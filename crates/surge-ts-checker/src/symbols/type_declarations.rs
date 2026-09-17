@@ -118,6 +118,8 @@ pub(crate) struct InterfaceBody {
     pub(crate) extends: Vec<ParsedNamedType>,
     pub(crate) members: Vec<ParsedInterfaceMember>,
     pub(crate) string_index_type: Option<ParsedType>,
+    /// See [`surge_ts_syntax::ParsedObjectType::number_index_type`].
+    pub(crate) number_index_type: Option<ParsedType>,
     pub(crate) call_signature: Option<ParsedFunctionType>,
     pub(crate) construct_signatures: Vec<ParsedFunctionType>,
     pub(crate) declaration_fragments: Vec<InterfaceDeclarationFragmentId>,
@@ -165,6 +167,7 @@ impl Clone for InterfaceBody {
             extends: self.extends.clone(),
             members: self.members.clone(),
             string_index_type: self.string_index_type.clone(),
+            number_index_type: self.number_index_type.clone(),
             call_signature: self.call_signature.clone(),
             construct_signatures: self.construct_signatures.clone(),
             declaration_fragments: self.declaration_fragments.clone(),
@@ -211,6 +214,7 @@ impl InterfaceInfo {
         extends: Vec<ParsedNamedType>,
         members: Vec<ParsedInterfaceMember>,
         string_index_type: Option<ParsedType>,
+        number_index_type: Option<ParsedType>,
         call_signature: Option<ParsedFunctionType>,
         construct_signatures: Vec<ParsedFunctionType>,
         resolution_scope: Option<Arc<TypeDeclarationScope>>,
@@ -233,6 +237,7 @@ impl InterfaceInfo {
                 extends,
                 members,
                 string_index_type,
+                number_index_type,
                 call_signature,
                 construct_signatures,
                 declaration_fragments: vec![declaration_fragment],
@@ -302,6 +307,20 @@ pub(crate) fn merge_interface_infos(
     existing: &InterfaceInfo,
     incoming: &InterfaceInfo,
 ) -> InterfaceInfo {
+    // The same physical declarations folded in twice duplicate every member and
+    // every heritage clause: `declaration_fragments` chains without dedup, and
+    // an augmentation can now reach a consumer both through the target's own
+    // declaration table and through the specifier-keyed export-table patch.
+    if !incoming.body.declaration_fragments.is_empty()
+        && incoming
+            .body
+            .declaration_fragments
+            .iter()
+            .all(|fragment| existing.body.declaration_fragments.contains(fragment))
+    {
+        return existing.clone();
+    }
+
     let is_method = |member: &ParsedInterfaceMember| matches!(member.ty, ParsedType::Function(_));
     let existing_property_names: std::collections::HashSet<&str> = existing
         .body
@@ -344,6 +363,11 @@ pub(crate) fn merge_interface_infos(
             .string_index_type
             .clone()
             .or_else(|| incoming.body.string_index_type.clone()),
+        existing
+            .body
+            .number_index_type
+            .clone()
+            .or_else(|| incoming.body.number_index_type.clone()),
         existing
             .body
             .call_signature
@@ -598,6 +622,9 @@ fn fold_interface_declaration(
     body.extends.extend(incoming.body.extends.iter().cloned());
     if body.type_parameters.is_empty() {
         body.type_parameters = incoming.body.type_parameters.clone();
+    }
+    if body.number_index_type.is_none() {
+        body.number_index_type = incoming.body.number_index_type.clone();
     }
     if body.string_index_type.is_none() {
         body.string_index_type = incoming.body.string_index_type.clone();
@@ -914,6 +941,7 @@ mod tests {
             vec![],
             None,
             None,
+            None,
             Vec::new(),
             None,
         ));
@@ -1002,6 +1030,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            None,
             None,
             None,
             Vec::new(),

@@ -144,6 +144,22 @@
     "support": "emitted"
   },
   {
+    "code": "TS2418",
+    "category": "Error",
+    "message": "Type of computed property's value is '{0}', which is not assignable to type '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2820",
+    "category": "Error",
+    "message": "Type '{0}' is not assignable to type '{1}'. Did you mean '{2}'?",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
     "code": "TS18046",
     "category": "Error",
     "message": "'{0}' is of type 'unknown'.",
@@ -163,6 +179,22 @@
     "code": "TS18048",
     "category": "Error",
     "message": "'{0}' is possibly 'undefined'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2571",
+    "category": "Error",
+    "message": "Object is of type 'unknown'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18050",
+    "category": "Error",
+    "message": "The value '{0}' cannot be used here.",
     "source": "typescript",
     "arity": 1,
     "support": "emitted"
@@ -237,7 +269,7 @@
     "message": "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2362",
@@ -328,6 +360,54 @@
     "support": "emitted"
   },
   {
+    "code": "TS2540",
+    "category": "Error",
+    "message": "Cannot assign to '{0}' because it is a read-only property.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2542",
+    "category": "Error",
+    "message": "Index signature in type '{0}' only permits reading.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2514",
+    "category": "Error",
+    "message": "A tuple type cannot be indexed with a negative value.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS7015",
+    "category": "Error",
+    "message": "Element implicitly has an 'any' type because index expression is not of type 'number'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2862",
+    "category": "Error",
+    "message": "Type '{0}' is generic and can only be indexed for reading.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS4104",
+    "category": "Error",
+    "message": "The type '{0}' is 'readonly' and cannot be assigned to the mutable type '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2536",
     "category": "Error",
     "message": "Type '{0}' cannot be used to index type '{1}'.",
@@ -363,6 +443,14 @@
     "code": "TS2554",
     "category": "Error",
     "message": "Expected {0} arguments, but got {1}.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2555",
+    "category": "Error",
+    "message": "Expected at least {0} arguments, but got {1}.",
     "source": "typescript",
     "arity": 2,
     "support": "emitted"
@@ -446,6 +534,22 @@
     "source": "typescript",
     "arity": 1,
     "support": "catalog-only"
+  },
+  {
+    "code": "TS2869",
+    "category": "Error",
+    "message": "Right operand of ?? is unreachable because the left operand is never nullish.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2871",
+    "category": "Error",
+    "message": "This expression is always nullish.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
   },
   {
     "code": "TS2872",
@@ -934,5 +1038,581 @@
     "source": "surge-ts",
     "arity": 1,
     "support": "emitted"
+  },
+  {
+    "code": "TS2703",
+    "category": "Error",
+    "message": "The operand of a 'delete' operator must be a property reference.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2704",
+    "category": "Error",
+    "message": "The operand of a 'delete' operator cannot be a read-only property.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2790",
+    "category": "Error",
+    "message": "The operand of a 'delete' operator must be optional.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18011",
+    "category": "Error",
+    "message": "The operand of a 'delete' operator cannot be a private identifier.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1102",
+    "category": "Error",
+    "message": "'delete' cannot be called on an identifier in strict mode.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2358",
+    "category": "Error",
+    "message": "The left-hand side of an 'instanceof' expression must be of type 'any', an object type or a type parameter.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2698",
+    "category": "Error",
+    "message": "Spread types may only be created from object types.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2416",
+    "category": "Error",
+    "message": "Property '{0}' in type '{1}' is not assignable to the same property in base type '{2}'.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2430",
+    "category": "Error",
+    "message": "Interface '{0}' incorrectly extends interface '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2564",
+    "category": "Error",
+    "message": "Property '{0}' has no initializer and is not definitely assigned in the constructor.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2403",
+    "category": "Error",
+    "message": "Subsequent variable declarations must have the same type.  Variable '{0}' must be of type '{1}', but here has type '{2}'.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2449",
+    "category": "Error",
+    "message": "Class '{0}' used before its declaration.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2651",
+    "category": "Error",
+    "message": "A member initializer in a enum declaration cannot reference members declared after it, including members defined in other enums.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2729",
+    "category": "Error",
+    "message": "Property '{0}' is used before its initialization.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2683",
+    "category": "Error",
+    "message": "'this' implicitly has type 'any' because it does not have a type annotation.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1019",
+    "category": "Error",
+    "message": "An index signature parameter cannot have a question mark.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1021",
+    "category": "Error",
+    "message": "An index signature must have a type annotation.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1024",
+    "category": "Error",
+    "message": "'readonly' modifier can only appear on a property declaration or index signature.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1028",
+    "category": "Error",
+    "message": "Accessibility modifier already seen.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1047",
+    "category": "Error",
+    "message": "A rest parameter cannot be optional.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1051",
+    "category": "Error",
+    "message": "A 'set' accessor cannot have an optional parameter.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1092",
+    "category": "Error",
+    "message": "Type parameters cannot appear on a constructor declaration.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1093",
+    "category": "Error",
+    "message": "Type annotation cannot appear on a constructor declaration.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1096",
+    "category": "Error",
+    "message": "An index signature must have exactly one parameter.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1098",
+    "category": "Error",
+    "message": "Type parameter list cannot be empty.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1099",
+    "category": "Error",
+    "message": "Type argument list cannot be empty.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1108",
+    "category": "Error",
+    "message": "A 'return' statement can only be used within a function body.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1141",
+    "category": "Error",
+    "message": "String literal expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1164",
+    "category": "Error",
+    "message": "Computed property names are not allowed in enums.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1172",
+    "category": "Error",
+    "message": "'extends' clause already seen.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1173",
+    "category": "Error",
+    "message": "'extends' clause must precede 'implements' clause.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1174",
+    "category": "Error",
+    "message": "Classes can only extend a single class.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1175",
+    "category": "Error",
+    "message": "'implements' clause already seen.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1176",
+    "category": "Error",
+    "message": "Interface declaration cannot have 'implements' clause.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1183",
+    "category": "Error",
+    "message": "An implementation cannot be declared in ambient contexts.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1184",
+    "category": "Error",
+    "message": "Modifiers cannot appear here.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1187",
+    "category": "Error",
+    "message": "A parameter property may not be declared using a binding pattern.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1249",
+    "category": "Error",
+    "message": "A decorator can only decorate a method implementation, not an overload.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1257",
+    "category": "Error",
+    "message": "A required element cannot follow an optional element.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1263",
+    "category": "Error",
+    "message": "Declarations with initializers cannot also have definite assignment assertions.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1264",
+    "category": "Error",
+    "message": "Declarations with definite assignment assertions must also have type annotations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1265",
+    "category": "Error",
+    "message": "A rest element cannot follow another rest element.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1266",
+    "category": "Error",
+    "message": "An optional element cannot follow a rest element.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1276",
+    "category": "Error",
+    "message": "An 'accessor' property cannot be declared optional.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1318",
+    "category": "Error",
+    "message": "An abstract accessor cannot have an implementation.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1354",
+    "category": "Error",
+    "message": "'readonly' type modifier is only permitted on array and tuple literal types.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1363",
+    "category": "Error",
+    "message": "A type-only import can specify a default import or named bindings, but not both.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1477",
+    "category": "Error",
+    "message": "An instantiation expression cannot be followed by a property access.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1490",
+    "category": "Error",
+    "message": "File appears to be binary.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1502",
+    "category": "Error",
+    "message": "The Unicode (u) flag and the Unicode Sets (v) flag cannot be set simultaneously.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1545",
+    "category": "Error",
+    "message": "'using' declarations are not allowed in ambient contexts.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1546",
+    "category": "Error",
+    "message": "'await using' declarations are not allowed in ambient contexts.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS2206",
+    "category": "Error",
+    "message": "The 'type' modifier cannot be used on a named import when 'import type' is used on its import statement.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS2207",
+    "category": "Error",
+    "message": "The 'type' modifier cannot be used on a named export when 'export type' is used on its export statement.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS2452",
+    "category": "Error",
+    "message": "An enum member cannot have a numeric name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2499",
+    "category": "Error",
+    "message": "An interface can only extend an identifier/qualified-name with optional type arguments.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS2566",
+    "category": "Error",
+    "message": "A rest element cannot have a property name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS2681",
+    "category": "Error",
+    "message": "A constructor cannot have a 'this' parameter.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2730",
+    "category": "Error",
+    "message": "An arrow function cannot have a 'this' parameter.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2784",
+    "category": "Error",
+    "message": "'get' and 'set' accessors cannot declare 'this' parameters.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS5085",
+    "category": "Error",
+    "message": "A tuple member cannot be both optional and rest.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS5086",
+    "category": "Error",
+    "message": "A labeled tuple element is declared as optional with a question mark after the name and before the colon, rather than after the type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS5087",
+    "category": "Error",
+    "message": "A labeled tuple element is declared as rest with a '...' before the name, rather than before the type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS8002",
+    "category": "Error",
+    "message": "'import ... =' can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS8005",
+    "category": "Error",
+    "message": "'implements' clauses can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS8012",
+    "category": "Error",
+    "message": "Parameter modifiers can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS8016",
+    "category": "Error",
+    "message": "Type assertion expressions can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS8037",
+    "category": "Error",
+    "message": "Type satisfaction expressions can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS17000",
+    "category": "Error",
+    "message": "JSX attributes must only be assigned a non-empty 'expression'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS18010",
+    "category": "Error",
+    "message": "An accessibility modifier cannot be used with a private identifier.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18058",
+    "category": "Error",
+    "message": "Default imports are not allowed in a deferred import.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS18059",
+    "category": "Error",
+    "message": "Named imports are not allowed in a deferred import.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
   }
 ]

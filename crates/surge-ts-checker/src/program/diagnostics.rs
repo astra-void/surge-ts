@@ -9,15 +9,37 @@ use surge_ts_diagnostics::Diagnostic;
 use crate::context::CheckerContext;
 use super::ParsedProgramFile;
 
+/// A parse failure reported the way tsc reports it when oxc classified the
+/// failure: the catalogued message for its code, anchored at oxc's own span.
+/// oxc's rendering is used only for a failure it left unnumbered, and for a
+/// number surge does not catalog, so neither can invent a TypeScript code.
+pub(crate) fn parser_error_diagnostic(
+    error: &surge_ts_syntax::ParserError,
+    file_name: &str,
+) -> Diagnostic {
+    let Some(descriptor) = error
+        .code
+        .and_then(surge_ts_diagnostics::emitted_descriptor_for_number)
+    else {
+        return Diagnostic::surge_parser_error(error.message.clone(), file_name.to_string());
+    };
+
+    crate::spans::diagnostic_with_syntax_span(
+        Diagnostic::from_descriptor(
+            descriptor,
+            Vec::<surge_ts_diagnostics::DiagnosticArg>::new(),
+            file_name.to_string(),
+        ),
+        error.span,
+    )
+}
+
 pub(super) fn emit_parser_diagnostics(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
     for parsed_file in parsed_files {
         ctx.set_file_name(parsed_file.file_name.clone());
 
-        for message in &parsed_file.parser_errors {
-            ctx.push(Diagnostic::surge_parser_error(
-                message.clone(),
-                parsed_file.file_name.clone(),
-            ));
+        for error in &parsed_file.parser_errors {
+            ctx.push(parser_error_diagnostic(error, &parsed_file.file_name));
         }
     }
 }

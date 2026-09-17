@@ -650,6 +650,7 @@ pub(crate) fn resolve_interface(
                     &interface.body.extends,
                     &interface.body.members,
                     interface.body.string_index_type.as_ref(),
+                    interface.body.number_index_type.as_ref(),
                     interface.body.call_signature.as_ref(),
                     &interface.body.construct_signatures,
                     ctx,
@@ -835,6 +836,7 @@ pub(crate) fn resolve_interface_declaration(
     extends: &[ParsedNamedType],
     members: &[ParsedInterfaceMember],
     string_index_type: Option<&ParsedType>,
+    number_index_type: Option<&ParsedType>,
     call_signature: Option<&ParsedFunctionType>,
     construct_signatures: &[ParsedFunctionType],
     ctx: &mut CheckerContext,
@@ -1364,7 +1366,8 @@ pub(crate) fn resolve_interface_declaration(
         } else {
             ObjectProperty::required(property_type.ty)
         }
-        .with_method(member.is_method);
+        .with_method(member.is_method)
+        .with_readonly(member.readonly);
 
         properties.insert(member.name.as_str().into(), object_property);
         own_member_names.insert(member.name.as_str());
@@ -1391,7 +1394,20 @@ pub(crate) fn resolve_interface_declaration(
         None => inherited_index_type.or(if base_is_open { Some(Type::Any) } else { None }),
     };
 
-    let mut object_type = alloc_object_type(properties, resolved_index_type);
+    // A numeric index signature is resolved alongside the string one: a numeric
+    // key prefers it, and its presence alone is what makes a *string* key an
+    // implicit `any` rather than a resolved member.
+    let resolved_number_index_type = number_index_type.map(|parsed| {
+        let resolved = crate::program::with_dts_expansion_reason(
+            crate::program::DtsExpansionReason::InterfaceIndexSignatureMapping,
+            || resolve_parsed_type(parsed.clone(), ctx, resolving, substitution),
+        );
+        had_error |= resolved.had_error;
+        resolved.ty
+    });
+
+    let mut object_type = alloc_object_type(properties, resolved_index_type)
+        .with_number_index_type(resolved_number_index_type);
     if openness_is_synthetic {
         object_type = object_type.with_open_index_marker();
     }
@@ -1420,6 +1436,7 @@ pub(crate) fn resolve_interface_declaration(
     // overload's arity/arguments is accepted (`new Uint8Array(8)` and
     // `new Uint8Array([1,2,3])` both work).
     let mut merged_construct: Option<FunctionType> = None;
+    let mut construct_members: Vec<FunctionType> = Vec::new();
     for construct_signature in construct_signatures {
         let resolved = crate::program::with_dts_expansion_reason(
             crate::program::DtsExpansionReason::InterfaceConstructSignatureMapping,
@@ -1434,6 +1451,7 @@ pub(crate) fn resolve_interface_declaration(
         );
         had_error |= resolved.had_error;
         if let Type::Function(function_type) = resolved.ty {
+            construct_members.push(function_type.clone());
             merged_construct = Some(match merged_construct {
                 Some(existing) => crate::program::with_dts_expansion_reason(
                     crate::program::DtsExpansionReason::OverloadArrayMerge,
@@ -1444,6 +1462,9 @@ pub(crate) fn resolve_interface_declaration(
         }
     }
     if let Some(construct_signature) = merged_construct {
+        // The group is kept beside the fold, as a method overload group is: what
+        // `infer` reads off a constructor is its *last* signature.
+        let construct_signature = construct_signature.with_overloads(construct_members);
         object_type = object_type.with_construct_signature(construct_signature);
     } else if let Some(inherited) = inherited_construct_signature {
         object_type = object_type.with_construct_signature(inherited);
@@ -1478,6 +1499,29 @@ fn exactly_one_callback_slot(left: &Type, right: &Type) -> bool {
 /// is variadic if either overload is. The shorter overload's return type is kept
 /// as the representative, matching the most basic form (e.g. `Array.from`'s
 /// `T[]`).
+/// surge models a resolved `Promise<T>` as its awaited `T` (the implicit-await
+/// modelling in `resolve_interface`), so one overload whose return reached that
+/// collapse and one that still holds the `Promise<T>` reference denote the same
+/// type — `tsc` keeps a signature per declaration and never sees a difference.
+/// Degrading the merged return over that silenced every check downstream of a
+/// global declared in two files: `fetch`, declared by both `lib.dom` and
+/// `@types/node`, answered the sentinel for its own result. Returns the wrapped
+/// form, so the merged signature still displays the way `tsc` prints it.
+fn promise_collapsed_pair_return(left: &Type, right: &Type) -> Option<Type> {
+    let left_awaited = crate::checks::call::promise_like_awaited_type(left);
+    let right_awaited = crate::checks::call::promise_like_awaited_type(right);
+    if left_awaited != right_awaited {
+        return None;
+    }
+    if &left_awaited != left {
+        return Some(left.clone());
+    }
+    if &right_awaited != right {
+        return Some(right.clone());
+    }
+    None
+}
+
 pub(crate) fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> FunctionType {
     let canonical_merge = a
         .id()
@@ -1551,10 +1595,12 @@ pub(crate) fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> F
     // `$ZodFormattedError<T, U>`) against the no-argument overload's
     // `$ZodFormattedError<T>`. Extending this from the one-unresolved-return case
     // to every disagreement cost no false negatives on any corpus.
-    let return_type = if a.return_type() != b.return_type() {
-        Type::Unknown
-    } else {
+    let return_type = if a.return_type() == b.return_type() {
         shorter.return_type().clone()
+    } else if let Some(wrapped) = promise_collapsed_pair_return(a.return_type(), b.return_type()) {
+        wrapped
+    } else {
+        Type::Unknown
     };
     let merged = [a, b]
         .into_iter()

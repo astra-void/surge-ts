@@ -54,7 +54,7 @@ fn signature_cache_safe_argument(ty: &Type, depth: usize, budget: &mut usize) ->
     }
     *budget -= 1;
     match ty {
-        Type::Unknown | Type::TypeParameter(_) => false,
+        Type::Unknown | Type::ErrorType | Type::TypeParameter(_) => false,
         Type::String
         | Type::Number
         | Type::Boolean
@@ -185,6 +185,9 @@ pub(crate) fn resolve_named_type(
     resolved
 }
 
+/// tsc's `instantiationDepth` ceiling (checker.go:22452), verbatim.
+const MAX_INSTANTIATION_DEPTH: usize = 100;
+
 fn resolve_named_type_inner(
     named_type: std::sync::Arc<ParsedNamedType>,
     ctx: &mut CheckerContext,
@@ -236,7 +239,11 @@ fn resolve_named_type_inner(
             );
         }
         return ResolvedType {
-            ty: Type::Unknown,
+            // tsc has no answer for this name either — it resolves to the
+            // error type, which stays `any`-permissive but is still *reported*
+            // through (a callback parameter contextually typed by it is an
+            // implicit `any`). Surge's own modelling gaps keep `Type::Unknown`.
+            ty: Type::ErrorType,
             had_error: true,
         };
     };
@@ -742,6 +749,30 @@ fn resolve_named_type_inner(
         }
     }
 
+    // tsc bounds *every* instantiation at one place: `instantiateTypeWithAlias`
+    // yields the error type once `instantiationDepth` reaches 100
+    // (checker.go:22452), having already returned early for anything that cannot
+    // contain type variables — which is why only the generic path below counts.
+    //
+    // surge's own ceilings sit inside `resolve_type_alias`, behind a gate that is
+    // off by default, and `resolve_interface` has nothing but an exact-key cycle
+    // check, so an expansion travelling through interfaces and intersections was
+    // counted by nothing at all. drizzle's `Omit`/`Readonly`/intersection chain is
+    // exactly that path, and it stopped terminating the moment `Record<any, any>`
+    // resolved concretely instead of degrading into the sentinel that had been
+    // cutting it by accident.
+    //
+    // The result on a trip is tsc's: the error type. The *diagnostic* is not —
+    // tsc raises TS2589 here, but its per-mapper instantiation cache cuts repeats
+    // surge re-expands, so surge trips where the source is not excessively deep
+    // and reporting it would be a false positive.
+    if ctx.instantiation_depth >= MAX_INSTANTIATION_DEPTH {
+        return ResolvedType {
+            ty: Type::ErrorType,
+            had_error: true,
+        };
+    }
+
     // Measure cycles triggered by this resolution alone. The declaration is pushed
     // onto `resolving` (at index `floor`) inside `resolve_interface`/`resolve_type_alias`,
     // so a re-entry at `floor` or deeper is an internal self/mutual cycle that
@@ -756,6 +787,7 @@ fn resolve_named_type_inner(
     let utility_keys_before_body = ctx.utility_diagnostic_keys.len();
     let degradation_epoch_before_body = crate::program::expansion_degradation_epoch();
 
+    ctx.instantiation_depth += 1;
     let resolved = match declaration {
         TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
             alias,
@@ -777,6 +809,7 @@ fn resolve_named_type_inner(
             reference_arguments.as_deref(),
         ),
     };
+    ctx.instantiation_depth -= 1;
 
     let subtree_lowest_cycle = ctx.lowest_cycle_target_index;
     ctx.lowest_cycle_target_index = saved_lowest_cycle.min(subtree_lowest_cycle);

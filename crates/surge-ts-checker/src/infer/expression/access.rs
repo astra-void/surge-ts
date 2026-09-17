@@ -41,7 +41,10 @@ pub(crate) fn infer_index_access(
     };
     match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
+        Type::Unknown
+        | Type::GenuineUnknown
+        | Type::ErrorType
+        | Type::TypeParameter(_) => InferredExpression::Unknown,
         // Lowered to its element array above.
         Type::OpenTuple(_) => InferredExpression::Unknown,
         Type::Union(union_type) => {
@@ -514,9 +517,15 @@ pub(crate) fn infer_property_call(
                 ) {
                     Some(inferred) => inferred,
                     None => match member_type {
-                        Type::Function(function_type) => {
-                            InferredExpression::Known(function_type.return_type().clone())
-                        }
+                        Type::Function(function_type) => InferredExpression::Known(
+                            crate::checks::call::select_overload_return_type_for_inferred_call(
+                                &function_type,
+                                arguments,
+                                symbols,
+                                ctx,
+                            )
+                            .unwrap_or_else(|| function_type.return_type().clone()),
+                        ),
                         _ => InferredExpression::Known(Type::Any),
                     },
                 }
@@ -711,6 +720,17 @@ pub(crate) fn infer_optional_property_access(
                 saw_known = true;
                 match ty.get_property_access_type(property_name) {
                     Some(property_type) => result_types.push(property_type),
+                    None if no_lib_array_member(ty, ctx) => result_types.push(Type::Any),
+                    // Same rule the non-optional access applies: a receiver that
+                    // peels to the sentinel, or one still carrying a leaked type
+                    // parameter, is a shape surge could not reconstruct, not a
+                    // type without the member. Without it `a?.b` reported a
+                    // member that `a!.b` resolved.
+                    None if ty.peeled().is_unknown()
+                        || crate::checks::expr::carries_leaked_type_parameter(ty, ctx) =>
+                    {
+                        return InferredExpression::Unknown;
+                    }
                     None => {
                         return InferredExpression::MissingProperty {
                             property_name: property_name.to_string(),
@@ -730,10 +750,20 @@ pub(crate) fn infer_optional_property_access(
         _ => base_type
             .get_property_access_type(property_name)
             .map(InferredExpression::Known)
-            .unwrap_or_else(|| InferredExpression::MissingProperty {
-                property_name: property_name.to_string(),
-                object_type: base_type.clone(),
-                span: *property_span,
+            .unwrap_or_else(|| {
+                if no_lib_array_member(&base_type, ctx) {
+                    InferredExpression::Known(Type::Any)
+                } else if base_type.peeled().is_unknown()
+                    || crate::checks::expr::carries_leaked_type_parameter(&base_type, ctx)
+                {
+                    InferredExpression::Unknown
+                } else {
+                    InferredExpression::MissingProperty {
+                        property_name: property_name.to_string(),
+                        object_type: base_type.clone(),
+                        span: *property_span,
+                    }
+                }
             }),
     };
 

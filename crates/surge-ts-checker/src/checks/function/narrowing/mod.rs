@@ -495,7 +495,21 @@ pub(crate) fn narrow_condition_symbol_table(
         .or_else(|| narrow_array_isarray_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_property_presence_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_nullish_equality_symbol_table(condition, symbols, branch_is_true))
-        .or_else(|| narrow_reference_guard_symbol_table(condition, symbols, branch_is_true))
+        .or_else(|| {
+            // As in `narrow_truthy_reference_in_scope`: the members the test rules
+            // out go first, and the reference guard then narrows what is left.
+            let filtered = truthy::narrow_union_by_property_truthiness_symbol_table(
+                condition,
+                symbols,
+                branch_is_true,
+            );
+            narrow_reference_guard_symbol_table(
+                condition,
+                filtered.as_ref().unwrap_or(symbols),
+                branch_is_true,
+            )
+            .or(filtered)
+        })
 }
 
 /// Merges the two disjunct narrowings of an `A || B` true branch: each name
@@ -535,6 +549,27 @@ fn union_disjunct_narrowings(
     }
 
     changed.then_some(merged)
+}
+
+/// Removes `null`/`undefined` from a reference's type in the current scope.
+/// `for (const _ in ref)` is the one statement form that narrows this way
+/// without a condition (tsc, flow.go: "for (const _ in ref) acts as a nonnull
+/// on ref").
+pub(crate) fn narrow_reference_non_null_in_scope(
+    expression: &ParsedExpression,
+    scopes: &mut ScopeStack,
+) {
+    let Some((base, path)) = reference_path(expression) else {
+        return;
+    };
+    narrow_reference_in_scope(
+        &base,
+        &path,
+        ReferenceGuard::Nullish {
+            keep_matching: false,
+        },
+        scopes,
+    );
 }
 
 fn narrow_value_guards_in_scope(
@@ -681,6 +716,7 @@ fn narrow_value_guards_in_scope(
                     ty: narrowed_property,
                     optional: base_property_type.optional,
                     method: base_property_type.method,
+                    readonly: base_property_type.readonly,
                 },
             );
             (
@@ -812,6 +848,7 @@ mod tests {
                     ty: Type::Number,
                     optional: *optional,
                     method: false,
+                    readonly: false,
                 },
             );
         }

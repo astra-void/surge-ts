@@ -1366,10 +1366,15 @@ pub(crate) fn fill_namespace_value_properties(
 
         match inner {
             ParsedStatement::FunctionDeclaration(function) => {
+                // `(...args: any[]) => any`, spelled out rather than left as a
+                // zero-parameter variadic: an argument lines up with the rest
+                // parameter and is contextually typed `any`, where no parameter
+                // at all leaves an arrow argument's own parameters untyped and
+                // reports a false TS7006 on them.
                 properties.insert(
                     function.name.as_str().into(),
                     ObjectProperty::required(Type::Function(FunctionType::new(
-                        vec![],
+                        vec![Type::Array(Box::new(Type::Any))],
                         Type::Any,
                         true,
                         0,

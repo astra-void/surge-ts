@@ -255,7 +255,9 @@ pub(super) fn parsed_annotation_display(annotation: &surge_ts_syntax::ParsedType
         ParsedType::Undefined => "undefined".to_string(),
         ParsedType::Void => "void".to_string(),
         ParsedType::Any => "any".to_string(),
-        ParsedType::Unknown | ParsedType::UnknownKeyword => "unknown".to_string(),
+        ParsedType::ErrorType | ParsedType::Unknown | ParsedType::UnknownKeyword => {
+            "unknown".to_string()
+        }
         ParsedType::Never => "never".to_string(),
         ParsedType::StringLiteral(value) => format!("\"{value}\""),
         ParsedType::NumberLiteral(value) => value.clone(),
@@ -400,7 +402,11 @@ pub(super) fn parsed_annotation_display(annotation: &surge_ts_syntax::ParsedType
             format!("{{ {} }}", members.join("; "))
         }
         ParsedType::Mapped(mapped) => {
-            let optional = if mapped.optional { "?" } else { "" };
+            let optional = match mapped.optional {
+                surge_ts_syntax::MappedOptionality::Keep => "",
+                surge_ts_syntax::MappedOptionality::Add => "?",
+                surge_ts_syntax::MappedOptionality::Remove => "-?",
+            };
             format!(
                 "{{ [{} in {}]{optional}: {} }}",
                 mapped.key_name,

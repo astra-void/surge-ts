@@ -91,7 +91,16 @@ fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
                     .borrow_mut()
                     .push((reference.id.clone(), reference.arguments.clone()));
             });
-            let result = contains_unknown(&reference.resolve(), sentinel_only);
+            // The arguments are part of what the reference *is*, not just of
+            // what it resolves to: a partially-substituted instantiation
+            // (`NextComponentType<…, AppPropsType<any, P>>` with `P` still
+            // free) can resolve to a structure that no longer mentions `P`,
+            // and comparing against it proves nothing about the real type.
+            let result = reference
+                .arguments
+                .iter()
+                .any(|argument| contains_unknown(argument, sentinel_only))
+                || contains_unknown(&reference.resolve(), sentinel_only);
             VISITING_REFERENCES.with(|visiting| {
                 visiting.borrow_mut().pop();
             });
@@ -110,6 +119,14 @@ pub(crate) fn emit_missing_return_diagnostic(
         Some(span) => diagnostic.with_span(convert_span(span)),
         None => diagnostic,
     };
+
+    // tsc runs this check only when the function's end point is reachable
+    // (`checkAllCodePathsInNonVoidFunctionReturnOrThrow` is gated on
+    // `functionHasImplicitReturn`). A body that always diverges — `while (true)
+    // {}`, a returning `if (true)`, a bare `return;` — reports nothing here.
+    if body_flow.guarantees_exit {
+        return;
+    }
 
     if body_flow.contains_value_return {
         if !body_flow.guarantees_value_return {
@@ -460,6 +477,7 @@ fn collect_body_local_type_declarations(
                     interface.extends.clone(),
                     interface.members.clone(),
                     interface.string_index_type.clone(),
+                    interface.number_index_type.clone(),
                     interface.call_signature.clone(),
                     interface.construct_signatures.clone(),
                     None,

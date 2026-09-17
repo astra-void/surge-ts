@@ -74,7 +74,9 @@ pub(crate) fn check_assignment_with_symbols(
             {
                 let inferred_type_name = inferred_value_type.name();
                 let target_type_name = target_type.name();
-                let diagnostic = Diagnostic::ts2322(
+                let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                    &inferred_value_type,
+                    &target_type,
                     &inferred_type_name,
                     &target_type_name,
                     ctx.file_name.clone(),
@@ -97,7 +99,7 @@ pub(crate) fn check_assignment_with_symbols(
     }
 }
 
-fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
+pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
     thread_local! {
         // References already on the walk, to break the cyclic structural graphs
         // lazy nominal references form (interface A whose member resolves to B

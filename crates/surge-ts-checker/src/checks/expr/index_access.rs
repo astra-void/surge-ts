@@ -194,7 +194,10 @@ pub(super) fn evaluate_index_access(
 
     match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
+        Type::Unknown
+        | Type::GenuineUnknown
+        | Type::ErrorType
+        | Type::TypeParameter(_) => InferredExpression::Unknown,
         // Lowered to its element array above.
         Type::OpenTuple(_) => InferredExpression::Unknown,
         Type::Tuple(elements) => {
@@ -324,7 +327,29 @@ pub(super) fn evaluate_index_access(
                 receiver_type,
                 Type::Object(_) | Type::Function(_) | Type::Reference(_)
             );
+            // A key that is not a literal still resolves through an index
+            // signature: `record[k]` with `k: string` reads the string index,
+            // and a numeric key prefers the number one
+            // (`findApplicableIndexInfo`). A number-only receiver cannot answer
+            // a string key at all — under `noImplicitAny` that is TS7015, tsc's
+            // "index expression is not of type 'number'".
+            let index_is_numeric = is_assignable_to(&index_type, &Type::Number)
+                || indexes_as_number(index, symbols);
             let Some(key) = literal_index_key(&index_type) else {
+                if let Type::Object(object_type) = receiver_type.peeled() {
+                    if let Some(index_value) = object_type.applicable_index_type(index_is_numeric) {
+                        return InferredExpression::Known(crate::infer::unchecked_index_read(
+                            index_value.clone(),
+                            ctx,
+                        ));
+                    }
+                    if object_type.number_index_type.is_some() && ctx.options.no_implicit_any {
+                        ctx.push(diagnostic_with_syntax_span(
+                            Diagnostic::ts7015(ctx.file_name.clone()),
+                            choose_span(index_span, choose_span(object_span, fallback_span)),
+                        ));
+                    }
+                }
                 return InferredExpression::Unknown;
             };
 
@@ -346,11 +371,20 @@ pub(super) fn evaluate_index_access(
                 if let Some(member) = object_type.get_property_access_type(&key) {
                     return InferredExpression::Known(member);
                 }
-                if let Some(index_type) = object_type.string_index_type.as_deref() {
+                if let Some(index_value) = object_type.applicable_index_type(index_is_numeric) {
                     return InferredExpression::Known(crate::infer::unchecked_index_read(
-                        index_type.clone(),
+                        index_value.clone(),
                         ctx,
                     ));
+                }
+                // A literal key a number-only receiver cannot answer is the same
+                // implicit `any` as a non-literal one.
+                if object_type.number_index_type.is_some() && ctx.options.no_implicit_any {
+                    ctx.push(diagnostic_with_syntax_span(
+                        Diagnostic::ts7015(ctx.file_name.clone()),
+                        choose_span(index_span, choose_span(object_span, fallback_span)),
+                    ));
+                    return InferredExpression::Unknown;
                 }
             }
 
@@ -364,6 +398,18 @@ pub(super) fn evaluate_index_access(
             InferredExpression::Unknown
         }
     }
+}
+
+/// tsc's `isForInVariableForNumericPropertyNames`: the key of a `for…in` over
+/// an object whose only index signature is numeric indexes as a `number`, even
+/// though the binding itself is a `string`.
+fn indexes_as_number(index: &ParsedExpression, symbols: &SymbolTable) -> bool {
+    let ParsedExpression::Identifier { name, .. } = index else {
+        return false;
+    };
+    symbols
+        .get(name)
+        .is_some_and(|symbol| matches!(symbol.kind, crate::symbols::SymbolKind::ForInNumericKey))
 }
 
 /// The element a literal numeric key selects out of a tuple, distributing over a

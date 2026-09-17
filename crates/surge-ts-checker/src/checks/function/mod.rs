@@ -24,6 +24,140 @@ pub(crate) use body::*;
 pub(crate) use body_statements::*;
 pub(crate) use narrowing::*;
 pub(crate) use signature::*;
+/// tsc's `getReturnTypeFromBody`, restricted to a body whose `return`s all sit
+/// at the top level.
+///
+/// A function declaration's signature is collected before any body is checked,
+/// so an unannotated return type stayed the degradation sentinel — and every
+/// type parameter a caller would infer *through* that return died with it.
+/// Inferring by checking the body here would walk it twice, so this reads only
+/// the body's own top-level statements: the bindings a `return` reads, and the
+/// `return`s themselves. Any statement that could hide a `return` gives up and
+/// keeps the sentinel, so a conditional body is never guessed at.
+///
+/// A returned `any` is refused along with the sentinel. tsc never produces
+/// `any` from a body that returns a typed value, so one here is surge's own gap
+/// — and publishing it is strictly worse than the sentinel: `any` is absorbing,
+/// so it silences every downstream check (`noUncheckedIndexedAccess` included)
+/// instead of merely staying unknown.
+fn inferred_declaration_return_type(
+    function: &ParsedFunctionDeclaration,
+    function_type: &FunctionType,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as BodyStatement;
+
+    if function.return_type.is_some()
+        || function.is_declare
+        || !function.has_body
+        || function.is_generator
+        || function.body.is_empty()
+    {
+        return None;
+    }
+
+    let mut scope = ctx
+        .symbols
+        .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    for (parameter, parameter_type) in function
+        .parameters
+        .iter()
+        .zip(function_type.parameters().iter())
+    {
+        if let Some(name) = signature::written_binding_names(std::slice::from_ref(parameter))
+            .into_iter()
+            .flatten()
+            .next()
+        {
+            scope.insert(
+                name,
+                crate::symbols::SymbolInfo {
+                    ty: parameter_type.clone(),
+                    kind: crate::symbols::SymbolKind::Parameter,
+                    function_signature: None,
+                },
+            );
+        }
+    }
+
+    let usable_type = |ty: &Type| !ty.is_unknown() && !matches!(ty, Type::Any);
+    let diagnostics_before = ctx.diagnostics().len();
+    let mut returned: Vec<Type> = Vec::new();
+    let mut usable = true;
+    for statement in &function.body {
+        match statement {
+            BodyStatement::VariableDeclaration(variable) => {
+                if variable.declared_type.is_none()
+                    && let Some(initializer) = variable.initializer.as_ref()
+                    && let crate::infer::InferredExpression::Known(ty) =
+                        crate::infer::infer_expression(initializer, &scope, ctx)
+                {
+                    scope.insert(
+                        variable.name.clone(),
+                        crate::symbols::SymbolInfo {
+                            ty,
+                            kind: crate::symbols::SymbolKind::Const,
+                            function_signature: None,
+                        },
+                    );
+                }
+            }
+            BodyStatement::Return(statement) => match statement.expression.as_ref() {
+                Some(expression) => {
+                    match crate::infer::infer_expression(expression, &scope, ctx) {
+                        crate::infer::InferredExpression::Known(ty) if usable_type(&ty) => {
+                            returned.push(ty)
+                        }
+                        _ => usable = false,
+                    }
+                }
+                None => returned.push(Type::Undefined),
+            },
+            BodyStatement::Throw(_)
+            | BodyStatement::Assignment(_)
+            | BodyStatement::ThisPropertyAssignment(_)
+            | BodyStatement::MemberAssignment(_)
+            | BodyStatement::Expression(_)
+            | BodyStatement::Function(_)
+            | BodyStatement::TypeAlias(_)
+            | BodyStatement::Continue
+            | BodyStatement::Break => {}
+            _ => usable = false,
+        }
+        if !usable {
+            break;
+        }
+    }
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+
+    // tsc widens the fresh literals a returned expression carries
+    // (`getReturnTypeFromBody` runs the result through the widening machinery),
+    // so `return { importName: "trpc" }` is `{ importName: string }`. Freezing
+    // the literal instead publishes a type far narrower than the declaration's,
+    // and every consumer compares against the wrong one.
+    let inferred = (usable && !returned.is_empty())
+        .then(|| crate::checks::expr::widen_type(&surge_ts_types::union_type(returned)))
+        .filter(usable_type)?;
+    Some(inferred)
+}
+
+/// `SURGE_INFER_DECLARATION_RETURN_TYPES=1`: infer an unannotated function
+/// declaration's return type from its body (see
+/// [`inferred_declaration_return_type`]). Any other non-empty value is a file
+/// substring filter, so the effect can be bisected across the corpus without a
+/// rebuild.
+fn infer_declaration_return_types(file_name: &str) -> bool {
+    static SETTING: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    match SETTING
+        .get_or_init(|| std::env::var("SURGE_INFER_DECLARATION_RETURN_TYPES").ok())
+        .as_deref()
+    {
+        None | Some("") => false,
+        Some("1") => true,
+        Some(filter) => file_name.contains(filter),
+    }
+}
+
 pub(crate) fn collect_function_declaration_signature(
     function: &ParsedFunctionDeclaration,
     symbols: &mut SymbolTable,
@@ -81,6 +215,20 @@ pub(crate) fn collect_function_declaration_signature(
         map_signature(ctx)
     };
 
+    let function_type = match infer_declaration_return_types(&ctx.file_name)
+        .then(|| inferred_declaration_return_type(function, &function_type, ctx))
+        .flatten()
+    {
+        Some(return_type) => FunctionType::new(
+            function_type.parameters().to_vec(),
+            return_type,
+            function_type.is_variadic(),
+            function_type.required_parameter_count(),
+        )
+        .with_parameter_names(signature::written_binding_names(&function.parameters)),
+        None => function_type,
+    };
+
     *symbols = std::mem::take(&mut ctx.symbols);
 
     let duplicate = register_function_signature(
@@ -122,6 +270,7 @@ pub(crate) fn check_function_declaration(
 ) {
     let start = Instant::now();
     let ParsedFunctionDeclaration {
+        has_this_parameter,
         is_declare,
         name,
         name_span,
@@ -211,6 +360,7 @@ pub(crate) fn check_function_declaration(
             return_type_span.or(name_span),
             has_body.then(|| body_reads.as_slice()),
             is_generator,
+            has_this_parameter,
             ctx,
         );
     });
@@ -227,6 +377,7 @@ pub(crate) fn check_function_declaration_body(
 ) {
     let start = Instant::now();
     let ParsedFunctionDeclaration {
+        has_this_parameter,
         is_declare,
         name,
         name_span,
@@ -265,6 +416,7 @@ pub(crate) fn check_function_declaration_body(
         return_type_span.or(name_span),
         has_body.then(|| body_reads.as_slice()),
         is_generator,
+        has_this_parameter,
         ctx,
     );
     record_program_timing(ctx.timings.as_ref(), |timings| {
@@ -281,6 +433,74 @@ pub(crate) fn check_function_declaration_body(
 /// slot uncontextualized, which is a false TS7006/TS7031 on the callback.
 /// The tuple expansion mirrors `expanded_signature` in the assignability
 /// relation, so a callback typed here still compares against its slot.
+/// The contextual type of a written rest parameter at `position`: tsc's
+/// `getRestTypeAtPosition` (relater.go:1829-1858). It is the *collection* the
+/// rest binds — the context's own rest type when the positions line up, an array
+/// of its element past that, and otherwise a tuple of the remaining positions —
+/// never the element type the positional expansion hands every other slot.
+/// `(...a) => …` against `(...args: string[]) => void` typed `a` as `string`.
+///
+/// `None` where tsc's answer needs an optional tuple element, which surge's
+/// tuple types cannot say; those positions keep the positional expansion.
+fn contextual_rest_parameter_type(expected_type: &FunctionType, position: usize) -> Option<Type> {
+    let parameters = expected_type.parameters();
+    let count = parameters.len();
+    // Surge stores a rest slot either as the written array or already unwrapped
+    // to its element (see `contextual_parameter_types`); tsc's `restType` is the
+    // collection, and its element is what an index by `number` reads.
+    let rest_and_element = expected_type.is_variadic().then(|| {
+        let stored = match &parameters[count - 1] {
+            Type::Reference(reference) => reference.resolve().peeled(),
+            other => other.clone(),
+        };
+        match stored {
+            Type::Array(element) => (Type::Array(element.clone()), *element),
+            Type::Tuple(elements) => {
+                let element = surge_ts_types::union_type(elements.clone());
+                (Type::Tuple(elements), element)
+            }
+            Type::OpenTuple(open) => {
+                let element = open.element_union();
+                (Type::OpenTuple(open), element)
+            }
+            element => (Type::Array(Box::new(element.clone())), element),
+        }
+    });
+
+    if let Some((rest, element)) = &rest_and_element
+        && position + 1 >= count
+    {
+        return Some(if position + 1 == count {
+            rest.clone()
+        } else {
+            Type::Array(Box::new(element.clone()))
+        });
+    }
+
+    let fixed_end = if rest_and_element.is_some() { count - 1 } else { count };
+    if position >= fixed_end {
+        return Some(Type::Tuple(Vec::new()));
+    }
+    if fixed_end > expected_type.required_parameter_count() {
+        return None;
+    }
+    let leading = parameters[position..fixed_end].to_vec();
+    Some(match rest_and_element {
+        None => Type::Tuple(leading),
+        Some((Type::Tuple(elements), _)) => Type::Tuple(leading.into_iter().chain(elements).collect()),
+        Some((Type::OpenTuple(open), _)) => Type::OpenTuple(surge_ts_types::OpenTupleType {
+            leading: leading.into_iter().chain(open.leading).collect(),
+            rest: open.rest,
+            trailing: open.trailing,
+        }),
+        Some((_, element)) => Type::OpenTuple(surge_ts_types::OpenTupleType {
+            leading,
+            rest: Box::new(element),
+            trailing: Vec::new(),
+        }),
+    })
+}
+
 fn contextual_parameter_types(expected_type: &FunctionType, parameter_count: usize) -> Vec<Type> {
     let parameters = expected_type.parameters();
     if !expected_type.is_variadic() {
@@ -363,7 +583,13 @@ fn emit_contextual_signature_mismatch(
         &ctx.file_name,
     );
     ctx.push(crate::spans::diagnostic_with_syntax_span(
-        Diagnostic::ts2322(&source_name, &target_name, ctx.file_name.clone()),
+        crate::checks::expr::type_not_assignable_diagnostic(
+            &source,
+            &target,
+            &source_name,
+            &target_name,
+            ctx.file_name.clone(),
+        ),
         span,
     ));
 }
@@ -380,6 +606,29 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
 /// [`check_arrow_function_expression_with_expected_type`] with the span tsc
 /// anchors a whole-signature mismatch on — the assignment target, not the
 /// failing return.
+/// `SURGE_INFER_BLOCK_RETURN_TYPES=1`: infer an unannotated *block* body's
+/// return type from its `return` statements, the way an expression body's
+/// already is (tsc's `getReturnTypeFromBody`).
+///
+/// Measured 2026-09-16. This is the root of tRPC's router cluster, not proxy
+/// modelling: `createTRPCNext({ config() { return opts; } })` cannot infer
+/// `TRouter` because the method hands back the degradation sentinel. With this
+/// on, an isolated probe matches tsc exactly and a directly-typed options value
+/// closes both remaining tRPC false positives.
+///
+/// It is off because it is only half the fix. Function *declarations* infer
+/// their return type on a different path and still degrade, so
+/// `testServerAndClientResource(appRouter)` — and with it the real call site —
+/// stays unresolved; and making the source concrete exposes a latent
+/// false positive where the *target* still carries an unsubstituted type
+/// parameter (`NextComponentType<…, AppPropsType<any, P>>`), which took trpc
+/// from 2 to 33. zod 0/0, the sweep and every other corpus are unchanged.
+fn infer_block_body_return_types() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED
+        .get_or_init(|| std::env::var("SURGE_INFER_BLOCK_RETURN_TYPES").as_deref() == Ok("1"))
+}
+
 pub(crate) fn check_arrow_function_expression_anchored(
     arrow: ParsedArrowFunction,
     expected_type: Option<&FunctionType>,
@@ -388,6 +637,8 @@ pub(crate) fn check_arrow_function_expression_anchored(
     ctx: &mut CheckerContext,
 ) -> FunctionType {
     let ParsedArrowFunction {
+        is_generator: _,
+        this_binding,
         type_parameters,
         parameters,
         return_type,
@@ -398,10 +649,20 @@ pub(crate) fn check_arrow_function_expression_anchored(
     } = arrow;
     let _ = is_async;
 
+    // An arrow does not bind `this`, so it keeps whatever the enclosing function
+    // established; a `function` expression and an object-literal method both
+    // lower to this shape but bind their own.
+    let outer_this_is_implicitly_any = ctx.this_is_implicitly_any;
+    match this_binding {
+        surge_ts_syntax::ParsedThisBinding::Inherited => {}
+        surge_ts_syntax::ParsedThisBinding::Own => ctx.this_is_implicitly_any = false,
+        surge_ts_syntax::ParsedThisBinding::ImplicitAny => ctx.this_is_implicitly_any = true,
+    }
+
     let expanded_contextual_parameter_types = expected_type
         .map(|expected_type| contextual_parameter_types(expected_type, parameters.len()));
     let contextual_parameter_types = expanded_contextual_parameter_types.as_deref();
-    with_type_parameter_scope(&type_parameters, ctx, |ctx| {
+    let result = with_type_parameter_scope(&type_parameters, ctx, |ctx| {
         // Resolve the arrow's annotations against the value symbols visible at
         // the arrow site, mirroring `check_variable_declaration_against_symbols`:
         // `(x: typeof localConst) => …` must see the enclosing function body's
@@ -468,8 +729,32 @@ pub(crate) fn check_arrow_function_expression_anchored(
         let mut scopes =
             ScopeStack::from_root(symbols.clone_with_reason(TypeCopyReason::FunctionBodySetup));
         scopes.push_function_scope();
+        // A `function` expression binds its own `this`; without a `this`
+        // parameter it has no type, so the enclosing scope's `this` must not
+        // leak in. tsc takes `this` from the contextual signature here — surge
+        // does not model that, and reading the enclosing class instead reported
+        // its members missing (`ws.addEventListener('message', function () {
+        // this.send(…) })` inside a class).
+        if matches!(this_binding, surge_ts_syntax::ParsedThisBinding::ImplicitAny) {
+            scopes.insert_current(
+                "this",
+                crate::symbols::SymbolInfo {
+                    ty: Type::Any,
+                    kind: crate::symbols::SymbolKind::Const,
+                    function_signature: None,
+                },
+            );
+        }
         for (index, parameter) in parameters.iter().enumerate() {
-            let parameter_type = parameter_types.get(index).unwrap_or(&Type::Any);
+            // The signature keeps surge's variadic slot, but the binding a
+            // contextually typed `...rest` introduces holds the collection.
+            let rest_binding_type = expected_type
+                .filter(|_| parameter.rest && parameter.declared_type.is_none())
+                .filter(|_| index + 1 == parameters.len())
+                .and_then(|expected_type| contextual_rest_parameter_type(expected_type, index));
+            let parameter_type = rest_binding_type
+                .as_ref()
+                .unwrap_or_else(|| parameter_types.get(index).unwrap_or(&Type::Any));
             insert_parameter_bindings(parameter, parameter_type, &mut scopes);
         }
 
@@ -558,6 +843,28 @@ pub(crate) fn check_arrow_function_expression_anchored(
                         ctx,
                     );
                 }
+                // tsc infers an unannotated block body's return type from its
+                // `return` statements (`getReturnTypeFromBody`). surge did that
+                // only for an expression body, so an object-literal method
+                // (`{ config() { return opts; } }`, which lowers to this shape)
+                // handed back the sentinel — and every type parameter inferred
+                // through that return died with it, which is what left tRPC's
+                // router unmodelled at `createTRPCNext({ config() { … } })`.
+                // A degraded return stays the sentinel: inferring from it would
+                // turn "could not model" into a decision.
+                if infer_block_body_return_types()
+                    && !has_explicit_return_type
+                    && expected_type.is_none()
+                {
+                    let returned = ctx.body_return_types().to_vec();
+                    if !returned.is_empty() && returned.iter().all(|ty| !ty.is_unknown()) {
+                        let mut members = returned;
+                        if !body_flow.guarantees_exit {
+                            members.push(Type::Undefined);
+                        }
+                        return_type = surge_ts_types::union_type(members);
+                    }
+                }
                 let returned_void_like = ctx.close_contextual_return_frame();
 
                 let contextually_void = expected_type
@@ -588,5 +895,8 @@ pub(crate) fn check_arrow_function_expression_anchored(
             function_type.required_parameter_count(),
         )
         .with_parameter_names(signature::written_binding_names(&parameters))
-    })
+    });
+
+    ctx.this_is_implicitly_any = outer_this_is_implicitly_any;
+    result
 }

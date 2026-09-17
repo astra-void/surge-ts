@@ -180,8 +180,11 @@ impl CheckerContext {
             if admits_undefined(ty) {
                 frame.returned_void_like = true;
             }
-            if frame.active
-                && frame.returned_types.len() < 16
+            // Collected for every frame, not just the contextually-checked
+            // one: an unannotated block body infers its return type from these
+            // (`getReturnTypeFromBody`), and that body has no expected type by
+            // definition, so gating on `active` left it with the sentinel.
+            if frame.returned_types.len() < 16
                 && !frame.returned_types.iter().any(|existing| existing == ty)
             {
                 frame
@@ -192,6 +195,14 @@ impl CheckerContext {
                     ));
             }
         }
+    }
+
+    /// The types the body currently being checked returned, for inferring an
+    /// unannotated block body's return type. Valid until the frame is closed.
+    pub(crate) fn body_return_types(&self) -> &[surge_ts_types::Type] {
+        self.contextual_return_frames
+            .last()
+            .map_or(&[], |frame| frame.returned_types.as_slice())
     }
 
     /// Takes the return-mismatch verdicts an active frame recorded, removing the
@@ -455,6 +466,19 @@ pub(crate) struct CheckerContext {
     /// they resolve to `unknown` without a TS2304 cascade — tsc resolves them
     /// against the full `@types/*`/generated namespace and reports nothing.
     pub(crate) namespace_member_resolution_depth: usize,
+    /// Generic instantiations performed under the *current root* resolution
+    /// (reset whenever the declaration-resolution stack empties). The
+    /// `resolving`-stack guards bound how deep a recursion goes and how many
+    /// frames of one declaration may nest, but both are path-local: a
+    /// type-level program that fans out — many distinct argument tuples across
+    /// several levels, none repeating and none deep — does unbounded *total*
+    /// work without tripping either. This is the breadth ceiling.
+    pub(crate) instantiation_work: usize,
+    /// Nested *generic* declaration instantiations currently being resolved.
+    /// tsc keeps the same counter on the checker and yields the error type at
+    /// 100 (`instantiateTypeWithAlias`); this is the single ceiling every
+    /// instantiation passes, whatever declaration kind it goes through.
+    pub(crate) instantiation_depth: usize,
     /// Nonzero while checking the attributes/children of a JSX element whose
     /// component props type could not be modelled (the `unknown` sentinel).
     /// Without a props type there is no contextual type to hand an inline
@@ -469,9 +493,22 @@ pub(crate) struct CheckerContext {
     /// surge's modelling gap rather than the source. Same rule as
     /// [`Self::unmodelled_jsx_props_depth`].
     pub(crate) degraded_expected_type_depth: usize,
+    /// Names bound in this file whose `any` is the *source's*, reached through a
+    /// binding rather than named directly: `const q = trpc.post.all.useQuery()`
+    /// where `trpc` is an import whose module was reported unresolved. tsc types
+    /// the whole chain as its error type, so a callback passed to a call on `q`
+    /// really has no contextual type. Without this the provenance stopped at the
+    /// import and every downstream call read as a chain surge merely failed to
+    /// model. Per-file: cleared by `begin_file_check`.
+    pub(crate) genuine_any_bindings: HashSet<String>,
     /// Nonzero while checking the value of a shorthand object-literal property
     /// (`{ value }`). An unresolved name there is TS18004 to tsc — the property
     /// has no initializer to fall back on — rather than a plain missing name.
+    /// Whether a `this` reached here would have no annotated type: the body
+    /// being checked is a plain `function` with no `this` parameter. An arrow
+    /// inherits it (that is what makes `function f() { return () => this }`
+    /// report), while a class method or an object-literal method clears it.
+    pub(crate) this_is_implicitly_any: bool,
     pub(crate) shorthand_property_depth: usize,
     /// How deep the per-property union-member probe is nested. It types a
     /// literal's properties against a candidate union, and a nested literal
@@ -612,9 +649,13 @@ impl CheckerContext {
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
             namespace_member_resolution_depth: 0,
+            instantiation_work: 0,
+            instantiation_depth: 0,
             unmodelled_jsx_props_depth: 0,
+            this_is_implicitly_any: false,
             shorthand_property_depth: 0,
             degraded_expected_type_depth: 0,
+            genuine_any_bindings: HashSet::default(),
             union_member_probe_depth: 0,
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
@@ -748,9 +789,13 @@ impl CheckerContext {
             type_parameter_constraint_scopes: data.type_parameter_constraint_scopes.clone(),
             timings: data.timings.clone(),
             namespace_member_resolution_depth: 0,
+            instantiation_work: 0,
+            instantiation_depth: 0,
             unmodelled_jsx_props_depth: 0,
+            this_is_implicitly_any: false,
             shorthand_property_depth: 0,
             degraded_expected_type_depth: 0,
+            genuine_any_bindings: HashSet::default(),
             union_member_probe_depth: 0,
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
@@ -1130,6 +1175,8 @@ impl CheckerContext {
         self.file_type_only_import_names.clear();
         self.file_type_only_import_names_owner = None;
         self.checked_function_declaration_names.clear();
+        self.genuine_any_bindings.clear();
+        self.this_is_implicitly_any = false;
         self.shorthand_property_depth = 0;
         debug_assert!(
             self.diagnostics.is_empty(),

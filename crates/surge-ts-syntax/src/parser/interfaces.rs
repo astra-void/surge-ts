@@ -13,28 +13,39 @@ pub(crate) fn parse_interface_declaration(
     declaration: &TSInterfaceDeclaration<'_>,
 ) -> Option<ParsedInterfaceDeclaration> {
     let getters = super::types::getter_accessor_names(&declaration.body.body);
-    let members = declaration
+    let mut members: Vec<ParsedInterfaceMember> = declaration
         .body
         .body
         .iter()
         .filter(|member| !super::types::is_shadowed_setter(member, &getters))
         .filter_map(parse_interface_member)
         .collect();
+    attach_member_write_types(
+        &mut members,
+        &super::types::setter_accessor_types(&declaration.body.body),
+    );
 
-    // A string/number index signature (`[key: string]: T`) contributes the
-    // object's `string_index_type` rather than a named property. The last one
-    // wins (interfaces rarely declare more than one).
-    let string_index_type = declaration
-        .body
-        .body
-        .iter()
-        .filter_map(|member| match member {
-            TSSignature::TSIndexSignature(index_signature) => {
-                parse_index_signature_value_type(index_signature)
-            }
-            _ => None,
-        })
-        .next_back();
+    // An index signature (`[key: string]: T`, `[key: number]: T`) contributes
+    // the object's index type rather than a named property, and the two kinds
+    // are kept apart: a numeric key prefers the number one. The last of each
+    // kind wins (interfaces rarely declare more than one).
+    let index_signature_of = |numeric: bool| {
+        declaration
+            .body
+            .body
+            .iter()
+            .filter_map(|member| match member {
+                TSSignature::TSIndexSignature(index_signature)
+                    if super::types::index_signature_is_numeric(index_signature) == numeric =>
+                {
+                    parse_index_signature_value_type(index_signature)
+                }
+                _ => None,
+            })
+            .next_back()
+    };
+    let string_index_type = index_signature_of(false);
+    let number_index_type = index_signature_of(true);
 
     // A bare call signature (`(value?: any): number`) makes the interface
     // callable. Multiple overloads fold into one permissive signature the same
@@ -80,6 +91,7 @@ pub(crate) fn parse_interface_declaration(
             .collect(),
         members,
         string_index_type,
+        number_index_type,
         call_signature,
         construct_signatures,
     })
@@ -101,6 +113,23 @@ fn parse_interface_heritage(heritage: &TSInterfaceHeritage<'_>) -> Option<crate:
     })
 }
 
+/// The interface-member form of
+/// [`super::types::attach_accessor_write_types`]: a getter that shadowed a
+/// setter is not read-only, and carries the setter's parameter type as its
+/// write type when the two differ.
+fn attach_member_write_types(
+    members: &mut [ParsedInterfaceMember],
+    setters: &std::collections::HashMap<String, crate::ParsedType>,
+) {
+    for member in members {
+        let Some(setter_type) = setters.get(&member.name) else {
+            continue;
+        };
+        member.readonly = false;
+        member.write_ty = (member.ty != *setter_type).then(|| setter_type.clone());
+    }
+}
+
 fn parse_interface_member(member: &TSSignature<'_>) -> Option<ParsedInterfaceMember> {
     let property = match member {
         TSSignature::TSPropertySignature(property_signature) => {
@@ -118,6 +147,8 @@ fn parse_interface_member(member: &TSSignature<'_>) -> Option<ParsedInterfaceMem
         optional: property.optional,
         is_abstract: false,
         is_method: property.is_method,
+        readonly: property.readonly,
+        write_ty: property.write_ty,
         ty: property.ty,
     })
 }

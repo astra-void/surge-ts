@@ -67,9 +67,10 @@ pub(crate) fn report_inferred_expression(
 }
 
 /// The receiver of a non-optional member access, checked the way tsc's
-/// `checkNonNullExpression` does: `unknown` is TS18046, and a receiver that can
-/// be `undefined` is TS18048 when tsc can name it and TS2532 otherwise. The
-/// access itself proceeds on the non-`undefined` part, so nothing cascades.
+/// `checkNonNullExpression` does: `unknown` is TS18046 named and TS2571
+/// otherwise, and a receiver that can be `undefined` is TS18048 named and
+/// TS2532 otherwise. The access itself proceeds on the non-`undefined` part, so
+/// nothing cascades.
 pub(super) fn check_property_receiver(
     object: &ParsedExpression,
     receiver: &InferredExpression,
@@ -82,12 +83,14 @@ pub(super) fn check_property_receiver(
         return;
     };
     if *object_type == Type::GenuineUnknown {
-        if let Some(name) = property_receiver_name(object) {
-            ctx.push(diagnostic_with_syntax_span(
-                Diagnostic::ts18046(name, ctx.file_name.clone()),
-                choose_span(object_span, fallback_span),
-            ));
-        }
+        let diagnostic = match nameable_receiver(object) {
+            Some(name) => Diagnostic::ts18046(name, ctx.file_name.clone()),
+            None => Diagnostic::ts2571(ctx.file_name.clone()),
+        };
+        ctx.push(diagnostic_with_syntax_span(
+            diagnostic,
+            choose_span(object_span, fallback_span),
+        ));
         return;
     }
     maybe_emit_possibly_undefined_receiver(
@@ -123,7 +126,9 @@ pub(crate) fn strip_reported_undefined_receiver(
     surge_ts_types::remove_undefined(&object_type)
 }
 
-fn maybe_emit_possibly_undefined_receiver(
+/// Reports a possibly-`undefined` operand, the way tsc's `checkNonNullType`
+/// does, and says whether it reported. Shared with the `++`/`--` operand rule.
+pub(crate) fn maybe_emit_possibly_undefined_receiver(
     object: &ParsedExpression,
     object_type: &Type,
     object_span: Option<SyntaxTextSpan>,
@@ -135,6 +140,16 @@ fn maybe_emit_possibly_undefined_receiver(
     // `undefined`, which is not the receiver's own: `b?.value.x` is fine, while
     // `b?.inner.x` with an optional `inner` is still an error. tsc keeps the
     // two apart with a marker; surge re-derives the link without it.
+    // A `null` keyword is the same TS18050 as `undefined`, but surge types it
+    // as `Any` (infer/expression/mod.rs) rather than a null type, so the
+    // nullability gate below would never see it.
+    if matches!(object, ParsedExpression::NullLiteral) {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts18050("null", ctx.file_name.clone()),
+            choose_span(object_span, fallback_span),
+        ));
+        return true;
+    }
     let receiver_type = if object.continues_optional_chain() {
         let Some(without_marker) = chain_link_type_without_marker(object, symbols, ctx) else {
             return false;
@@ -146,9 +161,15 @@ fn maybe_emit_possibly_undefined_receiver(
     if !receiver_can_be_undefined(&receiver_type) {
         return false;
     }
-    let diagnostic = match property_receiver_name(object) {
-        Some(name) => Diagnostic::ts18048(name, ctx.file_name.clone()),
-        None => Diagnostic::ts2532(ctx.file_name.clone()),
+    // `undefined` names a value rather than a possibly-`undefined` place, so
+    // tsc answers it with TS18050 before the possibly-`undefined` wording.
+    let diagnostic = if matches!(object, ParsedExpression::UndefinedLiteral) {
+        Diagnostic::ts18050("undefined", ctx.file_name.clone())
+    } else {
+        match nameable_receiver(object) {
+            Some(name) => Diagnostic::ts18048(name, ctx.file_name.clone()),
+            None => Diagnostic::ts2532(ctx.file_name.clone()),
+        }
     };
     ctx.push(diagnostic_with_syntax_span(
         diagnostic,
@@ -229,6 +250,13 @@ pub(crate) fn receiver_can_be_undefined(ty: &Type) -> bool {
         }
         _ => false,
     }
+}
+
+/// The receiver name tsc is willing to render. `reportObjectPossiblyNullOrUndefinedError`
+/// and its `unknown` sibling both drop to the unnamed diagnostic past 100 bytes
+/// (`len(nodeText) < 100`), so a long dotted chain reports as TS2532/TS2571.
+fn nameable_receiver(expression: &ParsedExpression) -> Option<String> {
+    property_receiver_name(expression).filter(|name| name.len() < 100)
 }
 
 /// The entity name tsc renders for a receiver: an identifier or a dotted chain
@@ -315,6 +343,44 @@ fn suggested_unresolved_name(
         }
     }
     best.map(str::to_string)
+}
+
+/// tsc's `getSpellingSuggestion` over an ordered candidate list. On a distance
+/// tie the earlier candidate wins, which is tsc's order for union members.
+/// More than `max_candidates` candidates (when non-zero) means no suggestion.
+pub(crate) fn spelling_suggestion<'a>(
+    name: &str,
+    candidates: impl IntoIterator<Item = &'a str>,
+    max_candidates: usize,
+) -> Option<&'a str> {
+    let name_length = name.chars().count();
+    let max_length_difference = 2.max(name_length * 34 / 100);
+    let mut best_distance = (name_length * 4 / 10) as f64 + 0.9;
+    let mut best: Option<&str> = None;
+    for (index, candidate) in candidates.into_iter().enumerate() {
+        if max_candidates > 0 && index >= max_candidates {
+            return None;
+        }
+        if candidate.is_empty()
+            || candidate == name
+            || candidate.len().abs_diff(name_length) > max_length_difference
+        {
+            continue;
+        }
+        if candidate.len() < 3 && !candidate.eq_ignore_ascii_case(name) {
+            continue;
+        }
+        let Some(distance) = levenshtein_with_max(name, candidate, best_distance) else {
+            continue;
+        };
+        if distance < best_distance {
+            best_distance = distance;
+            best = Some(candidate);
+        } else if best.is_none() {
+            best = Some(candidate);
+        }
+    }
+    best
 }
 
 /// Levenshtein distance where a case-only substitution costs 0.1, abandoning a

@@ -1,5 +1,5 @@
 use super::*;
-use surge_ts_syntax::{ParsedLogicalOperator, ParsedType};
+use surge_ts_syntax::{ParsedLogicalOperator, ParsedType, ParsedUnaryOperator};
 
 pub(crate) fn evaluate_expression(
     expression: &ParsedExpression,
@@ -28,12 +28,19 @@ pub(crate) fn evaluate_expression(
                 if property.is_shorthand {
                     ctx.shorthand_property_depth += 1;
                 }
-                let _ = evaluate_expression(
+                let property_result = evaluate_expression(
                     &property.value,
                     property.value_span.or(property.span).or(fallback_span),
                     symbols,
                     ctx,
                 );
+                if property.is_spread {
+                    super::check_object_spread_type(
+                        &property_result,
+                        property.span.or(property.value_span).or(fallback_span),
+                        ctx,
+                    );
+                }
                 if property.is_shorthand {
                     ctx.shorthand_property_depth -= 1;
                 }
@@ -126,6 +133,7 @@ pub(crate) fn evaluate_expression(
             *call_span,
             type_arguments,
             arguments,
+            None,
             symbols,
             ctx,
         ) {
@@ -148,6 +156,7 @@ pub(crate) fn evaluate_expression(
             *call_span,
             type_arguments,
             arguments,
+            None,
             symbols,
             ctx,
         ) {
@@ -251,7 +260,47 @@ pub(crate) fn evaluate_expression(
             let operand_result =
                 evaluate_expression(operand, operand_span.or(fallback_span), symbols, ctx);
 
+            if *operator == ParsedUnaryOperator::Delete {
+                super::check_delete_operand(
+                    operand,
+                    operand_span.or(fallback_span),
+                    symbols,
+                    ctx,
+                );
+            }
+
             ops::evaluate_unary_expression(*operator, operand_result)
+        }
+        ParsedExpression::Update {
+            operand,
+            operand_span,
+        } => {
+            let operand_result =
+                evaluate_expression(operand, operand_span.or(fallback_span), symbols, ctx);
+
+            super::check_update_operand(
+                operand,
+                operand_span.or(fallback_span),
+                &operand_result,
+                symbols,
+                ctx,
+            );
+
+            super::update_result_type(&operand_result)
+        }
+        ParsedExpression::Await {
+            operand,
+            operand_span,
+        } => {
+            let operand_result =
+                evaluate_expression(operand, operand_span.or(fallback_span), symbols, ctx);
+
+            match operand_result {
+                InferredExpression::Known(ty) => {
+                    InferredExpression::Known(crate::checks::call::awaited_type(&ty))
+                }
+                other => other,
+            }
         }
         ParsedExpression::Conditional {
             condition,
@@ -483,14 +532,9 @@ fn evaluate_nullish_coalescing(
 
     match (left_result, right_result) {
         (InferredExpression::Known(left_type), InferredExpression::Known(right_type)) => {
-            if left_type == Type::Any || left_type.is_unknown() {
-                InferredExpression::Known(left_type)
-            } else if left_type == Type::Undefined {
-                InferredExpression::Known(right_type)
-            } else {
-                let filtered_left = surge_ts_types::remove_nullish(&left_type);
-                InferredExpression::Known(union_type(vec![filtered_left, right_type]))
-            }
+            InferredExpression::Known(crate::infer::expression::nullish_coalescing_result(
+                left_type, right_type,
+            ))
         }
         (
             InferredExpression::Known(Type::Unknown)
@@ -886,12 +930,18 @@ fn evaluate_type_assertion(
             }
         }
         _ => {
-            let _ = evaluate_expression(
+            let source = evaluate_expression(
                 asserted_expression,
                 expression_span.or(fallback_span),
                 symbols,
                 ctx,
             );
+            // TS2352 is withheld: the comparable relation this needs is only as
+            // good as surge's structural expansion of a library's generic types,
+            // and on real code (zod's `issue as errors.$ZodStringFormatIssues`)
+            // that produced 54 false positives against a project that was
+            // otherwise diagnostic-exact. See `assertion-overlap-basic`.
+            let _ = &source;
         }
     }
 

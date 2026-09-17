@@ -15,7 +15,7 @@ use super::super::{downgrade_genuine_unknown_in_scope, narrow_discriminant_in_sc
 /// negation, or a comparison. Deliberately narrow: a `const x = f()` is not
 /// recorded, so the aliased-condition clone stays proportional to guard
 /// aliases rather than to every `const` in the body.
-pub(super) fn is_condition_shaped(expression: &ParsedExpression) -> bool {
+pub(crate) fn is_condition_shaped(expression: &ParsedExpression) -> bool {
     use surge_ts_syntax::{ParsedBinaryOperator, ParsedUnaryOperator};
     match expression {
         ParsedExpression::Logical { .. } => true,

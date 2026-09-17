@@ -8,7 +8,7 @@ use surge_ts_syntax::{
     parse_source,
 };
 
-use crate::checks::{assign, call, expr, function as check_function, var};
+use crate::checks::{call, expr, function as check_function, var};
 use crate::context::{CheckerContext, DeclarationNamespace, DeclarationResolutionKey, FileKind};
 use crate::default_lib::load_generated_default_lib_inputs;
 use crate::infer::{report_duplicate_type_parameters, validate_local_type_declaration};
@@ -30,6 +30,7 @@ pub fn check_source_with_options(
     options: crate::context::CheckerOptions,
 ) -> Vec<Diagnostic> {
     let parsed = parse_source(source_text, file_name);
+    let suppressed_ranges = parsed.suppressed_ranges.clone();
     let file_name = parsed.file_name;
     let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
     file_kinds.insert(file_name.clone(), classify_file_kind(&file_name));
@@ -50,10 +51,11 @@ pub fn check_source_with_options(
     }
     ctx.set_symbols(merged_sym);
 
-    for message in parsed.parser_errors {
-        let diagnostic = Diagnostic::surge_parser_error(message, file_name.clone());
+    for error in &parsed.parser_errors {
+        let diagnostic = crate::program::diagnostics::parser_error_diagnostic(error, &file_name);
         ctx.push(diagnostic);
     }
+    crate::program::emit_grammar_diagnostics(&parsed.grammar_diagnostics, &mut ctx);
 
     ctx.merge_script_interfaces_with_globals = !parsed.is_module;
     collect_type_declarations(&parsed.statements, &mut ctx);
@@ -92,12 +94,18 @@ pub fn check_source_with_options(
 
     ctx.module_value_fallback = Some(std::sync::Arc::new(validation_symbols));
 
-    for statement in parsed.statements {
+    for (index, statement) in parsed.statements.iter().enumerate() {
+        let statement =
+            crate::program::expand_module_if_alias(statement.clone(), &parsed.statements[..index]);
         check_statement(statement, &mut ctx);
     }
     ctx.module_value_fallback = None;
 
-    ctx.finish()
+    let mut diagnostics = ctx.finish();
+    // Program mode drops these in `check_files`; the single-file driver has no
+    // such stage, so an `@ts-expect-error` suppressed nothing here.
+    crate::program::drop_suppressed_diagnostics(&mut diagnostics, &suppressed_ranges);
+    diagnostics
 }
 
 /// Program mode seeds a class's value symbol in its signature pre-pass
@@ -961,6 +969,7 @@ fn register_merged_namespace_interfaces(
                 interface.extends.clone(),
                 interface.members.clone(),
                 interface.string_index_type.clone(),
+                interface.number_index_type.clone(),
                 interface.call_signature.clone(),
                 interface.construct_signatures.clone(),
                 None,
@@ -1019,6 +1028,7 @@ fn collect_namespace_type_declarations_prefixed(
                         interface.extends.clone(),
                         interface.members.clone(),
                         interface.string_index_type.clone(),
+                        interface.number_index_type.clone(),
                         interface.call_signature.clone(),
                         interface.construct_signatures.clone(),
                         None,
@@ -1094,19 +1104,36 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             var::check_variable_declaration(*variable, ctx);
         }
         ParsedStatement::Assignment(assignment) => {
-            assign::check_assignment(*assignment, ctx);
+            crate::program::check_module_assignment(*assignment, ctx);
+        }
+        ParsedStatement::MemberAssignment(assignment) => {
+            let symbols = ctx
+                .symbols
+                .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+            let mut scopes = crate::symbols::ScopeStack::from_root(symbols);
+            crate::checks::function::check_member_assignment(*assignment, &mut scopes, ctx);
         }
         ParsedStatement::FunctionDeclaration(function) => {
-            check_function::check_function_declaration(*function, ctx);
+            crate::program::with_declared_mutable_module_bindings(ctx, |ctx| {
+                check_function::check_function_declaration(*function, ctx);
+            });
         }
         ParsedStatement::Call(call) => {
+            let assertion = crate::program::module_call_expression(&call);
             call::check_call(*call, ctx);
+            crate::program::narrow_module_assertion_call(assertion, ctx);
         }
         ParsedStatement::Expression(expression) => {
+            let assertion = crate::program::assertion_candidate(&expression)
+                .then(|| (*expression).clone());
             expr::check_expression_statement(*expression, ctx);
+            crate::program::narrow_module_assertion_call(assertion, ctx);
         }
         ParsedStatement::If(if_statement) => {
             crate::program::check_module_if_statement(&if_statement, ctx);
+        }
+        ParsedStatement::Block(statements) => {
+            crate::program::check_module_block(statements, ctx);
         }
         ParsedStatement::TypeAliasDeclaration(_) => {}
         ParsedStatement::InterfaceDeclaration(_) => {}
@@ -1162,7 +1189,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                         ctx.file_name_arc(),
                                         specifier.name_span,
                                         vec![],
-                                        surge_ts_syntax::ParsedType::Unknown,
+                                        surge_ts_syntax::ParsedType::ErrorType,
                                         None,
                                     ),
                                 );
@@ -1176,7 +1203,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                         ctx.file_name_arc(),
                                         specifier.name_span,
                                         vec![],
-                                        surge_ts_syntax::ParsedType::Unknown,
+                                        surge_ts_syntax::ParsedType::ErrorType,
                                         None,
                                     ),
                                 );
@@ -1207,7 +1234,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                     ctx.file_name_arc(),
                                     *name_span,
                                     vec![],
-                                    surge_ts_syntax::ParsedType::Unknown,
+                                    surge_ts_syntax::ParsedType::ErrorType,
                                     None,
                                 ),
                             );
@@ -1233,7 +1260,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                         ctx.file_name_arc(),
                                         specifier.name_span,
                                         vec![],
-                                        surge_ts_syntax::ParsedType::Unknown,
+                                        surge_ts_syntax::ParsedType::ErrorType,
                                         None,
                                     ),
                                 );
@@ -1247,7 +1274,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                         ctx.file_name_arc(),
                                         specifier.name_span,
                                         vec![],
-                                        surge_ts_syntax::ParsedType::Unknown,
+                                        surge_ts_syntax::ParsedType::ErrorType,
                                         None,
                                     ),
                                 );
@@ -1287,7 +1314,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                     ctx.file_name_arc(),
                                     None,
                                     vec![],
-                                    surge_ts_syntax::ParsedType::Unknown,
+                                    surge_ts_syntax::ParsedType::ErrorType,
                                     None,
                                 ),
                             );
@@ -1546,6 +1573,7 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
         interface.extends.clone(),
         interface.members.clone(),
         interface.string_index_type.clone(),
+        interface.number_index_type.clone(),
         interface.call_signature.clone(),
         interface.construct_signatures.clone(),
         None,

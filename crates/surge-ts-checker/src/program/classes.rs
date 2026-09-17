@@ -46,6 +46,7 @@ pub(crate) fn class_instance_interface_info(
         members,
         None,
         None,
+        None,
         Vec::new(),
         None,
     );
@@ -63,6 +64,8 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
                 is_abstract: property.is_abstract,
                 is_method: false,
                 ty: property.declared_type.clone().unwrap_or(ParsedType::Any),
+                readonly: property.readonly,
+                write_ty: None,
             })
         }
         ParsedClassMember::Method(method) if !method.is_static => Some(ParsedInterfaceMember {
@@ -72,6 +75,8 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
             is_abstract: method.is_abstract,
             is_method: true,
             ty: method_function_type(method),
+            readonly: false,
+            write_ty: None,
         }),
         ParsedClassMember::Accessor(accessor) if !accessor.is_static => {
             Some(ParsedInterfaceMember {
@@ -81,6 +86,10 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
                 is_abstract: accessor.is_abstract,
                 is_method: false,
                 ty: accessor_property_type(accessor),
+                // A getter with no setter is read-only, exactly as
+                // `isReadonlySymbol` has it.
+                readonly: accessor.has_getter && !accessor.has_setter,
+                write_ty: accessor_write_type(accessor),
             })
         }
         _ => None,
@@ -124,11 +133,28 @@ fn constructor_parameter_property_members(
                         is_abstract: false,
                         is_method: false,
                         ty: parameter.declared_type.clone().unwrap_or(ParsedType::Any),
+                        readonly: parameter.is_readonly_parameter_property,
+                        write_ty: None,
                     })
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// What a write to an accessor is checked against, when that differs from what
+/// a read of it produces: the setter's parameter type of a pair whose getter
+/// declares something else. tsc keeps the two apart as `getTypeOfSymbol` and
+/// `getWriteTypeOfSymbol`, and writes against the latter, so
+/// `set value(next: number | string)` beside `get value(): number` accepts a
+/// string. `None` when reading and writing share a type, which is every member
+/// that is not such a pair.
+fn accessor_write_type(accessor: &ParsedClassAccessor) -> Option<ParsedType> {
+    let setter_param_type = accessor.setter_param_type.clone()?;
+    if !accessor.has_getter || accessor.getter_return_type.is_none() {
+        return None;
+    }
+    (accessor.getter_return_type.as_ref() != Some(&setter_param_type)).then_some(setter_param_type)
 }
 
 /// Lowers an accessor to the type of the property it presents. A getter's
@@ -593,6 +619,16 @@ fn check_implemented_interfaces(class: &ParsedClassDeclaration, ctx: &mut Checke
     };
 
     for implemented in &class.implements {
+        // tsc reports the member-specific errors first and falls back to the
+        // broad one only when that walk found nothing. A clause carrying type
+        // arguments is left to the broad check: resolving the interface by name
+        // alone would compare the class against its *uninstantiated* members
+        // (`v: number` against `v: T`).
+        if implemented.type_arguments.is_empty()
+            && super::heritage::report_incompatible_heritage_members(class, &implemented.name, ctx)
+        {
+            continue;
+        }
         let Some(required) = unimplemented_interface_members(&implemented.name, &declared, ctx)
         else {
             continue;
@@ -607,6 +643,24 @@ fn check_implemented_interfaces(class: &ParsedClassDeclaration, ctx: &mut Checke
             None => diagnostic,
         };
         ctx.push(diagnostic);
+    }
+}
+
+/// TS2416 for a member that overrides a base *class* member incompatibly.
+///
+/// Only the member-specific half of tsc's `extends` check runs here. The broad
+/// TS2415 needs a whole-type relation against the base plus the missing-member
+/// notion the `implements` path has, and surge's class instance surfaces are
+/// not complete enough for that to be free of false positives.
+fn check_extended_base_class(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    if class.is_declare {
+        return;
+    }
+    for base in &class.extends {
+        if !base.type_arguments.is_empty() {
+            continue;
+        }
+        super::heritage::report_incompatible_heritage_members(class, &base.name, ctx);
     }
 }
 
@@ -730,7 +784,10 @@ fn declared_member_name(member: &ParsedClassMember) -> Option<String> {
 
 pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
     check_inherited_abstract_members(class, ctx);
+    check_extended_base_class(class, ctx);
     check_implemented_interfaces(class, ctx);
+    super::property_initialization::check_property_initialization(class, ctx);
+    super::forward_references::check_class_property_initializers(class, ctx);
 
     // Ambient classes have no bodies; generic classes are out of scope and would
     // resolve member/`this` types against unbound type parameters.
@@ -763,6 +820,7 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                     Some(instance_type.clone()),
                     true,
                     None,
+                    false,
                     false,
                     ctx,
                 );
@@ -804,11 +862,71 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                     false,
                     method.has_body.then(|| method.body_reads.as_slice()),
                     method.is_generator,
+                    false,
                     ctx,
                 );
             }
-            ParsedClassMember::Property(_) | ParsedClassMember::Accessor(_) => {}
+            ParsedClassMember::Property(property) => {
+                let this_type = if property.is_static {
+                    static_type.clone()
+                } else {
+                    instance_type.clone()
+                };
+                check_class_property_initializer(property, this_type, ctx);
+            }
+            ParsedClassMember::Accessor(_) => {}
         }
+    }
+}
+
+/// tsc checks a property initializer as it checks a variable's
+/// (`checkVariableLikeDeclaration`): against the annotation when there is one,
+/// with `this` bound to the instance — or the constructor, for a static.
+fn check_class_property_initializer(
+    property: &ParsedClassProperty,
+    this_type: Type,
+    ctx: &mut CheckerContext,
+) {
+    let Some(initializer) = &property.initializer else {
+        return;
+    };
+    let mut symbols = ctx
+        .symbols
+        .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    let _ = symbols.insert(
+        "this".to_string(),
+        SymbolInfo {
+            ty: this_type,
+            kind: SymbolKind::Const,
+            function_signature: None,
+        },
+    );
+    let Some(declared_type) = property.declared_type.clone() else {
+        crate::checks::expr::evaluate_expression(
+            initializer,
+            property.initializer_span,
+            &symbols,
+            ctx,
+        );
+        return;
+    };
+    let declared_type = map_parsed_type(declared_type, ctx);
+    let inferred = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
+        initializer,
+        property.initializer_span,
+        property.name_span,
+        Some(&declared_type),
+        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+        &symbols,
+        ctx,
+    );
+    if let crate::infer::InferredExpression::Known(inferred_type) = inferred {
+        crate::checks::var::report_initializer_mismatch(
+            &inferred_type,
+            &declared_type,
+            property.name_span.or(property.initializer_span),
+            ctx,
+        );
     }
 }
 

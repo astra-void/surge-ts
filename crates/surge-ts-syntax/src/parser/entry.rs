@@ -105,7 +105,24 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     let parser_errors = parsed
         .errors
         .into_iter()
-        .map(|error| error.to_string())
+        .map(|error| {
+            let code = error
+                .code
+                .scope
+                .as_deref()
+                .filter(|scope| *scope == "TS")
+                .and(error.code.number.as_deref())
+                .and_then(|number| number.parse::<u32>().ok());
+            let span = error
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.first())
+                .map(|label| crate::TextSpan {
+                    start: label.offset(),
+                    end: label.offset() + label.len(),
+                });
+            crate::ParserError { code, message: error.to_string(), span }
+        })
         .collect();
 
     let is_module = parsed.program.source_type.is_module()

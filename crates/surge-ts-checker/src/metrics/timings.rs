@@ -637,8 +637,6 @@ fn render_check_counters(counters: &ProgramCounters) {
         counters.generic_call_inference_unresolved_argument_skip_count
     );
     eprintln!(
-        "    generic_call_inference_tuple_return_suppressed_count: {}",
-        counters.generic_call_inference_tuple_return_suppressed_count
     );
     eprintln!(
         "    generic_call_inference_candidate_count: {}",
@@ -800,10 +798,6 @@ fn render_flow_counters(counters: &ProgramCounters) {
     eprintln!(
         "    flow_return_analysis_walk_count: {}",
         counters.flow_return_analysis_walk_count
-    );
-    eprintln!(
-        "    flow_truthiness_check_count: {}",
-        counters.flow_truthiness_check_count
     );
 }
 

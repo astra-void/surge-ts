@@ -1,6 +1,6 @@
 use super::*;
 
-use surge_ts_syntax::ParsedMappedType;
+use surge_ts_syntax::{MappedOptionality, ParsedMappedType};
 use surge_ts_types::{ObjectProperty, PropertyMap};
 
 use crate::metrics::alloc_object_type;
@@ -11,17 +11,31 @@ use crate::metrics::alloc_object_type;
 fn mapped_key_is_open(constraint: &Type) -> bool {
     match constraint {
         Type::String | Type::Number | Type::Symbol => true,
+        // `any` is a key tsc accepts too, and it lands on the *string* index:
+        // `resolveMappedTypeMembers` takes the `TypeFlagsAny` branch and rewrites
+        // `indexKeyType` to `stringType`, which is why `Record<any, any>` is
+        // `{ [x: string]: any }`. Without it the mapped type degraded to the
+        // sentinel, and `T extends Record<any, any>` then answered backwards.
+        Type::Any => true,
         Type::Union(union) => union.types().iter().any(mapped_key_is_open),
         _ => false,
     }
 }
 
-/// The property names a literal key constraint enumerates. A numeric key names
-/// the member by its text, the same way an object literal's numeric key does.
-fn mapped_literal_keys(constraint: &Type) -> Option<Vec<String>> {
+/// The literal keys a key constraint enumerates, each with the property name it
+/// produces. A numeric key names the member by its text, the same way an object
+/// literal's numeric key does, while the key parameter stays the number literal.
+fn mapped_literal_keys(constraint: &Type) -> Option<Vec<(String, Type)>> {
     match constraint {
-        Type::StringLiteral(value) => Some(vec![value.clone()]),
-        Type::NumberLiteral(literal) => Some(vec![literal.value.clone()]),
+        // An empty key set maps to an empty object, not a failure: tsc's
+        // `resolveMappedTypeMembers` walks the constraint's constituents and a
+        // `never` constraint simply contributes none, leaving the members
+        // table empty. Answering `None` here degraded `{ [K in keyof R]: … }`
+        // with `R = {}` to the sentinel, and `keyof` of that then decided a
+        // conditional from a type surge never resolved.
+        Type::Never => Some(Vec::new()),
+        Type::StringLiteral(value) => Some(vec![(value.clone(), constraint.clone())]),
+        Type::NumberLiteral(literal) => Some(vec![(literal.value.clone(), constraint.clone())]),
         Type::Union(union) => {
             let mut keys = Vec::new();
             for variant in union.types() {
@@ -79,6 +93,18 @@ pub(crate) fn resolve_mapped_type(
     // fast path. Without this the mapped type collapsed to `unknown`, which
     // surfaced as a spurious missing-property error on every read.
     if mapped_key_is_open(&resolved_constraint.ty) {
+        // The literal-key branch below budgets its expansion; this one resolves
+        // the template just the same and needs the same ceiling. It went
+        // unguarded only because an open key used to be rare — once `any` keys
+        // stopped degrading, drizzle's `Omit`/`Readonly`/intersection chain
+        // expanded here without bound and the check never terminated.
+        let _expansion_scope = TypeExpansionScope::enter();
+        if !try_consume_type_expansion_step() {
+            return ResolvedType {
+                ty: Type::Unknown,
+                had_error: false,
+            };
+        }
         let mut value_substitution =
             substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
         value_substitution.insert(mapped.key_name.clone(), resolved_constraint.ty.clone());
@@ -115,7 +141,7 @@ pub(crate) fn resolve_mapped_type(
     let mut properties = PropertyMap::default();
     let mut had_error = false;
 
-    for key in keys {
+    for (key, key_type) in keys {
         if !try_consume_type_expansion_step() {
             return ResolvedType {
                 ty: Type::Unknown,
@@ -124,7 +150,7 @@ pub(crate) fn resolve_mapped_type(
         }
         let mut new_substitution =
             substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
-        new_substitution.insert(mapped.key_name.clone(), Type::StringLiteral(key.clone()));
+        new_substitution.insert(mapped.key_name.clone(), key_type);
 
         // `as` remaps the key: `never` drops it, a union of literals fans it
         // out, anything else is a shape surge cannot enumerate.
@@ -178,13 +204,29 @@ pub(crate) fn resolve_mapped_type(
             .and_then(|object| object.get_property(&key));
         let source_optional = source_property.is_some_and(|property| property.is_optional());
         let source_method = source_property.is_some_and(|property| property.is_method());
+        let readonly = match mapped.readonly {
+            MappedOptionality::Keep => source_property.is_some_and(|property| property.readonly),
+            MappedOptionality::Add => true,
+            MappedOptionality::Remove => false,
+        };
+        // `-?` strips `undefined` from the mapped property as well as clearing
+        // the optional flag; that is what makes `Required<{ b?: number }>` a
+        // `number` rather than a required `number | undefined`.
+        let (property_type, optional) = match mapped.optional {
+            MappedOptionality::Keep => (resolved_value.ty.clone(), source_optional),
+            MappedOptionality::Add => (resolved_value.ty.clone(), true),
+            MappedOptionality::Remove => {
+                (surge_ts_types::remove_undefined(&resolved_value.ty), false)
+            }
+        };
         for name in property_names {
             properties.insert(
                 name.into(),
                 ObjectProperty {
-                    ty: resolved_value.ty.clone(),
-                    optional: mapped.optional || source_optional,
+                    ty: property_type.clone(),
+                    optional,
                     method: source_method,
+                    readonly,
                 },
             );
         }

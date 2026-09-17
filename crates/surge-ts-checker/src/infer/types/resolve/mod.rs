@@ -177,6 +177,10 @@ pub(crate) fn resolve_parsed_type(
             ty: Type::Unknown,
             had_error: false,
         },
+        ParsedType::ErrorType => ResolvedType {
+            ty: Type::ErrorType,
+            had_error: false,
+        },
         ParsedType::UnknownKeyword => ResolvedType {
             ty: Type::GenuineUnknown,
             had_error: false,
@@ -440,6 +444,50 @@ pub(crate) fn resolve_parsed_type(
                 }
             }
 
+            // `typeof f<A, B>` is an instantiation expression: it binds the
+            // generic value's type parameters in type position, the same way a
+            // call with explicit type arguments does. Without this the query
+            // answered with the uninstantiated signature, whose parameters are
+            // still the declaration's own — the sentinel — so every utility over
+            // it (`ReturnType`, `Parameters`) degraded.
+            if !type_of.type_arguments.is_empty()
+                && type_of.members.is_empty()
+                && let Some(signature) = symbol.function_signature.as_ref()
+                && !signature.type_parameters.is_empty()
+                && let Type::Function(function) = &ty
+            {
+                let signature = std::sync::Arc::clone(signature);
+                let function = function.clone();
+                // The arguments are resolved under the *ambient* substitution,
+                // not a fresh one: inside `CreateNext<R, S>` the query reads
+                // `typeof withTRPC<R, S>`, whose arguments are the enclosing
+                // alias's own parameters and mean nothing on their own.
+                let mut argument_substitution = crate::infer::TypeParameterSubstitution::new();
+                for (index, type_parameter) in signature.type_parameters.iter().enumerate() {
+                    let resolved = match type_of.type_arguments.get(index) {
+                        Some(argument) => {
+                            resolve_parsed_type(argument.clone(), ctx, resolving, substitution).ty
+                        }
+                        None => match type_parameter.default_type.clone() {
+                            Some(default_type) => {
+                                resolve_parsed_type(default_type, ctx, resolving, substitution).ty
+                            }
+                            None => Type::Unknown,
+                        },
+                    };
+                    argument_substitution.insert(type_parameter.name.clone(), resolved);
+                }
+                let instantiated =
+                    crate::checks::call::instantiate_function_type_with_substitution(
+                        &function,
+                        &signature,
+                        &argument_substitution,
+                        ctx,
+                    )
+                    .into_owned();
+                ty = Type::Function(instantiated);
+            }
+
             ResolvedType {
                 ty,
                 had_error: false,
@@ -452,6 +500,32 @@ pub(crate) fn resolve_parsed_type(
                 resolving,
                 substitution,
             );
+            // `keyof unknown` is `never` (tsc's `getIndexType` over the unknown
+            // type), and the *written* keyword is the only `unknown` that means
+            // it — surge's `Type::Unknown` doubles as the degradation sentinel.
+            if matches!(resolved_inner.ty, Type::GenuineUnknown) {
+                return ResolvedType {
+                    ty: Type::Never,
+                    had_error: resolved_inner.had_error,
+                };
+            }
+            // `keyof any` is `string | number | symbol` (the same `getIndexType`
+            // arm), and tsc's error type *is* `any` — so a name or module the
+            // source does not resolve keys like one. Applying this to every
+            // `Type::Any` is what could not be done before: surge's `Any` is
+            // also its permissive modelling placeholder, and keying that turned
+            // 45 silent degradations into wrong decisions. `ErrorType` carries
+            // the provenance, so only the honest error type takes the rule.
+            if matches!(resolved_inner.ty, Type::ErrorType) {
+                return ResolvedType {
+                    ty: surge_ts_types::union_type(vec![
+                        Type::String,
+                        Type::Number,
+                        Type::Symbol,
+                    ]),
+                    had_error: resolved_inner.had_error,
+                };
+            }
             let mut keys = Vec::new();
             // `keyof {}` is `never`, not "could not model": the empty-interface
             // escape hatch (`T[keyof DO_NOT_USE_…]` in React's `Key` and

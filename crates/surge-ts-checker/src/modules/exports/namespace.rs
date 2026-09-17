@@ -70,6 +70,31 @@ pub(crate) fn namespace_export_object_type(export_table: &ModuleExportTable) -> 
     compute_namespace_export_object_type(export_table)
 }
 
+/// A namespace import's members are tsc's *export symbols themselves* —
+/// `resolveAnonymousTypeMembers` sets `members = getExportsOfSymbol(symbol)` for
+/// a module — so `ns.f(x)` resolves the very signature `f(x)` does, type
+/// parameters included. A property here carries only a `Type`, and a resolved
+/// generic function handle has its type parameters erased to the sentinel, so
+/// without the written signature riding along every `ns.f(...)` call lost its
+/// inference: the callee checked, but `T` never bound, from the arguments or
+/// from explicit type arguments alike.
+fn namespace_member_type(symbol: &SymbolInfo) -> Type {
+    let Some(signature) = symbol
+        .function_signature
+        .as_ref()
+        .filter(|signature| !signature.type_parameters.is_empty())
+    else {
+        return symbol.ty.clone();
+    };
+    let Type::Function(function_type) = &symbol.ty else {
+        return symbol.ty.clone();
+    };
+    if function_type.declaration().is_some() {
+        return symbol.ty.clone();
+    }
+    Type::Function(function_type.clone().with_declaration(signature.clone()))
+}
+
 pub(crate) fn compute_namespace_export_object_type(export_table: &ModuleExportTable) -> Type {
     crate::program::record_module_export_namespace_export_object_materialization_count();
     let mut properties = surge_ts_types::PropertyMap::default();
@@ -79,7 +104,7 @@ pub(crate) fn compute_namespace_export_object_type(export_table: &ModuleExportTa
         property_count += 1;
         properties.insert(
             name.clone(),
-            surge_ts_types::ObjectProperty::required(symbol.ty.clone()),
+            surge_ts_types::ObjectProperty::required(namespace_member_type(symbol)),
         );
     }
 

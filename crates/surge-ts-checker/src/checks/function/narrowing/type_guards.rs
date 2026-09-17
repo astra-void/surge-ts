@@ -209,9 +209,19 @@ pub(super) fn narrow_literal_equality_in_scope(
     let declared = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let Some(narrowed) = narrow_by_literal_equality(&declared, &literal, branch_is_true == eq)
-    else {
-        return false;
+    let keep_matching = branch_is_true == eq;
+    let narrowed = match narrow_by_literal_equality(&declared, &literal, keep_matching) {
+        Some(narrowed) => narrowed,
+        // The branch that excludes the one literal a variable is already
+        // narrowed to is dead: tsc's flow type there is `never`. Leaving it at
+        // the literal made the following `else if` compare two disjoint
+        // literals and report a false TS2367 (`let m: "x" | "y" = "x"` reaches
+        // the `else` narrowed to `"x"` by its initializer). Only an identifier
+        // whose *whole* type is that literal is narrowed this way — a
+        // discriminant property keeps the shared helper's behaviour, where the
+        // object union carries the narrowing instead.
+        None if !keep_matching && declared == literal => Type::Never,
+        None => return false,
     };
     let _ = scopes.insert_current_narrowed(
         name.to_string(),

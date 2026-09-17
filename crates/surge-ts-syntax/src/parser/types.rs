@@ -9,7 +9,8 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 
 use crate::{
-    ParsedConditionalType, ParsedFunctionType, ParsedIndexedAccessType, ParsedMappedType,
+    MappedOptionality, ParsedConditionalType, ParsedFunctionType, ParsedIndexedAccessType,
+    ParsedMappedType,
     ParsedNamedType, ParsedObjectType, ParsedObjectTypeProperty, ParsedPredicateType,
     ParsedTemplateLiteralType, ParsedTupleElement, ParsedType, ParsedTypeAliasDeclaration,
     ParsedTypeOfType, ParsedTypeParameter,
@@ -43,6 +44,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
             ParsedObjectType {
                 properties: Vec::new(),
                 string_index_type: None,
+                number_index_type: None,
                 call_signature: None,
                 call_signature_overloads: Vec::new(),
                 construct_signature: None,
@@ -80,6 +82,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                 ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
                     properties: Vec::new(),
                     string_index_type: None,
+                    number_index_type: None,
                     call_signature: None,
                     call_signature_overloads: Vec::new(),
                     construct_signature: Some(Box::new(function)),
@@ -201,6 +204,20 @@ fn parse_conditional_type(conditional_type: &TSConditionalType<'_>) -> Option<Pa
     })))
 }
 
+fn parse_type_query_arguments(type_query: &TSTypeQuery<'_>) -> Vec<ParsedType> {
+    type_query
+        .type_arguments
+        .as_ref()
+        .map(|arguments| {
+            arguments
+                .params
+                .iter()
+                .map(|argument| parse_type(argument).unwrap_or(ParsedType::Unknown))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
     match &type_query.expr_name {
         TSTypeQueryExprName::IdentifierReference(identifier) => {
@@ -209,6 +226,7 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 name_span: Some(text_span_from_oxc_span(identifier.span)),
                 members: Vec::new(),
                 import_specifier: None,
+                type_arguments: parse_type_query_arguments(type_query),
             })))
         }
         TSTypeQueryExprName::QualifiedName(qualified_name) => {
@@ -219,6 +237,7 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 name_span: Some(text_span_from_oxc_span(base_span)),
                 members,
                 import_specifier: None,
+                type_arguments: parse_type_query_arguments(type_query),
             })))
         }
         // `typeof import("vitest")['assert']` reads the module's namespace value;
@@ -234,6 +253,7 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 name_span: Some(text_span_from_oxc_span(import_type.source.span)),
                 members,
                 import_specifier: Some(specifier),
+                type_arguments: parse_type_query_arguments(type_query),
             })))
         }
         // `typeof this` is not modelled.
@@ -310,9 +330,9 @@ fn parse_indexed_access_type(indexed_access: &TSIndexedAccessType<'_>) -> Option
     })))
 }
 
-/// The `readonly` modifier (`readonly [K in …]`, `-readonly`) is not
-/// modelled for properties anywhere, so it is ignored rather than degrading
-/// the whole mapping.
+/// A mapped type's modifiers have three distinct states: `-?` makes a property
+/// required even when the homomorphic source's is optional, so it cannot fold
+/// into `?`, and `readonly` works the same way.
 fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
     let name_type = match mapped_type.name_type.as_ref() {
         Some(name_type) => Some(Box::new(parse_type(name_type)?)),
@@ -320,9 +340,18 @@ fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
     };
 
     let optional = match mapped_type.optional {
-        Some(TSMappedTypeModifierOperator::True) => true,
-        Some(_) => return Some(ParsedType::Unknown), // unsupported +? or -?
-        None => false,
+        Some(TSMappedTypeModifierOperator::True | TSMappedTypeModifierOperator::Plus) => {
+            MappedOptionality::Add
+        }
+        Some(TSMappedTypeModifierOperator::Minus) => MappedOptionality::Remove,
+        None => MappedOptionality::Keep,
+    };
+    let readonly = match mapped_type.readonly {
+        Some(TSMappedTypeModifierOperator::True | TSMappedTypeModifierOperator::Plus) => {
+            MappedOptionality::Add
+        }
+        Some(TSMappedTypeModifierOperator::Minus) => MappedOptionality::Remove,
+        None => MappedOptionality::Keep,
     };
 
     let constraint = parse_type(&mapped_type.constraint)?;
@@ -337,6 +366,7 @@ fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
         constraint: Box::new(constraint),
         value_type: Box::new(value_type),
         optional,
+        readonly,
         name_type,
         span: Some(text_span_from_oxc_span(mapped_type.span)),
     })))
@@ -408,9 +438,13 @@ fn parse_literal_type(literal_type: &TSLiteralType<'_>) -> ParsedType {
         TSLiteral::BooleanLiteral(boolean_literal) => {
             ParsedType::BooleanLiteral(boolean_literal.value)
         }
-        TSLiteral::UnaryExpression(_)
-        | TSLiteral::BigIntLiteral(_)
-        | TSLiteral::TemplateLiteral(_) => ParsedType::Unknown,
+        TSLiteral::UnaryExpression(unary_expression) => {
+            match super::expressions::signed_number_literal_text(unary_expression) {
+                Some(text) => ParsedType::NumberLiteral(text),
+                None => ParsedType::Unknown,
+            }
+        }
+        TSLiteral::BigIntLiteral(_) | TSLiteral::TemplateLiteral(_) => ParsedType::Unknown,
     }
 }
 
@@ -651,6 +685,7 @@ fn same_tuple_element_type(left: &ParsedType, right: &ParsedType) -> bool {
 fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     let mut properties = Vec::new();
     let mut string_index_type: Option<Box<ParsedType>> = None;
+    let mut number_index_type: Option<Box<ParsedType>> = None;
     let mut call_signature: Option<Box<ParsedFunctionType>> = None;
     let mut call_signature_overloads: Vec<ParsedFunctionType> = Vec::new();
     let mut construct_signature: Option<Box<ParsedFunctionType>> = None;
@@ -702,9 +737,14 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
                 continue;
             }
             TSSignature::TSIndexSignature(index_signature) => {
-                // The last index signature wins, matching the interface path.
+                // The last index signature of each kind wins, matching the
+                // interface path.
                 if let Some(value_type) = parse_index_signature_value_type(index_signature) {
-                    string_index_type = Some(Box::new(value_type));
+                    if index_signature_is_numeric(index_signature) {
+                        number_index_type = Some(Box::new(value_type));
+                    } else {
+                        string_index_type = Some(Box::new(value_type));
+                    }
                 }
                 continue;
             }
@@ -721,9 +761,12 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
         properties.push(property);
     }
 
+    attach_accessor_write_types(&mut properties, &setter_accessor_types(&type_literal.members));
+
     ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
         properties,
         string_index_type,
+        number_index_type,
         call_signature,
         // One signature is already the whole story; the fold is lossless there.
         call_signature_overloads: if call_signature_overloads.len() > 1 {
@@ -877,6 +920,51 @@ pub(crate) fn getter_accessor_names<'a>(
         .collect()
 }
 
+/// The parameter type of every `set` accessor in a member list, by name. A
+/// setter shadowed by a getter of the same name is dropped from the member
+/// list, so this is where the pair's *write* type is recovered — tsc keeps the
+/// two apart as `getTypeOfSymbol` and `getWriteTypeOfSymbol`.
+pub(crate) fn setter_accessor_types(
+    members: &[TSSignature<'_>],
+) -> std::collections::HashMap<String, ParsedType> {
+    members
+        .iter()
+        .filter_map(|member| match member {
+            TSSignature::TSMethodSignature(signature)
+                if signature.kind == TSMethodSignatureKind::Set =>
+            {
+                let PropertyKey::StaticIdentifier(key) = &signature.key else {
+                    return None;
+                };
+                let parameter_type = signature
+                    .params
+                    .items
+                    .first()
+                    .and_then(|parameter| parameter.type_annotation.as_ref())
+                    .and_then(|annotation| parse_type_annotation(annotation))?;
+                Some((key.name.to_string(), parameter_type))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Folds each `set` accessor's parameter type into the getter that shadowed it:
+/// the member stops being read-only, and carries the setter's type as its write
+/// type when the two differ.
+pub(crate) fn attach_accessor_write_types(
+    properties: &mut [ParsedObjectTypeProperty],
+    setters: &std::collections::HashMap<String, ParsedType>,
+) {
+    for property in properties {
+        let Some(setter_type) = setters.get(&property.name) else {
+            continue;
+        };
+        property.readonly = false;
+        property.write_ty = (property.ty != *setter_type).then(|| setter_type.clone());
+    }
+}
+
 pub(crate) fn is_shadowed_setter(
     member: &TSSignature<'_>,
     getters: &std::collections::HashSet<&str>,
@@ -939,6 +1027,11 @@ pub(crate) fn parse_type_method_signature(
             name_span,
             optional: false,
             is_method: false,
+            // A getter is read-only until a setter of the same name merges into
+            // it; the merge (in the interface/type-literal member list) is what
+            // clears this and records the write type.
+            readonly: method_signature.kind == TSMethodSignatureKind::Get,
+            write_ty: None,
             ty: accessor_type,
         });
     }
@@ -968,6 +1061,8 @@ pub(crate) fn parse_type_method_signature(
             type_parameters: parse_type_parameters(method_signature.type_parameters.as_deref()),
         })),
         optional: method_signature.optional,
+        readonly: false,
+        write_ty: None,
         is_method: true,
     })
 }
@@ -979,6 +1074,20 @@ pub(crate) fn parse_index_signature_value_type(
     index_signature: &oxc_ast::ast::TSIndexSignature<'_>,
 ) -> Option<ParsedType> {
     parse_type(&index_signature.type_annotation.type_annotation)
+}
+
+/// Whether an index signature is keyed by `number`. tsc keeps the two kinds
+/// apart: a numeric key prefers the number signature, and a string key a
+/// number-only type cannot answer is an implicit `any`.
+pub(crate) fn index_signature_is_numeric(
+    index_signature: &oxc_ast::ast::TSIndexSignature<'_>,
+) -> bool {
+    index_signature.parameters.first().is_some_and(|parameter| {
+        matches!(
+            parameter.type_annotation.type_annotation,
+            oxc_ast::ast::TSType::TSNumberKeyword(_)
+        )
+    })
 }
 
 pub(crate) fn parse_type_parameters(
@@ -1034,6 +1143,16 @@ pub(crate) fn computed_key_name(key: &PropertyKey<'_>) -> Option<String> {
         // augmentation contributed nothing at all.
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
         PropertyKey::NumericLiteral(literal) => Some(literal.raw_str().to_string()),
+        // `[-1]` names the property `-1`, as a written literal key would.
+        PropertyKey::UnaryExpression(unary) => {
+            super::expressions::signed_number_literal_text(unary)
+        }
+        // A template without substitutions is a string literal too.
+        PropertyKey::TemplateLiteral(template) if template.expressions.is_empty() => template
+            .quasis
+            .first()
+            .and_then(|quasi| quasi.value.cooked.as_ref())
+            .map(|cooked| cooked.to_string()),
         other => render(other.to_expression()).map(|path| format!("[{path}]")),
     }
 }
@@ -1064,6 +1183,8 @@ pub(crate) fn parse_type_property_signature(
                 ty: type_annotation,
                 optional: property_signature.optional,
                 is_method: false,
+                readonly: property_signature.readonly,
+                write_ty: None,
             })
         });
     }
@@ -1094,6 +1215,10 @@ pub(crate) fn parse_type_property_signature(
         ty: type_annotation,
         optional: property_signature.optional,
         is_method: false,
+        // tsc's `isReadonlySymbol`: a `readonly` member rejects every write,
+        // whatever its type.
+        readonly: property_signature.readonly,
+        write_ty: None,
     })
 }
 

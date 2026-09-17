@@ -1,16 +1,24 @@
+// Withheld, not deleted: the rule and its fixture are correct, what is not
+// good enough is surge's structural expansion of a library's generic types.
+// See `tests/compat-projects/assertion-overlap-basic/README.md`.
+#[allow(dead_code)]
+mod assertion;
 mod diagnostics;
 mod evaluate;
 mod guarded_unknown;
 mod index_access;
 mod inferred;
+mod operand_types;
+mod operand_writes;
 
 pub(crate) use diagnostics::*;
 pub(crate) use evaluate::*;
-use guarded_unknown::{
-    downgrade_guarded_genuine_unknown, downgrade_predicate_guarded_genuine_unknown,
-};
+pub(crate) use guarded_unknown::downgrade_guarded_genuine_unknown;
+use guarded_unknown::downgrade_predicate_guarded_genuine_unknown;
 use index_access::*;
 pub(crate) use inferred::*;
+pub(crate) use operand_types::{check_instanceof_left_operand, check_object_spread_type};
+pub(crate) use operand_writes::{check_delete_operand, check_update_operand, update_result_type};
 
 use std::time::Instant;
 use surge_ts_diagnostics::Diagnostic;
@@ -42,6 +50,96 @@ pub(crate) fn check_expression_statement(expression: ParsedExpression, ctx: &mut
     });
 }
 
+/// tsc reports a `readonly` array or tuple written to a mutable one with its
+/// own code (`The_type_0_is_readonly_and_cannot_be_assigned_to_the_mutable_type_1`,
+/// relater.go), not the generic assignability error.
+pub(crate) fn readonly_to_mutable_mismatch(source: &Type, target: &Type) -> bool {
+    let Type::Reference(reference) = source else {
+        return false;
+    };
+    reference.is_readonly_array()
+        && matches!(
+            target,
+            Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)
+        )
+}
+
+/// The diagnostic an assignability failure reports: TS4104 when a readonly
+/// array or tuple is written to a mutable one, and otherwise the position's
+/// ordinary code — TS2345 for an argument, TS2322 everywhere else.
+pub(crate) fn assignability_mismatch_diagnostic(
+    source: &Type,
+    target: &Type,
+    source_name: &str,
+    target_name: &str,
+    argument_position: bool,
+    file_name: impl Into<String>,
+) -> surge_ts_diagnostics::Diagnostic {
+    let file_name = file_name.into();
+    if readonly_to_mutable_mismatch(source, target) {
+        return surge_ts_diagnostics::Diagnostic::ts4104(source_name, target_name, file_name);
+    }
+    if argument_position {
+        surge_ts_diagnostics::Diagnostic::ts2345(source_name, target_name, file_name)
+    } else {
+        type_not_assignable_diagnostic(source, target, source_name, target_name, file_name)
+    }
+}
+
+/// tsc's plain assignability message (`reportRelationError` with no head
+/// message): TS2322, or TS2820 when a string literal missed a union by a typo
+/// of one of its string-literal members.
+pub(crate) fn type_not_assignable_diagnostic(
+    source: &Type,
+    target: &Type,
+    source_name: &str,
+    target_name: &str,
+    file_name: impl Into<String>,
+) -> surge_ts_diagnostics::Diagnostic {
+    match suggested_string_literal_member(source, target) {
+        Some(suggestion) => surge_ts_diagnostics::Diagnostic::ts2820(
+            source_name,
+            target_name,
+            Type::StringLiteral(suggestion).name(),
+            file_name,
+        ),
+        None => surge_ts_diagnostics::Diagnostic::ts2322(source_name, target_name, file_name),
+    }
+}
+
+/// tsc's `getSuggestedTypeForNonexistentStringLiteralType`.
+fn suggested_string_literal_member(source: &Type, target: &Type) -> Option<String> {
+    let Type::StringLiteral(value) = source else {
+        return None;
+    };
+    let peeled;
+    let union = match target {
+        Type::Union(union) => union,
+        Type::Reference(_) => {
+            peeled = target.peeled();
+            let Type::Union(union) = &peeled else {
+                return None;
+            };
+            union
+        }
+        _ => return None,
+    };
+    let members: Vec<Type> = union
+        .types()
+        .iter()
+        .map(|member| match member {
+            Type::Reference(_) => member.peeled(),
+            other => other.clone(),
+        })
+        .collect();
+    let candidates = members.iter().filter_map(|member| match member {
+        Type::StringLiteral(candidate) => Some(candidate.as_str()),
+        _ => None,
+    });
+    crate::checks::expr::inferred::spelling_suggestion(value, candidates, 1000)
+        .map(str::to_string)
+}
+
 pub(crate) fn evaluate_const_expression(
     expression: &ParsedExpression,
     fallback_span: Option<SyntaxTextSpan>,
@@ -63,7 +161,11 @@ pub(crate) fn evaluate_const_expression(
                     _ => Type::Unknown,
                 });
             }
-            let result = InferredExpression::Known(Type::Tuple(element_types));
+            // `as const` on an array makes it `readonly [...]`, which is what
+            // makes a write through an index TS2540 rather than a type error.
+            let result = InferredExpression::Known(
+                crate::infer::types::readonly_reference(Type::Tuple(element_types)),
+            );
             report_inferred_expression(
                 with_type_copy_reason(TypeCopyReason::ExpressionInference, || result.clone()),
                 fallback_span,
@@ -73,6 +175,9 @@ pub(crate) fn evaluate_const_expression(
             result
         }
         ParsedExpression::ObjectLiteral { properties, .. } => {
+            let properties = &*crate::infer::expression::resolve_computed_property_names(
+                properties, symbols, ctx,
+            );
             let mut props = surge_ts_types::PropertyMap::default();
             for property in properties {
                 let inferred = evaluate_const_expression(
@@ -91,6 +196,9 @@ pub(crate) fn evaluate_const_expression(
                         ty,
                         optional: false,
                         method: false,
+                        // `as const` makes every property read-only, which is
+                        // what turns a write to one into TS2540.
+                        readonly: true,
                     },
                 );
             }

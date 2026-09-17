@@ -152,6 +152,7 @@ pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type 
                         ty: surge_ts_types::remove_undefined(&existing.ty),
                         optional: false,
                         method: existing.method,
+                        readonly: existing.readonly,
                     },
                 );
             }
@@ -344,6 +345,45 @@ pub(super) fn narrow_truthy_reference_in_scope(
     true
 }
 
+/// The symbol-table form of [`narrow_union_by_property_truthiness_in_scope`],
+/// for the branches of `c ? a : b`. tsc binds both branches under the flow
+/// condition an `if` gets (`bindConditionalExpressionFlow`, binder.go:2319-2326),
+/// so the members the test rules out are gone in each branch just as they are in
+/// the statement form. Only the `if` path had this, which left
+/// `r.success ? … : r.error?.issues` reading `error` off the success member too.
+pub(super) fn narrow_union_by_property_truthiness_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+) -> Option<SymbolTable> {
+    let (base, path) = reference_path(condition)?;
+    if path.is_empty() {
+        return None;
+    }
+    let symbol = symbols.get(&base)?;
+    let Type::Union(union) = symbol.ty.peeled() else {
+        return None;
+    };
+    let kept: Vec<Type> = union
+        .types()
+        .iter()
+        .filter(|member| path_truthiness(member, &path) != Some(!branch_is_true))
+        .cloned()
+        .collect();
+    if kept.is_empty() || kept.len() == union.types().len() {
+        return None;
+    }
+    let narrowed_symbol = SymbolInfo {
+        ty: union_type(kept),
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+    let declared = symbol.ty.clone();
+    let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    narrowed_symbols.insert_narrowed(base, narrowed_symbol, declared);
+    Some(narrowed_symbols)
+}
+
 /// Whether the type at `path` inside `member` is always truthy (`Some(true)`),
 /// always falsy (`Some(false)`), or undecidable (`None`). An optional segment
 /// may be absent, so below it only a leaf that is itself falsy decides.
@@ -366,7 +406,7 @@ pub(super) fn path_truthiness(member: &Type, path: &[String]) -> Option<bool> {
 /// shape with at least one member is always truthy, and a union decides only
 /// when all of its members agree. `{}` admits `""` and `0`, so a memberless
 /// object stays undecided.
-pub(super) fn type_truthiness(ty: &Type) -> Option<bool> {
+pub(crate) fn type_truthiness(ty: &Type) -> Option<bool> {
     match ty {
         Type::BooleanLiteral(value) => Some(*value),
         Type::StringLiteral(value) => Some(!value.is_empty()),

@@ -447,7 +447,7 @@ fn resolve_default_and_named_import(
                 ctx.file_name_arc(),
                 *name_span,
                 vec![],
-                ParsedType::Unknown,
+                ParsedType::ErrorType,
                 None,
             ));
             if type_declarations.get(local_name).is_none() {
@@ -464,7 +464,7 @@ fn resolve_default_and_named_import(
                     ctx.file_name_arc(),
                     specifier.name_span,
                     vec![],
-                    ParsedType::Unknown,
+                    ParsedType::ErrorType,
                     None,
                 ));
                 if type_declarations.get(&specifier.local_name).is_none() {
@@ -476,7 +476,7 @@ fn resolve_default_and_named_import(
                     ctx.file_name_arc(),
                     specifier.name_span,
                     vec![],
-                    ParsedType::Unknown,
+                    ParsedType::ErrorType,
                     None,
                 ));
                 if type_declarations.get(&specifier.local_name).is_none() {
@@ -508,7 +508,7 @@ fn resolve_default_and_named_import(
                     ctx.file_name_arc(),
                     *name_span,
                     vec![],
-                    ParsedType::Unknown,
+                    ParsedType::ErrorType,
                     None,
                 ));
                 if type_declarations.get(local_name).is_none() {
@@ -545,7 +545,7 @@ fn resolve_default_and_named_import(
                         ctx.file_name_arc(),
                         *name_span,
                         vec![],
-                        ParsedType::Unknown,
+                        ParsedType::ErrorType,
                         None,
                     ));
                     if type_declarations.get(local_name).is_none() {
@@ -560,7 +560,7 @@ fn resolve_default_and_named_import(
                     ctx.file_name_arc(),
                     *name_span,
                     vec![],
-                    ParsedType::Unknown,
+                    ParsedType::ErrorType,
                     None,
                 ));
                 if type_declarations.get(local_name).is_none() {
@@ -1052,7 +1052,7 @@ fn resolve_namespace_import(
             ctx.file_name_arc(),
             None,
             vec![],
-            ParsedType::Unknown,
+            ParsedType::ErrorType,
             None,
         ));
         if type_declarations.get(local_name).is_none() {
@@ -1159,7 +1159,7 @@ fn resolve_named_import(
             report_unresolved_module(ctx, import);
             for specifier in specifiers {
                 if *is_type_only {
-                    insert_unknown_type_import(
+                    insert_error_type_import(
                         type_declarations,
                         &specifier.local_name,
                         ctx.file_name_arc(),
@@ -1168,7 +1168,7 @@ fn resolve_named_import(
                     continue;
                 }
 
-                insert_unknown_type_import(
+                insert_error_type_import(
                     type_declarations,
                     &specifier.local_name,
                     ctx.file_name_arc(),

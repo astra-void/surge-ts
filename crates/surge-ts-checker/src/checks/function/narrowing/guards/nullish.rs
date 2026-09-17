@@ -135,7 +135,8 @@ pub(crate) fn narrow_nullish_equality_symbol_table(
                 surge_ts_types::ObjectProperty {
                     ty: narrowed_ty,
                     optional: narrowed_optional,
-                    method: false,
+                    method: property.method,
+                    readonly: property.readonly,
                 },
             );
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);

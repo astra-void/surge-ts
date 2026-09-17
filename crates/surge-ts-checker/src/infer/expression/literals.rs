@@ -19,11 +19,58 @@ use crate::symbols::SymbolTable;
 
 use crate::infer::InferredExpression;
 
+/// tsc names a computed property by its key's type (`checkComputedPropertyName`):
+/// a string or number literal key is that property, and a `string`/`number` key
+/// adds no named member at all. The written path stays the name only for keys
+/// surge cannot type, which keeps well-known symbols (`[Symbol.iterator]`) as
+/// they were.
+pub(crate) fn resolve_computed_property_names<'a>(
+    properties: &'a [ParsedObjectProperty],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> std::borrow::Cow<'a, [ParsedObjectProperty]> {
+    if properties.iter().all(|property| property.computed_key.is_none()) {
+        return std::borrow::Cow::Borrowed(properties);
+    }
+    let mut resolved = Vec::with_capacity(properties.len());
+    for property in properties {
+        let Some(key) = property.computed_key.as_deref() else {
+            resolved.push(property.clone());
+            continue;
+        };
+        // The key is re-inferred by every pass that reads the literal; its own
+        // diagnostics belong to the pass that walks it, not to this lookup.
+        let diagnostics_before = ctx.diagnostics().len();
+        let key_type = infer_expression(key, symbols, ctx);
+        ctx.truncate_diagnostics(diagnostics_before);
+        let InferredExpression::Known(key_type) = key_type else {
+            resolved.push(property.clone());
+            continue;
+        };
+        match key_type.peeled() {
+            Type::StringLiteral(name) => {
+                let mut renamed = property.clone();
+                renamed.name = name;
+                resolved.push(renamed);
+            }
+            Type::NumberLiteral(literal) => {
+                let mut renamed = property.clone();
+                renamed.name = literal.value;
+                resolved.push(renamed);
+            }
+            Type::String | Type::Number | Type::Any => {}
+            _ => resolved.push(property.clone()),
+        }
+    }
+    std::borrow::Cow::Owned(resolved)
+}
+
 pub(crate) fn infer_object_literal(
     properties: &[ParsedObjectProperty],
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Type {
+    let properties = &*resolve_computed_property_names(properties, symbols, ctx);
     let object_literal_start = Instant::now();
     let mut merged_properties: PropertyMap = PropertyMap::default();
     // A spread source that surge could not fully enumerate carries
@@ -81,6 +128,7 @@ pub(crate) fn infer_object_literal(
                                     ]),
                                     optional: existing.optional,
                                     method: existing.method || source_property.method,
+                                    readonly: false,
                                 }
                             }
                             _ => source_property.clone(),
@@ -198,7 +246,10 @@ pub(crate) fn infer_const_expression(
                     _ => return InferredExpression::Unknown,
                 }
             }
-            InferredExpression::Known(Type::Tuple(element_types))
+            // `as const`: a readonly tuple, exactly as the annotation form.
+            InferredExpression::Known(crate::infer::types::readonly_reference(
+                Type::Tuple(element_types),
+            ))
         }
         ParsedExpression::ObjectLiteral { properties, .. }
             if !properties.iter().any(|property| property.is_spread) =>
@@ -209,7 +260,8 @@ pub(crate) fn infer_const_expression(
                     InferredExpression::Known(ty) if !ty.is_unknown() => {
                         members.insert(
                             property.name.as_str().into(),
-                            surge_ts_types::ObjectProperty::required(ty),
+                            // `as const`: every property is read-only.
+                            surge_ts_types::ObjectProperty::required(ty).with_readonly(true),
                         );
                     }
                     _ => return InferredExpression::Unknown,
@@ -233,6 +285,7 @@ pub(crate) fn infer_array_literal(
     }
 
     let mut element_types = Vec::new();
+    let mut spread_element_types = Vec::new();
 
     for element in elements {
         match infer_expression(&element.expression, symbols, ctx) {
@@ -246,6 +299,16 @@ pub(crate) fn infer_array_literal(
             | InferredExpression::Unknown => {
                 return InferredExpression::Unknown;
             }
+            // `[...xs]` contributes what iterating `xs` yields, not `xs`. A
+            // shape surge cannot iterate leaves the whole literal untyped
+            // rather than claiming an element type it did not derive.
+            InferredExpression::Known(ty) if element.spread => {
+                let yielded = crate::checks::function::for_of_element_type(&ty);
+                if yielded.is_unknown() {
+                    return InferredExpression::Unknown;
+                }
+                spread_element_types.push(yielded);
+            }
             InferredExpression::Known(ty) => element_types.push(ty),
         }
     }
@@ -255,7 +318,19 @@ pub(crate) fn infer_array_literal(
     // `["a","b"].includes(someString)` accept a widened argument. Contextual
     // typing against a literal-union target goes through a different path and is
     // unaffected.
-    let element_type = crate::checks::expr::widen_type(&union_type(element_types));
+    //
+    // A spread contributes an *existing* type, not a fresh literal, so it is
+    // not widened: `[...combination]` off a `('a' | 'b')[]` stays that union
+    // where widening made it `string[]` and rejected every use of the copy.
+    let element_type = if spread_element_types.is_empty() {
+        crate::checks::expr::widen_type(&union_type(element_types))
+    } else {
+        if !element_types.is_empty() {
+            spread_element_types
+                .push(crate::checks::expr::widen_type(&union_type(element_types)));
+        }
+        union_type(spread_element_types)
+    };
     InferredExpression::Known(Type::Array(Box::new(element_type)))
 }
 

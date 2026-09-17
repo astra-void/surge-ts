@@ -13,17 +13,21 @@ use crate::driver::collect_type_declarations;
 use crate::modules::{ModuleExportTable, build_module_export_table};
 
 /// See the comment at the ambient block-import binding phase in
-/// [`collect_ambient_modules`]. Opt-in (`SURGE_AMBIENT_BLOCK_IMPORTS=1`):
-/// since the namespace class+interface declaration merge and the class-arm
-/// prefix repair, flag-on is diagnostics-clean on every corpus (the earlier
-/// `Socket.destroy` false positive is gone) — but resolving the @types/node
-/// graph that the bound imports open up costs +36% user time on tRPC
-/// (interleaved A/B, diagnostics set-identical), because the newly reachable
-/// declarations expand eagerly per peel. Flip the default only after
-/// member-level lazy expansion makes that graph affordable.
+/// [`collect_ambient_modules`]. Default-on (opt-out `SURGE_AMBIENT_BLOCK_IMPORTS=0`):
+/// an import written inside `declare module "..."` binds, which is what
+/// TypeScript does and the only way a block-internal import is visible from a
+/// declaration body.
+///
+/// It was opt-in while resolving the @types/node graph the bound imports open
+/// up cost +36% user time on tRPC. Re-measured 2026-09-14 on an interleaved
+/// A/B (three reps, same frozen binary): trpc user time 4.07 s off vs 3.98 s
+/// on and peak RSS unchanged, zod within noise, and the diagnostic set is
+/// identical on all nine corpora — the memoization work that landed since
+/// absorbed the cost, so the reason to keep it off is gone.
 fn ambient_block_imports_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("SURGE_AMBIENT_BLOCK_IMPORTS").is_some())
+    *ENABLED
+        .get_or_init(|| std::env::var_os("SURGE_AMBIENT_BLOCK_IMPORTS").is_none_or(|v| v != "0"))
 }
 use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
 
@@ -844,10 +848,33 @@ pub(crate) fn collect_ambient_modules(
                     parsed_files,
                     ctx,
                 );
+                let declaring_file_contributions = if key
+                    .starts_with(MODULE_AUGMENTATION_FILE_KEY_PREFIX)
+                {
+                    Vec::new()
+                } else {
+                    augmentation_contributions_by_declaring_file(
+                        &parsed_file.file_name,
+                        &module.module_specifier,
+                        &raw_export_table,
+                        parsed_files,
+                        ctx,
+                    )
+                };
                 match Arc::make_mut(&mut ctx.module_augmentations).get_mut(&key) {
                     Some(existing) => merge_module_export_tables(existing, &raw_export_table),
                     None => {
                         Arc::make_mut(&mut ctx.module_augmentations).insert(key, raw_export_table);
+                    }
+                }
+                for (file_identity, contribution) in declaring_file_contributions {
+                    let file_key = module_augmentation_file_key(&file_identity);
+                    match Arc::make_mut(&mut ctx.module_augmentations).get_mut(&file_key) {
+                        Some(existing) => merge_module_export_tables(existing, &contribution),
+                        None => {
+                            Arc::make_mut(&mut ctx.module_augmentations)
+                                .insert(file_key, contribution);
+                        }
                     }
                 }
             } else if let Some(existing_index) = ambient_module_indexes
@@ -1051,6 +1078,160 @@ pub(crate) fn collect_ambient_modules(
         timings.ambient_module_binding += ambient_binding_start.elapsed()
     });
 }
+
+/// Resolves `specifier` written in `from_file` to a program file index, taking
+/// the package resolver's answer for a bare specifier and the relative resolver
+/// otherwise.
+fn module_file_index_for_specifier(
+    from_file: &str,
+    specifier: &str,
+    parsed_files: &[ParsedProgramFile],
+    ctx: &CheckerContext,
+) -> Option<usize> {
+    if let Some(resolved) = ctx.options.resolved_module_for(from_file, specifier) {
+        let identity = crate::modules::canonical_file_identity(resolved);
+        if let Some(index) = ctx.module_file_index_by_identity.get(identity.as_str()) {
+            return Some(*index);
+        }
+    }
+    crate::modules::resolve_relative_module(
+        from_file,
+        specifier,
+        parsed_files,
+        &ctx.module_file_index_by_identity,
+    )
+    .map(|resolution| resolution.resolved_file_index)
+}
+
+/// The file that *declares* `type_name`, following the entry module's
+/// `export *` / `export { … } from` chain.
+///
+/// `declare module "zod/v4" { interface ZodType { … } }` names the package
+/// entry point, but `ZodType` is declared in `classic/schemas.ts` and only
+/// re-exported from the entry — and `interface ZodString extends …` resolves
+/// its heritage in *that* file's scope. Patching the entry module's export
+/// table alone left every subtype blind to the added member, so a member an
+/// augmentation contributed existed on the augmented interface and on nothing
+/// that extended it. Only top-level declarations are followed: a name reached
+/// through a namespace re-export (`declare namespace fx { export { Req } }`)
+/// has no single declaring file here and keeps the specifier-keyed path.
+fn declaring_file_for_exported_type(
+    entry_file_index: usize,
+    type_name: &str,
+    parsed_files: &[ParsedProgramFile],
+    ctx: &CheckerContext,
+) -> Option<String> {
+    const MAX_REEXPORT_HOPS: usize = 64;
+    let mut visited = HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(entry_file_index);
+    while let Some(index) = queue.pop_front() {
+        if visited.len() >= MAX_REEXPORT_HOPS || !visited.insert(index) {
+            continue;
+        }
+        let Some(file) = parsed_files.get(index) else {
+            continue;
+        };
+        let declares = |statement: &ParsedStatement| match statement {
+            ParsedStatement::InterfaceDeclaration(declaration) => declaration.name == type_name,
+            _ => false,
+        };
+        for statement in &file.statements {
+            match statement {
+                statement if declares(statement) => {
+                    return Some(crate::modules::canonical_file_identity(&file.file_name));
+                }
+                ParsedStatement::ExportDeclaration(export) => match &**export {
+                    ParsedExportDeclaration::Statement { declaration, .. }
+                        if declares(declaration) =>
+                    {
+                        return Some(crate::modules::canonical_file_identity(&file.file_name));
+                    }
+                    ParsedExportDeclaration::All {
+                        module_specifier, ..
+                    } => {
+                        if let Some(next) = module_file_index_for_specifier(
+                            &file.file_name,
+                            module_specifier,
+                            parsed_files,
+                            ctx,
+                        ) {
+                            queue.push_back(next);
+                        }
+                    }
+                    ParsedExportDeclaration::Named {
+                        specifiers,
+                        module_specifier: Some(module_specifier),
+                        ..
+                    } if specifiers
+                        .iter()
+                        .any(|specifier| specifier.exported_name == type_name) =>
+                    {
+                        if let Some(next) = module_file_index_for_specifier(
+                            &file.file_name,
+                            module_specifier,
+                            parsed_files,
+                            ctx,
+                        ) {
+                            queue.push_back(next);
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// Splits a bare-specifier augmentation into the per-file contributions that
+/// [`declaring_file_for_exported_type`] can place, so each augmented interface
+/// also merges into the declaration table its subtypes resolve against. The
+/// specifier-keyed entry stays registered alongside: names with no resolvable
+/// declaring file still reach consumers only through it, and the ones that do
+/// resolve merge idempotently (see `merge_interface_infos`).
+fn augmentation_contributions_by_declaring_file(
+    augmenting_file: &str,
+    module_specifier: &str,
+    augmentation: &ModuleExportTable,
+    parsed_files: &[ParsedProgramFile],
+    ctx: &CheckerContext,
+) -> Vec<(String, ModuleExportTable)> {
+    if augmentation.type_declarations.len() == 0 {
+        return Vec::new();
+    }
+    let Some(entry_file_index) =
+        module_file_index_for_specifier(augmenting_file, module_specifier, parsed_files, ctx)
+    else {
+        return Vec::new();
+    };
+    let mut by_file: Vec<(String, ModuleExportTable)> = Vec::new();
+    for (name, declaration) in augmentation.type_declarations.iter() {
+        let Some(declaring_file) =
+            declaring_file_for_exported_type(entry_file_index, name.as_ref(), parsed_files, ctx)
+        else {
+            continue;
+        };
+        let entry = match by_file
+            .iter_mut()
+            .find(|(file, _)| *file == declaring_file)
+        {
+            Some(entry) => entry,
+            None => {
+                by_file.push((declaring_file, ModuleExportTable::default()));
+                by_file.last_mut().expect("just pushed")
+            }
+        };
+        crate::symbols::merge_type_declaration_into_table(
+            Arc::make_mut(&mut entry.1.type_declarations),
+            name.as_ref(),
+            declaration,
+        );
+    }
+    by_file
+}
+
 
 /// Merge a module augmentation into an already-resolved target export table.
 ///

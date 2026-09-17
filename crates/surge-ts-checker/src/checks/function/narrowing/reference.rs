@@ -237,7 +237,8 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
                 surge_ts_types::ObjectProperty {
                     ty: narrowed_ty,
                     optional: narrowed_optional,
-                    method: false,
+                    method: existing.method,
+                    readonly: existing.readonly,
                 },
             );
             Some(Type::Object(object_type))

@@ -491,6 +491,9 @@ fn run_single_file_mode(
     let diagnostics = Checker::new()
         .options(CheckerOptions {
             no_implicit_any,
+            // The single-file path has no tsconfig: `--noImplicitAny` stands in
+            // for `strict`, which is what both of these derive from.
+            strict_property_initialization: no_implicit_any,
             use_unknown_in_catch_variables: no_implicit_any,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,

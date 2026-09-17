@@ -12,12 +12,35 @@ use super::super::narrow_discriminant_in_scope;
 /// The bindings a branch body assigns at its own statement level. Deeper
 /// assignments are discarded with their own inner frame before the branch ends,
 /// so they cannot reach the join.
-pub(super) fn branch_assigned_names(body: &[ParsedFunctionBodyStatement], names: &mut Vec<String>) {
+/// The identifier a reference path starts from: `a` for `a.b.c` and `a[0].b`.
+/// `None` for a path rooted in anything that is not a plain binding.
+fn reference_root_name(expression: &ParsedExpression) -> Option<&str> {
+    match expression {
+        ParsedExpression::Identifier { name, .. } => Some(name),
+        ParsedExpression::PropertyAccess { object, .. }
+        | ParsedExpression::OptionalPropertyAccess { object, .. }
+        | ParsedExpression::ElementAccess { object, .. } => reference_root_name(object),
+        ParsedExpression::IndexAccess { object_name, .. } => Some(object_name),
+        _ => None,
+    }
+}
+
+pub(crate) fn branch_assigned_names(body: &[ParsedFunctionBodyStatement], names: &mut Vec<String>) {
     for statement in body {
         match statement {
             ParsedFunctionBodyStatement::Assignment(assignment) => {
                 if !names.iter().any(|name| *name == assignment.target_name) {
                     names.push(assignment.target_name.clone());
+                }
+            }
+            // `o.p = v` narrows by rewriting the *base* symbol's type
+            // (`narrow_reference_in_scope`), so the name to carry across the
+            // branch join is the root of the reference path, not the member.
+            ParsedFunctionBodyStatement::MemberAssignment(assignment) => {
+                if let Some(base) = reference_root_name(&assignment.target)
+                    && !names.iter().any(|name| name == base)
+                {
+                    names.push(base.to_string());
                 }
             }
             ParsedFunctionBodyStatement::Block(block) => branch_assigned_names(block, names),

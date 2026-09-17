@@ -12,7 +12,6 @@ use surge_ts_syntax::{
 use crate::context::{CheckerContext, convert_span};
 use crate::program::{
     record_flow_expression_visit_count, record_flow_identifier_read_count,
-    record_flow_truthiness_check_count,
 };
 
 pub(crate) fn check_expression_flow_impl(
@@ -140,6 +139,20 @@ pub(crate) fn check_expression_flow_impl(
             operand,
             operand_span,
             ..
+        } => check_expression_flow_impl(
+            operand,
+            operand_span.or(fallback_span),
+            flow_state,
+            statement_index,
+            ctx,
+        ),
+        ParsedExpression::Update {
+            operand,
+            operand_span,
+        }
+        | ParsedExpression::Await {
+            operand,
+            operand_span,
         } => check_expression_flow_impl(
             operand,
             operand_span.or(fallback_span),
@@ -572,32 +585,4 @@ fn type_assumed_initialized(ty: &surge_ts_types::Type) -> bool {
         Type::Union(union) => union.types().iter().any(type_assumed_initialized),
         _ => false,
     }
-}
-
-pub(crate) fn check_obvious_truthiness_condition(
-    expression: &ParsedExpression,
-    fallback_span: Option<SyntaxTextSpan>,
-    ctx: &mut CheckerContext,
-) -> bool {
-    record_flow_truthiness_check_count();
-    // This is intentionally narrow: it only covers syntax the project already parses
-    // and only emits the obvious truthiness diagnostics that the current checker supports.
-    let (diagnostic, diagnostic_emitted) = match expression {
-        ParsedExpression::StringLiteral(value) if value.is_empty() => {
-            (Diagnostic::ts2873(ctx.file_name.clone()), false)
-        }
-        ParsedExpression::StringLiteral(_) => (Diagnostic::ts2872(ctx.file_name.clone()), true),
-        // Boolean and numeric literal conditions are deliberately absent: tsc
-        // exempts them from TS2872/TS2873 so that `while (true)` and `if (0)`
-        // stay clean.
-        _ => return false,
-    };
-
-    let diagnostic = match fallback_span {
-        Some(span) => diagnostic.with_span(convert_span(span)),
-        None => diagnostic,
-    };
-
-    ctx.push(diagnostic);
-    diagnostic_emitted
 }

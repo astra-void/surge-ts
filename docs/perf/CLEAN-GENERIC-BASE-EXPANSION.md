@@ -69,7 +69,11 @@ resulting `ReadonlyMap` instantiation (pinned by
 degradation itself is pinned by a counter assertion
 (`any_member_produces_no_degraded_interface_resolutions`, a unit test next to
 the fix): the forced-peel fixture went from 1 degraded / 24 interface
-resolution attempts (pre-fix binary) to 0 / 13.
+resolution attempts (pre-fix binary) to 0 / 13. That absolute zero is no
+longer the assertion — the test now compares the `any` member against a
+concrete one and is named
+`any_member_degrades_no_more_than_a_concrete_member`; see the comment on it
+for why (2026-09-14).
 
 Known, deliberate tsc divergence: tsc types a conditional over `any` as the
 union of BOTH branches with unmatched `infer`s bound to `unknown` (probe:

@@ -188,6 +188,8 @@ impl JsonParser<'_> {
                         ty,
                         optional: false,
                         is_method: false,
+                        readonly: false,
+                        write_ty: None,
                     });
                 }
                 self.skip_whitespace();
@@ -210,6 +212,7 @@ impl JsonParser<'_> {
         Some(ParsedType::Object(Arc::new(ParsedObjectType {
             properties,
             string_index_type: None,
+            number_index_type: None,
             call_signature: None,
             call_signature_overloads: Vec::new(),
             construct_signature: None,

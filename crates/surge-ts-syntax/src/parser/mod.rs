@@ -63,6 +63,16 @@ fn parse_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {
         }
         Statement::IfStatement(if_statement) => functions::parse_if_statement(if_statement)
             .map(|if_statement| vec![ParsedStatement::If(Box::new(if_statement))]),
+        Statement::BlockStatement(_)
+        | Statement::ForStatement(_)
+        | Statement::ForInStatement(_)
+        | Statement::ForOfStatement(_)
+        | Statement::WhileStatement(_)
+        | Statement::DoWhileStatement(_)
+        | Statement::SwitchStatement(_)
+        | Statement::TryStatement(_)
+        | Statement::LabeledStatement(_) => functions::parse_function_body_statement(statement)
+            .map(|statements| vec![ParsedStatement::Block(statements)]),
         _ => None,
     }
 }
@@ -183,8 +193,16 @@ fn parse_expression_statement(
             let (expression, _) = parse_expression(&expression_statement.expression);
             Some(ParsedStatement::Expression(Box::new(expression)))
         }
-        Expression::AssignmentExpression(assignment) => parse_assignment_expression(assignment)
-            .map(|assignment| ParsedStatement::Assignment(Box::new(assignment))),
+        Expression::AssignmentExpression(assignment) => {
+            if let Some(assignment) = parse_assignment_expression(assignment) {
+                return Some(ParsedStatement::Assignment(Box::new(assignment)));
+            }
+            // A write to a member or element, which the identifier-target
+            // parser above does not accept. Dropping it left every module-scope
+            // `o.a = …` and `o[k] = …` unchecked.
+            functions::parse_member_assignment(assignment)
+                .map(|assignment| ParsedStatement::MemberAssignment(Box::new(assignment)))
+        }
         Expression::UnaryExpression(unary_expression) => parse_unary_expression(unary_expression)
             .map(|expression| ParsedStatement::Expression(Box::new(expression))),
         Expression::ConditionalExpression(conditional_expression) => {
@@ -226,7 +244,20 @@ pub(super) fn logical_assignment_value(
         }
         AssignmentOperator::LogicalOr => crate::ParsedLogicalOperator::Or,
         AssignmentOperator::LogicalAnd => crate::ParsedLogicalOperator::And,
-        _ => return None,
+        // `x op= v` is `x = x op v`, which is how tsc checks it too: the
+        // operator's own result type is what the assignment is then checked
+        // against (`checkBinaryLikeExpression` feeds `checkAssignmentOperator`).
+        other => {
+            let binary = compound_assignment_operator(other)?;
+            return Some(ParsedExpression::Binary {
+                left: Box::new(target),
+                left_span: target_span,
+                operator: binary,
+                operator_span: None,
+                right: Box::new(value),
+                right_span: value_span,
+            });
+        }
     };
     Some(ParsedExpression::Logical {
         left: Box::new(target),
@@ -235,6 +266,28 @@ pub(super) fn logical_assignment_value(
         operator_span: None,
         right: Box::new(value),
         right_span: value_span,
+    })
+}
+
+/// The binary operator a compound assignment applies.
+fn compound_assignment_operator(
+    operator: AssignmentOperator,
+) -> Option<crate::ParsedBinaryOperator> {
+    use crate::ParsedBinaryOperator as B;
+    Some(match operator {
+        AssignmentOperator::Addition => B::Add,
+        AssignmentOperator::Subtraction => B::Subtract,
+        AssignmentOperator::Multiplication => B::Multiply,
+        AssignmentOperator::Division => B::Divide,
+        AssignmentOperator::Remainder => B::Remainder,
+        AssignmentOperator::Exponential => B::Exponential,
+        AssignmentOperator::ShiftLeft => B::ShiftLeft,
+        AssignmentOperator::ShiftRight => B::ShiftRight,
+        AssignmentOperator::ShiftRightZeroFill => B::ShiftRightZeroFill,
+        AssignmentOperator::BitwiseOR => B::BitwiseOR,
+        AssignmentOperator::BitwiseXOR => B::BitwiseXOR,
+        AssignmentOperator::BitwiseAnd => B::BitwiseAnd,
+        _ => return None,
     })
 }
 
@@ -417,6 +470,25 @@ fn parse_object_binding_property_declarations(
         return Vec::new();
     };
 
+    // An object literal initializer is contextually typed by the pattern, whose
+    // defaulted elements are optional properties (`getTypeFromBindingPattern`),
+    // so a defaulted name the literal does not write reads `undefined` rather
+    // than a missing property.
+    if matches!(property.value, BindingPattern::AssignmentPattern(_))
+        && static_object_literal(&source_initializer).is_some_and(|properties| {
+            literal_lacks_property(properties, identifier.name.as_str())
+        })
+    {
+        return parse_binding_pattern_declarations(
+            &property.value,
+            Some(ParsedExpression::UndefinedLiteral),
+            Some(text_span_from_oxc_span(identifier.span)),
+            is_declare,
+            kind,
+            None,
+        );
+    }
+
     // Marked bracketed: this access is synthesized from a binding pattern, and
     // tsc does not apply `noPropertyAccessFromIndexSignature` (TS4111) to
     // destructuring — only to written dotted accesses.
@@ -436,6 +508,40 @@ fn parse_object_binding_property_declarations(
         kind,
         None,
     )
+}
+
+/// The properties of the object literal `expression` statically evaluates to:
+/// the literal itself, a property of one whose value is a literal, or the
+/// default an absent value falls back to.
+fn static_object_literal(expression: &ParsedExpression) -> Option<&[crate::ParsedObjectProperty]> {
+    match expression {
+        ParsedExpression::ObjectLiteral { properties, .. } => Some(properties),
+        ParsedExpression::ConstAssertion { expression, .. } => static_object_literal(expression),
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } => {
+            let properties = static_object_literal(object)?;
+            let property = properties
+                .iter()
+                .find(|property| property.name == *property_name && !property.is_spread)?;
+            static_object_literal(&property.value)
+        }
+        ParsedExpression::NullishCoalescing { left, right, .. } => match left.as_ref() {
+            ParsedExpression::UndefinedLiteral => static_object_literal(right),
+            left => static_object_literal(left),
+        },
+        _ => None,
+    }
+}
+
+/// Whether a literal certainly does not write `name`: a spread or a computed key
+/// could supply it.
+fn literal_lacks_property(properties: &[crate::ParsedObjectProperty], name: &str) -> bool {
+    properties
+        .iter()
+        .all(|property| !property.is_spread && property.computed_key.is_none() && property.name != name)
 }
 
 fn parse_array_pattern_declarations(

@@ -22,7 +22,7 @@ use crate::symbols::SymbolTable;
 
 mod builtins;
 mod instantiate;
-mod property;
+pub(crate) mod property;
 
 pub(crate) use builtins::*;
 pub(crate) use instantiate::*;
@@ -80,7 +80,8 @@ fn evaluate_arguments_under_degraded_callee(
 ) {
     let genuine = symbols
         .get(callee_name)
-        .is_some_and(|symbol| matches!(symbol.kind, crate::symbols::SymbolKind::ErrorImport));
+        .is_some_and(|symbol| matches!(symbol.kind, crate::symbols::SymbolKind::ErrorImport))
+        || ctx.genuine_any_bindings.contains(callee_name);
     let saved_depth = ctx.degraded_expected_type_depth;
     if genuine {
         ctx.degraded_expected_type_depth = 0;
@@ -510,30 +511,23 @@ fn check_callable_union_call(
         return None;
     }
 
-    let Some(members) = shared_signature_function_members(union) else {
+    let Some(members) = union_call_signature_members(union) else {
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts2349(ctx.file_name.clone()),
             callee_span,
         ));
         return None;
     };
+    if members.is_empty() {
+        return None;
+    }
 
-    // tsc synthesizes the union's call signature by intersecting the parameters
-    // positionally, so the member that declares the most of them carries the
-    // arity. A member that simply takes fewer does not make the union
-    // uncallable.
-    let representative = members
-        .iter()
-        .max_by_key(|member| member.parameters().len())
-        .expect("a shared signature has at least one member");
-    let return_types = members
-        .iter()
-        .map(|member| member.return_type().clone())
-        .collect::<Vec<_>>();
+    let combined = combined_union_call_signature(&members);
+    let return_type = combined.return_type().clone();
 
     with_type_copy_reason(TypeCopyReason::CallResolution, || {
         check_function_type_call(
-            representative,
+            &combined,
             callee_span,
             call_span,
             type_arguments,
@@ -541,7 +535,7 @@ fn check_callable_union_call(
             symbols,
             ctx,
         )
-        .map(|_| union_type(return_types))
+        .map(|_| return_type)
     })
 }
 
@@ -561,39 +555,68 @@ fn union_member_call_signature(ty: &Type) -> Option<FunctionType> {
     }
 }
 
-/// Returns the call signatures of a union's members when every member is
-/// callable and they share one Phase 1 call signature, or `None` when the union
-/// is not callable under Phase 1 rules (a non-callable member, mismatched arity,
-/// or parameters that are not mutually assignable). Return-type differences are
-/// permitted and unified by the caller.
-fn shared_signature_function_members(union: &UnionType) -> Option<Vec<FunctionType>> {
+/// Returns the call signatures of a union's members, or `None` when some member
+/// has none at all.
+///
+/// A union is callable exactly when *every* constituent is
+/// (`getUnionSignatures` bails on the first empty signature list); differing
+/// parameter types do not make it uncallable, they are combined by
+/// [`combined_union_call_signature`].
+fn union_call_signature_members(union: &UnionType) -> Option<Vec<FunctionType>> {
     let mut members = Vec::with_capacity(union.types().len());
     for ty in union.types() {
         members.push(union_member_call_signature(ty)?);
     }
 
-    // Compared against the member with the most parameters, not the first: a
-    // shorter member (`() => true`, a destructuring default beside
-    // `EnabledFn<T>`) contributes nothing to the positions it does not declare,
-    // and requiring equal arity made calling such a union a false TS2349.
-    // Positions present in *both* must still agree in the strong sense — that is
-    // what keeps a genuinely conflicting union uncallable.
-    let longest = members
-        .iter()
-        .max_by_key(|member| member.parameters().len())?;
-    let shares_signature = members.iter().all(|member| {
-        member.is_variadic() == longest.is_variadic()
-            && member
-                .parameters()
-                .iter()
-                .zip(longest.parameters().iter())
-                .all(|(member_parameter, longest_parameter)| {
-                    is_assignable_to(member_parameter, longest_parameter)
-                        && is_assignable_to(longest_parameter, member_parameter)
-                })
-    });
+    Some(members)
+}
 
-    shares_signature.then_some(members)
+/// The single signature tsc synthesizes for a callable union
+/// (`combineUnionOrIntersectionParameters` with `isUnion`): each position's
+/// parameter type is the **intersection** across the members that declare it, a
+/// position no member requires is optional, and the arity comes from the member
+/// declaring the most. A member that simply takes fewer parameters contributes
+/// nothing at the positions it omits (`T & unknown` is `T`), which is why the
+/// absent positions are skipped rather than intersected with a sentinel.
+///
+/// Requiring the members to *share* one signature instead — parameters mutually
+/// assignable — reported a false TS2349 on every union whose members merely
+/// differ, which is what left `j(file.source)` uncallable once jscodeshift's
+/// namespace intersection distributed.
+fn combined_union_call_signature(members: &[FunctionType]) -> FunctionType {
+    let parameter_count = members
+        .iter()
+        .map(|member| member.parameters().len())
+        .max()
+        .unwrap_or(0);
+    let parameters = (0..parameter_count)
+        .map(|index| {
+            let at_position: Vec<Type> = members
+                .iter()
+                .filter_map(|member| member.parameters().get(index).cloned())
+                .collect();
+            match at_position.len() {
+                1 => at_position.into_iter().next().expect("checked above"),
+                _ => crate::infer::types::merge_intersection_members(at_position),
+            }
+        })
+        .collect::<Vec<_>>();
+    let required_parameter_count = members
+        .iter()
+        .map(FunctionType::required_parameter_count)
+        .max()
+        .unwrap_or(0);
+    FunctionType::new(
+        parameters,
+        union_type(
+            members
+                .iter()
+                .map(|member| member.return_type().clone())
+                .collect(),
+        ),
+        members.iter().any(FunctionType::is_variadic),
+        required_parameter_count,
+    )
 }
 
 pub(crate) fn check_new_like(
@@ -613,6 +636,21 @@ pub(crate) fn check_new_like(
         && let Some(crate::symbols::TypeDeclarationInfo::Interface(info)) =
             ctx.lookup_type_declaration(name)
         && info.is_abstract_class
+        // tsc resolves the *value* and looks at its construct signatures. This
+        // lookup is by name over the type table, so a binding that shadows the
+        // class — zod's `partial(Class: SchemaClass<…>, …)` beside its own
+        // `export abstract class Class` — otherwise reported every `new Class()`
+        // in the function as an abstract instantiation. A binding that can hold
+        // any value no longer denotes the declaration; a `const` does (that is
+        // what a class declaration itself binds).
+        && !matches!(
+            symbols.get(name).map(|symbol| symbol.kind),
+            Some(
+                crate::symbols::SymbolKind::Parameter
+                    | crate::symbols::SymbolKind::Let
+                    | crate::symbols::SymbolKind::Var
+            )
+        )
     {
         // tsc underlines the whole `new` expression, not the class name.
         ctx.push(diagnostic_with_syntax_span(
@@ -1229,9 +1267,6 @@ pub(crate) fn check_optional_call_like(
         _ => return None,
     };
 
-    if callee_type.is_unknown() {
-        return None;
-    }
 
     let base_type = surge_ts_types::remove_undefined(&callee_type);
 
@@ -1250,8 +1285,16 @@ pub(crate) fn check_optional_call_like(
     };
 
     match base_type {
-        Type::Any => Some(Type::Any),
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => None,
+        Type::Any => {
+            super::call::property::evaluate_arguments_context_free(callee, arguments, symbols, ctx);
+            Some(Type::Any)
+        }
+        // Same rule as the property-call path: a callee surge could not model
+        // does not make its arguments stop being code.
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+            super::call::property::evaluate_arguments_context_free(callee, arguments, symbols, ctx);
+            None
+        }
         _ if callable.is_some() => check_function_type_call(
             callable.as_ref().expect("checked above"),
             callee_span,
@@ -1380,10 +1423,16 @@ pub(crate) fn check_function_type_call(
         } else {
             call_span.or(callee_span)
         };
-        ctx.push(diagnostic_with_syntax_span(
-            Diagnostic::ts2554(expected_count, actual, ctx.file_name.clone()),
-            span,
-        ));
+        // tsc's `getArgumentArityError`: a rest parameter makes the minimum the
+        // only bound, and optional parameters widen the count to a range.
+        let diagnostic = if actual < required && function_type.is_variadic() {
+            Diagnostic::ts2555(required, actual, ctx.file_name.clone())
+        } else if required < expected && !function_type.is_variadic() {
+            Diagnostic::ts2554(format!("{required}-{expected}"), actual, ctx.file_name.clone())
+        } else {
+            Diagnostic::ts2554(expected_count, actual, ctx.file_name.clone())
+        };
+        ctx.push(diagnostic_with_syntax_span(diagnostic, span));
         return None;
     }
 
@@ -1492,17 +1541,28 @@ pub(crate) fn check_function_type_call(
                 // narrowed the argument to `never`, which surge's narrowing only
                 // under-approximates, so every incompletely-narrowed residual
                 // would read as a false positive.
+                // A declared parameter that still carries holes surge could
+                // not fill — an unsubstituted type parameter, or a reference to
+                // a generic declaration written without arguments whose members
+                // were built from its own parameters — cannot reject anything.
+                // `type_contains_unknown` does not see through a reference;
+                // this predicate peels one level, as the signature comparison
+                // already does for the same shape.
                 if !matches!(parameter_type, Type::Never)
                     && !type_contains_unknown(&parameter_type)
+                    && !surge_ts_types::parameter_type_is_degraded(&parameter_type)
                     && (genuine_unknown_argument || !type_contains_unknown(&argument_type))
                     && !is_open_instantiation(&argument_type)
                     && !is_assignable_to(&argument_type, &parameter_type)
                 {
                     let argument_type_name = source_display_name(&argument_type, &parameter_type);
                     let parameter_type_name = parameter_type.name();
-                    let diagnostic = Diagnostic::ts2345(
+                    let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
+                        &argument_type,
+                        &parameter_type,
                         &argument_type_name,
                         &parameter_type_name,
+                        true,
                         ctx.file_name.clone(),
                     );
 
@@ -1535,6 +1595,48 @@ pub(crate) fn check_function_type_call(
         TypeCopyReason::CallResolution,
         || return_type.unwrap_or_else(|| function_type.return_type().clone()),
     ))
+}
+
+/// Overload selection for a call that is only *inferred* — a callback body
+/// sketched to bind a caller's type parameter. tsc resolves every call through
+/// `chooseOverload`, whatever asks for its type, so `plain(() => z.string())`
+/// binds `ZodString` from `string()`'s first overload; the sketch read the
+/// group's permissive fold instead and bound nothing. Shapes are built exactly
+/// as `check_function_type_call` builds them, from inferred rather than checked
+/// arguments, and the probe's diagnostics are discarded.
+///
+/// `function_type` is the group as declared: instantiating a generic group for
+/// the call rebuilds one kept signature and drops the rest, while `chooseOverload`
+/// walks every candidate in declaration order. A pick that is itself generic is
+/// declined by `select_overload_return_type`, leaving the caller's instantiation.
+pub(crate) fn select_overload_return_type_for_inferred_call(
+    function_type: &FunctionType,
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    function_type.overloads()?;
+    if arguments.iter().any(|argument| argument.spread) {
+        return None;
+    }
+    let diagnostics_before = ctx.diagnostics.len();
+    let argument_types: Vec<ArgumentShape> = arguments
+        .iter()
+        .map(|argument| ArgumentShape {
+            ty: match crate::infer::infer_expression(&argument.expression, symbols, ctx) {
+                InferredExpression::Known(argument_type)
+                    if !argument_is_callback(&argument.expression)
+                        && !type_contains_unknown(&argument_type) =>
+                {
+                    Some(argument_type)
+                }
+                _ => None,
+            },
+            written_keys: written_object_keys(&argument.expression),
+        })
+        .collect();
+    ctx.diagnostics.truncate(diagnostics_before);
+    select_overload_return_type(function_type, &argument_types)
 }
 
 /// What overload selection knows about one argument.
@@ -1833,7 +1935,6 @@ fn substituted_construct_signature(
             base_signature,
             &signature_info,
             &substitution,
-            false,
             ctx,
         )
         .into_owned(),

@@ -273,6 +273,8 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                     property.r#type,
                     PropertyDefinitionType::TSAbstractPropertyDefinition
                 ),
+                is_declare: property.declare,
+                has_definite_assertion: property.definite,
                 optional: property.optional,
                 readonly: property.readonly,
                 declared_type,

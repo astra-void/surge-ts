@@ -44,7 +44,7 @@ thread_local! {
     /// full comparison, which is exponential in nesting depth. Cleared with the
     /// in-progress set when the outermost call returns, so a freed `Arc` pointer
     /// can never alias a stale entry.
-    static ASSIGNABILITY_RELATION_CACHE: std::cell::RefCell<crate::fx::FxHashMap<(RelationKey, RelationKey), bool>> =
+    static ASSIGNABILITY_RELATION_CACHE: std::cell::RefCell<crate::fx::FxHashMap<(u8, RelationKey, RelationKey), bool>> =
         std::cell::RefCell::new(crate::fx::FxHashMap::default());
 
     /// Bumped whenever a comparison is answered by assumption (depth-cap or
@@ -62,6 +62,31 @@ thread_local! {
     /// remaining comparisons are answered by assumption, the same coinductive
     /// answer the cap gives.
     static ASSIGNABILITY_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+
+    /// The relation the current outermost query is being decided under. Constant
+    /// for the duration of one query; [`is_comparable_to`] sets and restores it.
+    static CURRENT_RELATION: std::cell::Cell<Relation> =
+        const { std::cell::Cell::new(Relation::Assignable) };
+}
+
+fn current_relation() -> Relation {
+    CURRENT_RELATION.with(std::cell::Cell::get)
+}
+
+/// Which relation a comparison is being decided under, mirroring tsc's
+/// `assignableRelation` / `comparableRelation`. The engine is a set of free
+/// functions sharing thread-local state (depth, in-progress set, memo), so the
+/// relation lives alongside them rather than being threaded through every
+/// signature — the same role `Relater.relation` plays in `relater.go`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Relation {
+    Assignable,
+    /// tsc's comparable relation: laxer than assignability, and the relation an
+    /// `x as T` conversion is checked under. The difference that matters is a
+    /// union *source*, which is related when *some* constituent is rather than
+    /// every one (`relater.go`, `someTypeRelatedToType` vs
+    /// `eachTypeRelatedToType`).
+    Comparable,
 }
 
 const MAX_ASSIGNABILITY_DEPTH: u32 = 200;
@@ -70,12 +95,12 @@ const MAX_ASSIGNABILITY_STEPS: u64 = 250_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct RelationKey {
     tag: u8,
-    parts: [usize; 5],
+    parts: [usize; 6],
 }
 
 /// Stable identity for memoizing a comparison side. Every field that can change
-/// the assignability verdict must contribute (properties, string index, call and
-/// construct signatures, `alias_id` for the nominal fast path); types without a
+/// the assignability verdict must contribute (properties, both index signatures,
+/// call and construct signatures, `alias_id` for the nominal fast path); types without a
 /// shared-`Arc` identity return `None` and are simply not memoized.
 fn relation_key(ty: &Type) -> Option<RelationKey> {
     match ty {
@@ -85,6 +110,10 @@ fn relation_key(ty: &Type) -> Option<RelationKey> {
                 Arc::as_ptr(&object.properties) as usize,
                 object
                     .string_index_type
+                    .as_ref()
+                    .map_or(0, |index| Arc::as_ptr(index) as usize),
+                object
+                    .number_index_type
                     .as_ref()
                     .map_or(0, |index| Arc::as_ptr(index) as usize),
                 object
@@ -101,11 +130,11 @@ fn relation_key(ty: &Type) -> Option<RelationKey> {
         }),
         Type::Union(union) => Some(RelationKey {
             tag: 2,
-            parts: [union.payload_address(), 0, 0, 0, 0],
+            parts: [union.payload_address(), 0, 0, 0, 0, 0],
         }),
         Type::Function(function) => Some(RelationKey {
             tag: 3,
-            parts: [function.payload_address(), 0, 0, 0, 0],
+            parts: [function.payload_address(), 0, 0, 0, 0, 0],
         }),
         _ => None,
     }
@@ -194,12 +223,16 @@ fn discriminated_union_assignable(from: &Type, to_union: &crate::UnionType) -> b
                     ty: literal.clone(),
                     optional: property.optional,
                     method: property.method,
+                    readonly: false,
                 },
             );
-            let narrowed = Type::Object(ObjectType::new(
-                narrowed_properties,
-                from_object.string_index_type.as_deref().cloned(),
-            ));
+            let narrowed = Type::Object(
+                ObjectType::new(
+                    narrowed_properties,
+                    from_object.string_index_type.as_deref().cloned(),
+                )
+                .with_number_index_type(from_object.number_index_type.as_deref().cloned()),
+            );
             peeled_members
                 .iter()
                 .any(|member| is_assignable_to(&narrowed, member))
@@ -209,6 +242,19 @@ fn discriminated_union_assignable(from: &Type, to_union: &crate::UnionType) -> b
     }
 
     false
+}
+
+/// tsc's `isTypeComparableTo`. Same engine as [`is_assignable_to`], decided
+/// under the comparable relation: `x as T` is legal when the two types overlap
+/// in either direction, and overlap is laxer than assignability.
+///
+/// Nested calls keep whatever relation the outermost query established, exactly
+/// as a `Relater` carries one relation through a whole comparison.
+pub fn is_comparable_to(from: &Type, to: &Type) -> bool {
+    let previous = CURRENT_RELATION.with(|relation| relation.replace(Relation::Comparable));
+    let result = is_assignable_to(from, to);
+    CURRENT_RELATION.with(|relation| relation.set(previous));
+    result
 }
 
 pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
@@ -258,7 +304,8 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         // type there, so failing on a degraded *source* turns every unmodelled
         // corner into a false-positive cascade. The same leniency already
         // applies to sentinel arguments in the same-generic fast path below.
-        || matches!(from, Type::Unknown | Type::TypeParameter(_))
+        // tsc's `errorType` is `any`, so it flows both ways like the sentinel.
+        || matches!(from, Type::Unknown | Type::ErrorType | Type::TypeParameter(_))
     {
         return true;
     }
@@ -267,11 +314,20 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
     // `Flags.A | Flags.B` is typed `number`, and the bitwise combination is the
     // normal way to build a flag argument. The reverse (a string into a string
     // enum) is rejected, which is why only the numeric marker opens this.
+    // A number *literal* is not covered: it must match a member's value
+    // (`isSimpleTypeRelatedTo`), which the structural comparison against the
+    // enum's member union below decides — a computed member resolves to
+    // `number` and so still accepts any literal. `number | 0` (from `x ?? 0`)
+    // is `number` once tsc's subtype reduction drops the literal.
     if matches!(to, Type::Reference(reference) if reference.numeric_enum)
-        && matches!(
-            from.base_primitive().as_ref().unwrap_or(from),
-            Type::Number | Type::NumberLiteral(_)
-        )
+        && match from {
+            Type::Number => true,
+            Type::Union(union) => {
+                union.types().iter().any(|member| matches!(member, Type::Number))
+                    && matches!(from.base_primitive(), Some(Type::Number))
+            }
+            _ => false,
+        }
     {
         return true;
     }
@@ -293,7 +349,10 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
 
     let cache_key = match (relation_key(from), relation_key(to)) {
         (Some(from_key), Some(to_key)) => {
-            let pair = (from_key, to_key);
+            // The relation is part of the key: the same pair legitimately gets
+            // different answers under the comparable relation, and a key that
+            // omitted it would let one relation answer for the other.
+            let pair = (current_relation() as u8, from_key, to_key);
             if let Some(result) =
                 ASSIGNABILITY_RELATION_CACHE.with(|cache| cache.borrow().get(&pair).copied())
             {
@@ -349,7 +408,7 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
                     .iter()
                     .zip(to_ref.arguments.iter())
                     .all(|(from_arg, to_arg)| {
-                        matches!(from_arg, Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_))
+                        matches!(from_arg, Type::Any | Type::Unknown | Type::ErrorType | Type::GenuineUnknown | Type::TypeParameter(_))
                             || matches!(to_arg, Type::Any)
                             || is_assignable_to(from_arg, to_arg)
                     });
@@ -487,15 +546,9 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             // than `any` single target member: a source member that is itself a
             // union (surge builds nested unions in a few synthesized spots)
             // fits the target member-wise, not as one atom.
-            from_union
-                .types()
-                .iter()
-                .all(|from_ty| is_assignable_to(from_ty, to))
+            union_source_related(from_union, to)
         }
-        (Type::Union(from_union), to_ty) => from_union
-            .types()
-            .iter()
-            .all(|from_ty| is_assignable_to(from_ty, to_ty)),
+        (Type::Union(from_union), to_ty) => union_source_related(from_union, to_ty),
         (from_ty, Type::Union(to_union)) => {
             to_union
                 .types()
@@ -525,6 +578,7 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         (Type::Function(source), Type::Object(target)) => {
             target.construct_signature().is_none()
                 && target.string_index_type.is_none()
+                && target.number_index_type.is_none()
                 && match target.call_signature() {
                     Some(call_signature) => is_function_assignable_to(source, call_signature),
                     None => true,
@@ -567,10 +621,20 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             | Type::OpenTuple(_),
             Type::Object(target),
         ) => {
+            // A required member is satisfied by whatever the source's own
+            // intrinsic surface answers for it — `length` on an array or
+            // string, `[Symbol.iterator]` on either. surge models these as
+            // their own `Type` variants rather than as `Array`/`String`
+            // interface instances, so without the lookup every lib interface an
+            // array satisfies in tsc (`ArrayLike<T>`, `Iterable<T>`, a bare
+            // `{ length: number }`) was rejected wholesale.
             target
                 .properties
-                .values()
-                .all(|property| property.is_optional())
+                .iter()
+                .all(|(name, property)| match from.get_property_access_type(name) {
+                    Some(source_ty) => is_assignable_to(&source_ty, &property.ty),
+                    None => property.is_optional(),
+                })
                 // Only an index signature the source *declared* rejects here. A
                 // checker-injected openness marker records an intersection operand
                 // surge could not enumerate (`T & {}` where `T` stayed generic), so
@@ -586,6 +650,20 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
 
 /// Whether `ty` is a function or an object carrying a call/construct signature —
 /// i.e. something assignable to the global `Function` interface.
+/// A union source is related when *every* constituent is under the assignable
+/// relation, but when *some* constituent is under the comparable one
+/// (`relater.go`: `eachTypeRelatedToType` vs `someTypeRelatedToType`). This is
+/// the only place the two relations diverge, and it applies at every level of a
+/// structural comparison — which is why `[string, string | undefined]` overlaps
+/// `string[]` even though it is not assignable to it.
+fn union_source_related(from_union: &crate::UnionType, to: &Type) -> bool {
+    let mut members = from_union.types().iter();
+    match current_relation() {
+        Relation::Assignable => members.all(|from_ty| is_assignable_to(from_ty, to)),
+        Relation::Comparable => members.any(|from_ty| is_assignable_to(from_ty, to)),
+    }
+}
+
 fn is_function_like(ty: &Type) -> bool {
     match ty {
         Type::Function(_) => true,
@@ -600,12 +678,22 @@ fn is_function_like(ty: &Type) -> bool {
 /// `unknown` keyword, which is `GenuineUnknown`) in an argument, member, union
 /// arm, or signature position. Depth-bounded and reference-arguments-only (no
 /// peel), so cyclic library reference graphs cannot loop.
+/// Whether a *declared* parameter type still carries holes surge could not
+/// fill — an unsubstituted type parameter, the degradation sentinel, or a
+/// reference to a generic declaration written without arguments, whose members
+/// were therefore built from the declaration's own parameters. Such an
+/// expectation cannot reject an argument: the mismatch describes the hole, not
+/// the source.
+pub fn parameter_type_is_degraded(ty: &Type) -> bool {
+    parameter_carries_degraded_unknown(ty, 0)
+}
+
 fn parameter_carries_degraded_unknown(ty: &Type, depth: usize) -> bool {
     if depth > 3 {
         return false;
     }
     match ty {
-        Type::Unknown | Type::TypeParameter(_) => true,
+        Type::Unknown | Type::ErrorType | Type::TypeParameter(_) => true,
         Type::Reference(reference) => {
             reference
                 .arguments
@@ -904,9 +992,9 @@ pub fn object_assignability_failure(
 
     for (property_name, target_property) in target.properties.iter() {
         let source_property = source.properties.get(property_name.as_ref());
-        let source_property_ty = source_property
-            .map(|property| &property.ty)
-            .or_else(|| source.string_index_type.as_deref());
+        let source_property_ty = source_property.map(|property| &property.ty).or_else(|| {
+            source.applicable_index_type(crate::object::is_numeric_key(property_name.as_ref()))
+        });
 
         let source_property_ty = source_property_ty
             .cloned()

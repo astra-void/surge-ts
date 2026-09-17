@@ -505,7 +505,7 @@ pub(super) fn canonical_type_identity(
             .clone()
             .map(CanonicalTypeIdentity::NamedObject)
             .ok_or(InterfaceCacheSkipReason::UnsupportedTypeArgument),
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+        Type::Unknown | Type::GenuineUnknown | Type::ErrorType | Type::TypeParameter(_) => {
             Err(InterfaceCacheSkipReason::UnresolvedTypeArgument)
         }
         Type::Union(union) if widened => {
@@ -772,6 +772,7 @@ mod physical_interface_cache_tests {
             Vec::new(),
             None,
             None,
+            None,
             Vec::new(),
             None,
         )
@@ -807,6 +808,8 @@ mod physical_interface_cache_tests {
                 optional: false,
                 is_abstract: false,
                 is_method: true,
+                readonly: false,
+                write_ty: None,
                 ty: ParsedType::Function(std::sync::Arc::new(ParsedFunctionType {
                     parameters: Vec::new(),
                     return_type: Box::new(ParsedType::String),

@@ -30,6 +30,37 @@ pub(crate) use access::*;
 pub(crate) use functions::*;
 pub(crate) use literals::*;
 pub(crate) use operators::*;
+/// The type of `left ?? right`. tsc expands a genuine `unknown` left operand to
+/// `{} | null | undefined` before taking its non-nullable half
+/// (`getAdjustedTypeWithFacts`), so `u ?? x` is `{} | x`, not `unknown`; the
+/// degradation sentinel and placeholder parameters keep flowing through as-is,
+/// because a modelling failure must not invent a type.
+pub(crate) fn nullish_coalescing_result(left_ty: Type, right_ty: Type) -> Type {
+    if left_ty == Type::Any || (left_ty.is_unknown() && left_ty != Type::GenuineUnknown) {
+        return left_ty;
+    }
+    if left_ty == Type::Undefined {
+        return right_ty;
+    }
+    let non_nullable = non_nullable_unknown(surge_ts_types::remove_nullish(&left_ty));
+    union_type(vec![non_nullable, right_ty])
+}
+
+fn non_nullable_unknown(ty: Type) -> Type {
+    match ty {
+        Type::GenuineUnknown => Type::Object(ObjectType::new(PropertyMap::default(), None)),
+        Type::Union(union) => union_type(
+            union
+                .types()
+                .iter()
+                .cloned()
+                .map(non_nullable_unknown)
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
 enum CopySource {
     Identifier,
     CallReturn,
@@ -132,7 +163,27 @@ pub(crate) fn infer_expression(
                     span: *span,
                 })
         }
-        ParsedExpression::This { .. } => symbols
+        ParsedExpression::This { span } => {
+            // tsc gates this on `noImplicitThis`; surge models no such flag, so
+            // it rides `noImplicitAny` — both derive from `strict`.
+            // TS2683 is withheld: an object-literal accessor under a
+            // contextual type reaches this through a path that does not clear
+            // the flag, so zod's `const def: core.$ZodObjectDef = { get shape()
+            // { … this.shape … } }` was a false positive. Re-enable with the
+            // `this` binding carried on the lowered arrow itself.
+            if false
+                && ctx.this_is_implicitly_any
+                && ctx.options.no_implicit_any
+                && symbols.get("this").is_none()
+                && let Some(span) = span
+            {
+                let file_name = ctx.file_name.clone();
+                ctx.push(
+                    surge_ts_diagnostics::Diagnostic::ts2683(file_name)
+                        .with_span(crate::context::convert_span(*span)),
+                );
+            }
+            symbols
             .get("this")
             .map(|symbol| {
                 InferredExpression::Known(clone_type_with_metrics(
@@ -142,7 +193,8 @@ pub(crate) fn infer_expression(
             })
             // Outside a class body `this` has no instance type here; stay
             // conservative rather than emitting an unresolved-identifier error.
-            .unwrap_or(InferredExpression::Unknown),
+            .unwrap_or(InferredExpression::Unknown)
+        }
         ParsedExpression::ObjectLiteral { properties, .. } => {
             InferredExpression::Known(infer_object_literal(properties, symbols, ctx))
         }
@@ -152,6 +204,17 @@ pub(crate) fn infer_expression(
         ParsedExpression::Unary {
             operator, operand, ..
         } => infer_unary_expression(*operator, operand, symbols, ctx),
+        ParsedExpression::Update { operand, .. } => {
+            crate::checks::expr::update_result_type(&infer_expression(operand, symbols, ctx))
+        }
+        ParsedExpression::Await { operand, .. } => {
+            match infer_expression(operand, symbols, ctx) {
+                InferredExpression::Known(ty) => {
+                    InferredExpression::Known(crate::checks::call::awaited_type(&ty))
+                }
+                other => other,
+            }
+        }
         ParsedExpression::Binary {
             operator,
             left,
@@ -225,14 +288,7 @@ pub(crate) fn infer_expression(
 
             match (left_type, right_type) {
                 (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty)) => {
-                    if left_ty == Type::Any || left_ty.is_unknown() {
-                        InferredExpression::Known(left_ty)
-                    } else if left_ty == Type::Undefined {
-                        InferredExpression::Known(right_ty)
-                    } else {
-                        let filtered_left = surge_ts_types::remove_nullish(&left_ty);
-                        InferredExpression::Known(union_type(vec![filtered_left, right_ty]))
-                    }
+                    InferredExpression::Known(nullish_coalescing_result(left_ty, right_ty))
                 }
                 _ => InferredExpression::Unknown,
             }

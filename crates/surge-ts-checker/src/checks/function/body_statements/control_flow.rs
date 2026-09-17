@@ -11,10 +11,11 @@ use crate::context::CheckerContext;
 use crate::context::convert_span;
 use crate::flow::{
     FlowCheck, FunctionFlowState, analyze_function_body_flow, check_expression_flow,
-    check_obvious_truthiness_condition, merge_branch_deltas,
+    merge_branch_deltas,
 };
 use crate::infer::{InferredExpression, map_parsed_type};
 use crate::symbols::ScopeStack;
+use super::super::narrowing::narrow_reference_non_null_in_scope;
 use super::super::{
     check_function_body, evaluate_condition_expression_with_truthy_guards, insert_binding_name,
     narrow_discriminant_in_scope, narrow_truthy_guarded_identifiers, visible_symbols,
@@ -34,8 +35,6 @@ pub(crate) fn check_function_if_statement(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
-    check_obvious_truthiness_condition(&if_statement.condition, if_statement.condition_span, ctx);
-
     // `if (ok)` where `ok` is a boolean `const` alias narrows by the condition
     // the alias was written as, not by the opaque identifier.
     let alias_condition = resolved_alias_condition(&if_statement.condition, flow_state);
@@ -221,21 +220,60 @@ pub(crate) fn check_function_while_statement(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
-    check_obvious_truthiness_condition(
-        &while_statement.condition,
-        while_statement.condition_span,
+    let ParsedWhileStatement {
+        condition,
+        condition_span,
+        body,
+        runs_at_least_once,
+    } = while_statement;
+
+    // A lowered `do … while (c)` runs its body first, so the body is checked
+    // with the enclosing flow state (its assignments stand afterwards) and the
+    // condition is checked last, where it may read what the body assigned.
+    if runs_at_least_once {
+        scopes.push_child();
+        check_function_body(body, return_type, scopes, flow_state, ctx);
+        scopes.pop_child();
+        check_while_condition(&condition, condition_span, statement_index, scopes, flow_state, ctx);
+        return;
+    }
+
+    check_while_condition(&condition, condition_span, statement_index, scopes, flow_state, ctx);
+
+    scopes.push_child();
+    // The condition is tested before every iteration, so the body starts where
+    // it held, whatever the previous iteration assigned.
+    let alias_condition = resolved_alias_condition(&condition, flow_state);
+    let base_condition: &ParsedExpression = alias_condition.as_deref().unwrap_or(&condition);
+    let rewritten_condition = rewrite_discriminant_aliases(base_condition, flow_state);
+    narrow_condition_and_aliases_in_scope(
+        base_condition,
+        rewritten_condition.as_ref(),
+        scopes,
+        true,
+        flow_state,
         ctx,
     );
+    if flow_state.tracked_local_count() > 0 {
+        flow_state.begin_branch_capture();
+        check_function_body(body, return_type, scopes, flow_state, ctx);
+        let _ = flow_state.finish_branch_capture();
+    } else {
+        check_function_body(body, return_type, scopes, flow_state, ctx);
+    }
+    scopes.pop_child();
+}
 
-    let flow_active = flow_state.tracked_local_count() > 0;
-    let condition_blocked = if flow_active {
-        check_expression_flow(
-            &while_statement.condition,
-            while_statement.condition_span,
-            flow_state,
-            statement_index,
-            ctx,
-        )
+fn check_while_condition(
+    condition: &surge_ts_syntax::ParsedExpression,
+    condition_span: Option<surge_ts_syntax::TextSpan>,
+    statement_index: usize,
+    scopes: &mut ScopeStack,
+    flow_state: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    let condition_blocked = if flow_state.tracked_local_count() > 0 {
+        check_expression_flow(condition, condition_span, flow_state, statement_index, ctx)
     } else {
         FlowCheck::Clear
     };
@@ -243,22 +281,12 @@ pub(crate) fn check_function_while_statement(
     if !condition_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);
         let _ = evaluate_condition_expression_with_truthy_guards(
-            &while_statement.condition,
-            while_statement.condition_span,
+            condition,
+            condition_span,
             &visible_symbols,
             ctx,
         );
     }
-
-    scopes.push_child();
-    if flow_active {
-        flow_state.begin_branch_capture();
-        check_function_body(while_statement.body, return_type, scopes, flow_state, ctx);
-        let _ = flow_state.finish_branch_capture();
-    } else {
-        check_function_body(while_statement.body, return_type, scopes, flow_state, ctx);
-    }
-    scopes.pop_child();
 }
 
 pub(crate) fn check_function_for_of_statement(
@@ -283,20 +311,57 @@ pub(crate) fn check_function_for_of_statement(
     };
 
     let mut element_type = Type::Unknown;
+    let mut numeric_property_names = false;
     if !iterable_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);
-        if let InferredExpression::Known(iterable_type) = evaluate_expression(
+        let iterable_type = evaluate_expression(
             &for_of_statement.iterable,
             for_of_statement.iterable_span,
             &visible_symbols,
             ctx,
-        ) {
+        );
+        // `for (k in o)` binds the property key, which is always `string` — the
+        // right-hand side is still evaluated so errors inside it surface. The
+        // key is *indexed* as a number when the iterated object's only index
+        // signature is numeric, which is a property of the access rather than
+        // of the binding (tsc: `isForInVariableForNumericPropertyNames`).
+        if for_of_statement.keys_only {
+            element_type = Type::String;
+            numeric_property_names = matches!(
+                &iterable_type,
+                InferredExpression::Known(iterable_type)
+                    if has_numeric_property_names(iterable_type)
+            );
+        } else if let InferredExpression::Known(iterable_type) = iterable_type {
             element_type = for_of_element_type(&iterable_type);
         }
     }
 
     scopes.push_child();
+    // `for (const _ in ref)` acts as a non-null assertion on `ref` for the
+    // duration of the body (tsc: `getTypeAtFlowNode`, flow.go — "for (const _
+    // in ref) acts as a nonnull on ref"), so indexing an optional object with
+    // the key it just produced is not a possibly-undefined access.
+    if for_of_statement.keys_only {
+        narrow_reference_non_null_in_scope(&for_of_statement.iterable, scopes);
+    }
     insert_binding_name(&for_of_statement.binding_name, element_type, scopes);
+    // The key of a `for…in` over a numerically-keyed object indexes as a
+    // number, so an access through it reads the numeric index signature rather
+    // than reporting an implicit `any`.
+    if numeric_property_names
+        && let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } =
+            &for_of_statement.binding_name
+        && let Some(symbol) = scopes.resolve(name).cloned()
+    {
+        scopes.insert_current(
+            name.as_str(),
+            crate::symbols::SymbolInfo {
+                kind: crate::symbols::SymbolKind::ForInNumericKey,
+                ..symbol
+            },
+        );
+    }
     if flow_active {
         flow_state.begin_branch_capture();
         check_function_body(for_of_statement.body, return_type, scopes, flow_state, ctx);
@@ -305,6 +370,15 @@ pub(crate) fn check_function_for_of_statement(
         check_function_body(for_of_statement.body, return_type, scopes, flow_state, ctx);
     }
     scopes.pop_child();
+}
+
+/// tsc's `hasNumericPropertyNames`: the type's only index signature is the
+/// numeric one, which is what makes a `for…in` key over it a `number`.
+fn has_numeric_property_names(ty: &Type) -> bool {
+    match ty.peeled() {
+        Type::Object(object) => object.has_numeric_property_names(),
+        _ => false,
+    }
 }
 
 pub(crate) fn for_of_element_type(iterable_type: &Type) -> Type {
@@ -512,9 +586,27 @@ pub(crate) fn check_function_switch_statement(
         right: Box::new(test.clone()),
         right_span: None,
     };
+    let any_of = |tests: &mut dyn Iterator<Item = &ParsedExpression>| {
+        tests
+            .map(equality_condition)
+            .reduce(|left, right| ParsedExpression::Logical {
+                left: Box::new(left),
+                left_span: None,
+                operator: surge_ts_syntax::ParsedLogicalOperator::Or,
+                operator_span: None,
+                right: Box::new(right),
+                right_span: None,
+            })
+    };
+    // Matching none of the cases is what the `default` clause, and the code
+    // after a `switch` without one, sees (`narrowTypeBySwitchOnDiscriminant`).
+    let no_case_matches =
+        any_of(&mut switch_statement.cases.iter().filter_map(|case| case.test.as_ref()));
     // Per case: the tests of the maximal run of empty-consequent cases falling
-    // into it, plus its own test. `None` for a group containing `default`.
-    let case_group_conditions: Vec<Option<ParsedExpression>> = {
+    // into it, plus its own test, and the branch of that condition the body
+    // runs in. A group containing `default` runs wherever no case *outside* the
+    // group matched.
+    let case_group_conditions: Vec<Option<(ParsedExpression, bool)>> = {
         let mut group: Vec<Option<&ParsedExpression>> = Vec::new();
         switch_statement
             .cases
@@ -522,20 +614,15 @@ pub(crate) fn check_function_switch_statement(
             .map(|switch_case| {
                 group.push(switch_case.test.as_ref());
                 let condition = if group.iter().any(|test| test.is_none()) {
-                    None
-                } else {
-                    group
-                        .iter()
-                        .filter_map(|test| *test)
-                        .map(equality_condition)
-                        .reduce(|left, right| ParsedExpression::Logical {
-                            left: Box::new(left),
-                            left_span: None,
-                            operator: surge_ts_syntax::ParsedLogicalOperator::Or,
-                            operator_span: None,
-                            right: Box::new(right),
-                            right_span: None,
+                    any_of(&mut switch_statement.cases.iter().filter_map(|case| {
+                        case.test.as_ref().filter(|test| {
+                            !group.iter().flatten().any(|member| std::ptr::eq(*member, *test))
                         })
+                    }))
+                    .map(|condition| (condition, false))
+                } else {
+                    any_of(&mut group.iter().filter_map(|test| *test))
+                        .map(|condition| (condition, true))
                 };
                 if !switch_case.consequent.is_empty() {
                     group.clear();
@@ -544,6 +631,18 @@ pub(crate) fn check_function_switch_statement(
             })
             .collect()
     };
+    let has_default = switch_statement.cases.iter().any(|case| case.test.is_none());
+    let every_case_exits = switch_statement.cases.last().is_some_and(|case| !case.consequent.is_empty())
+        && switch_statement
+            .cases
+            .iter()
+            .filter(|case| !case.consequent.is_empty())
+            .all(|case| {
+                // `break` leaves the case for the code after the `switch`.
+                let flow = analyze_function_body_flow(&case.consequent);
+                (flow.guarantees_value_return || flow.guarantees_exit)
+                    && !crate::flow::body_breaks_enclosing_loop(&case.consequent)
+            });
 
     if flow_active {
         let mut branch_deltas = Vec::new();
@@ -562,8 +661,8 @@ pub(crate) fn check_function_switch_statement(
             }
 
             scopes.push_child();
-            if let Some(condition) = case_group_conditions[case_index].as_ref() {
-                narrow_discriminant_in_scope(condition, scopes, true, ctx);
+            if let Some((condition, branch_is_true)) = case_group_conditions[case_index].as_ref() {
+                narrow_discriminant_in_scope(condition, scopes, *branch_is_true, ctx);
             }
             flow_state.begin_branch_capture();
             check_function_body(
@@ -583,8 +682,8 @@ pub(crate) fn check_function_switch_statement(
     } else {
         for (case_index, switch_case) in switch_statement.cases.into_iter().enumerate() {
             scopes.push_child();
-            if let Some(condition) = case_group_conditions[case_index].as_ref() {
-                narrow_discriminant_in_scope(condition, scopes, true, ctx);
+            if let Some((condition, branch_is_true)) = case_group_conditions[case_index].as_ref() {
+                narrow_discriminant_in_scope(condition, scopes, *branch_is_true, ctx);
             }
             check_function_body(
                 switch_case.consequent,
@@ -595,6 +694,15 @@ pub(crate) fn check_function_switch_statement(
             );
             scopes.pop_child();
         }
+    }
+
+    // Only the implicit `default` path continues past a `switch` whose every
+    // case leaves it.
+    if !has_default
+        && every_case_exits
+        && let Some(condition) = no_case_matches.as_ref()
+    {
+        narrow_discriminant_in_scope(condition, scopes, false, ctx);
     }
 }
 
@@ -701,6 +809,22 @@ pub(crate) fn check_function_try_statement(
         );
         scopes.pop_child();
     } else {
+        // The same join the flow-active path performs. It is not conditional on
+        // definite-assignment tracking: reaching the code after a `try` whose
+        // handler diverts means the block completed, so what it narrowed holds
+        // — and a body with no tracked locals still narrows (`context.response
+        // = await fetch(…)` inside `try`, read after it, in ofetch).
+        let handler_diverts = try_statement.handler.as_ref().is_none_or(|handler| {
+            let flow = analyze_function_body_flow(&handler.body);
+            flow.guarantees_value_return || flow.guarantees_exit
+        });
+        let mut joinable_assignments = Vec::new();
+        if handler_diverts
+            && !analyze_function_body_flow(&try_statement.block).guarantees_value_return
+        {
+            branch_assigned_names(&try_statement.block, &mut joinable_assignments);
+        }
+
         scopes.push_child();
         check_function_body(
             try_statement.block,
@@ -709,7 +833,9 @@ pub(crate) fn check_function_try_statement(
             flow_state,
             ctx,
         );
+        let try_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
         scopes.pop_child();
+        adopt_branch_assignments(&try_assignment_types, scopes);
 
         if let Some(handler_clause) = try_statement.handler {
             scopes.push_child();

@@ -61,13 +61,13 @@ fn try_qualified_namespace_call(
 /// surge's — see [`receiver_any_is_genuine`]. Everything else in the argument
 /// (an unresolved name, a missing member, a mismatched body) is reported either
 /// way, since those do not depend on the callback's parameter types.
-fn evaluate_arguments_context_free(
+pub(super) fn evaluate_arguments_context_free(
     object: &ParsedExpression,
     arguments: &[ParsedCallArgument],
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
-    let genuine = receiver_any_is_genuine(object, symbols);
+    let genuine = receiver_any_is_genuine(object, symbols, ctx);
     let saved_depth = ctx.degraded_expected_type_depth;
     if genuine {
         // tsc has no contextual parameter type here either, so it *does* report
@@ -96,21 +96,64 @@ fn evaluate_arguments_context_free(
 /// midway (a generic builder surge could not model). tsc still contextually
 /// types those callbacks, so reporting implicit-any there describes surge's gap
 /// rather than the source.
-pub(crate) fn receiver_any_is_genuine(object: &ParsedExpression, symbols: &SymbolTable) -> bool {
+pub(crate) fn receiver_any_is_genuine(
+    object: &ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &CheckerContext,
+) -> bool {
     match object {
-        ParsedExpression::Identifier { name, .. } => symbols
-            .get(name)
-            .is_some_and(|symbol| matches!(symbol.kind, crate::symbols::SymbolKind::ErrorImport)),
+        ParsedExpression::Identifier { name, .. } => name_is_genuine_any(name, symbols, ctx),
+        // A bare call and an index off a bare name both name their base
+        // directly rather than nesting an `Identifier` node.
+        ParsedExpression::Call { callee_name, .. } => {
+            name_is_genuine_any(callee_name, symbols, ctx)
+        }
+        ParsedExpression::IndexAccess { object_name, .. } => {
+            name_is_genuine_any(object_name, symbols, ctx)
+        }
         // Walk the chain to the binding it started from: `p.input(x).query(cb)`
         // is genuine exactly when `p` is.
         ParsedExpression::PropertyAccess { object, .. }
         | ParsedExpression::OptionalPropertyAccess { object, .. }
         | ParsedExpression::PropertyCall { object, .. }
-        | ParsedExpression::OptionalPropertyCall { object, .. } => {
-            receiver_any_is_genuine(object, symbols)
+        | ParsedExpression::OptionalPropertyCall { object, .. }
+        | ParsedExpression::ElementAccess { object, .. } => {
+            receiver_any_is_genuine(object, symbols, ctx)
+        }
+        // Forms that hand the operand's type straight back: `await any`,
+        // `any!`, and an index off one are all still `any` to tsc. A type
+        // assertion is deliberately absent — `x as Foo` states a real type.
+        ParsedExpression::Await { operand, .. } => {
+            receiver_any_is_genuine(operand, symbols, ctx)
+        }
+        ParsedExpression::NonNullAssertion { expression, .. } => {
+            receiver_any_is_genuine(expression, symbols, ctx)
+        }
+        // A union with `any` in it is `any`, so either arm settles it:
+        // `caller.list() ?? []` and `cond ? caller.x : []` both stay `any`.
+        ParsedExpression::Logical { left, right, .. }
+        | ParsedExpression::Binary { left, right, .. }
+        | ParsedExpression::NullishCoalescing { left, right, .. } => {
+            receiver_any_is_genuine(left, symbols, ctx)
+                || receiver_any_is_genuine(right, symbols, ctx)
+        }
+        ParsedExpression::Conditional {
+            when_true,
+            when_false,
+            ..
+        } => {
+            receiver_any_is_genuine(when_true, symbols, ctx)
+                || receiver_any_is_genuine(when_false, symbols, ctx)
         }
         _ => false,
     }
+}
+
+fn name_is_genuine_any(name: &str, symbols: &SymbolTable, ctx: &CheckerContext) -> bool {
+    symbols
+        .get(name)
+        .is_some_and(|symbol| matches!(symbol.kind, crate::symbols::SymbolKind::ErrorImport))
+        || ctx.genuine_any_bindings.contains(name)
 }
 
 /// `Array.prototype.filter` narrows its element type when the callback is a type
@@ -161,6 +204,7 @@ pub(crate) fn check_property_call_like(
     call_span: Option<SyntaxTextSpan>,
     type_arguments: &[ParsedType],
     arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
@@ -387,6 +431,7 @@ pub(crate) fn check_property_call_like(
                             type_arguments,
                             property_span,
                             arguments,
+                            expected_return_type,
                             symbols,
                             ctx,
                         );
@@ -501,6 +546,7 @@ pub(crate) fn check_property_call_like(
                         type_arguments,
                         property_span,
                         arguments,
+                        expected_return_type,
                         symbols,
                         ctx,
                     );
@@ -611,6 +657,45 @@ pub(crate) fn promise_like_awaited_type(ty: &Type) -> Type {
     ty.clone()
 }
 
+/// The type `await ty` produces, following tsc's `getAwaitedTypeNoAlias`:
+/// `any` awaits to itself, a union awaits constituent-wise, and a promise is
+/// unwrapped repeatedly (`Promise<Promise<T>>` awaits to `T`). Anything that is
+/// not promise-like awaits to itself.
+pub(crate) fn awaited_type(ty: &Type) -> Type {
+    awaited_type_at_depth(ty, 0)
+}
+
+fn awaited_type_at_depth(ty: &Type, depth: usize) -> Type {
+    // tsc pushes each type onto `awaitedTypeStack` to stop mutually recursive
+    // thenables (`BadPromiseA`/`BadPromiseB`); a depth cap ends the same cycles.
+    const MAX_UNWRAP_DEPTH: usize = 10;
+    if depth >= MAX_UNWRAP_DEPTH || matches!(ty, Type::Any) || ty.is_unknown() {
+        return ty.clone();
+    }
+
+    if let Type::Union(union) = ty {
+        return union_type(
+            union
+                .types()
+                .iter()
+                .map(|member| awaited_type_at_depth(member, depth + 1))
+                .collect(),
+        );
+    }
+
+    let promised = promise_like_awaited_type(ty);
+    if promised != *ty {
+        return awaited_type_at_depth(&promised, depth + 1);
+    }
+    if let Some(promised) = thenable_awaited_type(ty)
+        && promised != *ty
+    {
+        return awaited_type_at_depth(&promised, depth + 1);
+    }
+
+    ty.clone()
+}
+
 /// The value a user-defined thenable resolves to: the parameter of the callback
 /// `then` takes first.
 ///
@@ -654,6 +739,7 @@ pub(crate) fn check_optional_property_call(
     call_span: Option<SyntaxTextSpan>,
     type_arguments: &[ParsedType],
     arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
@@ -664,10 +750,10 @@ pub(crate) fn check_optional_property_call(
         _ => return None, // already reported by evaluate_expression
     };
 
-    if object_type.is_unknown() {
-        return None;
-    }
-
+    // No early return for a degraded receiver: the `Unknown` arm below walks the
+    // arguments, and returning here skipped it — everything inside a callback on
+    // an unmodelled receiver (`messages?.map((item) => <article>…</article>)`)
+    // went unchecked, which is where trpc's missing UMD-global reports live.
     let base_type = surge_ts_types::remove_undefined(&object_type);
     let base_type_name = base_type.name();
 
@@ -768,6 +854,7 @@ pub(crate) fn check_optional_property_call(
                             type_arguments,
                             property_span,
                             arguments,
+                            expected_return_type,
                             symbols,
                             ctx,
                         );
@@ -863,6 +950,7 @@ pub(crate) fn check_optional_property_call(
                         type_arguments,
                         property_span,
                         arguments,
+                        expected_return_type,
                         symbols,
                         ctx,
                     );
@@ -912,6 +1000,7 @@ fn instantiate_declared_member_signature<'a>(
     type_arguments: &[ParsedType],
     type_argument_span: Option<SyntaxTextSpan>,
     arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> std::borrow::Cow<'a, surge_ts_types::FunctionType> {
@@ -935,7 +1024,7 @@ fn instantiate_declared_member_signature<'a>(
                     type_arguments,
                     type_argument_span,
                     arguments,
-                    None,
+                    expected_return_type,
                     symbols,
                     ctx,
                 )
@@ -962,7 +1051,7 @@ fn instantiate_declared_member_signature<'a>(
                     type_arguments,
                     type_argument_span,
                     arguments,
-                    None,
+                    expected_return_type,
                     symbols,
                     ctx,
                 )
@@ -988,7 +1077,7 @@ fn instantiate_declared_member_signature<'a>(
             type_arguments,
             type_argument_span,
             arguments,
-            None,
+            expected_return_type,
             symbols,
             ctx,
         )
@@ -1009,19 +1098,23 @@ pub(crate) fn callable_member_call_return_type(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    let Type::Function(function_type) = callable_property_signature(member_type.clone()) else {
+    let Type::Function(declared) = callable_property_signature(member_type.clone()) else {
         return None;
     };
     let function_type = instantiate_declared_member_signature(
-        &function_type,
+        &declared,
         Some(member_type),
         type_arguments,
         property_span,
         arguments,
+        None,
         symbols,
         ctx,
     );
-    Some(function_type.return_type().clone())
+    Some(
+        super::select_overload_return_type_for_inferred_call(&declared, arguments, symbols, ctx)
+            .unwrap_or_else(|| function_type.return_type().clone()),
+    )
 }
 
 /// Under `noLib` the array member surface comes from the configured replacement

@@ -1,5 +1,4 @@
 
-use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
     ParsedExpression, ParsedReturnStatement,
 };
@@ -169,8 +168,13 @@ pub(crate) fn check_function_return_statement(
                 let source_type_name =
                     crate::checks::expr::source_display_name(&source_type, &return_type);
                 let target_type_name = return_type.name();
-                let diagnostic =
-                    Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone());
+                let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                    &source_type,
+                    &return_type,
+                    &source_type_name,
+                    &target_type_name,
+                    ctx.file_name.clone(),
+                );
 
                 let diagnostic = match return_statement.expression_span {
                     Some(span) => diagnostic.with_span(convert_span(span)),
