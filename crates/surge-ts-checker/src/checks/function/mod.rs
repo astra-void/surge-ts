@@ -871,14 +871,36 @@ pub(crate) fn check_arrow_function_expression_anchored(
                         )
                     }
                     Some(return_type_for_body) => {
-                        crate::checks::expected::evaluate_return_expression_with_expected_type(
+                        let inferred = crate::checks::expected::evaluate_return_expression_with_expected_type(
                             &expression,
-                            None,
+                            body_span,
                             None,
                             return_type_for_body,
                             &visible_symbols,
                             ctx,
-                        )
+                        );
+                        // tsc's `checkReturnExpression` relates an expression body
+                        // to the annotation as a whole, at the body. An async body
+                        // is left alone: surge reads `Promise<T>` as `T`.
+                        if !is_async
+                            && let InferredExpression::Known(body_type) = &inferred
+                            && !body_type.is_unknown()
+                            && !surge_ts_types::is_assignable_to(body_type, return_type_for_body)
+                            && !type_contains_unknown(body_type)
+                            && !type_contains_unknown(return_type_for_body)
+                        {
+                            let source_name =
+                                crate::checks::expr::source_display_name(body_type, return_type_for_body);
+                            let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                                body_type,
+                                return_type_for_body,
+                                &source_name,
+                                &return_type_for_body.name(),
+                                ctx.file_name.clone(),
+                            );
+                            ctx.push(crate::spans::diagnostic_with_syntax_span(diagnostic, body_span));
+                        }
+                        inferred
                     }
                 };
 
