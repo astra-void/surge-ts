@@ -1093,13 +1093,44 @@ fn enforce_inferred_constraints(
             continue;
         }
         let resolved = resolved.into_ty();
-        if !constraint_operand_is_settled(&resolved)
-            || matches!(resolved, Type::Any)
-            || surge_ts_types::is_assignable_to(&candidate, &resolved)
+        // A primitive candidate against a named constraint (`len(5)` for
+        // `T extends HasLen`) is judged by the constraint's own shape: the
+        // argument check reads that shape anyway, and a primitive seldom meets
+        // a named constraint, so peeling it expands nothing a call would not.
+        let settled_constraint = if constraint_operand_is_settled(&resolved) {
+            Some(resolved.clone())
+        } else if matches!(resolved, Type::Reference(_))
+            && candidate_is_primitive(&candidate)
+            && constraint_operand_is_settled(&resolved.peeled())
+        {
+            Some(resolved.clone())
+        } else {
+            None
+        };
+        let Some(settled_constraint) = settled_constraint else {
+            continue;
+        };
+        if matches!(settled_constraint, Type::Any)
+            || surge_ts_types::is_assignable_to(&candidate, &settled_constraint)
         {
             continue;
         }
         substitution.set(type_parameter.name.clone(), resolved, false);
+    }
+}
+
+fn candidate_is_primitive(ty: &Type) -> bool {
+    match ty {
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => true,
+        Type::Union(union) => union.types().iter().all(candidate_is_primitive),
+        _ => false,
     }
 }
 

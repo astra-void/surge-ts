@@ -502,6 +502,7 @@ export const fixturePresets: Record<string, string> = {
   'loop-assignment-join-basic': path.join(workspaceRoot, 'tests/compat-projects/loop-assignment-join-basic/tsconfig.json'),
   'non-exhaustive-switch-missing-return-basic': path.join(workspaceRoot, 'tests/compat-projects/non-exhaustive-switch-missing-return-basic/tsconfig.json'),
   'readonly-array-element-write-basic': path.join(workspaceRoot, 'tests/compat-projects/readonly-array-element-write-basic/tsconfig.json'),
+  'named-constraint-primitive-argument-basic': path.join(workspaceRoot, 'tests/compat-projects/named-constraint-primitive-argument-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
