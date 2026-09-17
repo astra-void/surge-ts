@@ -10,7 +10,35 @@
 
 ## Search
 
-- Prefer `rg` (ripgrep) over `grep` for all code searches. It respects `.gitignore`, is faster, and handles binary files safely.
+This repository is indexed by [graft](graft/INDEX.md): a prebuilt graph of every
+symbol, its exact `file:line` span, and who calls what. Reach for it *before*
+grepping or reading source files — one call usually replaces several file reads,
+and the graph refreshes before each query, so it reflects uncommitted edits.
+
+Pick the one tool that fits and act on its answer; most tasks need a single
+call. Do not re-ask the same question reworded.
+
+- `graft ask "<task>" --source` — locate + understand. Ranked nodes with the
+  code inlined at each `file:line` (the crux; `--full` for the whole span).
+  The default for "how does X work" / "where does Y live".
+- `graft grep "<literal>"` — exhaustive find, grouped by enclosing symbol. Use
+  when you need *every* occurrence (`ask` is ranked top-N and will miss some).
+- `graft skeleton <file>` — a file's whole API in ~200 tokens, every signature
+  plus span. Far cheaper than reading a 2,000-line checker module.
+- `graft callers <sym> [--direction out] [--depth N|all]` — exact edges. Run it
+  before changing or renaming a symbol; `--depth all` maps the blast radius.
+  Editing the primary file and stopping is the classic miss in this workspace,
+  where a checker change usually has siblings in `program/`, `infer/`, `flow/`,
+  and the crate's `tests/`.
+- `graft map` — orientation only, for an unfamiliar corner of the tree.
+
+Scope to one crate with `--in crates/<crate>/`.
+
+Fall back to plain text search when graft cannot answer — non-code files
+(fixtures, `oracle/` expectations, `Cargo.toml`, docs), or a literal that is not
+a symbol:
+
+- Prefer `rg` (ripgrep) over `grep` for such searches. It respects `.gitignore`, is faster, and handles binary files safely.
 - Fall back to `grep` only when `rg` is unavailable or a POSIX-compatible invocation is strictly required (e.g. inside a shell script that must be portable).
 
 ## Verification
