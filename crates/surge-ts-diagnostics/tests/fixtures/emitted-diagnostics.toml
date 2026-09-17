@@ -21,6 +21,24 @@ oracle = [
   "accessor-declaration-rules-basic",
 ]
 
+[TS2423]
+status = "emitted"
+oracle = [
+  "member-kind-override-basic",
+]
+
+[TS2425]
+status = "emitted"
+oracle = [
+  "member-kind-override-basic",
+]
+
+[TS2426]
+status = "emitted"
+oracle = [
+  "member-kind-override-basic",
+]
+
 [TS2474]
 status = "emitted"
 oracle = [
@@ -32,6 +50,18 @@ status = "emitted"
 oracle = [
   "spread-iterability-basic",
   "array-pattern-iterability-basic",
+]
+
+[TS2610]
+status = "emitted"
+oracle = [
+  "member-kind-override-basic",
+]
+
+[TS2611]
+status = "emitted"
+oracle = [
+  "member-kind-override-basic",
 ]
 
 [TS2676]

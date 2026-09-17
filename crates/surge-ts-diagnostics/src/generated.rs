@@ -115,6 +115,26 @@ pub const TS2305: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2610: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2610",
+    number: Some(2610),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' is defined as an accessor in class '{1}', but is overridden here in '{2}' as an instance property.",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2611: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2611",
+    number: Some(2611),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' is defined as a property in class '{1}', but is overridden here in '{2}' as an accessor.",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2614: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2614",
     number: Some(2614),
@@ -1595,6 +1615,36 @@ pub const TS2416: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2423: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2423",
+    number: Some(2423),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Class '{0}' defines instance member function '{1}', but extended class '{2}' defines it as instance member accessor.",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2425: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2425",
+    number: Some(2425),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Class '{0}' defines instance member property '{1}', but extended class '{2}' defines it as instance member function.",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2426: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2426",
+    number: Some(2426),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Class '{0}' defines instance member accessor '{1}', but extended class '{2}' defines it as instance member function.",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2430: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2430",
     number: Some(2430),
@@ -2297,6 +2347,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2300,
     TS2717,
     TS2305,
+    TS2610,
+    TS2611,
     TS2614,
     TS2306,
     TS2307,
@@ -2445,6 +2497,9 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2488,
     TS2698,
     TS2416,
+    TS2423,
+    TS2425,
+    TS2426,
     TS2430,
     TS2564,
     TS2403,
@@ -2628,6 +2683,42 @@ impl Diagnostic {
             vec![
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2610(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2610,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2611(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2611,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
             ],
             file_name,
         )
@@ -3926,6 +4017,60 @@ impl Diagnostic {
     ) -> Self {
         Self::from_descriptor(
             &TS2416,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2423(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2423,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2425(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2425,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2426(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2426,
             vec![
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),

@@ -89,6 +89,22 @@ message = "Module '{0}' has no exported member '{1}'."
 arity = 2
 
 [[diagnostic]]
+code = "TS2610"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is defined as an accessor in class '{1}', but is overridden here in '{2}' as an instance property."
+arity = 3
+
+[[diagnostic]]
+code = "TS2611"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is defined as a property in class '{1}', but is overridden here in '{2}' as an accessor."
+arity = 3
+
+[[diagnostic]]
 code = "TS2614"
 category = "Error"
 source = "typescript"
@@ -1270,6 +1286,30 @@ category = "Error"
 source = "typescript"
 support = "emitted"
 message = "Property '{0}' in type '{1}' is not assignable to the same property in base type '{2}'."
+arity = 3
+
+[[diagnostic]]
+code = "TS2423"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class '{0}' defines instance member function '{1}', but extended class '{2}' defines it as instance member accessor."
+arity = 3
+
+[[diagnostic]]
+code = "TS2425"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class '{0}' defines instance member property '{1}', but extended class '{2}' defines it as instance member function."
+arity = 3
+
+[[diagnostic]]
+code = "TS2426"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class '{0}' defines instance member accessor '{1}', but extended class '{2}' defines it as instance member function."
 arity = 3
 
 [[diagnostic]]

@@ -222,6 +222,149 @@ impl GrammarCollector {
         }
     }
 
+    /// tsc's `checkKindsOfPropertyMemberOverrides` for classes whose base is a
+    /// class declared at the top of the same file: an instance member may not
+    /// change kind between property, accessor and method. A private member on
+    /// either side is not an override, and an abstract base property or
+    /// accessor may be implemented as either.
+    fn check_member_kind_overrides(&mut self, statements: &[Statement<'_>]) {
+        #[derive(Clone, Copy, PartialEq)]
+        enum MemberKind {
+            Property,
+            Accessor,
+            Method,
+        }
+        struct Member {
+            kind: MemberKind,
+            is_private: bool,
+            is_abstract: bool,
+            span: Span,
+        }
+        fn instance_members(class: &Class<'_>) -> Vec<(String, Member)> {
+            class
+                .body
+                .body
+                .iter()
+                .filter_map(|element| {
+                    let (key, is_static, member) = match element {
+                        ClassElement::MethodDefinition(method) => {
+                            let kind = match method.kind {
+                                MethodDefinitionKind::Method => MemberKind::Method,
+                                MethodDefinitionKind::Get | MethodDefinitionKind::Set => {
+                                    MemberKind::Accessor
+                                }
+                                MethodDefinitionKind::Constructor => return None,
+                            };
+                            (
+                                &method.key,
+                                method.r#static,
+                                Member {
+                                    kind,
+                                    is_private: method.accessibility
+                                        == Some(oxc_ast::ast::TSAccessibility::Private),
+                                    is_abstract: method.r#type
+                                        == MethodDefinitionType::TSAbstractMethodDefinition,
+                                    span: method.key.span(),
+                                },
+                            )
+                        }
+                        ClassElement::PropertyDefinition(property) => (
+                            &property.key,
+                            property.r#static,
+                            Member {
+                                kind: MemberKind::Property,
+                                is_private: property.accessibility
+                                    == Some(oxc_ast::ast::TSAccessibility::Private),
+                                is_abstract: property.r#type
+                                    == PropertyDefinitionType::TSAbstractPropertyDefinition,
+                                span: property.key.span(),
+                            },
+                        ),
+                        _ => return None,
+                    };
+                    if is_static || matches!(key, PropertyKey::PrivateIdentifier(_)) {
+                        return None;
+                    }
+                    property_key_name(key).map(|name| (name, member))
+                })
+                .collect()
+        }
+
+        let classes: Vec<&Class<'_>> = statements
+            .iter()
+            .filter_map(|statement| match statement {
+                Statement::ClassDeclaration(class) => Some(class.as_ref()),
+                Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                    Some(Declaration::ClassDeclaration(class)) => Some(class.as_ref()),
+                    _ => None,
+                },
+                Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+                    ExportDefaultDeclarationKind::ClassDeclaration(class) => Some(class.as_ref()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let class_named = |name: &str| {
+            classes
+                .iter()
+                .copied()
+                .find(|class| class.id.as_ref().is_some_and(|id| id.name == name))
+        };
+        let base_of = |class: &Class<'_>| match &class.super_class {
+            Some(Expression::Identifier(base)) if class.super_type_arguments.is_none() => {
+                class_named(base.name.as_str())
+            }
+            _ => None,
+        };
+
+        for class in &classes {
+            let (Some(derived_name), Some(base)) = (class.id.as_ref(), base_of(class)) else {
+                continue;
+            };
+            let Some(base_name) = base.id.as_ref() else {
+                continue;
+            };
+            for (name, derived) in instance_members(class) {
+                let mut ancestor = Some(base);
+                let mut found = None;
+                let mut depth = 0;
+                while let Some(current) = ancestor
+                    && depth < 32
+                {
+                    if let Some((_, member)) =
+                        instance_members(current).into_iter().find(|(other, _)| *other == name)
+                    {
+                        found = Some(member);
+                        break;
+                    }
+                    ancestor = base_of(current);
+                    depth += 1;
+                }
+                let Some(inherited) = found else {
+                    continue;
+                };
+                if inherited.is_private || derived.is_private {
+                    continue;
+                }
+                let kind = match (inherited.kind, derived.kind) {
+                    (MemberKind::Accessor, MemberKind::Property) if !inherited.is_abstract => {
+                        Kind::PropertyAccessorOverride
+                    }
+                    (MemberKind::Property, MemberKind::Accessor) if !inherited.is_abstract => {
+                        Kind::AccessorPropertyOverride
+                    }
+                    (MemberKind::Method, MemberKind::Accessor) => Kind::MethodAccessorOverride,
+                    (MemberKind::Property, MemberKind::Method) => Kind::PropertyMethodOverride,
+                    (MemberKind::Accessor, MemberKind::Method) => Kind::AccessorMethodOverride,
+                    _ => continue,
+                };
+                let names = format!("{name}\u{0}{}\u{0}{}", base_name.name, derived_name.name);
+                self.push(kind, derived.span, Some(&names));
+            }
+        }
+    }
+
     fn collect_top_level_constants(&mut self, statements: &[Statement<'_>]) {
         for statement in statements {
             let declaration = match statement {
@@ -1314,6 +1457,7 @@ impl<'a> Visit<'a> for GrammarCollector {
                 .iter()
                 .any(|directive| directive.directive == "use strict");
         self.collect_top_level_constants(&program.body);
+        self.check_member_kind_overrides(&program.body);
         self.check_top_level_enum_merges(&program.body);
         self.check_default_exports(&program.body);
         self.check_function_implementations(&program.body);

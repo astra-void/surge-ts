@@ -99,6 +99,16 @@ pub enum ParsedGrammarDiagnosticKind {
     MultipleConstructorImplementations,
     /// A derived class constructor with no `super` call — TS2377.
     MissingSuperCall,
+    /// A member overriding a base class member of another kind — TS2610
+    /// (accessor overridden by property), TS2611 (property by accessor),
+    /// TS2423 (method by accessor), TS2425 (property by method), TS2426
+    /// (accessor by method). `name` holds the member, base and derived class
+    /// names separated by NULs.
+    PropertyAccessorOverride,
+    AccessorPropertyOverride,
+    MethodAccessorOverride,
+    PropertyMethodOverride,
+    AccessorMethodOverride,
     /// `this` read in a derived constructor before `super()` — TS17009.
     ThisBeforeSuperCall,
     /// `super.x` read in a derived constructor before `super()` — TS17011.

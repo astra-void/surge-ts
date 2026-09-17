@@ -88,6 +88,22 @@
     "support": "emitted"
   },
   {
+    "code": "TS2610",
+    "category": "Error",
+    "message": "'{0}' is defined as an accessor in class '{1}', but is overridden here in '{2}' as an instance property.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2611",
+    "category": "Error",
+    "message": "'{0}' is defined as a property in class '{1}', but is overridden here in '{2}' as an accessor.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
     "code": "TS2614",
     "category": "Error",
     "message": "Module '{0}' has no exported member '{1}'. Did you mean to use 'import {1} from {0}' instead?",
@@ -1267,6 +1283,30 @@
     "code": "TS2416",
     "category": "Error",
     "message": "Property '{0}' in type '{1}' is not assignable to the same property in base type '{2}'.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2423",
+    "category": "Error",
+    "message": "Class '{0}' defines instance member function '{1}', but extended class '{2}' defines it as instance member accessor.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2425",
+    "category": "Error",
+    "message": "Class '{0}' defines instance member property '{1}', but extended class '{2}' defines it as instance member function.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2426",
+    "category": "Error",
+    "message": "Class '{0}' defines instance member accessor '{1}', but extended class '{2}' defines it as instance member function.",
     "source": "typescript",
     "arity": 3,
     "support": "emitted"

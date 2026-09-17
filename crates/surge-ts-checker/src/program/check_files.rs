@@ -869,6 +869,28 @@ pub(crate) fn emit_grammar_diagnostics(
             Kind::AmbientInitializer => Diagnostic::ts1039(ctx.file_name.clone()),
             Kind::SetAccessorParameterCount => Diagnostic::ts1049(ctx.file_name.clone()),
             Kind::GetAccessorWithoutReturn => Diagnostic::ts2378(ctx.file_name.clone()),
+            Kind::PropertyAccessorOverride
+            | Kind::AccessorPropertyOverride
+            | Kind::MethodAccessorOverride
+            | Kind::PropertyMethodOverride
+            | Kind::AccessorMethodOverride => {
+                let Some([member, base, derived]) = finding
+                    .name
+                    .as_deref()
+                    .map(|names| names.split('\0').collect::<Vec<_>>())
+                    .and_then(|names| <[&str; 3]>::try_from(names).ok())
+                else {
+                    continue;
+                };
+                let file_name = ctx.file_name.clone();
+                match finding.kind {
+                    Kind::PropertyAccessorOverride => Diagnostic::ts2610(member, base, derived, file_name),
+                    Kind::AccessorPropertyOverride => Diagnostic::ts2611(member, base, derived, file_name),
+                    Kind::MethodAccessorOverride => Diagnostic::ts2423(base, member, derived, file_name),
+                    Kind::PropertyMethodOverride => Diagnostic::ts2425(base, member, derived, file_name),
+                    _ => Diagnostic::ts2426(base, member, derived, file_name),
+                }
+            }
             Kind::ThisBeforeSuperCall => Diagnostic::ts17009(ctx.file_name.clone()),
             Kind::SuperPropertyBeforeSuperCall => Diagnostic::ts17011(ctx.file_name.clone()),
             Kind::GetAccessorLessAccessible => Diagnostic::ts2808(ctx.file_name.clone()),
