@@ -82,6 +82,12 @@ oracle = [
   "accessor-declaration-rules-basic",
 ]
 
+[TS2706]
+status = "emitted"
+oracle = [
+  "type-parameter-default-order-basic",
+]
+
 [TS2722]
 status = "emitted"
 oracle = [

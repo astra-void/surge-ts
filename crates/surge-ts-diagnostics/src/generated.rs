@@ -95,6 +95,16 @@ pub const TS2300: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2706: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2706",
+    number: Some(2706),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Required type parameters may not follow optional type parameters.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2717: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2717",
     number: Some(2717),
@@ -2365,6 +2375,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1361,
     TS2304,
     TS2300,
+    TS2706,
     TS2717,
     TS2305,
     TS2610,
@@ -2678,6 +2689,11 @@ impl Diagnostic {
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2706(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2706, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

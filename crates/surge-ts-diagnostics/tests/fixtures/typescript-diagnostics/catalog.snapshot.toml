@@ -73,6 +73,14 @@ message = "Duplicate identifier '{0}'."
 arity = 1
 
 [[diagnostic]]
+code = "TS2706"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Required type parameters may not follow optional type parameters."
+arity = 0
+
+[[diagnostic]]
 code = "TS2717"
 category = "Error"
 source = "typescript"

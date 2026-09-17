@@ -1639,6 +1639,21 @@ impl<'a> Visit<'a> for GrammarCollector {
         oxc_ast_visit::walk::walk_arrow_function_expression(self, arrow);
     }
 
+    fn visit_ts_type_parameter_declaration(
+        &mut self,
+        declaration: &oxc_ast::ast::TSTypeParameterDeclaration<'a>,
+    ) {
+        let mut seen_default = false;
+        for parameter in &declaration.params {
+            if parameter.default.is_some() {
+                seen_default = true;
+            } else if seen_default {
+                self.push(Kind::RequiredTypeParameterAfterOptional, parameter.name.span, None);
+            }
+        }
+        oxc_ast_visit::walk::walk_ts_type_parameter_declaration(self, declaration);
+    }
+
     fn visit_formal_parameters(&mut self, parameters: &FormalParameters<'a>) {
         self.check_parameter_list(parameters);
         oxc_ast_visit::walk::walk_formal_parameters(self, parameters);

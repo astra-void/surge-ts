@@ -72,6 +72,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2706",
+    "category": "Error",
+    "message": "Required type parameters may not follow optional type parameters.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2717",
     "category": "Error",
     "message": "Subsequent property declarations must have the same type.  Property '{0}' must be of type '{1}', but here has type '{2}'.",
