@@ -24,6 +24,30 @@ use super::{
     functions::parse_statement_list_as_function_body,
 };
 
+fn lower_type_assertion(
+    expression: &Expression<'_>,
+    type_annotation: &oxc_ast::ast::TSType<'_>,
+    span: Span,
+) -> ParsedExpression {
+    let (expression, expression_span) = parse_expression(expression);
+    let ty = crate::parser::types::parse_type(type_annotation).unwrap_or(crate::ParsedType::Unknown);
+    if let crate::ParsedType::Named(named_type) = &ty
+        && named_type.name == "const"
+        && named_type.type_arguments.is_empty()
+    {
+        return ParsedExpression::ConstAssertion {
+            expression: Box::new(expression),
+            span: Some(text_span_from_oxc_span(span)),
+        };
+    }
+    ParsedExpression::TypeAssertion {
+        expression: Box::new(expression),
+        expression_span: Some(text_span_from_oxc_span(expression_span)),
+        ty,
+        type_span: Some(text_span_from_oxc_span(type_annotation.span())),
+    }
+}
+
 pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression, Span) {
     let parsed_expression = match expression {
         Expression::StringLiteral(string_literal) => {
@@ -101,32 +125,16 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         Expression::ComputedMemberExpression(member_expression) => {
             parse_computed_member_expression(member_expression).unwrap_or(ParsedExpression::Unknown)
         }
-        Expression::TSAsExpression(as_expression) => {
-            let (expression, expression_span) = parse_expression(&as_expression.expression);
-            let ty = crate::parser::types::parse_type(&as_expression.type_annotation)
-                .unwrap_or(crate::ParsedType::Unknown);
-
-            if let crate::ParsedType::Named(named_type) = &ty {
-                if named_type.name == "const" && named_type.type_arguments.is_empty() {
-                    return (
-                        ParsedExpression::ConstAssertion {
-                            expression: Box::new(expression),
-                            span: Some(text_span_from_oxc_span(as_expression.span)),
-                        },
-                        as_expression.span,
-                    );
-                }
-            }
-
-            ParsedExpression::TypeAssertion {
-                expression: Box::new(expression),
-                expression_span: Some(text_span_from_oxc_span(expression_span)),
-                ty,
-                type_span: Some(text_span_from_oxc_span(
-                    as_expression.type_annotation.span(),
-                )),
-            }
-        }
+        Expression::TSAsExpression(as_expression) => lower_type_assertion(
+            &as_expression.expression,
+            &as_expression.type_annotation,
+            as_expression.span,
+        ),
+        Expression::TSTypeAssertion(type_assertion) => lower_type_assertion(
+            &type_assertion.expression,
+            &type_assertion.type_annotation,
+            type_assertion.span,
+        ),
         Expression::TSSatisfiesExpression(satisfies_expression) => {
             let (expression, expression_span) = parse_expression(&satisfies_expression.expression);
             let ty = crate::parser::types::parse_type(&satisfies_expression.type_annotation)
@@ -790,6 +798,14 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
                 as_expression.span,
             )
         }
+        Argument::TSTypeAssertion(type_assertion) => (
+            lower_type_assertion(
+                &type_assertion.expression,
+                &type_assertion.type_annotation,
+                type_assertion.span,
+            ),
+            argument.span(),
+        ),
         Argument::TSSatisfiesExpression(satisfies_expression) => {
             let (expression, expression_span) = parse_expression(&satisfies_expression.expression);
             let ty = crate::parser::types::parse_type(&satisfies_expression.type_annotation)
