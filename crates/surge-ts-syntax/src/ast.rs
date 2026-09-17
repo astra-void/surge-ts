@@ -131,6 +131,9 @@ pub enum ParsedGrammarDiagnosticKind {
     /// An `async` function whose written return type is not `Promise<T>` —
     /// TS1064. `name` holds the written type, which the message wraps.
     AsyncReturnTypeNotPromise,
+    /// A type alias whose resolution reaches itself before any deferred
+    /// position — TS2456. `name` holds the alias.
+    CircularTypeAlias,
     /// A type parameter without a default after one with a default — TS2706.
     RequiredTypeParameterAfterOptional,
     /// A parameter written both optional and with a default — TS1015.

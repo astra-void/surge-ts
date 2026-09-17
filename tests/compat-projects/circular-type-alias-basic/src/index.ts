@@ -1,0 +1,21 @@
+export type Self = Self;
+export type First = Second;
+export type Second = First;
+export type Leading = First;
+export type Unioned = string | Unioned;
+export type Intersected = { a: 1 } & Intersected;
+export type Keys = keyof Keys;
+export type Checked = Checked extends string ? 1 : 2;
+export type Extended = string extends Extended ? 1 : 2;
+export type Indexed = Indexed["x"];
+export type Template = `${Template}`;
+export type Parenthesized = (Parenthesized);
+export type Optional = Optional | undefined;
+
+export type Json = string | Json[] | { [key: string]: Json };
+export type Linked = { next: Linked };
+export type Returning = () => Returning;
+export type Tupled = [Tupled];
+export type Promised = Promise<Promised>;
+export type Branch = string extends number ? Branch : 2;
+export type ReadonlyList = readonly ReadonlyList[];

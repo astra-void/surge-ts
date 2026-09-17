@@ -601,6 +601,14 @@ message = "The '{0}' operator is not allowed for boolean types. Consider using '
 arity = 2
 
 [[diagnostic]]
+code = "TS2456"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type alias '{0}' circularly references itself."
+arity = 1
+
+[[diagnostic]]
 code = "TS2459"
 category = "Error"
 source = "typescript"

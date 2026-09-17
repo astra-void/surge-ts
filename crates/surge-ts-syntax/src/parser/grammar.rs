@@ -365,6 +365,113 @@ impl GrammarCollector {
         }
     }
 
+    /// tsc's `pushTypeResolution` cycle for module-level type aliases: an
+    /// alias whose body reaches itself through positions resolved eagerly
+    /// (union and intersection members, `keyof`, indexed access, a conditional's
+    /// check and extends types, template literal spans, another alias and its
+    /// type arguments) circularly references itself (TS2456). Object members,
+    /// signatures, array and tuple elements, conditional branches and the type
+    /// arguments of other references are deferred. Only the aliases on the
+    /// cycle are reported, not those that merely lead into one.
+    fn check_circular_type_aliases(&mut self, statements: &[Statement<'_>]) {
+        use oxc_ast::ast::{TSType, TSTypeAliasDeclaration, TSTypeName, TSTypeOperatorOperator};
+        let aliases: Vec<&TSTypeAliasDeclaration<'_>> = statements
+            .iter()
+            .filter_map(|statement| {
+                let declaration = match statement {
+                    Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+                    other => other.as_declaration(),
+                };
+                match declaration {
+                    Some(Declaration::TSTypeAliasDeclaration(alias)) => Some(alias.as_ref()),
+                    _ => None,
+                }
+            })
+            .collect();
+        let names: Vec<&str> = aliases.iter().map(|alias| alias.id.name.as_str()).collect();
+
+        fn eager_references<'n>(ty: &TSType<'_>, names: &[&'n str], out: &mut Vec<&'n str>) {
+            match ty {
+                TSType::TSTypeReference(reference) => {
+                    let TSTypeName::IdentifierReference(identifier) = &reference.type_name else {
+                        return;
+                    };
+                    if let Some(name) = names.iter().find(|name| **name == identifier.name.as_str()) {
+                        out.push(name);
+                        if let Some(arguments) = &reference.type_arguments {
+                            for argument in &arguments.params {
+                                eager_references(argument, names, out);
+                            }
+                        }
+                    }
+                }
+                TSType::TSUnionType(union) => {
+                    for member in &union.types {
+                        eager_references(member, names, out);
+                    }
+                }
+                TSType::TSIntersectionType(intersection) => {
+                    for member in &intersection.types {
+                        eager_references(member, names, out);
+                    }
+                }
+                TSType::TSParenthesizedType(inner) => {
+                    eager_references(&inner.type_annotation, names, out);
+                }
+                TSType::TSTypeOperatorType(operator)
+                    if operator.operator == TSTypeOperatorOperator::Keyof =>
+                {
+                    eager_references(&operator.type_annotation, names, out);
+                }
+                TSType::TSIndexedAccessType(access) => {
+                    eager_references(&access.object_type, names, out);
+                    eager_references(&access.index_type, names, out);
+                }
+                TSType::TSConditionalType(conditional) => {
+                    eager_references(&conditional.check_type, names, out);
+                    eager_references(&conditional.extends_type, names, out);
+                }
+                TSType::TSTemplateLiteralType(template) => {
+                    for span in &template.types {
+                        eager_references(span, names, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let edges: Vec<Vec<usize>> = aliases
+            .iter()
+            .map(|alias| {
+                let mut referenced = Vec::new();
+                eager_references(&alias.type_annotation, &names, &mut referenced);
+                referenced
+                    .into_iter()
+                    .filter_map(|name| names.iter().position(|other| *other == name))
+                    .collect()
+            })
+            .collect();
+        for (index, alias) in aliases.iter().enumerate() {
+            // On a cycle exactly when the alias can reach itself.
+            let mut visited = vec![false; aliases.len()];
+            let mut stack = edges[index].clone();
+            let mut on_cycle = false;
+            while let Some(next) = stack.pop() {
+                if next == index {
+                    on_cycle = true;
+                    break;
+                }
+                if std::mem::replace(&mut visited[next], true) {
+                    continue;
+                }
+                stack.extend(edges[next].iter().copied());
+            }
+            if on_cycle {
+                self.push(Kind::CircularTypeAlias, alias.id.span, Some(alias.id.name.as_str()));
+            }
+        }
+    }
+
     fn collect_top_level_constants(&mut self, statements: &[Statement<'_>]) {
         for statement in statements {
             let declaration = match statement {
@@ -1458,6 +1565,7 @@ impl<'a> Visit<'a> for GrammarCollector {
                 .any(|directive| directive.directive == "use strict");
         self.collect_top_level_constants(&program.body);
         self.check_member_kind_overrides(&program.body);
+        self.check_circular_type_aliases(&program.body);
         self.check_top_level_enum_merges(&program.body);
         self.check_default_exports(&program.body);
         self.check_function_implementations(&program.body);

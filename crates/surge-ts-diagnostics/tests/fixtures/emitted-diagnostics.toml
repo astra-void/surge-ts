@@ -45,6 +45,12 @@ oracle = [
   "member-kind-override-basic",
 ]
 
+[TS2456]
+status = "emitted"
+oracle = [
+  "circular-type-alias-basic",
+]
+
 [TS2474]
 status = "emitted"
 oracle = [

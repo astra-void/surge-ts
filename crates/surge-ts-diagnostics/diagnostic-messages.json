@@ -600,6 +600,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2456",
+    "category": "Error",
+    "message": "Type alias '{0}' circularly references itself.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2459",
     "category": "Error",
     "message": "Module '{0}' declares '{1}' locally, but it is not exported.",

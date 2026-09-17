@@ -2619,12 +2619,12 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "type-alias-cycle-self"
 path = "tests/smoke/type_alias_cycle_self.ts"
-expected_diagnostics = ["surge::type-alias-cycle"]
+expected_diagnostics = ["TS2456"]
 
 [[case]]
 name = "type-alias-cycle-indirect"
 path = "tests/smoke/type_alias_cycle_indirect.ts"
-expected_diagnostics = ["surge::type-alias-cycle"]
+expected_diagnostics = ["TS2456", "TS2456"]
 
 [[case]]
 name = "type-alias-duplicate-declaration"
@@ -3963,12 +3963,12 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "type-alias-cycle-self-no-cascade"
 path = "tests/smoke/type_alias_cycle_self_no_cascade.ts"
-expected_diagnostics = ["surge::type-alias-cycle"]
+expected_diagnostics = ["TS2456"]
 
 [[case]]
 name = "type-alias-cycle-indirect-no-cascade"
 path = "tests/smoke/type_alias_cycle_indirect_no_cascade.ts"
-expected_diagnostics = ["surge::type-alias-cycle"]
+expected_diagnostics = ["TS2456", "TS2456"]
 
 [[case]]
 name = "type-alias-cycle-in-object-property-no-cascade"
@@ -3993,12 +3993,12 @@ expected_diagnostics = ["TS2339", "TS2322"]
 [[case]]
 name = "type-alias-cycle-in-union-no-cascade"
 path = "tests/smoke/type_alias_cycle_in_union_no_cascade.ts"
-expected_diagnostics = ["surge::type-alias-cycle"]
+expected_diagnostics = ["TS2456"]
 
 [[case]]
 name = "type-alias-cycle-function-return-no-missing-return-cascade"
 path = "tests/smoke/type_alias_cycle_function_return_no_missing_return_cascade.ts"
-expected_diagnostics = ["surge::type-alias-cycle"]
+expected_diagnostics = ["TS2456"]
 
 [[case]]
 name = "type-alias-not-value-still-ts2304"

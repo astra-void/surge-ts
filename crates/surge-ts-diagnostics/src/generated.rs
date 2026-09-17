@@ -755,6 +755,16 @@ pub const TS2447: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2456: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2456",
+    number: Some(2456),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type alias '{0}' circularly references itself.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2459: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2459",
     number: Some(2459),
@@ -2441,6 +2451,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2749,
     TS2869,
     TS2447,
+    TS2456,
     TS2459,
     TS2469,
     TS2632,
@@ -3348,6 +3359,15 @@ impl Diagnostic {
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),
             ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2456(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2456,
+            vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
     }
