@@ -491,6 +491,7 @@ export const fixturePresets: Record<string, string> = {
   'this-write-missing-property-basic': path.join(workspaceRoot, 'tests/compat-projects/this-write-missing-property-basic/tsconfig.json'),
   'this-write-target-anchor-basic': path.join(workspaceRoot, 'tests/compat-projects/this-write-target-anchor-basic/tsconfig.json'),
   'this-parameter-typing-basic': path.join(workspaceRoot, 'tests/compat-projects/this-parameter-typing-basic/tsconfig.json'),
+  'class-field-initializer-type-basic': path.join(workspaceRoot, 'tests/compat-projects/class-field-initializer-type-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -63,7 +63,10 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
                 optional: property.optional,
                 is_abstract: property.is_abstract,
                 is_method: false,
-                ty: property.declared_type.clone().unwrap_or(ParsedType::Any),
+                ty: property
+                    .declared_type
+                    .clone()
+                    .unwrap_or_else(|| initializer_property_type(property)),
                 readonly: property.readonly,
                 write_ty: None,
             })
@@ -418,8 +421,84 @@ fn inherited_static_properties(
 fn static_property_type(property: &ParsedClassProperty, ctx: &mut CheckerContext) -> Type {
     match property.declared_type.clone() {
         Some(declared_type) => map_parsed_type(declared_type, ctx),
-        None => Type::Any,
+        None => map_parsed_type(initializer_property_type(property), ctx),
     }
+}
+
+/// The type an unannotated property takes from its initializer, as tsc's
+/// `getWidenedTypeForVariableLikeDeclaration` gives it: widened, except that a
+/// `readonly` property keeps its literal. The instance side is built from
+/// written types before any expression is checked, so only initializers whose
+/// type is evident from their syntax are lowered; the rest stay `any`.
+fn initializer_property_type(property: &ParsedClassProperty) -> ParsedType {
+    property
+        .initializer
+        .as_ref()
+        .and_then(|initializer| syntactic_initializer_type(initializer, property.readonly))
+        .unwrap_or(ParsedType::Any)
+}
+
+fn syntactic_initializer_type(initializer: &surge_ts_syntax::ParsedExpression, keep_literal: bool) -> Option<ParsedType> {
+    use surge_ts_syntax::ParsedExpression;
+    Some(match initializer {
+        ParsedExpression::StringLiteral(value) if keep_literal => ParsedType::StringLiteral(value.clone()),
+        ParsedExpression::NumberLiteral(value) if keep_literal => ParsedType::NumberLiteral(value.clone()),
+        ParsedExpression::BooleanLiteral(value) if keep_literal => ParsedType::BooleanLiteral(*value),
+        ParsedExpression::StringLiteral(_) => ParsedType::String,
+        ParsedExpression::NumberLiteral(_) => ParsedType::Number,
+        ParsedExpression::BooleanLiteral(_) => ParsedType::Boolean,
+        ParsedExpression::TemplateLiteral { expressions, .. } if expressions.is_empty() => {
+            ParsedType::String
+        }
+        ParsedExpression::ArrayLiteral { elements, .. } => {
+            let mut element_types = elements.iter().map(|element| match &element.expression {
+                _ if element.spread => None,
+                ParsedExpression::StringLiteral(_) => Some(ParsedType::String),
+                ParsedExpression::NumberLiteral(_) => Some(ParsedType::Number),
+                ParsedExpression::BooleanLiteral(_) => Some(ParsedType::Boolean),
+                _ => None,
+            });
+            let first = element_types.next()??;
+            if !element_types.all(|element| element.as_ref() == Some(&first)) {
+                return None;
+            }
+            ParsedType::Array(Arc::new(first))
+        }
+        ParsedExpression::ObjectLiteral { properties, .. } => {
+            let mut members = Vec::with_capacity(properties.len());
+            for property in properties {
+                if property.is_spread || property.is_accessor || property.computed_key.is_some() {
+                    return None;
+                }
+                // A member is a mutable location, so its literal widens even
+                // when the property holding the object is `readonly`.
+                let ty = if property.is_method {
+                    ParsedType::Any
+                } else {
+                    syntactic_initializer_type(&property.value, false).unwrap_or(ParsedType::Any)
+                };
+                members.push(surge_ts_syntax::ParsedObjectTypeProperty {
+                    name: property.name.clone(),
+                    name_span: property.name_span,
+                    ty,
+                    optional: false,
+                    is_method: property.is_method,
+                    readonly: false,
+                    write_ty: None,
+                });
+            }
+            ParsedType::Object(Arc::new(surge_ts_syntax::ParsedObjectType {
+                properties: members,
+                string_index_type: None,
+                number_index_type: None,
+                call_signature: None,
+                call_signature_overloads: Vec::new(),
+                construct_signature: None,
+                non_primitive: false,
+            }))
+        }
+        _ => return None,
+    })
 }
 
 fn class_instance_type(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) -> Type {
