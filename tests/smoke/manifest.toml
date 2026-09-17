@@ -2440,9 +2440,11 @@ path = "tests/smoke/union_function_return_string_or_undefined_missing_still_ts23
 expected_diagnostics = ["TS2355"]
 
 [[case]]
-name = "union-function-return-string-or-undefined-partial-still-ts2366"
-path = "tests/smoke/union_function_return_string_or_undefined_partial_still_ts2366.ts"
-expected_diagnostics = ["TS2366"]
+# TS2366 is gated on `!isTypeAssignableTo(undefinedType, t)` (checker.go:3784),
+# so a return type that already admits `undefined` does not get it. Verified
+# against the oracle: this file reports nothing under `strict`.
+name = "union-function-return-string-or-undefined-partial-exempt"
+path = "tests/smoke/union_function_return_string_or_undefined_partial_exempt.ts"
 
 [[case]]
 name = "union-function-return-undefined-value-valid"
@@ -5460,9 +5462,11 @@ path = "tests/smoke/function_type_unresolved_return_no_cascade.ts"
 expected_diagnostics = ["TS2304"]
 
 [[case]]
-name = "function-type-void-union-missing-return-still-checked"
-path = "tests/smoke/function_type_void_union_missing_return_still_checked.ts"
-expected_diagnostics = ["TS2355"]
+# tsc's early exit is `maybeTypeOfKind(t, Void)` (checker.go:3759), so a union
+# carrying `void` is exempt exactly like the bare keyword. Verified against the
+# oracle: `function f(): string | void {}` reports nothing.
+name = "function-type-void-union-missing-return-exempt"
+path = "tests/smoke/function_type_void_union_missing_return_exempt.ts"
 
 [[case]]
 name = "function-type-void-union-return-undefined-valid"

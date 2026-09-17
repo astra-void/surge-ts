@@ -825,6 +825,16 @@ pub const TS7030: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2534: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2534",
+    number: Some(2534),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A function returning 'never' cannot have a reachable end point.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS7031: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS7031",
     number: Some(7031),
@@ -2108,6 +2118,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS4114,
     TS7029,
     TS7030,
+    TS2534,
     TS7031,
     TS7034,
     TS7051,
@@ -3009,6 +3020,11 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts7030(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS7030, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2534(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2534, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

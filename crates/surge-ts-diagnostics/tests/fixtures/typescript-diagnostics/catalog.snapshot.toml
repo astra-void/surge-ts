@@ -657,6 +657,14 @@ message = "Not all code paths return a value."
 arity = 0
 
 [[diagnostic]]
+code = "TS2534"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A function returning 'never' cannot have a reachable end point."
+arity = 0
+
+[[diagnostic]]
 code = "TS7031"
 category = "Error"
 source = "typescript"

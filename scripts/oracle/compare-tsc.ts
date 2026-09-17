@@ -479,6 +479,7 @@ export const fixturePresets: Record<string, string> = {
   'declared-literal-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/declared-literal-inference-basic/tsconfig.json'),
   'callable-intersection-brand-basic': path.join(workspaceRoot, 'tests/compat-projects/callable-intersection-brand-basic/tsconfig.json'),
   'ambient-namespace-member-contextual-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-namespace-member-contextual-basic/tsconfig.json'),
+  'missing-return-diagnostic-selection-basic': path.join(workspaceRoot, 'tests/compat-projects/missing-return-diagnostic-selection-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
