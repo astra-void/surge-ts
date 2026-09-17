@@ -499,6 +499,7 @@ export const fixturePresets: Record<string, string> = {
   'keyof-union-and-mapped-distribution-basic': path.join(workspaceRoot, 'tests/compat-projects/keyof-union-and-mapped-distribution-basic/tsconfig.json'),
   'uncalled-function-condition-basic': path.join(workspaceRoot, 'tests/compat-projects/uncalled-function-condition-basic/tsconfig.json'),
   'overload-argument-mismatch-basic': path.join(workspaceRoot, 'tests/compat-projects/overload-argument-mismatch-basic/tsconfig.json'),
+  'loop-assignment-join-basic': path.join(workspaceRoot, 'tests/compat-projects/loop-assignment-join-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

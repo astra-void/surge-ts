@@ -260,16 +260,24 @@ pub(crate) fn check_function_while_statement(
     // A lowered `do … while (c)` runs its body first, so the body is checked
     // with the enclosing flow state (its assignments stand afterwards) and the
     // condition is checked last, where it may read what the body assigned.
+    // tsc types the code after a loop from every edge into it: the body's end
+    // (the assignments it made) and, unless the body always runs, the state
+    // before the first iteration.
+    let mut assigned = Vec::new();
+    branch_assigned_names(&body, &mut assigned);
     if runs_at_least_once {
         scopes.push_child();
         check_function_body(body, return_type, scopes, flow_state, ctx);
+        let body_types = branch_assignment_types(&assigned, scopes);
         scopes.pop_child();
+        adopt_branch_assignments(&body_types, scopes);
         check_while_condition(&condition, condition_span, statement_index, scopes, flow_state, ctx);
         return;
     }
 
     check_while_condition(&condition, condition_span, statement_index, scopes, flow_state, ctx);
 
+    let entry_types = branch_assignment_types(&assigned, scopes);
     scopes.push_child();
     // The condition is tested before every iteration, so the body starts where
     // it held, whatever the previous iteration assigned.
@@ -291,7 +299,9 @@ pub(crate) fn check_function_while_statement(
     } else {
         check_function_body(body, return_type, scopes, flow_state, ctx);
     }
+    let body_types = branch_assignment_types(&assigned, scopes);
     scopes.pop_child();
+    join_branch_pair(&entry_types, &body_types, scopes);
 }
 
 fn check_while_condition(
@@ -367,6 +377,9 @@ pub(crate) fn check_function_for_of_statement(
         }
     }
 
+    let mut assigned = Vec::new();
+    branch_assigned_names(&for_of_statement.body, &mut assigned);
+    let entry_types = branch_assignment_types(&assigned, scopes);
     scopes.push_child();
     // `for (const _ in ref)` acts as a non-null assertion on `ref` for the
     // duration of the body (tsc: `getTypeAtFlowNode`, flow.go — "for (const _
@@ -399,7 +412,9 @@ pub(crate) fn check_function_for_of_statement(
     } else {
         check_function_body(for_of_statement.body, return_type, scopes, flow_state, ctx);
     }
+    let body_types = branch_assignment_types(&assigned, scopes);
     scopes.pop_child();
+    join_branch_pair(&entry_types, &body_types, scopes);
 }
 
 /// tsc's `hasNumericPropertyNames`: the type's only index signature is the
