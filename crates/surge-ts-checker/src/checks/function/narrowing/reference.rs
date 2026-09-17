@@ -403,6 +403,21 @@ pub(super) fn collect_reference_guards<'a>(
         }
         return;
     }
+    // By De Morgan every operand of an `||` fails where the whole test does, so
+    // `if (!s?.program || !s.map) return;` leaves both references truthy.
+    if let ParsedExpression::Logical {
+        left,
+        operator: ParsedLogicalOperator::Or,
+        right,
+        ..
+    } = condition
+    {
+        if !branch_is_true {
+            collect_reference_guards(left, false, guards);
+            collect_reference_guards(right, false, guards);
+        }
+        return;
+    }
 
     // `!!x` is `x`'s truthiness spelled out; as an `&&` operand (`!!query &&
     // query.isFetched()`, or an alias of it) it proves the same thing the bare
@@ -419,6 +434,15 @@ pub(super) fn collect_reference_guards<'a>(
         } = operand.as_ref()
     {
         collect_reference_guards(inner, branch_is_true, guards);
+        return;
+    }
+    if let ParsedExpression::Unary {
+        operator: ParsedUnaryOperator::Not,
+        operand,
+        ..
+    } = condition
+    {
+        collect_reference_guards(operand, !branch_is_true, guards);
         return;
     }
 

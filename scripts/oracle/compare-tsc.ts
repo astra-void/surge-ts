@@ -494,6 +494,7 @@ export const fixturePresets: Record<string, string> = {
   'class-field-initializer-type-basic': path.join(workspaceRoot, 'tests/compat-projects/class-field-initializer-type-basic/tsconfig.json'),
   'tuple-index-out-of-bounds-basic': path.join(workspaceRoot, 'tests/compat-projects/tuple-index-out-of-bounds-basic/tsconfig.json'),
   'destructuring-assignment-basic': path.join(workspaceRoot, 'tests/compat-projects/destructuring-assignment-basic/tsconfig.json'),
+  'or-false-branch-reference-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/or-false-branch-reference-narrowing-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
