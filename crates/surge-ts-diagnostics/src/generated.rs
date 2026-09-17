@@ -685,6 +685,16 @@ pub const TS2869: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2769: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2769",
+    number: Some(2769),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "No overload matches this call.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2774: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2774",
     number: Some(2774),
@@ -2114,6 +2124,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2745,
     TS2749,
     TS2869,
+    TS2769,
     TS2774,
     TS2871,
     TS2872,
@@ -2923,6 +2934,11 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2869(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2869, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2769(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2769, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

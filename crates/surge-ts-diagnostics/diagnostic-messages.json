@@ -544,6 +544,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2769",
+    "category": "Error",
+    "message": "No overload matches this call.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2774",
     "category": "Error",
     "message": "This condition will always return true since this function is always defined. Did you mean to call it instead?",

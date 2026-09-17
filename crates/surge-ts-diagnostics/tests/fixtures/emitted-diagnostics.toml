@@ -557,6 +557,12 @@ oracle = [
   "syntactic-nullishness-coalesce-basic",
 ]
 
+[TS2769]
+status = "emitted"
+oracle = [
+  "overload-argument-mismatch-basic",
+]
+
 [TS2774]
 status = "emitted"
 oracle = [

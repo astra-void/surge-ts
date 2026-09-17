@@ -1346,6 +1346,15 @@ fn construct_signature_of(ty: &Type) -> Option<surge_ts_types::FunctionType> {
     }
 }
 
+fn overload_arity_fits(candidate: &FunctionType, argument_count: usize) -> bool {
+    let parameters = candidate.parameters();
+    let mut required = candidate.required_parameter_count();
+    while required > 0 && parameter_is_void_optional(&parameters[required - 1]) {
+        required -= 1;
+    }
+    argument_count >= required && (candidate.is_variadic() || argument_count <= parameters.len())
+}
+
 fn rest_parameter_element_type(parameter_type: &Type, rest_offset: usize) -> Type {
     match parameter_type {
         Type::Array(element) => element.as_ref().clone(),
@@ -1381,6 +1390,38 @@ pub(crate) fn check_function_type_call(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    // tsc resolves an overloaded call against the candidates whose arity fits
+    // (`hasCorrectArity`). With exactly one, a mismatch is that candidate's own
+    // argument error; with several, it is TS2769. The permissive fold stays the
+    // signature arguments are checked against whenever a candidate is not fully
+    // modelled, since a sentinel parameter would reject what tsc accepts.
+    let mut arity_candidates = 0;
+    if let Some(members) = function_type.overloads()
+        && !arguments.iter().any(|argument| argument.spread)
+    {
+        let fitting: Vec<&FunctionType> = members
+            .iter()
+            .filter(|member| overload_arity_fits(member, arguments.len()))
+            .collect();
+        arity_candidates = fitting.len();
+        if let [sole] = fitting.as_slice()
+            && sole.overloads().is_none()
+            && !sole
+                .parameters()
+                .iter()
+                .any(|parameter| type_contains_unknown(parameter) || matches!(parameter, Type::Never))
+        {
+            return check_function_type_call(
+                sole,
+                callee_span,
+                call_span,
+                _type_arguments,
+                arguments,
+                symbols,
+                ctx,
+            );
+        }
+    }
     let expected = function_type.parameters().len();
     let actual = arguments.len();
     let mut has_unresolved_argument = false;
@@ -1559,14 +1600,20 @@ pub(crate) fn check_function_type_call(
                 {
                     let argument_type_name = source_display_name(&argument_type, &parameter_type);
                     let parameter_type_name = parameter_type.name();
-                    let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
-                        &argument_type,
-                        &parameter_type,
-                        &argument_type_name,
-                        &parameter_type_name,
-                        true,
-                        ctx.file_name.clone(),
-                    );
+                    // Every fitting candidate's parameter at this position is a
+                    // member of the fold's, so none of them accepts it either.
+                    let diagnostic = if arity_candidates > 1 {
+                        Diagnostic::ts2769(ctx.file_name.clone())
+                    } else {
+                        crate::checks::expr::assignability_mismatch_diagnostic(
+                            &argument_type,
+                            &parameter_type,
+                            &argument_type_name,
+                            &parameter_type_name,
+                            true,
+                            ctx.file_name.clone(),
+                        )
+                    };
 
                     ctx.push(diagnostic_with_syntax_span(diagnostic, argument.span));
                     mismatch_reported = true;

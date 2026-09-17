@@ -545,6 +545,14 @@ message = "Right operand of ?? is unreachable because the left operand is never 
 arity = 0
 
 [[diagnostic]]
+code = "TS2769"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "No overload matches this call."
+arity = 0
+
+[[diagnostic]]
 code = "TS2774"
 category = "Error"
 source = "typescript"
