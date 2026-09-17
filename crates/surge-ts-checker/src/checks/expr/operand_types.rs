@@ -118,3 +118,49 @@ pub(crate) fn check_instanceof_left_operand(
     let file_name = ctx.file_name.clone();
     ctx.push(Diagnostic::ts2358(file_name).with_span(convert_span(span)));
 }
+
+/// tsc's `getIteratedTypeOrElementType` failure (TS2488) for a type surge can
+/// see has no iteration protocol. `nullish_is_error` separates a spread, where
+/// `undefined` and `unknown` are themselves not iterable, from `for…of`, where
+/// tsc reports them as possibly-nullish or unknown operands instead.
+pub(crate) fn check_iterable_operand(
+    operand_result: &InferredExpression,
+    operand_span: Option<SyntaxTextSpan>,
+    nullish_is_error: bool,
+    ctx: &mut CheckerContext,
+) {
+    let (InferredExpression::Known(ty), Some(span)) = (operand_result, operand_span) else {
+        return;
+    };
+    if !is_definitely_not_iterable(ty, nullish_is_error) {
+        return;
+    }
+    let file_name = ctx.file_name.clone();
+    ctx.push(Diagnostic::ts2488(ty.name(), file_name).with_span(convert_span(span)));
+}
+
+fn is_definitely_not_iterable(ty: &Type, nullish_is_error: bool) -> bool {
+    match ty {
+        Type::Number
+        | Type::NumberLiteral(_)
+        | Type::Boolean
+        | Type::BooleanLiteral(_)
+        | Type::BigInt
+        | Type::Symbol => true,
+        Type::Undefined | Type::GenuineUnknown => nullish_is_error,
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| is_definitely_not_iterable(member, nullish_is_error)),
+        Type::Object(object) => {
+            object
+                .get_property(surge_ts_types::ITERATION_PROTOCOL_MEMBER)
+                .is_none()
+                && object.call_signature().is_none()
+                && object.construct_signature().is_none()
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none()
+        }
+        _ => false,
+    }
+}

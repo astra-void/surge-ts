@@ -702,10 +702,12 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
         // bad member inside it is reported the same way — so it is parsed, and
         // the argument carries the flag the arity check needs.
         Argument::SpreadElement(spread) => {
+            let (expression, expression_span) = parse_expression(&spread.argument);
             return ParsedCallArgument {
-                expression: parse_expression(&spread.argument).0,
+                expression,
                 span: Some(text_span_from_oxc_span(argument.span())),
                 spread: true,
+                expression_span: Some(text_span_from_oxc_span(expression_span)),
             };
         }
         Argument::BooleanLiteral(boolean_literal) => (
@@ -805,6 +807,7 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
                         },
                         span: Some(text_span_from_oxc_span(as_expression.span)),
                         spread: false,
+                        expression_span: Some(text_span_from_oxc_span(as_expression.span)),
                     };
                 }
             }
@@ -872,6 +875,7 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
         expression,
         span: Some(text_span_from_oxc_span(span)),
         spread: false,
+        expression_span: Some(text_span_from_oxc_span(span)),
     }
 }
 

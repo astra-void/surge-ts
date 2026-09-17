@@ -656,6 +656,7 @@ fn parse_for_of_statement(for_of_statement: &ForOfStatement<'_>) -> Option<Parse
         iterable_span: Some(text_span_from_oxc_span(iterable_span)),
         body,
         keys_only: false,
+        is_await: for_of_statement.r#await,
     })
 }
 
@@ -686,6 +687,7 @@ fn parse_for_in_statement(
         iterable_span: Some(text_span_from_oxc_span(iterable_span)),
         body: parse_branch_body(&for_in_statement.body),
         keys_only: true,
+        is_await: false,
     })
 }
 

@@ -1413,6 +1413,8 @@ pub struct ParsedForOfStatement {
     /// key (always `string`), not the iterated element, and the right-hand side
     /// need not be iterable.
     pub keys_only: bool,
+    /// `for await (x of xs)`, which may iterate an async iterable.
+    pub is_await: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1495,6 +1497,8 @@ pub struct ParsedCallArgument {
     /// `f(...xs)`. The count this contributes depends on the spread's own type,
     /// so a call carrying one has no statically known argument count.
     pub spread: bool,
+    /// The argument without a spread's `...`.
+    pub expression_span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

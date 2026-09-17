@@ -517,6 +517,7 @@ export const fixturePresets: Record<string, string> = {
   'template-expression-type-basic': path.join(workspaceRoot, 'tests/compat-projects/template-expression-type-basic/tsconfig.json'),
   'constructor-overload-group-basic': path.join(workspaceRoot, 'tests/compat-projects/constructor-overload-group-basic/tsconfig.json'),
   'void-expression-type-basic': path.join(workspaceRoot, 'tests/compat-projects/void-expression-type-basic/tsconfig.json'),
+  'spread-iterability-basic': path.join(workspaceRoot, 'tests/compat-projects/spread-iterability-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

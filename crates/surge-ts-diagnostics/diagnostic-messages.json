@@ -1200,6 +1200,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2488",
+    "category": "Error",
+    "message": "Type '{0}' must have a '[Symbol.iterator]()' method that returns an iterator.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2698",
     "category": "Error",
     "message": "Spread types may only be created from object types.",

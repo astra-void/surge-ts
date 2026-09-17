@@ -1489,7 +1489,14 @@ pub(crate) fn check_function_type_call(
         // one would report the whole tuple against a single parameter. Its own
         // expression is still evaluated so errors inside it surface.
         if argument.spread {
-            let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            let spread_result =
+                evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            crate::checks::expr::check_iterable_operand(
+                &spread_result,
+                argument.expression_span,
+                true,
+                ctx,
+            );
             argument_types.push(ArgumentShape::wildcard());
             continue;
         }

@@ -484,10 +484,22 @@ fn contextual_rest_parameter_type(expected_type: &FunctionType, position: usize)
     if position >= fixed_end {
         return Some(Type::Tuple(Vec::new()));
     }
-    if fixed_end > expected_type.required_parameter_count() {
-        return None;
-    }
-    let leading = parameters[position..fixed_end].to_vec();
+    // surge's tuples have no optional elements, so an optional parameter
+    // contributes its `T | undefined` slot.
+    let required = expected_type.required_parameter_count();
+    let leading = parameters[position..fixed_end]
+        .iter()
+        .enumerate()
+        .map(|(offset, parameter)| {
+            if position + offset >= required
+                && !surge_ts_types::is_assignable_to(&Type::Undefined, parameter)
+            {
+                surge_ts_types::union_type(vec![parameter.clone(), Type::Undefined])
+            } else {
+                parameter.clone()
+            }
+        })
+        .collect::<Vec<_>>();
     Some(match rest_and_element {
         None => Type::Tuple(leading),
         Some((Type::Tuple(elements), _)) => Type::Tuple(leading.into_iter().chain(elements).collect()),

@@ -1,3 +1,9 @@
+[TS2488]
+status = "emitted"
+oracle = [
+  "spread-iterability-basic",
+]
+
 [TS5102]
 status = "emitted"
 fixtures = [

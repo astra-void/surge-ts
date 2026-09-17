@@ -1201,6 +1201,14 @@ message = "The left-hand side of an 'instanceof' expression must be of type 'any
 arity = 0
 
 [[diagnostic]]
+code = "TS2488"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' must have a '[Symbol.iterator]()' method that returns an iterator."
+arity = 1
+
+[[diagnostic]]
 code = "TS2698"
 category = "Error"
 source = "typescript"

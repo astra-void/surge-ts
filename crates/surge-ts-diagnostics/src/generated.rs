@@ -1505,6 +1505,16 @@ pub const TS2358: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2488: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2488",
+    number: Some(2488),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type '{0}' must have a '[Symbol.iterator]()' method that returns an iterator.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2698: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2698",
     number: Some(2698),
@@ -2316,6 +2326,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS18011,
     TS1102,
     TS2358,
+    TS2488,
     TS2698,
     TS2416,
     TS2430,
@@ -3739,6 +3750,15 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2358(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2358, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2488(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2488,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
     }
 
     #[allow(clippy::needless_pass_by_value)]

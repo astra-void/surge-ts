@@ -82,12 +82,15 @@ pub(crate) fn evaluate_expression(
             let inferred_expression = infer_expression(expression, symbols, ctx);
 
             for element in elements {
-                let _ = evaluate_expression(
+                let element_result = evaluate_expression(
                     &element.expression,
                     element.span.or(fallback_span),
                     symbols,
                     ctx,
                 );
+                if element.spread {
+                    super::check_iterable_operand(&element_result, element.span, true, ctx);
+                }
             }
 
             report_inferred_expression(

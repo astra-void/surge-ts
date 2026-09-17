@@ -372,8 +372,18 @@ pub(crate) fn check_function_for_of_statement(
                 InferredExpression::Known(iterable_type)
                     if has_numeric_property_names(iterable_type)
             );
-        } else if let InferredExpression::Known(iterable_type) = iterable_type {
-            element_type = for_of_element_type(&iterable_type);
+        } else {
+            if !for_of_statement.is_await {
+                crate::checks::expr::check_iterable_operand(
+                    &iterable_type,
+                    for_of_statement.iterable_span,
+                    false,
+                    ctx,
+                );
+            }
+            if let InferredExpression::Known(iterable_type) = iterable_type {
+                element_type = for_of_element_type(&iterable_type);
+            }
         }
     }
 
