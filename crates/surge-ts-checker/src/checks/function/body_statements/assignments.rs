@@ -278,19 +278,37 @@ fn object_property_is_readonly(receiver: &Type, property_name: &str) -> bool {
 fn report_readonly_element_write(
     receiver: &Type,
     index_type: &Type,
-    span: Option<surge_ts_syntax::TextSpan>,
+    element_span: Option<surge_ts_syntax::TextSpan>,
+    access_span: Option<surge_ts_syntax::TextSpan>,
     ctx: &mut CheckerContext,
 ) -> bool {
     let Type::Reference(reference) = receiver else {
         return false;
     };
-    if !reference.is_readonly_array() {
+    // The lib's `ReadonlyArray<T>` written by name is the same readonly array
+    // as `readonly T[]`, which tsc also prints it as.
+    let lib_readonly_array = reference.arguments.len() == 1
+        && reference.id.split('\u{0}').next_back() == Some("ReadonlyArray");
+    if !reference.is_readonly_array() && !lib_readonly_array {
         return false;
     }
 
-    let diagnostic = match (receiver.peeled(), literal_index_key(index_type)) {
-        (Type::Tuple(_), Some(key)) => Diagnostic::ts2540(key, ctx.file_name.clone()),
-        _ => Diagnostic::ts2542(receiver.name(), ctx.file_name.clone()),
+    // A tuple element is a property, reported on the index; an array's index
+    // signature is reported on the whole access (`errorIfWritingToReadonlyIndex`).
+    let (diagnostic, span) = match (receiver.peeled(), literal_index_key(index_type)) {
+        (Type::Tuple(_), Some(key)) => (Diagnostic::ts2540(key, ctx.file_name.clone()), element_span),
+        _ => {
+            let name = if lib_readonly_array {
+                let element = &reference.arguments[0];
+                match element {
+                    Type::Union(_) | Type::Function(_) => format!("readonly ({})[]", element.name()),
+                    _ => format!("readonly {}[]", element.name()),
+                }
+            } else {
+                receiver.name()
+            };
+            (Diagnostic::ts2542(name, ctx.file_name.clone()), access_span)
+        }
     };
     ctx.push(match span {
         Some(span) => diagnostic.with_span(convert_span(span)),
@@ -453,7 +471,13 @@ fn check_element_assignment(
         return;
     }
 
-    if report_readonly_element_write(&receiver_type, &index_type, property_span, ctx) {
+    if report_readonly_element_write(
+        &receiver_type,
+        &index_type,
+        property_span,
+        assignment.target_span.or(property_span),
+        ctx,
+    ) {
         return;
     }
     if let Some(key) = literal_index_key(&index_type)
