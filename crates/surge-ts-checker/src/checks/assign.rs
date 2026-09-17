@@ -4,7 +4,9 @@ use surge_ts_syntax::ParsedAssignment;
 use surge_ts_types::is_assignable_to;
 
 use super::emit_type_only_as_value_diagnostic;
-use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
+use super::expected::{
+    ExpectedTypeDiagnostic, evaluate_expression_with_expected_type_anchored,
+};
 use crate::context::{CheckerContext, convert_span};
 use crate::program::{
     DtsExpansionReason, record_assignability_check, record_program_timing,
@@ -52,9 +54,12 @@ pub(crate) fn check_assignment_with_symbols(
         .unwrap_or(&target.ty)
         .clone();
 
-    let inferred_value = evaluate_expression_with_expected_type(
+    // tsc reports a mismatched write at the assignment target, elaborating into
+    // the value only where it can (an object or array literal member).
+    let inferred_value = evaluate_expression_with_expected_type_anchored(
         &assignment.value,
         assignment.value_span,
+        Some(target_span),
         Some(&target_type),
         ExpectedTypeDiagnostic::TypeNotAssignable,
         symbols,
@@ -82,11 +87,7 @@ pub(crate) fn check_assignment_with_symbols(
                     ctx.file_name.clone(),
                 );
 
-                let diagnostic = match assignment.value_span {
-                    Some(span) => diagnostic.with_span(convert_span(span)),
-                    None => diagnostic,
-                };
-
+                let diagnostic = diagnostic.with_span(convert_span(target_span));
                 ctx.push(diagnostic);
             }
             record_program_timing(ctx.timings.as_ref(), |timings| {
