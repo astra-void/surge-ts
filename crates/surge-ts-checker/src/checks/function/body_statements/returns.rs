@@ -34,6 +34,7 @@ pub(super) fn may_infer_as_any(expression: &ParsedExpression) -> bool {
             | ParsedExpression::JsxFragment { .. }
             | ParsedExpression::StringLiteral(_)
             | ParsedExpression::NumberLiteral(_)
+            | ParsedExpression::BigIntLiteral(_)
             | ParsedExpression::BooleanLiteral(_)
             | ParsedExpression::TemplateLiteral { .. }
             | ParsedExpression::UndefinedLiteral

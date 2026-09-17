@@ -60,6 +60,7 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
             ParsedExpression::BooleanLiteral(boolean_literal.value)
         }
         Expression::NullLiteral(_) => ParsedExpression::NullLiteral,
+        Expression::BigIntLiteral(literal) => ParsedExpression::BigIntLiteral(literal.raw.as_deref().unwrap_or_default().to_string()),
         Expression::Identifier(identifier) => {
             if identifier.name == "undefined" {
                 ParsedExpression::UndefinedLiteral

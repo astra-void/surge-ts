@@ -36,8 +36,11 @@ pub(crate) fn evaluate_binary_expression(
         | ParsedBinaryOperator::BitwiseXOR => evaluate_arithmetic_binary(
             left_result,
             right_result,
+            operator,
             left_span.or(fallback_span),
+            operator_span,
             right_span.or(fallback_span),
+            fallback_span,
             ctx,
         ),
         ParsedBinaryOperator::LessThan
@@ -266,11 +269,20 @@ fn is_numeric_like_for_add(ty: &Type) -> bool {
     }
 }
 
+/// tsc's arithmetic and bitwise arm of `checkBinaryLikeExpression`: two
+/// boolean operands of `&`/`|`/`^` are TS2447 on the operator; otherwise each
+/// operand must be `any`, number-like or bigint-like (TS2362/TS2363), and
+/// mixing a bigint with a non-bigint — or `>>>` on bigints — is TS2365 on the
+/// whole expression.
+#[allow(clippy::too_many_arguments)]
 fn evaluate_arithmetic_binary(
     left_result: InferredExpression,
     right_result: InferredExpression,
+    operator: ParsedBinaryOperator,
     left_span: Option<SyntaxTextSpan>,
+    operator_span: Option<SyntaxTextSpan>,
     right_span: Option<SyntaxTextSpan>,
+    fallback_span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let Some(left_type) = inferred_type(&left_result) else {
@@ -284,31 +296,110 @@ fn evaluate_arithmetic_binary(
         return InferredExpression::Unknown;
     }
 
-    if matches!(left_type, Type::Any) || matches!(right_type, Type::Any) {
-        return InferredExpression::Known(Type::Any);
+    if let Some(suggested) = suggested_boolean_operator(operator)
+        && is_boolean_like(left_type)
+        && is_boolean_like(right_type)
+    {
+        let file_name = ctx.file_name.clone();
+        push_diagnostic(
+            ctx,
+            Diagnostic::ts2447(binary_operator_text(operator), suggested, file_name),
+            operator_span.or(fallback_span),
+        );
+        return InferredExpression::Known(Type::Number);
     }
 
-    let left_valid = is_number_like_for_arithmetic(left_type);
-    let right_valid = is_number_like_for_arithmetic(right_type);
+    let left_valid = is_valid_arithmetic_operand(left_type);
+    let right_valid = is_valid_arithmetic_operand(right_type);
+    if !left_valid {
+        let file_name = ctx.file_name.clone();
+        push_diagnostic(ctx, Diagnostic::ts2362(file_name), left_span);
+    }
+    if !right_valid {
+        let file_name = ctx.file_name.clone();
+        push_diagnostic(ctx, Diagnostic::ts2363(file_name), right_span);
+    }
 
-    match (left_valid, right_valid) {
-        (true, true) => InferredExpression::Known(Type::Number),
-        (false, true) => {
-            let file_name = ctx.file_name.clone();
-            push_diagnostic(ctx, Diagnostic::ts2362(file_name), left_span);
+    let either_any = matches!(left_type, Type::Any) || matches!(right_type, Type::Any);
+    let maybe_bigint = maybe_bigint_like(left_type) || maybe_bigint_like(right_type);
+    if either_any && !maybe_bigint || !maybe_bigint {
+        return if left_valid && right_valid {
+            InferredExpression::Known(if either_any { Type::Any } else { Type::Number })
+        } else {
             InferredExpression::Unknown
+        };
+    }
+    if is_bigint_like(left_type) && is_bigint_like(right_type) {
+        if matches!(operator, ParsedBinaryOperator::ShiftRightZeroFill) {
+            report_operator_error(operator, left_type, right_type, fallback_span, ctx);
         }
-        (true, false) => {
-            let file_name = ctx.file_name.clone();
-            push_diagnostic(ctx, Diagnostic::ts2363(file_name), right_span);
-            InferredExpression::Unknown
-        }
-        (false, false) => {
-            let file_name = ctx.file_name.clone();
-            push_diagnostic(ctx, Diagnostic::ts2362(file_name.clone()), left_span);
-            push_diagnostic(ctx, Diagnostic::ts2363(file_name), right_span);
-            InferredExpression::Unknown
-        }
+        return InferredExpression::Known(Type::BigInt);
+    }
+    report_operator_error(operator, left_type, right_type, fallback_span, ctx);
+    InferredExpression::Unknown
+}
+
+fn report_operator_error(
+    operator: ParsedBinaryOperator,
+    left_type: &Type,
+    right_type: &Type,
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    let file_name = ctx.file_name.clone();
+    push_diagnostic(
+        ctx,
+        Diagnostic::ts2365(
+            binary_operator_text(operator),
+            &operand_display_name(left_type),
+            &operand_display_name(right_type),
+            file_name,
+        ),
+        span,
+    );
+}
+
+fn suggested_boolean_operator(operator: ParsedBinaryOperator) -> Option<&'static str> {
+    match operator {
+        ParsedBinaryOperator::BitwiseAnd => Some("&&"),
+        ParsedBinaryOperator::BitwiseOR => Some("||"),
+        ParsedBinaryOperator::BitwiseXOR => Some("!=="),
+        _ => None,
+    }
+}
+
+fn is_boolean_like(ty: &Type) -> bool {
+    match ty {
+        Type::Boolean | Type::BooleanLiteral(_) => true,
+        Type::Union(union) => union.types().iter().all(is_boolean_like),
+        _ => false,
+    }
+}
+
+/// `isTypeAssignableToKind(t, BigIntLike)`, which `any` satisfies.
+fn is_bigint_like(ty: &Type) -> bool {
+    match ty {
+        Type::BigInt | Type::Any => true,
+        Type::Union(union) => union.types().iter().all(is_bigint_like),
+        _ => false,
+    }
+}
+
+fn maybe_bigint_like(ty: &Type) -> bool {
+    match ty {
+        Type::BigInt => true,
+        Type::Union(union) => union.types().iter().any(maybe_bigint_like),
+        _ => false,
+    }
+}
+
+/// `checkArithmeticOperandType`: `any`, number-like (numeric enums included)
+/// or bigint-like.
+fn is_valid_arithmetic_operand(ty: &Type) -> bool {
+    match ty {
+        Type::Any | Type::BigInt => true,
+        Type::Union(union) => union.types().iter().all(is_valid_arithmetic_operand),
+        other => is_number_like_for_arithmetic(other),
     }
 }
 

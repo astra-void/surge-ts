@@ -552,6 +552,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2447",
+    "category": "Error",
+    "message": "The '{0}' operator is not allowed for boolean types. Consider using '{1}' instead.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2459",
     "category": "Error",
     "message": "Module '{0}' declares '{1}' locally, but it is not exported.",

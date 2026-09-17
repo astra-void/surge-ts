@@ -508,6 +508,7 @@ export const fixturePresets: Record<string, string> = {
   'import-binding-assignment-basic': path.join(workspaceRoot, 'tests/compat-projects/import-binding-assignment-basic/tsconfig.json'),
   'import-unexported-local-basic': path.join(workspaceRoot, 'tests/compat-projects/import-unexported-local-basic/tsconfig.json'),
   'modifier-order-basic': path.join(workspaceRoot, 'tests/compat-projects/modifier-order-basic/tsconfig.json'),
+  'arithmetic-operand-rules-basic': path.join(workspaceRoot, 'tests/compat-projects/arithmetic-operand-rules-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -113,6 +113,7 @@ pub(crate) fn infer_expression(
         ParsedExpression::StringLiteral(value) => {
             InferredExpression::Known(Type::StringLiteral(value.clone()))
         }
+        ParsedExpression::BigIntLiteral(_) => InferredExpression::Known(Type::BigInt),
         ParsedExpression::NumberLiteral(value) => {
             InferredExpression::Known(Type::NumberLiteral(NumberLiteralType {
                 value: value.clone(),

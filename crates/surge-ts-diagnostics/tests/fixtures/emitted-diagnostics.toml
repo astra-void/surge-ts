@@ -563,6 +563,12 @@ oracle = [
   "modifier-order-basic",
 ]
 
+[TS2447]
+status = "emitted"
+oracle = [
+  "arithmetic-operand-rules-basic",
+]
+
 [TS2459]
 status = "emitted"
 oracle = [

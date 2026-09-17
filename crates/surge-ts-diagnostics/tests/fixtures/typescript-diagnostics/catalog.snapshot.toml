@@ -553,6 +553,14 @@ message = "Right operand of ?? is unreachable because the left operand is never 
 arity = 0
 
 [[diagnostic]]
+code = "TS2447"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The '{0}' operator is not allowed for boolean types. Consider using '{1}' instead."
+arity = 2
+
+[[diagnostic]]
 code = "TS2459"
 category = "Error"
 source = "typescript"

@@ -850,6 +850,8 @@ pub struct ParsedObjectTypeProperty {
 pub enum ParsedExpression {
     StringLiteral(String),
     NumberLiteral(String),
+    /// `10n`. Typed as `bigint`: surge has no bigint literal type.
+    BigIntLiteral(String),
     BooleanLiteral(bool),
     UndefinedLiteral,
     NullLiteral,

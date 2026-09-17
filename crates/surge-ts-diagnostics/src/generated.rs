@@ -695,6 +695,16 @@ pub const TS2869: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2447: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2447",
+    number: Some(2447),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The '{0}' operator is not allowed for boolean types. Consider using '{1}' instead.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2459: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2459",
     number: Some(2459),
@@ -2175,6 +2185,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2745,
     TS2749,
     TS2869,
+    TS2447,
     TS2459,
     TS2632,
     TS2769,
@@ -3001,6 +3012,18 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2869(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2869, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2447(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2447,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
     }
 
     #[allow(clippy::needless_pass_by_value)]

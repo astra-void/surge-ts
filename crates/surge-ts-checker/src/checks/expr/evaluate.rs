@@ -1072,6 +1072,7 @@ fn is_pure_literal_tree(expression: &ParsedExpression) -> bool {
     match expression {
         ParsedExpression::StringLiteral(_)
         | ParsedExpression::NumberLiteral(_)
+        | ParsedExpression::BigIntLiteral(_)
         | ParsedExpression::BooleanLiteral(_) => true,
         ParsedExpression::ArrayLiteral { elements, .. } => elements
             .iter()

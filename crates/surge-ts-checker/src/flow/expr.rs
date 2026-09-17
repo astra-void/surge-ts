@@ -491,6 +491,7 @@ pub(crate) fn check_expression_flow_impl(
         ParsedExpression::This { .. }
         | ParsedExpression::StringLiteral(_)
         | ParsedExpression::NumberLiteral(_)
+        | ParsedExpression::BigIntLiteral(_)
         | ParsedExpression::BooleanLiteral(_)
         | ParsedExpression::UndefinedLiteral
         | ParsedExpression::NullLiteral
