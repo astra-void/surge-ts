@@ -67,6 +67,15 @@ pub enum ParsedGrammarDiagnosticKind {
     DeleteOnIdentifierInStrictMode,
     /// An enum member initializer naming a member declared after it — TS2651.
     EnumForwardReference,
+    /// An enum member with no initializer after one whose value is not a
+    /// number — TS1061.
+    EnumMemberInitializerRequired,
+    /// A `const enum` member initializer that is not a constant expression —
+    /// TS2474.
+    ConstEnumInitializerNotConstant,
+    /// An ambient enum member initializer that is not a constant expression —
+    /// TS1066.
+    AmbientEnumInitializerNotConstant,
     /// A second property of the same name in one object literal — TS1117.
     DuplicateObjectLiteralProperty,
     /// An overload group with no implementation — TS2391.

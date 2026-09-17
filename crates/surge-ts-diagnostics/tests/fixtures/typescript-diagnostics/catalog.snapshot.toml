@@ -1201,6 +1201,14 @@ message = "The left-hand side of an 'instanceof' expression must be of type 'any
 arity = 0
 
 [[diagnostic]]
+code = "TS2474"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "const enum member initializers must be constant expressions."
+arity = 0
+
+[[diagnostic]]
 code = "TS2488"
 category = "Error"
 source = "typescript"
@@ -1337,12 +1345,28 @@ message = "A 'set' accessor cannot have an optional parameter."
 arity = 0
 
 [[diagnostic]]
+code = "TS1061"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Enum member must have initializer."
+arity = 0
+
+[[diagnostic]]
 code = "TS1064"
 category = "Error"
 source = "typescript"
 support = "emitted"
 message = "The return type of an async function or method must be the global Promise<T> type. Did you mean to write 'Promise<{0}>'?"
 arity = 1
+
+[[diagnostic]]
+code = "TS1066"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "In ambient enum declarations member initializer must be constant expression."
+arity = 0
 
 [[diagnostic]]
 code = "TS1092"

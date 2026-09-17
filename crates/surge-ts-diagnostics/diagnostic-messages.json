@@ -1200,6 +1200,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2474",
+    "category": "Error",
+    "message": "const enum member initializers must be constant expressions.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2488",
     "category": "Error",
     "message": "Type '{0}' must have a '[Symbol.iterator]()' method that returns an iterator.",
@@ -1336,11 +1344,27 @@
     "support": "catalog-only"
   },
   {
+    "code": "TS1061",
+    "category": "Error",
+    "message": "Enum member must have initializer.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS1064",
     "category": "Error",
     "message": "The return type of an async function or method must be the global Promise<T> type. Did you mean to write 'Promise<{0}>'?",
     "source": "typescript",
     "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1066",
+    "category": "Error",
+    "message": "In ambient enum declarations member initializer must be constant expression.",
+    "source": "typescript",
+    "arity": 0,
     "support": "emitted"
   },
   {

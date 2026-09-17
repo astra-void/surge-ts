@@ -1,8 +1,26 @@
+[TS1061]
+status = "emitted"
+oracle = [
+  "enum-member-constant-values-basic",
+]
+
 [TS1064]
 status = "emitted"
 oracle = [
   "async-return-type-promise-basic",
 ]
+[TS1066]
+status = "emitted"
+oracle = [
+  "enum-member-constant-values-basic",
+]
+
+[TS2474]
+status = "emitted"
+oracle = [
+  "enum-member-constant-values-basic",
+]
+
 [TS2488]
 status = "emitted"
 oracle = [

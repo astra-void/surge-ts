@@ -1505,6 +1505,16 @@ pub const TS2358: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2474: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2474",
+    number: Some(2474),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "const enum member initializers must be constant expressions.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2488: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2488",
     number: Some(2488),
@@ -1675,6 +1685,16 @@ pub const TS1051: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::CatalogOnly,
 };
 
+pub const TS1061: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1061",
+    number: Some(1061),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Enum member must have initializer.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS1064: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS1064",
     number: Some(1064),
@@ -1682,6 +1702,16 @@ pub const TS1064: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "The return type of an async function or method must be the global Promise<T> type. Did you mean to write 'Promise<{0}>'?",
     argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1066: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1066",
+    number: Some(1066),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "In ambient enum declarations member initializer must be constant expression.",
+    argument_count: 0,
     support: DiagnosticSupport::Emitted,
 };
 
@@ -2346,6 +2376,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS18011,
     TS1102,
     TS2358,
+    TS2474,
     TS2488,
     TS2698,
     TS2416,
@@ -2363,7 +2394,9 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1028,
     TS1047,
     TS1051,
+    TS1061,
     TS1064,
+    TS1066,
     TS1092,
     TS1093,
     TS1096,
@@ -3775,6 +3808,11 @@ impl Diagnostic {
     }
 
     #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2474(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2474, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
     pub fn ts2488(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS2488,
@@ -3922,12 +3960,22 @@ impl Diagnostic {
     }
 
     #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1061(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1061, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
     pub fn ts1064(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS1064,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1066(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1066, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

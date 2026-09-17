@@ -528,6 +528,7 @@ export const fixturePresets: Record<string, string> = {
   'parser-grammar-codes-basic': path.join(workspaceRoot, 'tests/compat-projects/parser-grammar-codes-basic/tsconfig.json'),
   'async-return-type-promise-basic': path.join(workspaceRoot, 'tests/compat-projects/async-return-type-promise-basic/tsconfig.json'),
   'overload-implementation-compatibility-basic': path.join(workspaceRoot, 'tests/compat-projects/overload-implementation-compatibility-basic/tsconfig.json'),
+  'enum-member-constant-values-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-member-constant-values-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -42,9 +42,193 @@ struct GrammarCollector {
     /// The file's text, which modifier-order checks read: the AST keeps which
     /// modifiers a member has, not the order they were written in.
     source_text: String,
+    /// What each module-level binding contributes to an enum initializer that
+    /// names it; see [`EnumConstant`].
+    top_level_constants: std::collections::HashMap<String, EnumConstant>,
+    /// Module-level enum declarations, which alone may consult
+    /// `top_level_constants` (a nested one could see a shadowing binding).
+    top_level_enums: std::collections::HashSet<(u32, u32)>,
+}
+
+/// What tsc's enum constant evaluation can say about an initializer without
+/// resolving names it cannot see: an imported binding or another enum's member
+/// may well be constant, so those are `Unknown` and never reported.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum EnumConstant {
+    Number,
+    String,
+    NonConstant,
+    Unknown,
+}
+
+fn enum_constant(
+    expression: &Expression<'_>,
+    members: &std::collections::HashMap<String, EnumConstant>,
+    top_level: Option<&std::collections::HashMap<String, EnumConstant>>,
+) -> EnumConstant {
+    use oxc_syntax::operator::BinaryOperator;
+    match expression {
+        Expression::NumericLiteral(_) => EnumConstant::Number,
+        Expression::StringLiteral(_) => EnumConstant::String,
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => {
+            EnumConstant::String
+        }
+        Expression::TemplateLiteral(_) => EnumConstant::Unknown,
+        Expression::ParenthesizedExpression(parenthesized) => {
+            enum_constant(&parenthesized.expression, members, top_level)
+        }
+        Expression::UnaryExpression(unary)
+            if matches!(
+                unary.operator,
+                UnaryOperator::UnaryPlus | UnaryOperator::UnaryNegation | UnaryOperator::BitwiseNot
+            ) =>
+        {
+            match enum_constant(&unary.argument, members, top_level) {
+                EnumConstant::Number => EnumConstant::Number,
+                EnumConstant::Unknown => EnumConstant::Unknown,
+                _ => EnumConstant::NonConstant,
+            }
+        }
+        Expression::BinaryExpression(binary)
+            if matches!(
+                binary.operator,
+                BinaryOperator::Addition
+                    | BinaryOperator::Subtraction
+                    | BinaryOperator::Multiplication
+                    | BinaryOperator::Division
+                    | BinaryOperator::Remainder
+                    | BinaryOperator::Exponential
+                    | BinaryOperator::ShiftLeft
+                    | BinaryOperator::ShiftRight
+                    | BinaryOperator::ShiftRightZeroFill
+                    | BinaryOperator::BitwiseOR
+                    | BinaryOperator::BitwiseXOR
+                    | BinaryOperator::BitwiseAnd
+            ) =>
+        {
+            let left = enum_constant(&binary.left, members, top_level);
+            let right = enum_constant(&binary.right, members, top_level);
+            match (left, right) {
+                (EnumConstant::NonConstant, _) | (_, EnumConstant::NonConstant) => {
+                    EnumConstant::NonConstant
+                }
+                (EnumConstant::Unknown, _) | (_, EnumConstant::Unknown) => EnumConstant::Unknown,
+                (EnumConstant::Number, EnumConstant::Number) => EnumConstant::Number,
+                _ if binary.operator == BinaryOperator::Addition => EnumConstant::String,
+                _ => EnumConstant::NonConstant,
+            }
+        }
+        Expression::Identifier(identifier) => members
+            .get(identifier.name.as_str())
+            .or_else(|| top_level.and_then(|constants| constants.get(identifier.name.as_str())))
+            .copied()
+            .unwrap_or(EnumConstant::Unknown),
+        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => {
+            EnumConstant::Unknown
+        }
+        _ => EnumConstant::NonConstant,
+    }
 }
 
 impl GrammarCollector {
+    /// tsc's `computeEnumMemberValues`: a member without an initializer takes
+    /// the previous numeric value plus one, so it needs one after a string or
+    /// computed member (TS1061), and a `const enum` initializer must be a
+    /// constant expression (TS2474). An ambient enum's members are otherwise
+    /// free to be computed, but a written initializer must still be constant
+    /// (TS1066).
+    fn check_enum_member_values(&mut self, declaration: &oxc_ast::ast::TSEnumDeclaration<'_>) {
+        let ambient = declaration.declare || self.is_ambient();
+        let top_level_constants = std::mem::take(&mut self.top_level_constants);
+        let top_level = self
+            .top_level_enums
+            .contains(&(declaration.span.start, declaration.span.end))
+            .then_some(&top_level_constants);
+        let mut members = std::collections::HashMap::new();
+        let mut previous = EnumConstant::Number;
+        for member in &declaration.body.members {
+            let value = match &member.initializer {
+                Some(initializer) => {
+                    let value = enum_constant(initializer, &members, top_level);
+                    if value == EnumConstant::NonConstant {
+                        if declaration.r#const {
+                            self.push(Kind::ConstEnumInitializerNotConstant, initializer.span(), None);
+                        } else if ambient {
+                            self.push(Kind::AmbientEnumInitializerNotConstant, initializer.span(), None);
+                        }
+                    }
+                    previous = value;
+                    value
+                }
+                None => {
+                    if !ambient && matches!(previous, EnumConstant::String | EnumConstant::NonConstant) {
+                        self.push(Kind::EnumMemberInitializerRequired, member.id.span(), None);
+                    }
+                    if previous == EnumConstant::Unknown {
+                        EnumConstant::Unknown
+                    } else {
+                        EnumConstant::Number
+                    }
+                }
+            };
+            if let Some(name) = property_key_name_of_enum_member(&member.id) {
+                members.insert(name, value);
+            }
+        }
+        self.top_level_constants = top_level_constants;
+    }
+
+    fn collect_top_level_constants(&mut self, statements: &[Statement<'_>]) {
+        for statement in statements {
+            let declaration = match statement {
+                Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+                other => other.as_declaration(),
+            };
+            match declaration {
+                Some(Declaration::VariableDeclaration(variable)) => {
+                    for declarator in &variable.declarations {
+                        let oxc_ast::ast::BindingPattern::BindingIdentifier(identifier) =
+                            &declarator.id
+                        else {
+                            continue;
+                        };
+                        let value = match &declarator.init {
+                            Some(init)
+                                if variable.kind == VariableDeclarationKind::Const
+                                    && !variable.declare =>
+                            {
+                                enum_constant(
+                                    init,
+                                    &std::collections::HashMap::new(),
+                                    Some(&self.top_level_constants),
+                                )
+                            }
+                            _ => EnumConstant::NonConstant,
+                        };
+                        self.top_level_constants.insert(identifier.name.to_string(), value);
+                    }
+                }
+                Some(Declaration::FunctionDeclaration(function)) => {
+                    if let Some(id) = &function.id {
+                        self.top_level_constants
+                            .insert(id.name.to_string(), EnumConstant::NonConstant);
+                    }
+                }
+                Some(Declaration::ClassDeclaration(class)) => {
+                    if let Some(id) = &class.id {
+                        self.top_level_constants
+                            .insert(id.name.to_string(), EnumConstant::NonConstant);
+                    }
+                }
+                Some(Declaration::TSEnumDeclaration(enumeration)) => {
+                    self.top_level_enums
+                        .insert((enumeration.span.start, enumeration.span.end));
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// tsc's `checkReturnTypeAnnotation` for an `async` signature: the written
     /// return type must be a reference to the global `Promise`. A written type
     /// reference is left alone, since an alias may resolve to `Promise`.
@@ -916,6 +1100,7 @@ impl<'a> Visit<'a> for GrammarCollector {
                 .directives
                 .iter()
                 .any(|directive| directive.directive == "use strict");
+        self.collect_top_level_constants(&program.body);
         self.check_default_exports(&program.body);
         self.check_function_implementations(&program.body);
         oxc_ast_visit::walk::walk_program(self, program);
@@ -930,6 +1115,7 @@ impl<'a> Visit<'a> for GrammarCollector {
     // members are evaluated in order, so a forward reference reads a binding
     // that does not have its value yet (tsc's `checkEnumDeclaration`, TS2651).
     fn visit_ts_enum_declaration(&mut self, declaration: &oxc_ast::ast::TSEnumDeclaration<'a>) {
+        self.check_enum_member_values(declaration);
         let mut declared_so_far: Vec<&str> = Vec::new();
         let member_names: Vec<Option<String>> = declaration
             .body
