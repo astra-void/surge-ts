@@ -310,6 +310,21 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         return true;
     }
 
+    // An intersection relates when some constituent does
+    // (`someTypeRelatedToType`). A merged intersection keeps only its object
+    // side's members, so a branded primitive (`"id" & { __brand: "id" }`) is
+    // judged through the primitive operand it recorded.
+    if let Type::Object(object) = from
+        && object.is_intersection
+        && object.intersection_operands.as_deref().is_some_and(|operands| {
+            operands.iter().any(|operand| {
+                !matches!(operand, Type::Reference(_) | Type::Object(_)) && is_assignable_to(operand, to)
+            })
+        })
+    {
+        return true;
+    }
+
     // tsc lets any `number` flow into a numeric `enum` — its own
     // `Flags.A | Flags.B` is typed `number`, and the bitwise combination is the
     // normal way to build a flag argument. The reverse (a string into a string

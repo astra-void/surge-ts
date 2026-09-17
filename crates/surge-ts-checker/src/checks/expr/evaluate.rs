@@ -1215,14 +1215,7 @@ fn check_in_operands(
             && !matches!(ty, Type::Any | Type::GenuineUnknown | Type::ErrorType)
     };
     let property_key = surge_ts_types::union_type(vec![Type::String, Type::Number, Type::Symbol]);
-    // An intersection relates when some constituent does
-    // (`someTypeRelatedToType`). A branded key (`"marker" & { __brand: … }`)
-    // merges to its object side alone, which loses the primitive that makes it
-    // a valid key, so a merged intersection is not judged.
-    let key_assignable = |ty: &Type| {
-        matches!(ty.peeled(), Type::Object(object) if object.is_intersection)
-            || surge_ts_types::is_assignable_to(ty, &property_key)
-    };
+    let key_assignable = |ty: &Type| surge_ts_types::is_assignable_to(ty, &property_key);
     if let InferredExpression::Known(left_type) = left_result
         && judgeable(left_type)
         && !key_assignable(left_type)

@@ -512,6 +512,7 @@ export const fixturePresets: Record<string, string> = {
   'equality-reference-and-nan-basic': path.join(workspaceRoot, 'tests/compat-projects/equality-reference-and-nan-basic/tsconfig.json'),
   'symbol-operand-rules-basic': path.join(workspaceRoot, 'tests/compat-projects/symbol-operand-rules-basic/tsconfig.json'),
   'in-operator-operand-rules-basic': path.join(workspaceRoot, 'tests/compat-projects/in-operator-operand-rules-basic/tsconfig.json'),
+  'branded-primitive-assignability-basic': path.join(workspaceRoot, 'tests/compat-projects/branded-primitive-assignability-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -620,9 +620,24 @@ fn merge_intersection_members_now(
         MergeEntry::DepthExceeded => return open_merge_fallback(members),
     };
 
+    // Also the primitive operands, which the merge below drops from the
+    // surface but assignability still relates through.
     let nominal_operands: Vec<Type> = members
         .iter()
-        .filter(|member| matches!(member, Type::Reference(_)))
+        .filter(|member| {
+            matches!(
+                member,
+                Type::Reference(_)
+                    | Type::String
+                    | Type::Number
+                    | Type::Boolean
+                    | Type::BigInt
+                    | Type::Symbol
+                    | Type::StringLiteral(_)
+                    | Type::NumberLiteral(_)
+                    | Type::BooleanLiteral(_)
+            )
+        })
         .cloned()
         .collect();
     // Peel reference operands (`StudentBulkImportRow & { … }`) so a named object
