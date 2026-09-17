@@ -495,6 +495,7 @@ export const fixturePresets: Record<string, string> = {
   'tuple-index-out-of-bounds-basic': path.join(workspaceRoot, 'tests/compat-projects/tuple-index-out-of-bounds-basic/tsconfig.json'),
   'destructuring-assignment-basic': path.join(workspaceRoot, 'tests/compat-projects/destructuring-assignment-basic/tsconfig.json'),
   'or-false-branch-reference-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/or-false-branch-reference-narrowing-basic/tsconfig.json'),
+  'optional-chain-discriminant-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-discriminant-narrowing-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

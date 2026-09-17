@@ -182,8 +182,13 @@ fn narrow_single_guard_for_identifier(
         && name == var_name
     {
         let keep_matching = branch_is_true == eq;
-        return narrow_union_by_discriminant(ty, property, &literal, keep_matching)
-            .or_else(|| narrow_optional_chain_base(condition, ty, &literal, keep_matching));
+        return narrow_discriminant_through_optional_chain(
+            condition,
+            ty,
+            property,
+            &literal,
+            keep_matching,
+        );
     }
     if let Some((ParsedExpression::Identifier { name, .. }, eq)) =
         parse_nullish_equality_condition(condition)
@@ -661,12 +666,13 @@ fn narrow_value_guards_in_scope(
             let Some(symbol) = scopes.resolve(name) else {
                 return;
             };
-            let Some(narrowed) =
-                narrow_union_by_discriminant(&symbol.ty, property, &literal, keep_matching)
-                    .or_else(|| {
-                        narrow_optional_chain_base(condition, &symbol.ty, &literal, keep_matching)
-                    })
-            else {
+            let Some(narrowed) = narrow_discriminant_through_optional_chain(
+                condition,
+                &symbol.ty,
+                property,
+                &literal,
+                keep_matching,
+            ) else {
                 return;
             };
             (

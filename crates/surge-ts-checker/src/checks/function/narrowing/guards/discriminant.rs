@@ -31,6 +31,25 @@ pub(crate) fn narrow_optional_chain_base(
     (narrowed != *subject_ty && !narrowed.is_unknown()).then_some(narrowed)
 }
 
+/// A discriminant test through an optional chain narrows twice: the union by
+/// the discriminant, and the base by the chain's non-nullishness. Both apply to
+/// `x?.kind === "a"` on `A | B | null`, which leaves `A`.
+pub(crate) fn narrow_discriminant_through_optional_chain(
+    condition: &ParsedExpression,
+    subject_ty: &Type,
+    property: &str,
+    literal: &Type,
+    keep_matching: bool,
+) -> Option<Type> {
+    match narrow_union_by_discriminant(subject_ty, property, literal, keep_matching) {
+        Some(narrowed) => Some(
+            narrow_optional_chain_base(condition, &narrowed, literal, keep_matching)
+                .unwrap_or(narrowed),
+        ),
+        None => narrow_optional_chain_base(condition, subject_ty, literal, keep_matching),
+    }
+}
+
 /// `parse_discriminant_condition` with an extra resolver for operands that are
 /// not literal tokens but still denote a unit literal type.
 pub(crate) fn parse_discriminant_condition_with<'a>(
@@ -101,11 +120,13 @@ pub(crate) fn narrow_discriminant_symbol_table(
     match discriminant_object {
         ParsedExpression::Identifier { name, .. } => {
             let symbol = symbols.get(name)?;
-            let narrowed =
-                narrow_union_by_discriminant(&symbol.ty, property, &literal, keep_matching)
-                    .or_else(|| {
-                        narrow_optional_chain_base(condition, &symbol.ty, &literal, keep_matching)
-                    })?;
+            let narrowed = narrow_discriminant_through_optional_chain(
+                condition,
+                &symbol.ty,
+                property,
+                &literal,
+                keep_matching,
+            )?;
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
             narrowed_symbols.insert_narrowed(
                 name.clone(),
