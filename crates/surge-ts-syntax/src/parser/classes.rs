@@ -224,6 +224,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                         body,
                         has_body: method.value.body.is_some(),
                         is_generator: method.value.generator,
+                        is_async: method.value.r#async,
                         body_reads,
                     }))
                 }

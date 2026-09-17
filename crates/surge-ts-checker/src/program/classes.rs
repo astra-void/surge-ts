@@ -179,9 +179,96 @@ fn method_function_type(method: &ParsedClassMethod) -> ParsedType {
             .iter()
             .map(parameter_to_type_parameter)
             .collect(),
-        return_type: Box::new(method.return_type.clone().unwrap_or(ParsedType::Any)),
+        return_type: Box::new(
+            method
+                .return_type
+                .clone()
+                .or_else(|| syntactic_method_return_type(method))
+                .unwrap_or(ParsedType::Any),
+        ),
         type_parameters: method.type_parameters.clone(),
     }))
+}
+
+/// The return type an unannotated method takes from its body when every
+/// `return` in it hands back a literal: the widened union of those literals'
+/// primitives, as `getReturnTypeFromBody` gives it, `void` when no `return`
+/// carries a value, and either wrapped in `Promise` for an `async` method.
+/// Anything else — another kind of returned value, a bare `return` beside a
+/// valued one, a generator — is left for inference surge does not do here.
+fn syntactic_method_return_type(method: &ParsedClassMethod) -> Option<ParsedType> {
+    use surge_ts_syntax::{ParsedExpression, ParsedFunctionBodyStatement as Statement};
+
+    fn collect(body: &[Statement], kinds: &mut Vec<ParsedType>, bare_return: &mut bool) -> Option<()> {
+        for statement in body {
+            match statement {
+                Statement::Return(return_statement) => {
+                    let Some(expression) = return_statement.expression.as_ref() else {
+                        *bare_return = true;
+                        continue;
+                    };
+                    let kind = match expression {
+                        ParsedExpression::StringLiteral(_) => ParsedType::String,
+                        ParsedExpression::TemplateLiteral { expressions, .. }
+                            if expressions.is_empty() =>
+                        {
+                            ParsedType::String
+                        }
+                        ParsedExpression::NumberLiteral(_) => ParsedType::Number,
+                        ParsedExpression::BooleanLiteral(_) => ParsedType::Boolean,
+                        _ => return None,
+                    };
+                    if !kinds.contains(&kind) {
+                        kinds.push(kind);
+                    }
+                }
+                Statement::Block(block) => collect(block, kinds, bare_return)?,
+                Statement::If(if_statement) => {
+                    collect(&if_statement.then_body, kinds, bare_return)?;
+                    collect(&if_statement.else_body, kinds, bare_return)?;
+                }
+                Statement::While(while_statement) => collect(&while_statement.body, kinds, bare_return)?,
+                Statement::ForOf(for_of) => collect(&for_of.body, kinds, bare_return)?,
+                Statement::Switch(switch_statement) => {
+                    for case in &switch_statement.cases {
+                        collect(&case.consequent, kinds, bare_return)?;
+                    }
+                }
+                Statement::Try(try_statement) => {
+                    collect(&try_statement.block, kinds, bare_return)?;
+                    if let Some(handler) = &try_statement.handler {
+                        collect(&handler.body, kinds, bare_return)?;
+                    }
+                    collect(&try_statement.finalizer, kinds, bare_return)?;
+                }
+                _ => {}
+            }
+        }
+        Some(())
+    }
+
+    if method.is_generator || !method.has_body {
+        return None;
+    }
+    let mut kinds = Vec::new();
+    let mut bare_return = false;
+    collect(&method.body, &mut kinds, &mut bare_return)?;
+    let returned = match kinds.len() {
+        // No value is returned anywhere: the method is `void`.
+        0 => ParsedType::Void,
+        _ if bare_return => return None,
+        1 => kinds.pop()?,
+        _ => ParsedType::Union(Arc::new(kinds)),
+    };
+    Some(if method.is_async {
+        ParsedType::Named(Arc::new(ParsedNamedType {
+            name: "Promise".to_string(),
+            span: None,
+            type_arguments: vec![returned],
+        }))
+    } else {
+        returned
+    })
 }
 
 fn parameter_to_type_parameter(parameter: &ParsedFunctionParameter) -> ParsedFunctionTypeParameter {

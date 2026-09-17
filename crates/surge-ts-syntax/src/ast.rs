@@ -659,6 +659,7 @@ pub struct ParsedClassMethod {
     pub has_body: bool,
     /// See [`ParsedFunctionDeclaration::is_generator`].
     pub is_generator: bool,
+    pub is_async: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
