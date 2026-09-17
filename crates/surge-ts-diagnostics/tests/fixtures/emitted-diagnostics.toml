@@ -587,6 +587,12 @@ oracle = [
   "import-binding-assignment-basic",
 ]
 
+[TS2736]
+status = "emitted"
+oracle = [
+  "unary-operand-rules-basic",
+]
+
 [TS2769]
 status = "emitted"
 oracle = [

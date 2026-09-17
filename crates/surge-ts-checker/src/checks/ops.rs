@@ -166,7 +166,7 @@ pub(crate) fn evaluate_unary_expression(
         // `number` (`bigint` for a bigint operand). TS2356 is the `++`/`--`
         // operand rule, not this one — reporting it here made `+data` on a
         // contextually-typed `string` parameter a false positive.
-        ParsedUnaryOperator::Plus | ParsedUnaryOperator::Minus => {
+        ParsedUnaryOperator::Plus | ParsedUnaryOperator::Minus | ParsedUnaryOperator::BitwiseNot => {
             let Some(operand_type) = inferred_type(&operand_result) else {
                 return InferredExpression::Unknown;
             };
@@ -179,7 +179,10 @@ pub(crate) fn evaluate_unary_expression(
                 return InferredExpression::Known(Type::Any);
             }
 
-            if matches!(operand_type.base_primitive(), Some(Type::BigInt)) {
+            // Unary `+` is always `number`; it rejects a bigint operand instead.
+            if !matches!(operator, ParsedUnaryOperator::Plus)
+                && matches!(operand_type.base_primitive(), Some(Type::BigInt))
+            {
                 return InferredExpression::Known(Type::BigInt);
             }
 

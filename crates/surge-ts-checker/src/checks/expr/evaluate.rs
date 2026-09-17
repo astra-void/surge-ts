@@ -274,6 +274,20 @@ pub(crate) fn evaluate_expression(
             let operand_result =
                 evaluate_expression(operand, operand_span.or(fallback_span), symbols, ctx);
 
+            if matches!(
+                operator,
+                ParsedUnaryOperator::Plus | ParsedUnaryOperator::Minus | ParsedUnaryOperator::BitwiseNot
+            ) && let InferredExpression::Known(operand_type) = &operand_result
+            {
+                check_numeric_unary_operand(
+                    *operator,
+                    operand,
+                    operand_type,
+                    operand_span.or(fallback_span),
+                    symbols,
+                    ctx,
+                );
+            }
             if *operator == ParsedUnaryOperator::Delete {
                 super::check_delete_operand(
                     operand,
@@ -1261,6 +1275,57 @@ fn check_in_operands(
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts2322(&right_type.name(), "object", ctx.file_name.clone()),
             right_span,
+        ));
+    }
+}
+
+/// tsc's `+`/`-`/`~` arm of `checkPrefixUnaryExpression`: a possibly nullish
+/// operand is reported (`checkNonNullType`), a symbol operand is TS2469, and
+/// unary `+` on a bigint is TS2736.
+fn check_numeric_unary_operand(
+    operator: ParsedUnaryOperator,
+    operand: &ParsedExpression,
+    operand_type: &Type,
+    operand_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    if crate::checks::function::type_contains_unknown(operand_type)
+        || matches!(operand_type, Type::Any | Type::GenuineUnknown | Type::ErrorType)
+    {
+        return;
+    }
+    let operator_text = match operator {
+        ParsedUnaryOperator::Plus => "+",
+        ParsedUnaryOperator::Minus => "-",
+        _ => "~",
+    };
+    super::maybe_emit_possibly_undefined_receiver(
+        operand,
+        operand_type,
+        operand_span,
+        operand_span,
+        symbols,
+        ctx,
+    );
+    fn some_member(ty: &Type, test: &dyn Fn(&Type) -> bool) -> bool {
+        match ty {
+            Type::Union(union) => union.types().iter().any(|member| some_member(member, test)),
+            other => test(other),
+        }
+    }
+    if some_member(operand_type, &|ty| matches!(ty, Type::Symbol)) {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2469(operator_text, ctx.file_name.clone()),
+            operand_span,
+        ));
+    }
+    if matches!(operator, ParsedUnaryOperator::Plus)
+        && some_member(operand_type, &|ty| matches!(ty, Type::BigInt))
+    {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2736("+", &widen_type(operand_type).name(), ctx.file_name.clone()),
+            operand_span,
         ));
     }
 }

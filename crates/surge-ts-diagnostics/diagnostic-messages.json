@@ -584,6 +584,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2736",
+    "category": "Error",
+    "message": "Operator '{0}' cannot be applied to type '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2769",
     "category": "Error",
     "message": "No overload matches this call.",

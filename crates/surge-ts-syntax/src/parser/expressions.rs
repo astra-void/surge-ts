@@ -1020,7 +1020,8 @@ pub(crate) fn parse_unary_expression(
         // the whole expression would stop their operands being checked at all.
         UnaryOperator::Typeof => ParsedUnaryOperator::Typeof,
         UnaryOperator::Delete => ParsedUnaryOperator::Delete,
-        UnaryOperator::BitwiseNot | UnaryOperator::Void => ParsedUnaryOperator::Discard,
+        UnaryOperator::BitwiseNot => ParsedUnaryOperator::BitwiseNot,
+        UnaryOperator::Void => ParsedUnaryOperator::Discard,
     };
 
     let (operand, operand_span) = parse_expression(&unary_expression.argument);

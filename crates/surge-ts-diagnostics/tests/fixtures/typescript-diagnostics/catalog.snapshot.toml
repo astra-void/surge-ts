@@ -585,6 +585,14 @@ message = "Cannot assign to '{0}' because it is an import."
 arity = 1
 
 [[diagnostic]]
+code = "TS2736"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Operator '{0}' cannot be applied to type '{1}'."
+arity = 2
+
+[[diagnostic]]
 code = "TS2769"
 category = "Error"
 source = "typescript"

@@ -58,10 +58,10 @@ pub(crate) fn infer_unary_expression(
         },
         ParsedUnaryOperator::Typeof => InferredExpression::Known(typeof_result_type()),
         ParsedUnaryOperator::Delete => InferredExpression::Known(Type::Boolean),
-        // `void` / `delete` / `~`: the operand has already been walked, and the
+        // `void`: the operand has already been walked, and the
         // result stays unmodelled rather than guessing `undefined`/`boolean`/`number`.
         ParsedUnaryOperator::Discard => InferredExpression::Unknown,
-        ParsedUnaryOperator::Plus | ParsedUnaryOperator::Minus => match operand_type {
+        ParsedUnaryOperator::Plus | ParsedUnaryOperator::Minus | ParsedUnaryOperator::BitwiseNot => match operand_type {
             InferredExpression::Known(Type::Any) => InferredExpression::Known(Type::Number),
             InferredExpression::Known(ty) if matches!(ty.base_primitive(), Some(Type::Number)) => {
                 InferredExpression::Known(Type::Number)

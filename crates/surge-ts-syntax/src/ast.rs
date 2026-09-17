@@ -1187,6 +1187,8 @@ pub enum ParsedUnaryOperator {
     Not,
     Plus,
     Minus,
+    /// `~`, typed like unary `-`.
+    BitwiseNot,
     Typeof,
     /// `delete o.p`. Kept apart from [`ParsedUnaryOperator::Discard`] because
     /// its operand carries rules the other unmodelled operators have none of:

@@ -735,6 +735,16 @@ pub const TS2632: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2736: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2736",
+    number: Some(2736),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Operator '{0}' cannot be applied to type '{1}'.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2769: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2769",
     number: Some(2769),
@@ -2219,6 +2229,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2459,
     TS2469,
     TS2632,
+    TS2736,
     TS2769,
     TS2774,
     TS2839,
@@ -3085,6 +3096,18 @@ impl Diagnostic {
         Self::from_descriptor(
             &TS2632,
             vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2736(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2736,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
             file_name,
         )
     }
