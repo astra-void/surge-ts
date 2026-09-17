@@ -5722,7 +5722,7 @@ expected_diagnostics = []
 [[case]]
 name = "callable-union-different-parameter-type-still-non-callable-or-pinned"
 path = "tests/smoke/callable_union_different_parameter_type_still_non_callable_or_pinned.ts"
-expected_diagnostics = ["TS2349"]
+expected_diagnostics = ["TS2345"]
 
 [[case]]
 name = "callable-union-function-or-undefined-still-non-callable"

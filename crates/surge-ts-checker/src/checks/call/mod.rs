@@ -1653,8 +1653,11 @@ pub(crate) fn check_function_type_call(
                 // this predicate peels one level, as the signature comparison
                 // already does for the same shape.
                 // A rest slot of `never` (`push` on a `never[]`) is no such
-                // assertion, so it is checked like any other.
-                if (!matches!(parameter_type, Type::Never) || is_rest_position)
+                // assertion, so it is checked like any other, and neither is an
+                // argument written as a literal, which no narrowing reaches.
+                if (!matches!(parameter_type, Type::Never)
+                    || is_rest_position
+                    || is_unnarrowable_literal(&argument.expression))
                     && !type_contains_unknown(&parameter_type)
                     && !surge_ts_types::parameter_type_is_degraded(&parameter_type)
                     && (genuine_unknown_argument || !type_contains_unknown(&argument_type))
@@ -2143,4 +2146,17 @@ pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
         Type::Union(union) => union.types().iter().any(type_contains_unknown),
         _ => false,
     }
+}
+
+fn is_unnarrowable_literal(expression: &ParsedExpression) -> bool {
+    matches!(
+        expression,
+        ParsedExpression::StringLiteral(_)
+            | ParsedExpression::NumberLiteral(_)
+            | ParsedExpression::BooleanLiteral(_)
+            | ParsedExpression::BigIntLiteral(_)
+            | ParsedExpression::ObjectLiteral { .. }
+            | ParsedExpression::ArrayLiteral { .. }
+            | ParsedExpression::TemplateLiteral { is_tagged: false, .. }
+    )
 }
