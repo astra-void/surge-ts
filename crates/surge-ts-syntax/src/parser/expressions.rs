@@ -170,6 +170,12 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         Expression::ThisExpression(this_expression) => ParsedExpression::This {
             span: Some(text_span_from_oxc_span(this_expression.span)),
         },
+        // `super.member`: the checker binds `super` to the base class in a class
+        // member's body. A `super(...)` call keeps its own lowering.
+        Expression::Super(super_keyword) => ParsedExpression::Identifier {
+            name: "super".to_string(),
+            span: Some(text_span_from_oxc_span(super_keyword.span)),
+        },
         Expression::TemplateLiteral(template) => ParsedExpression::TemplateLiteral {
             expressions: template
                 .expressions
@@ -517,6 +523,12 @@ fn parse_call_expression_expression(
                 })
             }
         }
+        Expression::Super(super_keyword) => Some(ParsedExpression::ExpressionCall {
+            callee: Box::new(ParsedExpression::Unknown),
+            callee_span: Some(text_span_from_oxc_span(super_keyword.span)),
+            type_arguments,
+            arguments,
+        }),
         _ => {
             let (callee, callee_span) = parse_expression(&call_expression.callee);
             Some(ParsedExpression::ExpressionCall {
@@ -684,6 +696,12 @@ fn parse_call_expression_expression_with_type_arguments(
                 })
             }
         }
+        Expression::Super(super_keyword) => Some(ParsedExpression::ExpressionCall {
+            callee: Box::new(ParsedExpression::Unknown),
+            callee_span: Some(text_span_from_oxc_span(super_keyword.span)),
+            type_arguments,
+            arguments,
+        }),
         _ => {
             let (callee, callee_span) = parse_expression(&call_expression.callee);
             Some(ParsedExpression::ExpressionCall {

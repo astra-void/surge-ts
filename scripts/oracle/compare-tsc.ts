@@ -545,6 +545,7 @@ export const fixturePresets: Record<string, string> = {
   'tagged-template-call-basic': path.join(workspaceRoot, 'tests/compat-projects/tagged-template-call-basic/tsconfig.json'),
   'this-before-super-basic': path.join(workspaceRoot, 'tests/compat-projects/this-before-super-basic/tsconfig.json'),
   'member-kind-override-basic': path.join(workspaceRoot, 'tests/compat-projects/member-kind-override-basic/tsconfig.json'),
+  'super-member-access-basic': path.join(workspaceRoot, 'tests/compat-projects/super-member-access-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -131,7 +131,7 @@ pub(super) fn evaluate_index_access(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let Some(symbol) = symbols.get(object_name) else {
-        if emit_type_only_as_value_diagnostic(object_name, object_span, ctx) {
+        if object_name == "super" || emit_type_only_as_value_diagnostic(object_name, object_span, ctx) {
             return InferredExpression::Unknown;
         }
 

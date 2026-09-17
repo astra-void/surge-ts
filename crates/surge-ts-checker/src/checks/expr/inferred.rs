@@ -13,7 +13,9 @@ pub(crate) fn report_inferred_expression(
             }
         }
         InferredExpression::UnresolvedIdentifier { name, span } => {
-            if emit_type_only_as_value_diagnostic(&name, span, ctx) {
+            // `super` outside a class body with a resolvable base is left to
+            // the grammar; there is nothing to look it up in.
+            if name == "super" || emit_type_only_as_value_diagnostic(&name, span, ctx) {
                 return;
             }
 

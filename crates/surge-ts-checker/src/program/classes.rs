@@ -995,7 +995,37 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
         check_implicit_override(class, ctx);
     }
 
+    // `super` in a member body reads the base class: its instance for an
+    // instance member, its constructor for a static one.
+    let super_types = class.extends.first().and_then(|base| {
+        ctx.lookup_type_declaration(&base.name)?;
+        let checkpoint = ctx.diagnostics().len();
+        let instance = map_parsed_type(ParsedType::Named(Arc::new(base.clone())), ctx);
+        ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+        let constructor = ctx.symbols.get(&base.name).map(|symbol| symbol.ty.clone())?;
+        (!instance.is_unknown() && !matches!(instance, Type::Any))
+            .then_some((instance, constructor))
+    });
+    let previous_super = ctx.symbols.remove("super");
+
     for member in &class.members {
+        if let Some((instance, constructor)) = &super_types {
+            let is_static = match member {
+                ParsedClassMember::Method(method) => method.is_static,
+                ParsedClassMember::Property(property) => property.is_static,
+                ParsedClassMember::Accessor(accessor) => accessor.is_static,
+                ParsedClassMember::StaticBlock(_) => true,
+                ParsedClassMember::Constructor(_) => false,
+            };
+            let _ = ctx.symbols.insert(
+                "super",
+                SymbolInfo {
+                    ty: if is_static { constructor.clone() } else { instance.clone() },
+                    kind: SymbolKind::Const,
+                    function_signature: None,
+                },
+            );
+        }
         match member {
             ParsedClassMember::Constructor(constructor) => {
                 let function_type =
@@ -1089,6 +1119,10 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                 );
             }
         }
+    }
+    let _ = ctx.symbols.remove("super");
+    if let Some(previous) = previous_super {
+        let _ = ctx.symbols.insert_handle("super", previous);
     }
 }
 
