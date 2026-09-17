@@ -93,6 +93,18 @@ oracle = [
   "tests/compat-projects/satisfies-basic",
 ]
 
+[TS17009]
+status = "emitted"
+oracle = [
+  "this-before-super-basic",
+]
+
+[TS17011]
+status = "emitted"
+oracle = [
+  "this-before-super-basic",
+]
+
 [TS18046]
 status = "emitted"
 fixtures = [

@@ -1064,6 +1064,22 @@
     "support": "emitted"
   },
   {
+    "code": "TS17009",
+    "category": "Error",
+    "message": "'super' must be called before accessing 'this' in the constructor of a derived class.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17011",
+    "category": "Error",
+    "message": "'super' must be called before accessing a property of 'super' in the constructor of a derived class.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS18004",
     "category": "Error",
     "message": "No value exists in scope for the shorthand property '{0}'. Either declare one or provide an initializer.",

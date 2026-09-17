@@ -1065,6 +1065,22 @@ message = "A parameter initializer is only allowed in a function or constructor 
 arity = 0
 
 [[diagnostic]]
+code = "TS17009"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'super' must be called before accessing 'this' in the constructor of a derived class."
+arity = 0
+
+[[diagnostic]]
+code = "TS17011"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'super' must be called before accessing a property of 'super' in the constructor of a derived class."
+arity = 0
+
+[[diagnostic]]
 code = "TS18004"
 category = "Error"
 source = "typescript"

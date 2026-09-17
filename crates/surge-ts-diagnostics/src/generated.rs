@@ -1335,6 +1335,26 @@ pub const TS2371: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS17009: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS17009",
+    number: Some(17009),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'super' must be called before accessing 'this' in the constructor of a derived class.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS17011: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS17011",
+    number: Some(17011),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'super' must be called before accessing a property of 'super' in the constructor of a derived class.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS18004: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS18004",
     number: Some(18004),
@@ -2399,6 +2419,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1253,
     TS2369,
     TS2371,
+    TS17009,
+    TS17011,
     TS18004,
     TS2676,
     TS2678,
@@ -3678,6 +3700,16 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2371(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2371, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts17009(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS17009, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts17011(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS17011, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

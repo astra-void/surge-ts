@@ -99,6 +99,10 @@ pub enum ParsedGrammarDiagnosticKind {
     MultipleConstructorImplementations,
     /// A derived class constructor with no `super` call — TS2377.
     MissingSuperCall,
+    /// `this` read in a derived constructor before `super()` — TS17009.
+    ThisBeforeSuperCall,
+    /// `super.x` read in a derived constructor before `super()` — TS17011.
+    SuperPropertyBeforeSuperCall,
     /// A comma operator whose left side is discarded and cannot have an
     /// effect — TS2695.
     UnusedCommaOperand,

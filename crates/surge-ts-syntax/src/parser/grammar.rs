@@ -604,6 +604,71 @@ impl GrammarCollector {
         self.push(Kind::GetAccessorWithoutReturn, name_span, None);
     }
 
+    /// tsc's `checkThisBeforeSuper`: `this` or `super.x` read directly in a
+    /// derived constructor before `super()` has run (TS17009, TS17011). The
+    /// flow is approximated by the leading statements up to the one that calls
+    /// `super`, plus that call's own arguments when it is the whole statement;
+    /// a reference inside a nested function runs later and is not one.
+    fn report_this_before_super(&mut self, body: &FunctionBody<'_>) {
+        struct EarlyReferences {
+            found: Vec<(Kind, Span)>,
+        }
+
+        impl<'a> Visit<'a> for EarlyReferences {
+            fn visit_this_expression(&mut self, this: &oxc_ast::ast::ThisExpression) {
+                self.found.push((Kind::ThisBeforeSuperCall, this.span));
+            }
+            fn visit_super(&mut self, _: &oxc_ast::ast::Super) {}
+            fn visit_static_member_expression(
+                &mut self,
+                member: &oxc_ast::ast::StaticMemberExpression<'a>,
+            ) {
+                if let Expression::Super(super_keyword) = &member.object {
+                    self.found.push((Kind::SuperPropertyBeforeSuperCall, super_keyword.span));
+                }
+                oxc_ast_visit::walk::walk_static_member_expression(self, member);
+            }
+            fn visit_computed_member_expression(
+                &mut self,
+                member: &oxc_ast::ast::ComputedMemberExpression<'a>,
+            ) {
+                if let Expression::Super(super_keyword) = &member.object {
+                    self.found.push((Kind::SuperPropertyBeforeSuperCall, super_keyword.span));
+                }
+                oxc_ast_visit::walk::walk_computed_member_expression(self, member);
+            }
+            fn visit_function(&mut self, _: &Function<'a>, _: oxc_syntax::scope::ScopeFlags) {}
+            fn visit_arrow_function_expression(
+                &mut self,
+                _: &oxc_ast::ast::ArrowFunctionExpression<'a>,
+            ) {
+            }
+            fn visit_class(&mut self, _: &Class<'a>) {}
+        }
+
+        let mut references = EarlyReferences { found: Vec::new() };
+        for statement in &body.statements {
+            if let Statement::ExpressionStatement(expression) = statement
+                && let Expression::CallExpression(call) = &expression.expression
+                && matches!(call.callee, Expression::Super(_))
+            {
+                for argument in &call.arguments {
+                    references.visit_argument(argument);
+                }
+                break;
+            }
+            let mut finder = SuperCallInStatement { found: false };
+            finder.visit_statement(statement);
+            if finder.found {
+                break;
+            }
+            references.visit_statement(statement);
+        }
+        for (kind, span) in references.found {
+            self.push(kind, span, None);
+        }
+    }
+
     fn check_class_members(&mut self, class: &Class<'_>) {
         let ambient = self.is_ambient() || class.declare;
         let mut groups: Vec<MemberGroup> = Vec::new();
@@ -731,6 +796,8 @@ impl GrammarCollector {
                 };
                 if !body_calls_super(body) {
                     self.push(Kind::MissingSuperCall, method.key.span(), None);
+                } else {
+                    self.report_this_before_super(body);
                 }
             }
         }
@@ -1042,6 +1109,19 @@ fn constructor_assigned_property_names(class: &Class<'_>) -> Vec<String> {
         }
     }
     collector.names
+}
+
+struct SuperCallInStatement {
+    found: bool,
+}
+
+impl<'a> Visit<'a> for SuperCallInStatement {
+    fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
+        if matches!(call.callee, Expression::Super(_)) {
+            self.found = true;
+        }
+        oxc_ast_visit::walk::walk_call_expression(self, call);
+    }
 }
 
 /// Whether a function body has a `return` of its own, outside any nested

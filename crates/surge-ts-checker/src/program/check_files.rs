@@ -869,6 +869,8 @@ pub(crate) fn emit_grammar_diagnostics(
             Kind::AmbientInitializer => Diagnostic::ts1039(ctx.file_name.clone()),
             Kind::SetAccessorParameterCount => Diagnostic::ts1049(ctx.file_name.clone()),
             Kind::GetAccessorWithoutReturn => Diagnostic::ts2378(ctx.file_name.clone()),
+            Kind::ThisBeforeSuperCall => Diagnostic::ts17009(ctx.file_name.clone()),
+            Kind::SuperPropertyBeforeSuperCall => Diagnostic::ts17011(ctx.file_name.clone()),
             Kind::GetAccessorLessAccessible => Diagnostic::ts2808(ctx.file_name.clone()),
             Kind::AccessorAbstractMismatch => Diagnostic::ts2676(ctx.file_name.clone()),
             Kind::SetAccessorReturnType => Diagnostic::ts1095(ctx.file_name.clone()),
