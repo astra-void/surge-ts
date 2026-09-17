@@ -1489,6 +1489,7 @@ pub struct ParsedArrowFunction {
     pub type_parameters: Vec<ParsedTypeParameter>,
     pub parameters: Vec<ParsedFunctionParameter>,
     pub return_type: Option<ParsedType>,
+    pub return_type_span: Option<TextSpan>,
     pub is_async: bool,
     /// A `function*` / `async function*` expression lowered to this shape. Its
     /// return type is a `Generator`/`AsyncGenerator`, never the body's

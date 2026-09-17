@@ -915,6 +915,10 @@ fn parse_arrow_function_expression(
         type_parameters: parse_type_parameters(arrow_expression.type_parameters.as_deref()),
         parameters,
         return_type,
+        return_type_span: arrow_expression
+            .return_type
+            .as_ref()
+            .map(|annotation| text_span_from_oxc_span(annotation.type_annotation.span())),
         is_async: arrow_expression.r#async,
         is_generator: false,
         body,
@@ -1308,6 +1312,10 @@ fn function_as_arrow(
             .return_type
             .as_ref()
             .and_then(|annotation| parse_type_annotation(annotation)),
+        return_type_span: function
+            .return_type
+            .as_ref()
+            .map(|annotation| text_span_from_oxc_span(annotation.type_annotation.span())),
         is_async: function.r#async,
         is_generator: function.generator,
         body: ParsedArrowFunctionBody::Block(

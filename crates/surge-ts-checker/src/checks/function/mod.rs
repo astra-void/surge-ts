@@ -719,11 +719,12 @@ pub(crate) fn check_arrow_function_expression_anchored(
     ctx: &mut CheckerContext,
 ) -> FunctionType {
     let ParsedArrowFunction {
-        is_generator: _,
+        is_generator,
         this_binding,
         type_parameters,
         parameters,
         return_type,
+        return_type_span,
         is_async,
         body,
         body_reads,
@@ -962,6 +963,22 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     &mut flow_state,
                     ctx,
                 );
+                // The flow verdict is checked first: the return-type gate walks
+                // the whole type, which on a large annotation is far costlier
+                // than the body it guards.
+                if has_explicit_return_type
+                    && !is_generator
+                    && !body_flow.guarantees_exit
+                    && !body_flow.guarantees_value_return
+                    && should_check_missing_return(&return_type)
+                {
+                    emit_missing_return_diagnostic(
+                        body_flow,
+                        &return_type,
+                        return_type_span.or(arrow_span),
+                        ctx,
+                    );
+                }
                 // tsc reports a contextually-typed arrow whose returns do not fit
                 // as one whole-signature mismatch on the assignment, with the leaf
                 // as nested elaboration. Take the leaf verdicts back and render
