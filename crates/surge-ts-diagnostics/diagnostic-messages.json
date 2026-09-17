@@ -112,6 +112,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2440",
+    "category": "Error",
+    "message": "Import declaration conflicts with local declaration of '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2613",
     "category": "Error",
     "message": "Module '{0}' has no default export. Did you mean to use 'import {1} from {0}' instead?",

@@ -51,6 +51,12 @@ oracle = [
   "member-kind-override-basic",
 ]
 
+[TS2440]
+status = "emitted"
+oracle = [
+  "import-local-declaration-conflict-basic",
+]
+
 [TS2456]
 status = "emitted"
 oracle = [

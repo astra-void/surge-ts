@@ -145,6 +145,16 @@ pub const TS2611: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2440: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2440",
+    number: Some(2440),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Import declaration conflicts with local declaration of '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2613: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2613",
     number: Some(2613),
@@ -2410,6 +2420,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2305,
     TS2610,
     TS2611,
+    TS2440,
     TS2613,
     TS2614,
     TS2306,
@@ -2791,6 +2802,15 @@ impl Diagnostic {
                 DiagnosticArg::from(arg1.to_string()),
                 DiagnosticArg::from(arg2.to_string()),
             ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2440(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2440,
+            vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
     }

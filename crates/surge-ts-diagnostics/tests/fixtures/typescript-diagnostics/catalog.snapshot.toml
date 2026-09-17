@@ -113,6 +113,14 @@ message = "'{0}' is defined as a property in class '{1}', but is overridden here
 arity = 3
 
 [[diagnostic]]
+code = "TS2440"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Import declaration conflicts with local declaration of '{0}'."
+arity = 1
+
+[[diagnostic]]
 code = "TS2613"
 category = "Error"
 source = "typescript"

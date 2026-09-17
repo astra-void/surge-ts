@@ -10,6 +10,7 @@ use std::time::Instant;
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
     ParsedExportDeclaration, ParsedImportDeclaration, ParsedImportKind, ParsedStatement, ParsedType,
+    TextSpan,
 };
 use surge_ts_types::{Type, TypeCopyReason};
 
@@ -59,6 +60,186 @@ pub(crate) fn report_unresolved_module(ctx: &mut CheckerContext, import: &Parsed
     }
 }
 
+const MEANING_VALUE: u8 = 1 << 0;
+const MEANING_TYPE: u8 = 1 << 1;
+const MEANING_NAMESPACE: u8 = 1 << 2;
+
+/// Meanings each top-level name is declared with in this file, mirroring the
+/// symbol-flag groups tsc's `checkAliasSymbol` builds its excluded meanings
+/// from. Only declarations count: an import binding contributes nothing, so a
+/// name that appears here alongside an import of the same name is exactly the
+/// collision tsc reports as TS2440.
+fn local_declaration_meanings(statements: &[ParsedStatement]) -> HashMap<&str, u8> {
+    let mut meanings: HashMap<&str, u8> = HashMap::new();
+    collect_local_declaration_meanings(statements, &mut meanings);
+    meanings
+}
+
+fn collect_local_declaration_meanings<'a>(
+    statements: &'a [ParsedStatement],
+    meanings: &mut HashMap<&'a str, u8>,
+) {
+    for statement in statements {
+        let (name, meaning) = match statement {
+            ParsedStatement::VariableDeclaration(variable) => {
+                (variable.name.as_str(), MEANING_VALUE)
+            }
+            ParsedStatement::FunctionDeclaration(function) => {
+                (function.name.as_str(), MEANING_VALUE)
+            }
+            ParsedStatement::ClassDeclaration(class) => {
+                (class.name.as_str(), MEANING_VALUE | MEANING_TYPE)
+            }
+            ParsedStatement::InterfaceDeclaration(interface) => {
+                (interface.name.as_str(), MEANING_TYPE)
+            }
+            ParsedStatement::TypeAliasDeclaration(alias) => (alias.name.as_str(), MEANING_TYPE),
+            ParsedStatement::NamespaceDeclaration(namespace) => {
+                let name = match namespace.name.split_once('.') {
+                    Some((head, _)) => head,
+                    None => namespace.name.as_str(),
+                };
+                (name, MEANING_VALUE | MEANING_NAMESPACE)
+            }
+            ParsedStatement::ExportDeclaration(export) => {
+                if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
+                    collect_local_declaration_meanings(
+                        std::slice::from_ref(declaration.as_ref()),
+                        meanings,
+                    );
+                }
+                continue;
+            }
+            _ => continue,
+        };
+        *meanings.entry(name).or_insert(0) |= meaning;
+    }
+}
+
+/// tsc reports an import whose local name is also declared in the file on the
+/// import, not on the declaration, and only when the two overlap in meaning
+/// (`checkAliasSymbol`: a value import beside a local `type` alias is legal).
+/// The declaration owns the name afterwards, so the colliding value binding is
+/// dropped — leaving it would make the declaration look like a redeclaration
+/// and report TS2451 on top, which tsc never does.
+fn report_import_local_declaration_conflicts(
+    parsed_file: &ParsedProgramFile,
+    program_files: &[ParsedProgramFile],
+    module_export_tables: &[Option<ModuleExportTable>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
+    symbols: &mut SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let local_meanings = local_declaration_meanings(&parsed_file.statements);
+    if local_meanings.is_empty() {
+        return;
+    }
+
+    for statement in &parsed_file.statements {
+        let ParsedStatement::ImportDeclaration(import) = statement else {
+            continue;
+        };
+        let bindings: Vec<(&str, &str, Option<TextSpan>)> = match &import.kind {
+            ParsedImportKind::Named { specifiers, .. } => specifiers
+                .iter()
+                .map(|specifier| {
+                    (
+                        specifier.local_name.as_str(),
+                        specifier.imported_name.as_str(),
+                        specifier.name_span,
+                    )
+                })
+                .collect(),
+            ParsedImportKind::DefaultAndNamed {
+                local_name,
+                name_span,
+                specifiers,
+                ..
+            } => std::iter::once((local_name.as_str(), "default", *name_span))
+                .chain(specifiers.iter().map(|specifier| {
+                    (
+                        specifier.local_name.as_str(),
+                        specifier.imported_name.as_str(),
+                        specifier.name_span,
+                    )
+                }))
+                .collect(),
+            ParsedImportKind::Default {
+                local_name,
+                name_span,
+            }
+            | ParsedImportKind::TypeOnlyDefault {
+                local_name,
+                name_span,
+            } => vec![(local_name.as_str(), "default", *name_span)],
+            ParsedImportKind::Namespace {
+                local_name,
+                name_span,
+                ..
+            } => vec![(local_name.as_str(), "*", *name_span)],
+            ParsedImportKind::Equals { .. }
+            | ParsedImportKind::SideEffect
+            | ParsedImportKind::Unsupported => continue,
+        };
+
+        if !bindings
+            .iter()
+            .any(|(local_name, ..)| local_meanings.contains_key(local_name))
+        {
+            continue;
+        }
+
+        let Some((export_table, _, _)) = try_resolve_module(
+            &import.module_specifier,
+            ctx,
+            program_files,
+            module_export_tables,
+            module_resolution_scopes,
+        ) else {
+            continue;
+        };
+
+        for (local_name, imported_name, name_span) in bindings {
+            let Some(local_meaning) = local_meanings.get(local_name).copied() else {
+                continue;
+            };
+            let target_meaning = if imported_name == "*" {
+                let mut meaning = MEANING_NAMESPACE;
+                if export_table.default_symbol.is_some()
+                    || export_table.symbols.iter_shared().next().is_some()
+                {
+                    meaning |= MEANING_VALUE;
+                }
+                meaning
+            } else {
+                let mut meaning = 0;
+                if lookup_type_export(&export_table, imported_name).is_some() {
+                    meaning |= MEANING_TYPE;
+                }
+                if lookup_value_export(&export_table, imported_name).is_some() {
+                    meaning |= MEANING_VALUE;
+                }
+                meaning
+            };
+
+            if local_meaning & target_meaning == 0 {
+                continue;
+            }
+
+            let diagnostic = Diagnostic::ts2440(local_name, ctx.file_name.clone());
+            let diagnostic = match name_span {
+                Some(span) => diagnostic.with_span(convert_span(span)),
+                None => diagnostic,
+            };
+            ctx.push(diagnostic);
+
+            if local_meaning & target_meaning & MEANING_VALUE != 0 {
+                symbols.remove(local_name);
+            }
+        }
+    }
+}
+
 pub(crate) fn resolve_module_imports(
     parsed_file: &ParsedProgramFile,
     program_files: &[ParsedProgramFile],
@@ -94,6 +275,15 @@ pub(crate) fn resolve_module_imports(
         program_files,
         module_export_tables,
         module_resolution_scopes,
+        ctx,
+    );
+
+    report_import_local_declaration_conflicts(
+        parsed_file,
+        program_files,
+        module_export_tables,
+        module_resolution_scopes,
+        &mut symbols,
         ctx,
     );
 

@@ -552,6 +552,7 @@ export const fixturePresets: Record<string, string> = {
   'type-parameter-default-order-basic': path.join(workspaceRoot, 'tests/compat-projects/type-parameter-default-order-basic/tsconfig.json'),
   'circular-type-alias-basic': path.join(workspaceRoot, 'tests/compat-projects/circular-type-alias-basic/tsconfig.json'),
   'no-default-export-import-basic': path.join(workspaceRoot, 'tests/compat-projects/no-default-export-import-basic/tsconfig.json'),
+  'import-local-declaration-conflict-basic': path.join(workspaceRoot, 'tests/compat-projects/import-local-declaration-conflict-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
