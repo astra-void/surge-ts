@@ -312,45 +312,102 @@ pub(crate) fn imported_name_is_unexported_local(
     program_files: &[ParsedProgramFile],
     name: &str,
 ) -> bool {
+    let Some(exported) = syntactic_export_names(resolved_index, program_files) else {
+        return false;
+    };
     let Some(file) = resolved_index.and_then(|index| program_files.get(index)) else {
         return false;
     };
+    !exported.contains(&name)
+        && crate::program::module_scope_declared_names(&file.statements).contains(name)
+}
+
+/// The names a TypeScript source module exports, in declaration order, when
+/// its syntax says so conclusively: no `export *`, `export =` or export form
+/// surge does not parse.
+pub(crate) fn syntactic_export_names(
+    resolved_index: Option<usize>,
+    program_files: &[ParsedProgramFile],
+) -> Option<Vec<&str>> {
+    let file = resolved_index.and_then(|index| program_files.get(index))?;
     if file.file_kind.is_declaration()
         || ![".ts", ".tsx", ".mts", ".cts"]
             .iter()
             .any(|extension| file.file_name.ends_with(extension))
     {
-        return false;
+        return None;
     }
-    let mut exported: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut exported: Vec<&str> = Vec::new();
     for statement in &file.statements {
         let ParsedStatement::ExportDeclaration(export) = statement else {
             continue;
         };
         match export.as_ref() {
             ParsedExportDeclaration::Statement { declaration, .. } => {
-                exported.extend(crate::program::module_scope_declared_names(
+                let mut names: Vec<&str> = crate::program::module_scope_declared_names(
                     std::slice::from_ref(declaration.as_ref()),
-                ));
+                )
+                .into_iter()
+                .collect();
+                names.sort_unstable();
+                exported.extend(names);
             }
             ParsedExportDeclaration::Named { specifiers, .. } => {
                 exported.extend(specifiers.iter().map(|specifier| specifier.exported_name.as_str()));
             }
-            ParsedExportDeclaration::Default { .. } => {
-                exported.insert("default");
-            }
+            ParsedExportDeclaration::Default { .. } => exported.push("default"),
             ParsedExportDeclaration::Namespace { exported_name, .. } => {
-                exported.insert(exported_name.as_str());
+                exported.push(exported_name.as_str());
             }
             ParsedExportDeclaration::Empty { .. } => {}
             ParsedExportDeclaration::All { .. }
             | ParsedExportDeclaration::NamespaceExport { .. }
             | ParsedExportDeclaration::Equals { .. }
-            | ParsedExportDeclaration::Unsupported { .. } => return false,
+            | ParsedExportDeclaration::Unsupported { .. } => return None,
         }
     }
-    !exported.contains(name)
-        && crate::program::module_scope_declared_names(&file.statements).contains(name)
+    Some(exported)
+}
+
+/// tsc's `errorNoModuleMemberSymbol` for a named import the module does not
+/// export: the closest exported name (TS2724), else TS2614 when the module
+/// has a default export, else TS2305.
+pub(crate) fn emit_missing_import_member_diagnostic(
+    ctx: &mut CheckerContext,
+    module_specifier: &str,
+    name: &str,
+    name_span: Option<TextSpan>,
+    resolved_index: Option<usize>,
+    program_files: &[ParsedProgramFile],
+) {
+    let suggestion = syntactic_export_names(resolved_index, program_files).and_then(|exported| {
+        crate::checks::expr::spelling_suggestion(
+            name,
+            exported.into_iter().filter(|export| *export != "default"),
+            0,
+        )
+        .map(str::to_string)
+    });
+    let Some(suggestion) = suggestion else {
+        emit_missing_named_import_diagnostic(
+            ctx,
+            module_specifier,
+            name,
+            name_span,
+            module_has_explicit_default_export(module_specifier, resolved_index, program_files, ctx),
+        );
+        return;
+    };
+    let diagnostic = Diagnostic::ts2724(
+        quoted_module_specifier(module_specifier),
+        name,
+        suggestion,
+        ctx.file_name.clone(),
+    );
+    ctx.push(match name_span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
 }
 
 pub(crate) fn emit_unexported_local_import_diagnostic(

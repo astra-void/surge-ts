@@ -5,6 +5,12 @@ oracle = [
   "array-pattern-iterability-basic",
 ]
 
+[TS2724]
+status = "emitted"
+oracle = [
+  "import-member-suggestion-basic",
+]
+
 [TS5102]
 status = "emitted"
 fixtures = [

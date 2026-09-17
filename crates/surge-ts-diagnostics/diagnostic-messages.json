@@ -1264,6 +1264,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2724",
+    "category": "Error",
+    "message": "'{0}' has no exported member named '{1}'. Did you mean '{2}'?",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
     "code": "TS2729",
     "category": "Error",
     "message": "Property '{0}' is used before its initialization.",

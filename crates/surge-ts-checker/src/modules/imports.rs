@@ -1393,11 +1393,13 @@ fn resolve_named_import(
                 continue;
             }
 
-            emit_missing_export_diagnostic(
+            emit_missing_import_member_diagnostic(
                 ctx,
                 &import.module_specifier,
                 &specifier.imported_name,
                 specifier.name_span,
+                resolved_index,
+                program_files,
             );
             insert_unknown_type_import(
                 type_declarations,
@@ -1467,11 +1469,13 @@ fn resolve_named_import(
                 continue;
             }
 
-            emit_missing_export_diagnostic(
+            emit_missing_import_member_diagnostic(
                 ctx,
                 &import.module_specifier,
                 &specifier.imported_name,
                 specifier.name_span,
+                resolved_index,
+                program_files,
             );
             insert_unknown_type_import(
                 type_declarations,

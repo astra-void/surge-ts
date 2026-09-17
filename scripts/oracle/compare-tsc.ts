@@ -523,6 +523,7 @@ export const fixturePresets: Record<string, string> = {
   'for-of-non-null-source-basic': path.join(workspaceRoot, 'tests/compat-projects/for-of-non-null-source-basic/tsconfig.json'),
   'property-spelling-suggestion-basic': path.join(workspaceRoot, 'tests/compat-projects/property-spelling-suggestion-basic/tsconfig.json'),
   'name-spelling-suggestion-basic': path.join(workspaceRoot, 'tests/compat-projects/name-spelling-suggestion-basic/tsconfig.json'),
+  'import-member-suggestion-basic': path.join(workspaceRoot, 'tests/compat-projects/import-member-suggestion-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

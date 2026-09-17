@@ -1265,6 +1265,14 @@ message = "A member initializer in a enum declaration cannot reference members d
 arity = 0
 
 [[diagnostic]]
+code = "TS2724"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' has no exported member named '{1}'. Did you mean '{2}'?"
+arity = 3
+
+[[diagnostic]]
 code = "TS2729"
 category = "Error"
 source = "typescript"
