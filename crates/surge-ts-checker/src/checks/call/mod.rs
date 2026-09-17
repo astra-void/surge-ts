@@ -156,6 +156,76 @@ pub(crate) fn check_call_like_with_expected_type(
         return None;
     }
 
+    // tsc's `resolveCall` rejects written type arguments an untyped callee
+    // cannot take (TS2347) and a count outside the signature's range (TS2558),
+    // anchored at the first type argument.
+    if !type_arguments.is_empty() {
+        if matches!(callee_ty, Type::Any) {
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2347(ctx.file_name.clone()),
+                call_span.or(callee_span),
+            ));
+            evaluate_arguments_under_degraded_callee(callee_name, arguments, symbols, ctx);
+            return Some(Type::Any);
+        }
+        if let Some(signature) = symbol.function_signature.as_deref()
+            && !signature.overloaded
+            && matches!(&callee_ty, Type::Function(function) if function.overloads().is_none())
+        {
+            let maximum = signature.type_parameters.len();
+            let minimum = signature
+                .type_parameters
+                .iter()
+                .filter(|parameter| parameter.default_type.is_none())
+                .count();
+            if type_arguments.len() < minimum || type_arguments.len() > maximum {
+                let expected = if minimum == maximum {
+                    maximum.to_string()
+                } else {
+                    format!("{minimum}-{maximum}")
+                };
+                let type_arguments_start = callee_span.map(|span| SyntaxTextSpan {
+                    start: span.end + 1,
+                    end: span.end + 1,
+                });
+                ctx.push(diagnostic_with_syntax_span(
+                    Diagnostic::ts2558(expected, type_arguments.len(), ctx.file_name.clone()),
+                    type_arguments_start,
+                ));
+                evaluate_arguments_under_degraded_callee(callee_name, arguments, symbols, ctx);
+                return None;
+            }
+            // Only the first type argument's position is known (types carry no
+            // spans), so only it is related to its constraint.
+            if let (Some(first), Some(parameter)) =
+                (type_arguments.first(), signature.type_parameters.first())
+                && let Some(constraint) = &parameter.constraint
+            {
+                let checkpoint = ctx.diagnostics().len();
+                let argument_type = crate::infer::map_parsed_type(first.clone(), ctx);
+                let constraint_type = crate::infer::map_parsed_type(constraint.clone(), ctx);
+                ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+                if !crate::checks::function::type_contains_degradation(&argument_type)
+                    && !crate::checks::function::type_contains_degradation(&constraint_type)
+                    && !is_assignable_to(&argument_type, &constraint_type)
+                {
+                    let first_argument = callee_span.map(|span| SyntaxTextSpan {
+                        start: span.end + 1,
+                        end: span.end + 1,
+                    });
+                    ctx.push(diagnostic_with_syntax_span(
+                        Diagnostic::ts2344(
+                            crate::checks::expr::source_display_name(&argument_type, &constraint_type),
+                            constraint_type.name(),
+                            ctx.file_name.clone(),
+                        ),
+                        first_argument,
+                    ));
+                }
+            }
+        }
+    }
+
     // A generic call signature on an interface (`interface $Fetch { <T, R
     // extends ResponseType = "json">(…): … }`) was resolved with its type
     // parameters at their defaults; the written signature is read back so the

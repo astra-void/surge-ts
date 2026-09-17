@@ -256,6 +256,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2347",
+    "category": "Error",
+    "message": "Untyped function calls may not accept type arguments.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2349",
     "category": "Error",
     "message": "This expression is not callable.",
@@ -1315,6 +1323,14 @@
     "code": "TS2430",
     "category": "Error",
     "message": "Interface '{0}' incorrectly extends interface '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2558",
+    "category": "Error",
+    "message": "Expected {0} type arguments, but got {1}.",
     "source": "typescript",
     "arity": 2,
     "support": "emitted"

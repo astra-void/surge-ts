@@ -6336,7 +6336,7 @@ expected_diagnostics = []
 [[case]]
 name = "generic-call-type-arguments-parser-safe"
 path = "tests/smoke/generic_call_type_arguments_parser_safe.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2558"]
 
 [[case]]
 name = "generic-call-inference-identity-valid"

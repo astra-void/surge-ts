@@ -257,6 +257,14 @@ message = "Argument of type '{0}' is not assignable to parameter of type '{1}'."
 arity = 2
 
 [[diagnostic]]
+code = "TS2347"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Untyped function calls may not accept type arguments."
+arity = 0
+
+[[diagnostic]]
 code = "TS2349"
 category = "Error"
 source = "typescript"
@@ -1318,6 +1326,14 @@ category = "Error"
 source = "typescript"
 support = "emitted"
 message = "Interface '{0}' incorrectly extends interface '{1}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS2558"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expected {0} type arguments, but got {1}."
 arity = 2
 
 [[diagnostic]]

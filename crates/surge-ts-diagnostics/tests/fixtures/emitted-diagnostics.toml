@@ -15,6 +15,12 @@ oracle = [
   "enum-member-constant-values-basic",
 ]
 
+[TS2347]
+status = "emitted"
+oracle = [
+  "call-type-argument-count-basic",
+]
+
 [TS2378]
 status = "emitted"
 oracle = [
@@ -50,6 +56,12 @@ status = "emitted"
 oracle = [
   "spread-iterability-basic",
   "array-pattern-iterability-basic",
+]
+
+[TS2558]
+status = "emitted"
+oracle = [
+  "call-type-argument-count-basic",
 ]
 
 [TS2610]

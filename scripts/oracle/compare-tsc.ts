@@ -547,6 +547,7 @@ export const fixturePresets: Record<string, string> = {
   'member-kind-override-basic': path.join(workspaceRoot, 'tests/compat-projects/member-kind-override-basic/tsconfig.json'),
   'super-member-access-basic': path.join(workspaceRoot, 'tests/compat-projects/super-member-access-basic/tsconfig.json'),
   'never-parameter-literal-argument-basic': path.join(workspaceRoot, 'tests/compat-projects/never-parameter-literal-argument-basic/tsconfig.json'),
+  'call-type-argument-count-basic': path.join(workspaceRoot, 'tests/compat-projects/call-type-argument-count-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
