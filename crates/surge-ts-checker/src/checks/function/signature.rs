@@ -1335,8 +1335,14 @@ pub(crate) fn check_function_body_with_signature(
     body_reads: Option<&[String]>,
     is_generator: bool,
     has_this_parameter: bool,
+    this_parameter_type: Option<ParsedType>,
     ctx: &mut CheckerContext,
 ) {
+    let this_type = this_parameter_type.map(|this_parameter_type| {
+        with_type_parameter_scope(type_parameters, ctx, |ctx| {
+            crate::infer::map_parsed_type(this_parameter_type, ctx)
+        })
+    });
     check_function_body_with_signature_and_this(
         Some(name),
         parameters,
@@ -1346,7 +1352,7 @@ pub(crate) fn check_function_body_with_signature(
         function_signature,
         has_explicit_return_type,
         missing_return_span,
-        None,
+        this_type,
         false,
         body_reads,
         is_generator,

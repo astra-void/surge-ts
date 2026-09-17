@@ -64,6 +64,11 @@ pub(crate) fn parse_function_declaration_named(
 
     Some(ParsedFunctionDeclaration {
         has_this_parameter: function.this_param.is_some(),
+        this_parameter_type: function
+            .this_param
+            .as_ref()
+            .and_then(|this_param| this_param.type_annotation.as_ref())
+            .and_then(|annotation| parse_type_annotation(annotation)),
         is_declare: function.declare,
         name,
         name_span,

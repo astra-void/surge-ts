@@ -270,6 +270,7 @@ pub(crate) fn check_function_declaration(
     let start = Instant::now();
     let ParsedFunctionDeclaration {
         has_this_parameter,
+        this_parameter_type,
         is_declare,
         name,
         name_span,
@@ -360,6 +361,7 @@ pub(crate) fn check_function_declaration(
             has_body.then(|| body_reads.as_slice()),
             is_generator,
             has_this_parameter,
+            this_parameter_type,
             ctx,
         );
     });
@@ -377,6 +379,7 @@ pub(crate) fn check_function_declaration_body(
     let start = Instant::now();
     let ParsedFunctionDeclaration {
         has_this_parameter,
+        this_parameter_type,
         is_declare,
         name,
         name_span,
@@ -416,6 +419,7 @@ pub(crate) fn check_function_declaration_body(
         has_body.then(|| body_reads.as_slice()),
         is_generator,
         has_this_parameter,
+        this_parameter_type,
         ctx,
     );
     record_program_timing(ctx.timings.as_ref(), |timings| {

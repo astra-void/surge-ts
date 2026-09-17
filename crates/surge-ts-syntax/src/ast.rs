@@ -1228,6 +1228,8 @@ pub struct ParsedFunctionDeclaration {
     /// parameter list, so its presence has to be carried separately. Only the
     /// implicit-`this` check reads it; nothing about the signature depends on it.
     pub has_this_parameter: bool,
+    /// The annotation of that `this` parameter, which types `this` in the body.
+    pub this_parameter_type: Option<ParsedType>,
     /// All value-position identifier names read anywhere in the body (including
     /// nested functions, spreads, for-in, and object methods), collected from the
     /// full oxc AST during parsing. Backs unused-binding diagnostics (TS6133).
