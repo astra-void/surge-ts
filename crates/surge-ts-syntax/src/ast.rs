@@ -1194,14 +1194,10 @@ pub enum ParsedUnaryOperator {
     /// `~`, typed like unary `-`.
     BitwiseNot,
     Typeof,
-    /// `delete o.p`. Kept apart from [`ParsedUnaryOperator::Discard`] because
-    /// its operand carries rules the other unmodelled operators have none of:
-    /// it must be a property reference, and that property must be optional and
-    /// writable.
+    /// `delete o.p`: its operand must be a property reference, and that
+    /// property must be optional and writable.
     Delete,
-    /// `void` and `~`: the result is not modelled, but the operand is
-    /// still an expression that has to be checked.
-    Discard,
+    Void,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

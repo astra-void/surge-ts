@@ -159,9 +159,7 @@ pub(crate) fn evaluate_unary_expression(
             InferredExpression::Known(crate::infer::expression::typeof_result_type())
         }
         ParsedUnaryOperator::Delete => InferredExpression::Known(Type::Boolean),
-        // `void` / `delete` / `~`: the operand has already been walked, and the
-        // result stays unmodelled rather than guessing `undefined`/`boolean`/`number`.
-        ParsedUnaryOperator::Discard => InferredExpression::Unknown,
+        ParsedUnaryOperator::Void => InferredExpression::Known(Type::Undefined),
         // Unary `+`/`-` coerce: tsc accepts any operand and types the result
         // `number` (`bigint` for a bigint operand). TS2356 is the `++`/`--`
         // operand rule, not this one — reporting it here made `+data` on a

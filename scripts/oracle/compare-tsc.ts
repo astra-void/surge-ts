@@ -516,6 +516,7 @@ export const fixturePresets: Record<string, string> = {
   'unary-operand-rules-basic': path.join(workspaceRoot, 'tests/compat-projects/unary-operand-rules-basic/tsconfig.json'),
   'template-expression-type-basic': path.join(workspaceRoot, 'tests/compat-projects/template-expression-type-basic/tsconfig.json'),
   'constructor-overload-group-basic': path.join(workspaceRoot, 'tests/compat-projects/constructor-overload-group-basic/tsconfig.json'),
+  'void-expression-type-basic': path.join(workspaceRoot, 'tests/compat-projects/void-expression-type-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

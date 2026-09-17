@@ -1043,7 +1043,7 @@ pub(crate) fn parse_unary_expression(
         UnaryOperator::Typeof => ParsedUnaryOperator::Typeof,
         UnaryOperator::Delete => ParsedUnaryOperator::Delete,
         UnaryOperator::BitwiseNot => ParsedUnaryOperator::BitwiseNot,
-        UnaryOperator::Void => ParsedUnaryOperator::Discard,
+        UnaryOperator::Void => ParsedUnaryOperator::Void,
     };
 
     let (operand, operand_span) = parse_expression(&unary_expression.argument);
