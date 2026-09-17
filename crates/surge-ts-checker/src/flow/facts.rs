@@ -256,14 +256,21 @@ pub(crate) fn summarize_function_statement_flow(
             let mut contains_value_return = false;
             let mut contains_return_with_value = false;
             let mut contains_throw = false;
-            let mut guarantees_value_return = !switch_statement.cases.is_empty();
+            // An empty clause falls through to the next one, so only the
+            // clauses with a body (and the last, which has nowhere to fall) count.
+            let mut guarantees_value_return = switch_statement
+                .cases
+                .last()
+                .is_some_and(|case| !case.consequent.is_empty());
 
             for case in &switch_statement.cases {
                 let case_summary = summarize_function_body_flow(&case.consequent);
                 contains_value_return |= case_summary.contains_value_return;
                 contains_return_with_value |= case_summary.contains_return_with_value;
                 contains_throw |= case_summary.contains_throw;
-                guarantees_value_return &= case_summary.guarantees_value_return;
+                if !case.consequent.is_empty() {
+                    guarantees_value_return &= case_summary.guarantees_value_return;
+                }
             }
 
             // A switch falls through to the following statement unless it is
