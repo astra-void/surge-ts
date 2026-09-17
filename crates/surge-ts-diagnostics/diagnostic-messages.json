@@ -160,6 +160,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2808",
+    "category": "Error",
+    "message": "A get accessor must be at least as accessible as the setter",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2820",
     "category": "Error",
     "message": "Type '{0}' is not assignable to type '{1}'. Did you mean '{2}'?",
@@ -888,6 +896,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2378",
+    "category": "Error",
+    "message": "A 'get' accessor must return a value.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2390",
     "category": "Error",
     "message": "Constructor implementation is missing.",
@@ -1053,6 +1069,14 @@
     "message": "No value exists in scope for the shorthand property '{0}'. Either declare one or provide an initializer.",
     "source": "typescript",
     "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2676",
+    "category": "Error",
+    "message": "Accessors must both be abstract or non-abstract.",
+    "source": "typescript",
+    "arity": 0,
     "support": "emitted"
   },
   {

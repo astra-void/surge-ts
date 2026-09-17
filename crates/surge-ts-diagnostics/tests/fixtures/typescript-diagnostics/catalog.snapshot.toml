@@ -161,6 +161,14 @@ message = "Type of computed property's value is '{0}', which is not assignable t
 arity = 2
 
 [[diagnostic]]
+code = "TS2808"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A get accessor must be at least as accessible as the setter"
+arity = 0
+
+[[diagnostic]]
 code = "TS2820"
 category = "Error"
 source = "typescript"
@@ -889,6 +897,14 @@ message = "'const' declarations must be initialized."
 arity = 0
 
 [[diagnostic]]
+code = "TS2378"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'get' accessor must return a value."
+arity = 0
+
+[[diagnostic]]
 code = "TS2390"
 category = "Error"
 source = "typescript"
@@ -1055,6 +1071,14 @@ source = "typescript"
 support = "emitted"
 message = "No value exists in scope for the shorthand property '{0}'. Either declare one or provide an initializer."
 arity = 1
+
+[[diagnostic]]
+code = "TS2676"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Accessors must both be abstract or non-abstract."
+arity = 0
 
 [[diagnostic]]
 code = "TS2678"

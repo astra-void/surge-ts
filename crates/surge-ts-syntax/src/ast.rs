@@ -127,6 +127,14 @@ pub enum ParsedGrammarDiagnosticKind {
     SetAccessorParameterCount,
     /// A `set` accessor with a return type annotation — TS1095.
     SetAccessorReturnType,
+    /// A `get` accessor whose body can complete without returning — TS2378.
+    GetAccessorWithoutReturn,
+    /// A `get` accessor less accessible than its `set` accessor — TS2808,
+    /// reported on both.
+    GetAccessorLessAccessible,
+    /// A `get`/`set` pair of which only one is `abstract` — TS2676, reported on
+    /// both.
+    AccessorAbstractMismatch,
     /// One name written in an object literal as both an accessor and a plain
     /// property — TS1119.
     ObjectLiteralPropertyAndAccessor,

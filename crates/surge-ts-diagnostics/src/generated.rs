@@ -205,6 +205,16 @@ pub const TS2418: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2808: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2808",
+    number: Some(2808),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A get accessor must be at least as accessible as the setter",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2820: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2820",
     number: Some(2820),
@@ -1115,6 +1125,16 @@ pub const TS1155: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2378: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2378",
+    number: Some(2378),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A 'get' accessor must return a value.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2390: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2390",
     number: Some(2390),
@@ -1322,6 +1342,16 @@ pub const TS18004: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "No value exists in scope for the shorthand property '{0}'. Either declare one or provide an initializer.",
     argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2676: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2676",
+    number: Some(2676),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Accessors must both be abstract or non-abstract.",
+    argument_count: 0,
     support: DiagnosticSupport::Emitted,
 };
 
@@ -2246,6 +2276,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2315,
     TS2322,
     TS2418,
+    TS2808,
     TS2820,
     TS18046,
     TS2532,
@@ -2337,6 +2368,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS7061,
     TS1117,
     TS1155,
+    TS2378,
     TS2390,
     TS2391,
     TS2528,
@@ -2358,6 +2390,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2369,
     TS2371,
     TS18004,
+    TS2676,
     TS2678,
     TS2515,
     TS2654,
@@ -2658,6 +2691,11 @@ impl Diagnostic {
             ],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2808(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2808, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -3485,6 +3523,11 @@ impl Diagnostic {
     }
 
     #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2378(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2378, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
     pub fn ts2390(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2390, Vec::<DiagnosticArg>::new(), file_name)
     }
@@ -3633,6 +3676,11 @@ impl Diagnostic {
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2676(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2676, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

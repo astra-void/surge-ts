@@ -493,6 +493,73 @@ impl GrammarCollector {
         }
     }
 
+    /// tsc's `checkAccessorDeclaration` for a `get`/`set` pair of one name: both
+    /// or neither `abstract` (TS2676), and a getter no less accessible than its
+    /// setter (TS2808). Each is reported on both accessors.
+    fn check_accessor_pairs(&mut self, class: &Class<'_>) {
+        use oxc_ast::ast::TSAccessibility;
+        let accessors: Vec<(String, bool, bool, &oxc_ast::ast::MethodDefinition<'_>)> = class
+            .body
+            .body
+            .iter()
+            .filter_map(|element| match element {
+                ClassElement::MethodDefinition(method)
+                    if matches!(method.kind, MethodDefinitionKind::Get | MethodDefinitionKind::Set) =>
+                {
+                    property_key_name(&method.key).map(|name| {
+                        (name, method.r#static, method.kind == MethodDefinitionKind::Get, method.as_ref())
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        for (name, is_static, is_getter, getter) in &accessors {
+            if !is_getter {
+                continue;
+            }
+            let Some((_, _, _, setter)) = accessors
+                .iter()
+                .find(|(other, other_static, other_getter, _)| {
+                    other == name && other_static == is_static && !other_getter
+                })
+            else {
+                continue;
+            };
+            let abstract_of = |method: &oxc_ast::ast::MethodDefinition<'_>| {
+                method.r#type == MethodDefinitionType::TSAbstractMethodDefinition
+            };
+            if abstract_of(getter) != abstract_of(setter) {
+                self.push(Kind::AccessorAbstractMismatch, getter.key.span(), None);
+                self.push(Kind::AccessorAbstractMismatch, setter.key.span(), None);
+            }
+            let less_accessible = match (getter.accessibility, setter.accessibility) {
+                (Some(TSAccessibility::Protected), None | Some(TSAccessibility::Public)) => true,
+                (Some(TSAccessibility::Private), setter) => setter != Some(TSAccessibility::Private),
+                _ => false,
+            };
+            if less_accessible {
+                self.push(Kind::GetAccessorLessAccessible, getter.key.span(), None);
+                self.push(Kind::GetAccessorLessAccessible, setter.key.span(), None);
+            }
+        }
+    }
+
+    /// tsc's "A 'get' accessor must return a value" (TS2378): a body with no
+    /// `return` at all whose end is reachable. Reachability is approximated by
+    /// the body not ending in `throw`.
+    fn check_getter_returns(&mut self, name_span: Span, body: Option<&FunctionBody<'_>>) {
+        let Some(body) = body else {
+            return;
+        };
+        if self.is_ambient()
+            || matches!(body.statements.last(), Some(Statement::ThrowStatement(_)))
+            || body_has_return(body)
+        {
+            return;
+        }
+        self.push(Kind::GetAccessorWithoutReturn, name_span, None);
+    }
+
     fn check_class_members(&mut self, class: &Class<'_>) {
         let ambient = self.is_ambient() || class.declare;
         let mut groups: Vec<MemberGroup> = Vec::new();
@@ -566,6 +633,7 @@ impl GrammarCollector {
         for group in &groups {
             self.report_member_group(group, ambient);
         }
+        self.check_accessor_pairs(class);
 
         // A property with no annotation and no initializer has an implicit
         // `any` type *unless* the constructor assigns it: tsc infers the
@@ -932,6 +1000,27 @@ fn constructor_assigned_property_names(class: &Class<'_>) -> Vec<String> {
     collector.names
 }
 
+/// Whether a function body has a `return` of its own, outside any nested
+/// function.
+fn body_has_return(body: &FunctionBody<'_>) -> bool {
+    struct ReturnFinder {
+        found: bool,
+    }
+
+    impl<'a> Visit<'a> for ReturnFinder {
+        fn visit_return_statement(&mut self, _: &oxc_ast::ast::ReturnStatement<'a>) {
+            self.found = true;
+        }
+        fn visit_function(&mut self, _: &Function<'a>, _: oxc_syntax::scope::ScopeFlags) {}
+        fn visit_arrow_function_expression(&mut self, _: &oxc_ast::ast::ArrowFunctionExpression<'a>) {}
+        fn visit_class(&mut self, _: &Class<'a>) {}
+    }
+
+    let mut finder = ReturnFinder { found: false };
+    finder.visit_function_body(body);
+    finder.found
+}
+
 /// Whether a constructor body calls `super(...)` anywhere inside it, including
 /// inside a branch or an arrow function — the same places the call counts for
 /// tsc.
@@ -1281,6 +1370,9 @@ impl<'a> Visit<'a> for GrammarCollector {
     }
 
     fn visit_method_definition(&mut self, method: &oxc_ast::ast::MethodDefinition<'a>) {
+        if method.kind == MethodDefinitionKind::Get {
+            self.check_getter_returns(method.key.span(), method.value.body.as_deref());
+        }
         if method.kind == MethodDefinitionKind::Set {
             if method.value.return_type.is_some() {
                 self.push(Kind::SetAccessorReturnType, method.key.span(), None);
@@ -1324,6 +1416,14 @@ impl<'a> Visit<'a> for GrammarCollector {
 
     fn visit_object_expression(&mut self, object: &ObjectExpression<'a>) {
         self.check_duplicate_properties(object);
+        for property in &object.properties {
+            if let ObjectPropertyKind::ObjectProperty(property) = property
+                && property.kind == PropertyKind::Get
+                && let Expression::FunctionExpression(function) = &property.value
+            {
+                self.check_getter_returns(property.key.span(), function.body.as_deref());
+            }
+        }
         oxc_ast_visit::walk::walk_object_expression(self, object);
     }
 

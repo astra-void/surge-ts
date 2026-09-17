@@ -15,6 +15,12 @@ oracle = [
   "enum-member-constant-values-basic",
 ]
 
+[TS2378]
+status = "emitted"
+oracle = [
+  "accessor-declaration-rules-basic",
+]
+
 [TS2474]
 status = "emitted"
 oracle = [
@@ -28,10 +34,22 @@ oracle = [
   "array-pattern-iterability-basic",
 ]
 
+[TS2676]
+status = "emitted"
+oracle = [
+  "accessor-declaration-rules-basic",
+]
+
 [TS2724]
 status = "emitted"
 oracle = [
   "import-member-suggestion-basic",
+]
+
+[TS2808]
+status = "emitted"
+oracle = [
+  "accessor-declaration-rules-basic",
 ]
 
 [TS5102]
