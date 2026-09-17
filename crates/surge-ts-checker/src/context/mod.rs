@@ -526,6 +526,10 @@ pub(crate) struct CheckerContext {
     /// that conditional: tsc checks each branch of a returned conditional
     /// against the return type on its own (`checkReturnExpression`).
     pub(crate) split_returned_conditional: bool,
+    /// Set while a destructured binding with a default is evaluated: tsc reads
+    /// its element with `AccessFlagsAllowMissing`, so a tuple too short for it
+    /// is not TS2493.
+    pub(crate) allow_missing_tuple_element: bool,
     /// Set by the arrow path just before it checks a block body, consumed by
     /// the frame that body opens.
     pub(crate) next_body_frame_active: bool,
@@ -664,6 +668,7 @@ impl CheckerContext {
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
             split_returned_conditional: false,
+            allow_missing_tuple_element: false,
             next_body_frame_active: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
@@ -805,6 +810,7 @@ impl CheckerContext {
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
             split_returned_conditional: false,
+            allow_missing_tuple_element: false,
             next_body_frame_active: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),

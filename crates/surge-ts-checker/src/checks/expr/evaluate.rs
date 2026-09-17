@@ -472,10 +472,25 @@ pub(crate) fn evaluate_expression(
         ParsedExpression::ElementAccess {
             object,
             object_span,
-            ..
+            index,
+            index_span,
         } => {
             let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
             check_property_receiver(object, &receiver, *object_span, fallback_span, symbols, ctx);
+            if let InferredExpression::Known(receiver_type) = &receiver
+                && let Type::Tuple(elements) = receiver_type.peeled()
+                && let ParsedExpression::NumberLiteral(value) = index.as_ref()
+                && let Ok(index_value) = value.parse::<i64>()
+                && usize::try_from(index_value).map_or(true, |index| index >= elements.len())
+            {
+                super::index_access::report_tuple_index_out_of_bounds(
+                    &elements,
+                    index_value,
+                    index_span.or(*object_span).or(fallback_span),
+                    ctx,
+                );
+                return InferredExpression::Known(Type::Undefined);
+            }
             let inferred_expression = infer_expression(expression, symbols, ctx);
             report_inferred_expression(
                 with_type_copy_reason(TypeCopyReason::ExpressionInference, || {

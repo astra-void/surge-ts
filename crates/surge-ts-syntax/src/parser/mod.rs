@@ -562,12 +562,14 @@ fn parse_array_pattern_declarations(
             continue;
         };
 
+        // tsc reports an element the source lacks on the binding element itself.
+        let element_span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(element)));
         let element_initializer = match &initializer {
             ParsedExpression::Identifier { name, .. } => ParsedExpression::IndexAccess {
                 object_name: name.clone(),
                 object_span: initializer_span,
                 index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
-                index_span: initializer_span,
+                index_span: element_span,
             },
             // A non-identifier initializer (`const [a, b] = useState()`) indexes
             // the source expression directly so each binding gets its own element
@@ -576,7 +578,7 @@ fn parse_array_pattern_declarations(
                 object: Box::new(initializer.clone()),
                 object_span: initializer_span,
                 index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
-                index_span: initializer_span,
+                index_span: element_span,
             },
         };
 

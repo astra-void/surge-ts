@@ -210,25 +210,25 @@ pub(super) fn evaluate_index_access(
                 | InferredExpression::Unknown => return InferredExpression::Unknown,
             };
 
-            if let Some(index_value) = tuple_index_value(&index_type) {
-                return match elements.get(index_value).cloned() {
-                    Some(element_type) => InferredExpression::Known(element_type),
-                    None => {
-                        let index_type_name = index_type.name();
-                        let object_type_name = Type::Tuple(elements.to_vec()).name();
-                        let diagnostic = Diagnostic::ts2339(
-                            &index_type_name,
-                            &object_type_name,
-                            ctx.file_name.clone(),
-                        );
-
-                        ctx.push(diagnostic_with_syntax_span(
-                            diagnostic,
-                            choose_span(index_span, choose_span(object_span, fallback_span)),
-                        ));
-                        InferredExpression::Unknown
-                    }
-                };
+            // tsc's `getPropertyTypeForIndexType`: a literal index past a fixed
+            // tuple's end is TS2493 (a negative one TS2514) and reads `undefined`,
+            // unless the access allows a missing element — a destructured
+            // binding with a default.
+            if let Type::NumberLiteral(NumberLiteralType { value }) = &index_type
+                && let Ok(index_value) = value.parse::<i64>()
+            {
+                if let Some(element_type) =
+                    usize::try_from(index_value).ok().and_then(|index| elements.get(index))
+                {
+                    return InferredExpression::Known(element_type.clone());
+                }
+                report_tuple_index_out_of_bounds(
+                    elements,
+                    index_value,
+                    choose_span(index_span, choose_span(object_span, fallback_span)),
+                    ctx,
+                );
+                return InferredExpression::Known(Type::Undefined);
             }
 
             if !is_assignable_to(&index_type, &Type::Number) {
@@ -445,10 +445,24 @@ fn literal_index_key(index_type: &Type) -> Option<String> {
     }
 }
 
-fn tuple_index_value(index_type: &Type) -> Option<usize> {
-    let Type::NumberLiteral(NumberLiteralType { value }) = index_type else {
-        return None;
+pub(super) fn report_tuple_index_out_of_bounds(
+    elements: &[Type],
+    index_value: i64,
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if ctx.allow_missing_tuple_element {
+        return;
+    }
+    let diagnostic = if index_value < 0 {
+        Diagnostic::ts2514(ctx.file_name.clone())
+    } else {
+        Diagnostic::ts2493(
+            Type::Tuple(elements.to_vec()).name(),
+            elements.len(),
+            index_value,
+            ctx.file_name.clone(),
+        )
     };
-
-    value.parse::<usize>().ok()
+    ctx.push(diagnostic_with_syntax_span(diagnostic, span));
 }

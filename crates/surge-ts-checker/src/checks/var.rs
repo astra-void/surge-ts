@@ -201,6 +201,9 @@ pub(crate) fn check_variable_declaration_against_symbols(
         });
     let initializer_symbols = self_bound_symbols.as_ref().unwrap_or(symbols);
 
+    let outer_allow_missing = ctx.allow_missing_tuple_element;
+    ctx.allow_missing_tuple_element = variable.from_binding_pattern
+        && matches!(variable.initializer, Some(ParsedExpression::NullishCoalescing { .. }));
     let inferred_initializer = if options.check_initializer {
         variable
             .initializer
@@ -224,6 +227,7 @@ pub(crate) fn check_variable_declaration_against_symbols(
     } else {
         InferredExpression::Unknown
     };
+    ctx.allow_missing_tuple_element = outer_allow_missing;
 
     let mut inferred_symbol_type = match &inferred_initializer {
         InferredExpression::Known(inferred_initializer_type) => {
