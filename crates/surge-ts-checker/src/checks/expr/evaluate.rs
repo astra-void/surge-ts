@@ -57,6 +57,7 @@ pub(crate) fn evaluate_expression(
             is_tagged,
             ..
         } => {
+            let mut tag_signature = None;
             for (index, interpolation) in expressions.iter().enumerate() {
                 let interpolation_span = expression_spans
                     .get(index)
@@ -65,15 +66,24 @@ pub(crate) fn evaluate_expression(
                     .or(*span)
                     .or(fallback_span);
                 let result = evaluate_expression(interpolation, interpolation_span, symbols, ctx);
+                let InferredExpression::Known(ty) = &result else {
+                    continue;
+                };
+                if *is_tagged && index == 0 {
+                    tag_signature = tagged_template_signature(ty);
+                    continue;
+                }
                 // A symbol cannot be converted to a string implicitly (TS2731).
-                if !(*is_tagged && index == 0)
-                    && let InferredExpression::Known(ty) = &result
-                    && type_may_be_symbol(ty)
-                {
+                if type_may_be_symbol(ty) {
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2731(ctx.file_name.clone()),
                         interpolation_span,
                     ));
+                }
+                if let Some(signature) = &tag_signature {
+                    // The tag receives the strings array first, so interpolation
+                    // `index` is argument `index`.
+                    check_tagged_template_argument(signature, index, ty, interpolation_span, ctx);
                 }
             }
             infer_expression(expression, symbols, ctx)
@@ -1416,4 +1426,51 @@ fn is_primitive_assertion_side(ty: &Type) -> bool {
         Type::Union(union) => union.types().iter().all(is_primitive_assertion_side),
         _ => false,
     }
+}
+
+/// The signature a tagged template calls when surge can relate its arguments
+/// directly: a single, non-generic function with resolved parameters.
+pub(crate) fn tagged_template_signature(tag: &Type) -> Option<surge_ts_types::FunctionType> {
+    let Type::Function(function) = tag else {
+        return None;
+    };
+    if function.overloads().is_some()
+        || function
+            .parameters()
+            .iter()
+            .chain([function.return_type()])
+            .any(crate::checks::function::type_contains_degradation)
+    {
+        return None;
+    }
+    Some(function.clone())
+}
+
+fn check_tagged_template_argument(
+    signature: &surge_ts_types::FunctionType,
+    position: usize,
+    argument: &Type,
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    let parameters = signature.parameters();
+    let parameter = if signature.is_variadic() && position + 1 >= parameters.len() {
+        match parameters.last().map(Type::peeled) {
+            Some(Type::Array(element)) => *element,
+            _ => return,
+        }
+    } else {
+        match parameters.get(position) {
+            Some(parameter) => parameter.clone(),
+            None => return,
+        }
+    };
+    if argument.is_unknown() || surge_ts_types::is_assignable_to(argument, &parameter) {
+        return;
+    }
+    let source_name = super::source_display_name(argument, &parameter);
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts2345(&source_name, &parameter.name(), ctx.file_name.clone()),
+        span,
+    ));
 }

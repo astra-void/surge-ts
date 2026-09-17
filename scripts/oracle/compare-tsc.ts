@@ -542,6 +542,7 @@ export const fixturePresets: Record<string, string> = {
   'computed-accessor-body-basic': path.join(workspaceRoot, 'tests/compat-projects/computed-accessor-body-basic/tsconfig.json'),
   'call-callee-and-arity-arguments-basic': path.join(workspaceRoot, 'tests/compat-projects/call-callee-and-arity-arguments-basic/tsconfig.json'),
   'primitive-assertion-overlap-basic': path.join(workspaceRoot, 'tests/compat-projects/primitive-assertion-overlap-basic/tsconfig.json'),
+  'tagged-template-call-basic': path.join(workspaceRoot, 'tests/compat-projects/tagged-template-call-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

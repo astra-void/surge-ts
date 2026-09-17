@@ -514,7 +514,15 @@ pub(crate) fn infer_expression(
                 let _ = infer_expression(expression, symbols, ctx);
             }
             if *is_tagged {
-                InferredExpression::Unknown
+                match expressions.first().map(|tag| infer_expression(tag, symbols, ctx)) {
+                    Some(InferredExpression::Known(tag)) => {
+                        match crate::checks::expr::tagged_template_signature(&tag) {
+                            Some(signature) => InferredExpression::Known(signature.return_type().clone()),
+                            None => InferredExpression::Unknown,
+                        }
+                    }
+                    _ => InferredExpression::Unknown,
+                }
             } else {
                 InferredExpression::Known(template_literal_type(expressions, quasis))
             }

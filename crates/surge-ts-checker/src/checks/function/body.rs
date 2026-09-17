@@ -73,6 +73,11 @@ pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
     contains_unknown(ty, false)
 }
 
+/// Like [`type_contains_unknown`], but a written `unknown` is a real type.
+pub(crate) fn type_contains_degradation(ty: &Type) -> bool {
+    contains_unknown(ty, true)
+}
+
 fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
     thread_local! {
         // References resolved while walking the current type, to break the cyclic
