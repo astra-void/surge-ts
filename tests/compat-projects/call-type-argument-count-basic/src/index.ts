@@ -11,3 +11,15 @@ untyped<string>(1);
 withDefault<"x">();
 withDefault();
 one<string>("fine");
+
+class Box<T> {
+  constructor(public value: T) {}
+}
+class Plain {}
+class Pair<A, B = string> {}
+new Box<string, number>("a");
+new Box<string>("a");
+new Plain<string>();
+new Pair<number>();
+new Pair<1, 2, 3>();
+new Map<string, number>();

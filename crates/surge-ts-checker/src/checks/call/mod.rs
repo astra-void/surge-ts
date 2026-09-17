@@ -741,6 +741,37 @@ pub(crate) fn check_new_like(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    // Written type arguments on `new C<…>()` must fit the class's type
+    // parameters (TS2558). Only a class declared in a source file is checked:
+    // a library constructor's generics need not match its instance interface.
+    if !type_arguments.is_empty()
+        && let ParsedExpression::Identifier { name, .. } = callee
+        && let Some(crate::symbols::TypeDeclarationInfo::Interface(info)) =
+            ctx.lookup_type_declaration(name)
+        && !crate::modules::is_declaration_file_name(&info.file_name)
+        && symbols.get(name).is_some_and(|symbol| match &symbol.ty {
+            Type::Any => true,
+            Type::Object(object) => object.construct_signature().is_some(),
+            _ => false,
+        })
+    {
+        let parameters = &info.body.type_parameters;
+        let maximum = parameters.len();
+        let minimum = parameters.iter().filter(|parameter| parameter.default_type.is_none()).count();
+        if type_arguments.len() < minimum || type_arguments.len() > maximum {
+            let expected =
+                if minimum == maximum { maximum.to_string() } else { format!("{minimum}-{maximum}") };
+            let type_arguments_start = callee_span.map(|span| SyntaxTextSpan {
+                start: span.end + 1,
+                end: span.end + 1,
+            });
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2558(expected, type_arguments.len(), ctx.file_name.clone()),
+                type_arguments_start,
+            ));
+        }
+    }
+
     // An `abstract class` has a construct signature like any other class — the
     // instance type is still what `new` produces, and tsc reports the
     // instantiation without cascading.
