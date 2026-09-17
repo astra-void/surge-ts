@@ -402,6 +402,8 @@ pub(crate) struct CheckerContext {
     /// Every name the current file's imports bind, for TS2632. Owned by the
     /// file that set it, like `file_type_only_import_names`.
     pub(crate) file_import_names: FxHashSet<Arc<str>>,
+    /// The subset of `file_import_names` bound by `import * as`.
+    pub(crate) file_namespace_import_names: FxHashSet<Arc<str>>,
     pub(crate) file_type_only_import_names_owner: Option<String>,
     /// Function names the authoritative check pass has already registered in the
     /// file under check. The first registration *replaces* the signature the
@@ -650,6 +652,7 @@ impl CheckerContext {
             merge_script_interfaces_with_globals: false,
             file_type_only_import_names: FxHashSet::default(),
             file_import_names: FxHashSet::default(),
+            file_namespace_import_names: FxHashSet::default(),
             checked_function_declaration_names: FxHashSet::default(),
             file_type_only_import_names_owner: None,
             ambient_global_type_declarations: Arc::new(TypeDeclarationTable::new()),
@@ -794,6 +797,7 @@ impl CheckerContext {
             merge_script_interfaces_with_globals: false,
             file_type_only_import_names: FxHashSet::default(),
             file_import_names: FxHashSet::default(),
+            file_namespace_import_names: FxHashSet::default(),
             checked_function_declaration_names: FxHashSet::default(),
             file_type_only_import_names_owner: None,
             ambient_global_type_declarations: data.ambient_global_type_declarations.clone(),
@@ -1148,11 +1152,21 @@ impl CheckerContext {
             && self.file_import_names.contains(name)
     }
 
-    pub(crate) fn set_file_import_names<'a>(&mut self, names: impl IntoIterator<Item = &'a str>) {
+    pub(crate) fn is_namespace_import_binding(&self, name: &str) -> bool {
+        self.file_type_only_import_names_owner.as_deref() == Some(self.file_name.as_str())
+            && self.file_namespace_import_names.contains(name)
+    }
+
+    pub(crate) fn set_file_import_names<'a>(
+        &mut self,
+        names: impl IntoIterator<Item = &'a str>,
+        namespace_names: impl IntoIterator<Item = &'a str>,
+    ) {
         self.file_import_names.clear();
-        for name in names {
-            self.file_import_names.insert(Arc::from(name));
-        }
+        self.file_import_names.extend(names.into_iter().map(Arc::from));
+        self.file_namespace_import_names.clear();
+        self.file_namespace_import_names
+            .extend(namespace_names.into_iter().map(Arc::from));
     }
 
     pub(crate) fn set_file_type_only_import_names<'a>(

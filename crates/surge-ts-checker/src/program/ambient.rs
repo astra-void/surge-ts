@@ -131,6 +131,23 @@ pub(crate) fn module_scope_own_declared_names(statements: &[ParsedStatement]) ->
 /// as a value as TS1361, not as a UMD-global reference — and an import whose
 /// module fails to resolve binds the name just as much, so this reads the
 /// syntax rather than the resolved binding tables.
+/// The local names of a file's namespace imports (`import * as ns`), whose
+/// members are read-only properties of the module namespace object.
+pub(crate) fn namespace_import_names(statements: &[ParsedStatement]) -> HashSet<&str> {
+    statements
+        .iter()
+        .filter_map(|statement| match statement {
+            ParsedStatement::ImportDeclaration(import) => match &import.kind {
+                surge_ts_syntax::ParsedImportKind::Namespace { local_name, .. } => {
+                    Some(local_name.as_str())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
 pub(crate) fn import_bound_names(statements: &[ParsedStatement]) -> HashSet<&str> {
     let mut names = HashSet::new();
 

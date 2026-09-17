@@ -985,6 +985,9 @@ pub(super) fn check_program_file(
             crate::program::ambient::import_bound_names(&parsed_file.statements)
                 .into_iter()
                 .filter(|name| !module_declared.contains(name)),
+            crate::program::ambient::namespace_import_names(&parsed_file.statements)
+                .into_iter()
+                .filter(|name| !module_declared.contains(name)),
         );
 
         if !ctx.umd_global_names.is_empty() {

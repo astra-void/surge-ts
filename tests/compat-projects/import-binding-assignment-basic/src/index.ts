@@ -14,3 +14,12 @@ function shadowed() {
   let counter = 0;
   counter = 3;
 }
+
+source.counter = 4;
+
+function namespaceMember() {
+  source.increment = () => {};
+}
+
+import { settings } from "./settings";
+settings.verbose = true;

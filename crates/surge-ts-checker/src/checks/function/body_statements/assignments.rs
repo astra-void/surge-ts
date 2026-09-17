@@ -728,6 +728,17 @@ pub(crate) fn check_member_assignment(
 
     let visible_symbols = visible_symbols(scopes);
 
+    // A module namespace object's members are read-only properties.
+    if let ParsedExpression::Identifier { name, .. } = object.as_ref()
+        && ctx.is_namespace_import_binding(name)
+        && !scopes.declares_locally(name)
+    {
+        if let Some(span) = property_span.or(assignment.target_span) {
+            ctx.push(Diagnostic::ts2540(property_name, ctx.file_name.clone()).with_span(convert_span(span)));
+        }
+        return;
+    }
+
     // The receiver of the write is still read: `decl.init.callee = x` reports
     // a possibly-undefined `decl` and a missing `init` on it exactly as a read
     // would. The written member itself is only reported below on a union
