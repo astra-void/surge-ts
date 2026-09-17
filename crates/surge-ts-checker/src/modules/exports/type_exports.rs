@@ -105,6 +105,30 @@ pub(crate) fn insert_unknown_type_import(
     let _ = type_declarations.insert(local_name.to_string(), declaration);
 }
 
+/// The type side of an import from a module that does not resolve. tsc has no
+/// answer for it either, so it binds the *error* type: permissive like the
+/// degradation sentinel, but still reported through (a callback parameter
+/// contextually typed by it is an implicit `any`). A module that *did* resolve
+/// but whose export surge could not find is a modelling gap, not an error, and
+/// keeps [`insert_unknown_type_import`].
+pub(crate) fn insert_error_type_import(
+    type_declarations: &mut TypeDeclarationTable,
+    local_name: &str,
+    file_name: Arc<str>,
+    name_span: Option<TextSpan>,
+) {
+    let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
+        local_name.to_string(),
+        file_name,
+        name_span,
+        vec![],
+        ParsedType::ErrorType,
+        None,
+    ));
+
+    let _ = type_declarations.insert(local_name.to_string(), declaration);
+}
+
 pub(crate) fn insert_unknown_value_import(local_name: &str, symbols: &mut SymbolTable) {
     insert_value_import(local_name, Type::Unknown, symbols);
 }

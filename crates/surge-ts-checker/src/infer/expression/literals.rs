@@ -285,6 +285,7 @@ pub(crate) fn infer_array_literal(
     }
 
     let mut element_types = Vec::new();
+    let mut spread_element_types = Vec::new();
 
     for element in elements {
         match infer_expression(&element.expression, symbols, ctx) {
@@ -298,6 +299,16 @@ pub(crate) fn infer_array_literal(
             | InferredExpression::Unknown => {
                 return InferredExpression::Unknown;
             }
+            // `[...xs]` contributes what iterating `xs` yields, not `xs`. A
+            // shape surge cannot iterate leaves the whole literal untyped
+            // rather than claiming an element type it did not derive.
+            InferredExpression::Known(ty) if element.spread => {
+                let yielded = crate::checks::function::for_of_element_type(&ty);
+                if yielded.is_unknown() {
+                    return InferredExpression::Unknown;
+                }
+                spread_element_types.push(yielded);
+            }
             InferredExpression::Known(ty) => element_types.push(ty),
         }
     }
@@ -307,7 +318,19 @@ pub(crate) fn infer_array_literal(
     // `["a","b"].includes(someString)` accept a widened argument. Contextual
     // typing against a literal-union target goes through a different path and is
     // unaffected.
-    let element_type = crate::checks::expr::widen_type(&union_type(element_types));
+    //
+    // A spread contributes an *existing* type, not a fresh literal, so it is
+    // not widened: `[...combination]` off a `('a' | 'b')[]` stays that union
+    // where widening made it `string[]` and rejected every use of the copy.
+    let element_type = if spread_element_types.is_empty() {
+        crate::checks::expr::widen_type(&union_type(element_types))
+    } else {
+        if !element_types.is_empty() {
+            spread_element_types
+                .push(crate::checks::expr::widen_type(&union_type(element_types)));
+        }
+        union_type(spread_element_types)
+    };
     InferredExpression::Known(Type::Array(Box::new(element_type)))
 }
 

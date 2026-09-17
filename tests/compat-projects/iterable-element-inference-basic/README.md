@@ -10,6 +10,9 @@ parameter contributed no candidate at all and `T` stayed uninferred.
 that motivated it: the `readonly [string, V][]` a caller hands it has to reach
 `T` for the result to keep the index signature tsc gives it.
 
-`ArrayLike<T>` and `ConcatArray<T>` are deliberately *not* in the set: inferring
-through them exposes a separate gap — an array argument is not assignable to
-either interface in surge — which turns a silent call into a false `TS2345`.
+`ArrayLike<T>` and `ConcatArray<T>` were held out of the set while that gap was
+open — an array argument was not assignable to either interface, so inferring
+through them turned a silent call into a false `TS2345`. The array surface now
+answers `length` and `[Symbol.iterator]`
+(see [array-iteration-protocol-assignability-basic](../array-iteration-protocol-assignability-basic/README.md)),
+so both are in the set.

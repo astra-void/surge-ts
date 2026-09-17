@@ -223,7 +223,14 @@ impl<'a> ReferenceGraphLoader<'a> {
         for name in initial {
             self.load_recursive(&name);
         }
-        (self.inputs, self.loaded_files, self.io_stats)
+        // tsc then orders the lib files by their position in its lib list
+        // (`sortLibs`), which is the order their declarations merge in: a
+        // `DateConstructor` signature from `es2015.core` follows `scripthost`'s.
+        let mut ordered: Vec<(SourceFileInput, String)> =
+            self.inputs.into_iter().zip(self.loaded_files).collect();
+        ordered.sort_by_key(|(input, _)| default_lib_file_priority(&input.file_name));
+        let (inputs, loaded_files) = ordered.into_iter().unzip();
+        (inputs, loaded_files, self.io_stats)
     }
 
     fn load_recursive(&mut self, normalized_name: &str) {
@@ -261,6 +268,134 @@ impl<'a> ReferenceGraphLoader<'a> {
 
 /// Normalize a lib name the way TypeScript does for known libs: trim, lowercase,
 /// and accept either `lib.es2022.d.ts`, `es2022`, or `ES2022`.
+/// tsc's lib list (`tsoptions.Libs`), in the order `sortLibs` ranks lib files by.
+const LIB_ORDER: &[&str] = &[
+    "es5",
+    "es6",
+    "es2015",
+    "es7",
+    "es2016",
+    "es2017",
+    "es2018",
+    "es2019",
+    "es2020",
+    "es2021",
+    "es2022",
+    "es2023",
+    "es2024",
+    "es2025",
+    "esnext",
+    "dom",
+    "dom.iterable",
+    "dom.asynciterable",
+    "webworker",
+    "webworker.importscripts",
+    "webworker.iterable",
+    "webworker.asynciterable",
+    "scripthost",
+    "es2015.core",
+    "es2015.collection",
+    "es2015.generator",
+    "es2015.iterable",
+    "es2015.promise",
+    "es2015.proxy",
+    "es2015.reflect",
+    "es2015.symbol",
+    "es2015.symbol.wellknown",
+    "es2016.array.include",
+    "es2016.intl",
+    "es2017.arraybuffer",
+    "es2017.date",
+    "es2017.object",
+    "es2017.sharedmemory",
+    "es2017.string",
+    "es2017.intl",
+    "es2017.typedarrays",
+    "es2018.asyncgenerator",
+    "es2018.asynciterable",
+    "es2018.intl",
+    "es2018.promise",
+    "es2018.regexp",
+    "es2019.array",
+    "es2019.object",
+    "es2019.string",
+    "es2019.symbol",
+    "es2019.intl",
+    "es2020.bigint",
+    "es2020.date",
+    "es2020.promise",
+    "es2020.sharedmemory",
+    "es2020.string",
+    "es2020.symbol.wellknown",
+    "es2020.intl",
+    "es2020.number",
+    "es2021.promise",
+    "es2021.string",
+    "es2021.weakref",
+    "es2021.intl",
+    "es2022.array",
+    "es2022.error",
+    "es2022.intl",
+    "es2022.object",
+    "es2022.string",
+    "es2022.regexp",
+    "es2023.array",
+    "es2023.collection",
+    "es2023.intl",
+    "es2024.arraybuffer",
+    "es2024.collection",
+    "es2024.object",
+    "es2024.promise",
+    "es2024.regexp",
+    "es2024.sharedmemory",
+    "es2024.string",
+    "es2025.collection",
+    "es2025.float16",
+    "es2025.intl",
+    "es2025.iterator",
+    "es2025.promise",
+    "es2025.regexp",
+    "esnext.asynciterable",
+    "esnext.symbol",
+    "esnext.bigint",
+    "esnext.weakref",
+    "esnext.object",
+    "esnext.regexp",
+    "esnext.string",
+    "esnext.float16",
+    "esnext.iterator",
+    "esnext.promise",
+    "esnext.array",
+    "esnext.collection",
+    "esnext.date",
+    "esnext.decorators",
+    "esnext.disposable",
+    "esnext.error",
+    "esnext.intl",
+    "esnext.sharedmemory",
+    "esnext.temporal",
+    "esnext.typedarrays",
+    "decorators",
+    "decorators.legacy",
+];
+
+/// tsc's `getDefaultLibFilePriority`: `lib.d.ts` first, then a lib's position in
+/// [`LIB_ORDER`], and anything else after every listed lib.
+fn default_lib_file_priority(file_name: &str) -> usize {
+    let base_name = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
+    if base_name == "lib.d.ts" || base_name == "lib.es6.d.ts" {
+        return 0;
+    }
+    let name = base_name
+        .strip_prefix("lib.")
+        .and_then(|name| name.strip_suffix(".d.ts"))
+        .unwrap_or(base_name);
+    LIB_ORDER
+        .iter()
+        .position(|lib| lib.eq_ignore_ascii_case(name))
+        .map_or(LIB_ORDER.len() + 2, |index| index + 1)
+}
+
 fn normalize_lib_name(name: &str) -> String {
     let trimmed = name.trim().to_ascii_lowercase();
     let trimmed = trimmed

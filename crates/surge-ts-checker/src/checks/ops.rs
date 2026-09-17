@@ -61,7 +61,13 @@ pub(crate) fn evaluate_binary_expression(
         ),
         // `"prop" in obj` / `x instanceof Ctor` are boolean type-guard tests. The
         // operands are already evaluated by the caller; the result is `boolean`.
-        ParsedBinaryOperator::In | ParsedBinaryOperator::Instanceof => {
+        ParsedBinaryOperator::In => InferredExpression::Known(Type::Boolean),
+        ParsedBinaryOperator::Instanceof => {
+            crate::checks::expr::check_instanceof_left_operand(
+                &left_result,
+                left_span.or(fallback_span),
+                ctx,
+            );
             InferredExpression::Known(Type::Boolean)
         }
     }
@@ -145,6 +151,7 @@ pub(crate) fn evaluate_unary_expression(
         ParsedUnaryOperator::Typeof => {
             InferredExpression::Known(crate::infer::expression::typeof_result_type())
         }
+        ParsedUnaryOperator::Delete => InferredExpression::Known(Type::Boolean),
         // `void` / `delete` / `~`: the operand has already been walked, and the
         // result stays unmodelled rather than guessing `undefined`/`boolean`/`number`.
         ParsedUnaryOperator::Discard => InferredExpression::Unknown,

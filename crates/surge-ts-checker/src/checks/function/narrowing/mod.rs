@@ -495,7 +495,21 @@ pub(crate) fn narrow_condition_symbol_table(
         .or_else(|| narrow_array_isarray_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_property_presence_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_nullish_equality_symbol_table(condition, symbols, branch_is_true))
-        .or_else(|| narrow_reference_guard_symbol_table(condition, symbols, branch_is_true))
+        .or_else(|| {
+            // As in `narrow_truthy_reference_in_scope`: the members the test rules
+            // out go first, and the reference guard then narrows what is left.
+            let filtered = truthy::narrow_union_by_property_truthiness_symbol_table(
+                condition,
+                symbols,
+                branch_is_true,
+            );
+            narrow_reference_guard_symbol_table(
+                condition,
+                filtered.as_ref().unwrap_or(symbols),
+                branch_is_true,
+            )
+            .or(filtered)
+        })
 }
 
 /// Merges the two disjunct narrowings of an `A || B` true branch: each name

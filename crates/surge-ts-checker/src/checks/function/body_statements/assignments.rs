@@ -230,10 +230,7 @@ fn report_readonly_property_write(
     span: Option<surge_ts_syntax::TextSpan>,
     ctx: &mut CheckerContext,
 ) -> bool {
-    let readonly = object_property_is_readonly(receiver, property_name)
-        || declared_member(receiver, property_name, ctx)
-            .is_some_and(|(member, _)| member.readonly);
-    if !readonly {
+    if !property_write_is_readonly(receiver, property_name, ctx) {
         return false;
     }
 
@@ -243,6 +240,19 @@ fn report_readonly_property_write(
         None => diagnostic,
     });
     true
+}
+
+/// Whether writing `receiver.property_name` is rejected because the member is
+/// `readonly`. Shared with the `delete` and increment/decrement operand checks,
+/// which reject the same members under their own diagnostic codes.
+pub(crate) fn property_write_is_readonly(
+    receiver: &Type,
+    property_name: &str,
+    ctx: &CheckerContext,
+) -> bool {
+    object_property_is_readonly(receiver, property_name)
+        || declared_member(receiver, property_name, ctx)
+            .is_some_and(|(member, _)| member.readonly)
 }
 
 /// Whether the receiver's own object surface declares the member `readonly`.
@@ -895,12 +905,28 @@ pub(crate) fn update_assigned_symbol_type(
         return;
     };
 
+    // A binding whose *declaration* is a union the value inhabits re-narrows to
+    // that value, whatever it is narrowed to right now. Checked up front so the
+    // `undefined` arm below cannot claim an annotated binding: `let ctx:
+    // undefined | Ctx = undefined; ctx = make();` is `Ctx` afterwards, not the
+    // declared union again, and every later use of it was reading the union.
+    // Only an *un-annotated* `let x = undefined` widens.
+    let declared_union_admits_value = scopes
+        .visible_symbols()
+        .declared_type(target_name)
+        .is_some_and(|declared| {
+            matches!(declared, Type::Union(_)) && is_assignable_to(&value_ty, declared)
+        });
+
     let mut narrowed_by_assignment = false;
-    let updated_ty = if symbol.ty == Type::Undefined {
+    let updated_ty = if symbol.ty == Type::Undefined && !declared_union_admits_value {
         union_type(vec![
             Type::Undefined,
             with_type_copy_reason(TypeCopyReason::ScopeOrContext, || value_ty.clone()),
         ])
+    } else if symbol.ty == Type::Undefined {
+        narrowed_by_assignment = true;
+        value_ty
     } else if symbol.ty == value_ty || is_assignable_to(&value_ty, &symbol.ty) {
         // Assigning to a union-declared variable narrows it to what was
         // assigned, as tsc does: the lazy-singleton idiom

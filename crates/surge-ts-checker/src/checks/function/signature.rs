@@ -24,16 +24,49 @@ use crate::infer::{
 use crate::metrics::alloc_function_type;
 use crate::symbols::{FunctionSignatureInfo, ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
 
+/// `SURGE_TSC_IMPLICIT_ANY=1`: report implicit-any exactly where tsc does,
+/// dropping surge's two suppression depths.
+///
+/// tsc's own exemptions are three — `reportErrors` off, a private ambient
+/// member, and a JS file without `checkJS` (`getTypeForVariableLikeDeclaration`
+/// tail, then `reportImplicitAny`). It has **no** "the contextual type was
+/// degraded" rule, so `unmodelled_jsx_props_depth` and
+/// `degraded_expected_type_depth` are surge's own.
+///
+/// They are not a wrong rule to delete, though: they stand in for the
+/// contextual types surge fails to supply where tsc has one. Measured
+/// 2026-09-16 with them off — trpc FN 50 -> 37, but FP trpc 7 -> 724,
+/// zod 0 -> 357, tanstack 7 -> 211. The dominant zod shape is
+/// `core.$constructor("…", (inst, def) => …)` assigned to a
+/// `core.$constructor<$ZodCheckLessThan>` annotation: the callback parameters
+/// get no contextual type because that very interface resolves to
+/// `Object{1 props: init}` with **no construct signature** — `new (def: D): T`
+/// is dropped — so the contextual type is already half missing before
+/// inference runs. Close that, then turn this on.
+fn tsc_implicit_any_rule() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_TSC_IMPLICIT_ANY").as_deref() == Ok("1"))
+}
+
 pub(crate) fn emit_parameter_diagnostics(
     parameter: &ParsedFunctionParameter,
     contextual_type: Option<&Type>,
     ctx: &mut CheckerContext,
 ) {
+    // tsc's own exemptions are three — `reportErrors` off, a private ambient
+    // member, a JS file without `checkJS` (`getTypeForVariableLikeDeclaration`
+    // tail). It has no "the contextual type was degraded" rule, so these two
+    // depths are surge's, and they are load-bearing rather than wrong:
+    // dropping them to match tsc exactly closes 13 tRPC false negatives and
+    // opens ~1,300 false positives (trpc 7 -> 724, zod 0 -> 357, tanstack
+    // 7 -> 211, measured 2026-09-16). They stand in for the contextual types
+    // surge fails to supply where tsc has one; removing them is only correct
+    // once that gap is closed.
     if !ctx.options.no_implicit_any
         || parameter.declared_type.is_some()
         || parameter.initializer.is_some()
-        || ctx.unmodelled_jsx_props_depth > 0
-        || ctx.degraded_expected_type_depth > 0
+        || (!tsc_implicit_any_rule()
+            && (ctx.unmodelled_jsx_props_depth > 0 || ctx.degraded_expected_type_depth > 0))
     {
         return;
     }
@@ -611,6 +644,7 @@ fn defer_dependency_signature_annotation(annotation: &ParsedType) -> bool {
         | ParsedType::Undefined
         | ParsedType::Void
         | ParsedType::Any
+        | ParsedType::ErrorType
         | ParsedType::Unknown
         | ParsedType::UnknownKeyword
         | ParsedType::Never
@@ -1300,6 +1334,7 @@ pub(crate) fn check_function_body_with_signature(
     missing_return_span: Option<TextSpan>,
     body_reads: Option<&[String]>,
     is_generator: bool,
+    has_this_parameter: bool,
     ctx: &mut CheckerContext,
 ) {
     check_function_body_with_signature_and_this(
@@ -1315,6 +1350,7 @@ pub(crate) fn check_function_body_with_signature(
         false,
         body_reads,
         is_generator,
+        has_this_parameter,
         ctx,
     );
 }
@@ -1340,6 +1376,9 @@ pub(crate) fn check_function_body_with_signature_and_this(
     is_constructor: bool,
     body_reads: Option<&[String]>,
     is_generator: bool,
+    // `function f(this: T)`: oxc keeps the `this` parameter out of the parameter
+    // list, so the caller has to report whether one was written.
+    has_this_parameter: bool,
     ctx: &mut CheckerContext,
 ) {
     let body_flow = analyze_function_body_flow(&body);
@@ -1359,6 +1398,13 @@ pub(crate) fn check_function_body_with_signature_and_this(
             },
         );
     }
+    // A plain `function` with no `this` parameter gives `this` no type; tsc
+    // reports a read of it under `noImplicitThis`. A constructor and a method
+    // both arrive here with a `this` type, which clears it.
+    let outer_this_is_implicitly_any = ctx.this_is_implicitly_any;
+    ctx.this_is_implicitly_any =
+        this_type.is_none() && !is_constructor && !has_this_parameter;
+
     if let Some(this_type) = this_type {
         scopes.insert_current(
             "this".to_string(),
@@ -1422,6 +1468,8 @@ pub(crate) fn check_function_body_with_signature_and_this(
     {
         emit_implicit_return_diagnostic(missing_return_span, ctx);
     }
+
+    ctx.this_is_implicitly_any = outer_this_is_implicitly_any;
 }
 
 pub(crate) fn merged_function_body_root_symbols(ctx: &CheckerContext) -> SymbolTable {

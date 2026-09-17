@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::ParsedVariableDeclaration;
-use surge_ts_types::{Type, is_assignable_to};
+use surge_ts_types::{Type, TypeCopyReason, is_assignable_to};
 
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type_anchored};
 use super::expr::{evaluate_expression, source_display_name, widen_type};
@@ -118,6 +118,10 @@ pub(crate) fn check_variable_declaration_against_symbols(
     // moves `ctx.symbols` out into `symbols`, so without this the typeof lookup
     // would run against an empty table and spuriously report TS2304.
 
+    let variable_name = variable.name.clone();
+    let variable_name_span = variable.name_span;
+    let redeclaration_candidate = !variable.is_declare && variable.declared_type.is_some();
+
     // A generic annotation is kept for call-site instantiation; a type-predicate
     // annotation is kept so `if (isFoo(x))` can narrow — neither is recoverable
     // from the resolved callable type alone.
@@ -167,6 +171,36 @@ pub(crate) fn check_variable_declaration_against_symbols(
         ctx.push(diagnostic);
     }
 
+    // Inside its own initializer an annotated binding already has its declared
+    // type: tsc's `getTypeOfVariableOrParameterOrProperty` answers the
+    // annotation whatever is being checked, so a deferred self-reference
+    // (`const s: ZodType<T> = z.lazy(() => s)`) reads `ZodType<T>`. The caller
+    // pre-binds the name to the sentinel for the initializer; swap in the
+    // annotation resolved just above, so it is still resolved exactly once.
+    let self_bound_symbols = declared_type
+        .as_ref()
+        .filter(|declared_type| !declared_type.is_unknown())
+        .filter(|_| {
+            options.check_initializer
+                && variable.initializer.is_some()
+                && symbols
+                    .get(&variable_name)
+                    .is_some_and(|symbol| matches!(symbol.ty, Type::Unknown))
+        })
+        .map(|declared_type| {
+            let mut bound = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+            let _ = bound.insert(
+                variable_name.clone(),
+                SymbolInfo {
+                    ty: declared_type.clone(),
+                    kind: symbol_kind,
+                    function_signature: None,
+                },
+            );
+            bound
+        });
+    let initializer_symbols = self_bound_symbols.as_ref().unwrap_or(symbols);
+
     let inferred_initializer = if options.check_initializer {
         variable
             .initializer
@@ -179,7 +213,7 @@ pub(crate) fn check_variable_declaration_against_symbols(
                         variable.name_span,
                         Some(declared_type),
                         ExpectedTypeDiagnostic::TypeNotAssignable,
-                        symbols,
+                        initializer_symbols,
                         ctx,
                     )
                 } else {
@@ -253,13 +287,80 @@ pub(crate) fn check_variable_declaration_against_symbols(
         })
     });
 
-    declared_type.or(inferred_symbol_type).map(|ty| {
+    // Go carries an unresolved import's error type through every binding that
+    // reads from it, so `const q = trpc.post.all.useQuery()` is `any` there too
+    // and a callback passed to a call on `q` has no contextual type. surge's
+    // `Type::Any` cannot say which `any` it is, so the provenance is recorded
+    // beside the binding instead — otherwise it stopped at the import and every
+    // downstream call read as a chain surge merely failed to model.
+    if declared_type.is_none()
+        && let Some(initializer) = variable.initializer.as_ref()
+    {
+        if crate::checks::call::property::receiver_any_is_genuine(initializer, symbols, ctx) {
+            ctx.genuine_any_bindings.insert(variable_name.clone());
+        } else {
+            ctx.genuine_any_bindings.remove(variable_name.as_str());
+        }
+    }
+
+    let symbol = declared_type.or(inferred_symbol_type).map(|ty| {
         Arc::new(SymbolInfo {
             ty,
             kind: symbol_kind,
             function_signature,
         })
-    })
+    })?;
+
+    if redeclaration_candidate {
+        report_redeclared_var_type(&variable_name, variable_name_span, &symbol, symbols, ctx);
+    }
+
+    Some(symbol)
+}
+
+/// TS2403: a `var` may be redeclared, but every declaration has to give it the
+/// same type. `get_own` keeps this to the declaring scope, so a module `var`
+/// that shadows a same-named ambient global is not a redeclaration.
+///
+/// Both declarations must be annotated. tsc compares the *widened declaration*
+/// types, which for an unannotated `var` comes from its initializer; surge's
+/// inference is not faithful enough there to report on it, so an unannotated
+/// declaration on either side leaves the pair alone.
+///
+/// An ambient `declare var` is skipped for the reason the duplicate `let`/`const`
+/// check skips it: it is pre-registered before this runs, so its own
+/// registration would read as the earlier declaration.
+fn report_redeclared_var_type(
+    variable_name: &str,
+    variable_name_span: Option<surge_ts_syntax::TextSpan>,
+    symbol: &SymbolInfoHandle,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    if !matches!(symbol.kind, SymbolKind::Var) {
+        return;
+    }
+    let Some(previous) = symbols
+        .get_own(variable_name)
+        .filter(|existing| matches!(existing.kind, SymbolKind::Var))
+        .map(|existing| existing.ty.clone())
+    else {
+        return;
+    };
+    if previous.is_unknown() || symbol.ty.is_unknown() || previous == symbol.ty {
+        return;
+    }
+
+    let diagnostic = Diagnostic::ts2403(
+        variable_name,
+        previous.name(),
+        symbol.ty.name(),
+        ctx.file_name.clone(),
+    );
+    ctx.push(match variable_name_span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
 }
 
 pub(crate) fn widen_implicit_variable_initializer_type(symbol_kind: SymbolKind, ty: &Type) -> Type {

@@ -91,7 +91,16 @@ fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
                     .borrow_mut()
                     .push((reference.id.clone(), reference.arguments.clone()));
             });
-            let result = contains_unknown(&reference.resolve(), sentinel_only);
+            // The arguments are part of what the reference *is*, not just of
+            // what it resolves to: a partially-substituted instantiation
+            // (`NextComponentType<…, AppPropsType<any, P>>` with `P` still
+            // free) can resolve to a structure that no longer mentions `P`,
+            // and comparing against it proves nothing about the real type.
+            let result = reference
+                .arguments
+                .iter()
+                .any(|argument| contains_unknown(argument, sentinel_only))
+                || contains_unknown(&reference.resolve(), sentinel_only);
             VISITING_REFERENCES.with(|visiting| {
                 visiting.borrow_mut().pop();
             });

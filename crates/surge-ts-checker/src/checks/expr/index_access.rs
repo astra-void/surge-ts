@@ -194,7 +194,10 @@ pub(super) fn evaluate_index_access(
 
     match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
+        Type::Unknown
+        | Type::GenuineUnknown
+        | Type::ErrorType
+        | Type::TypeParameter(_) => InferredExpression::Unknown,
         // Lowered to its element array above.
         Type::OpenTuple(_) => InferredExpression::Unknown,
         Type::Tuple(elements) => {

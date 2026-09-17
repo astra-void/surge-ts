@@ -204,6 +204,20 @@ fn parse_conditional_type(conditional_type: &TSConditionalType<'_>) -> Option<Pa
     })))
 }
 
+fn parse_type_query_arguments(type_query: &TSTypeQuery<'_>) -> Vec<ParsedType> {
+    type_query
+        .type_arguments
+        .as_ref()
+        .map(|arguments| {
+            arguments
+                .params
+                .iter()
+                .map(|argument| parse_type(argument).unwrap_or(ParsedType::Unknown))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
     match &type_query.expr_name {
         TSTypeQueryExprName::IdentifierReference(identifier) => {
@@ -212,6 +226,7 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 name_span: Some(text_span_from_oxc_span(identifier.span)),
                 members: Vec::new(),
                 import_specifier: None,
+                type_arguments: parse_type_query_arguments(type_query),
             })))
         }
         TSTypeQueryExprName::QualifiedName(qualified_name) => {
@@ -222,6 +237,7 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 name_span: Some(text_span_from_oxc_span(base_span)),
                 members,
                 import_specifier: None,
+                type_arguments: parse_type_query_arguments(type_query),
             })))
         }
         // `typeof import("vitest")['assert']` reads the module's namespace value;
@@ -237,6 +253,7 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 name_span: Some(text_span_from_oxc_span(import_type.source.span)),
                 members,
                 import_specifier: Some(specifier),
+                type_arguments: parse_type_query_arguments(type_query),
             })))
         }
         // `typeof this` is not modelled.

@@ -637,8 +637,6 @@ fn render_check_counters(counters: &ProgramCounters) {
         counters.generic_call_inference_unresolved_argument_skip_count
     );
     eprintln!(
-        "    generic_call_inference_tuple_return_suppressed_count: {}",
-        counters.generic_call_inference_tuple_return_suppressed_count
     );
     eprintln!(
         "    generic_call_inference_candidate_count: {}",

@@ -41,7 +41,10 @@ pub(crate) fn infer_index_access(
     };
     match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
+        Type::Unknown
+        | Type::GenuineUnknown
+        | Type::ErrorType
+        | Type::TypeParameter(_) => InferredExpression::Unknown,
         // Lowered to its element array above.
         Type::OpenTuple(_) => InferredExpression::Unknown,
         Type::Union(union_type) => {
@@ -514,9 +517,15 @@ pub(crate) fn infer_property_call(
                 ) {
                     Some(inferred) => inferred,
                     None => match member_type {
-                        Type::Function(function_type) => {
-                            InferredExpression::Known(function_type.return_type().clone())
-                        }
+                        Type::Function(function_type) => InferredExpression::Known(
+                            crate::checks::call::select_overload_return_type_for_inferred_call(
+                                &function_type,
+                                arguments,
+                                symbols,
+                                ctx,
+                            )
+                            .unwrap_or_else(|| function_type.return_type().clone()),
+                        ),
                         _ => InferredExpression::Known(Type::Any),
                     },
                 }

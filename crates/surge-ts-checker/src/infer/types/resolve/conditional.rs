@@ -1905,30 +1905,59 @@ mod distributive_member_guard_tests {
 
     /// One file (no import) so the preliminary analysis round's import-less
     /// scope contributes no degraded resolution of its own, and the returned
-    /// `h.value` forces the deferred `MakeRO<any>` conditional to actually
+    /// `h.value` forces the deferred `MakeRO<…>` conditional to actually
     /// distribute (an unused member never peels the lazy alias reference).
-    fn forced_any_member_fixture() -> Vec<SourceFileInput> {
+    ///
+    /// `member` is the `Holder` argument: `any` is the shape under test, a
+    /// concrete non-`Map` type is the baseline it is compared against.
+    fn forced_member_fixture(member: &str) -> Vec<SourceFileInput> {
         vec![SourceFileInput {
             file_name: "single.ts".to_string(),
-            source_text: "export type MakeRO<T> = T extends Map<infer K, infer V>\n\
+            source_text: format!(
+                "export type MakeRO<T> = T extends Map<infer K, infer V>\n\
                  \x20 ? ReadonlyMap<K, V>\n\
                  \x20 : Readonly<T>;\n\
-                 export interface Holder<T> { value: MakeRO<T>; }\n\
-                 export function go<T>(seed: T, h: Holder<any>): string {\n\
+                 export interface Holder<T> {{ value: MakeRO<T>; }}\n\
+                 export function go<T>(seed: T, h: Holder<{member}>): string {{\n\
                  \x20 return h.value;\n\
-                 }\n"
-            .to_string(),
+                 }}\n"
+            ),
         }]
+    }
+
+    fn interface_resolutions(member: &str) -> (u64, u64) {
+        let _ = check_program_with_stats_and_jobs(
+            forced_member_fixture(member),
+            crate::CheckerOptions::default(),
+            1,
+        );
+        let counters = crate::metrics::snapshot_program_counters();
+        (
+            counters.interface_resolution_attempt_count,
+            counters.interface_resolution_degraded_count,
+        )
     }
 
     /// The pinning assertion for the member guards: distributing an `any`
     /// member must not select the `Map` branch with `K`/`V` unbound — before
     /// the guards, this exact fixture resolved `ReadonlyMap<K, V>` with both
     /// arguments unresolvable and finished with 1 degraded interface
-    /// resolution out of 24 attempts (verified against the pre-fix binary);
-    /// with the guards it is 0 of 13. The diagnostic surface alone cannot pin
-    /// the failure (the lookup misses are suppressed in most windows), so the
-    /// counter is the assertion.
+    /// resolution out of 24 attempts (verified against the pre-fix binary).
+    /// The diagnostic surface alone cannot pin the failure (the lookup misses
+    /// are suppressed in most windows), so the counters are the assertion.
+    ///
+    /// The assertion is a *comparison against a concrete member*, not an
+    /// absolute zero. An absolute zero held only while the `extends` pattern
+    /// `Map<infer K, infer V>` expanded no self-referential interface: once
+    /// `6e097c69` began keeping computed-key members, `MapIterator<T>` and
+    /// `IteratorObject<T, …>` carry their own `[Symbol.iterator]()` again, and
+    /// a *generic* interface whose member refers to its own instantiation
+    /// degrades its resolution (`interface Box<T> { inner: Box<T> }` alone
+    /// reproduces it; the non-generic `interface N { next: N }` does not).
+    /// That gap is a property of the pattern, not of the member: `Holder<any>`,
+    /// `Holder<string>` and `Holder<Map<string, number>>` all report the same
+    /// 3 degraded of 14. Pinning the absolute number would pin the unrelated
+    /// gap; pinning the *difference* keeps measuring the guards.
     ///
     /// Known tsc divergence, deliberate: tsc types `MakeRO<any>` as the union
     /// of both branches (`Readonly<any> | ReadonlyMap<unknown, unknown>`) and
@@ -1937,24 +1966,27 @@ mod distributive_member_guard_tests {
     /// this synthetic shape. On the real corpora the guards only removed
     /// diagnostics that the pinned tsc does not emit.
     #[test]
-    fn any_member_produces_no_degraded_interface_resolutions() {
+    fn any_member_degrades_no_more_than_a_concrete_member() {
         // Safety: set before any checker thread is spawned in this test
         // process (nextest: one process per test); the counters gate is
         // re-derived from this env var at the start of every run.
         unsafe { std::env::set_var("SURGE_TIMINGS", "1") };
-        let _ = check_program_with_stats_and_jobs(
-            forced_any_member_fixture(),
-            crate::CheckerOptions::default(),
-            1,
+
+        let (baseline_attempts, baseline_degraded) = interface_resolutions("string");
+        let (any_attempts, any_degraded) = interface_resolutions("any");
+
+        assert!(
+            baseline_attempts > 0,
+            "the baseline resolved no interface at all — the fixture stopped \
+             reaching the `Map` pattern and measures nothing",
         );
-        let counters = crate::metrics::snapshot_program_counters();
         assert_eq!(
-            counters.interface_resolution_degraded_count,
-            0,
-            "an `any` member must not degrade any interface resolution \
-             (got {} degraded of {} attempts)",
-            counters.interface_resolution_degraded_count,
-            counters.interface_resolution_attempt_count,
+            (any_attempts, any_degraded),
+            (baseline_attempts, baseline_degraded),
+            "an `any` member must resolve the same interfaces as a concrete \
+             one (got {any_degraded} degraded of {any_attempts} attempts \
+             against a baseline of {baseline_degraded} of {baseline_attempts}); \
+             a surplus is the `Map` branch being selected with `K`/`V` unbound",
         );
     }
 }

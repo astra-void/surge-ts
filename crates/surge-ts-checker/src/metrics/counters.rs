@@ -54,7 +54,6 @@ pub(crate) struct ProgramCounters {
     pub(crate) generic_call_inference_unresolved_argument_skip_count: u64,
     pub(crate) overload_selection_attempt_count: u64,
     pub(crate) overload_selection_pick_count: u64,
-    pub(crate) generic_call_inference_tuple_return_suppressed_count: u64,
     pub(crate) generic_call_inference_candidate_count: u64,
     pub(crate) generic_indexed_access_attempt_count: u64,
     pub(crate) generic_indexed_access_substituted_receiver_count: u64,
@@ -355,10 +354,6 @@ pub(crate) fn record_generic_call_inference_explicit_type_args_skip() {
 
 pub(crate) fn record_generic_call_inference_unresolved_argument_skip() {
     record_program_counter(|c| c.generic_call_inference_unresolved_argument_skip_count += 1);
-}
-
-pub(crate) fn record_generic_call_inference_tuple_return_suppressed() {
-    record_program_counter(|c| c.generic_call_inference_tuple_return_suppressed_count += 1);
 }
 
 pub(crate) fn record_generic_call_inference_candidate() {

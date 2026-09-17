@@ -22,6 +22,7 @@ pub(crate) fn normalize_compiler_options(
     };
 
     let mut explicit_no_implicit_any = None;
+    let mut explicit_strict_property_initialization = None;
     let mut explicit_use_unknown_in_catch_variables = None;
     let mut explicit_resolve_json_module = None;
 
@@ -36,6 +37,13 @@ pub(crate) fn normalize_compiler_options(
                 explicit_no_implicit_any = parse_bool_option(key, value, config_dir, diagnostics);
                 if let Some(no_implicit_any) = explicit_no_implicit_any {
                     normalized.no_implicit_any = no_implicit_any;
+                }
+            }
+            "strictPropertyInitialization" => {
+                explicit_strict_property_initialization =
+                    parse_bool_option(key, value, config_dir, diagnostics);
+                if let Some(value) = explicit_strict_property_initialization {
+                    normalized.strict_property_initialization = value;
                 }
             }
             "useUnknownInCatchVariables" => {
@@ -194,6 +202,8 @@ pub(crate) fn normalize_compiler_options(
     }
 
     normalized.no_implicit_any = explicit_no_implicit_any.unwrap_or(normalized.strict);
+    normalized.strict_property_initialization =
+        explicit_strict_property_initialization.unwrap_or(normalized.strict);
     normalized.use_unknown_in_catch_variables =
         explicit_use_unknown_in_catch_variables.unwrap_or(normalized.strict);
     // tsc turns `.json` resolution on by default for every resolver it still

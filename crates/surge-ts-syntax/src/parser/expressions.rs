@@ -1,17 +1,20 @@
 use oxc_ast::ast::{
-    Argument, ArrayExpression, ArrowFunctionExpression, BinaryExpression, BinaryOperator,
+    Argument, ArrayExpression, ArrayExpressionElement, ArrowFunctionExpression, BinaryExpression,
+    BinaryOperator,
     ChainElement, ChainExpression, ComputedMemberExpression, ConditionalExpression, Expression,
     JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXElementName,
     JSXExpressionContainer, JSXFragment, JSXMemberExpression, JSXMemberExpressionObject,
     LogicalExpression, LogicalOperator, NewExpression, ObjectExpression, ObjectPropertyKind,
-    PropertyKey, PropertyKind, StaticMemberExpression, UnaryExpression, UnaryOperator,
+    PropertyKey, PropertyKind, SimpleAssignmentTarget, StaticMemberExpression, UnaryExpression,
+    UnaryOperator, UpdateExpression,
 };
 use oxc_span::{GetSpan, Span};
 
 use crate::{
     ParsedArrowFunction, ParsedArrowFunctionBody, ParsedBinaryOperator, ParsedCall,
     ParsedCallArgument, ParsedExpression, ParsedJsxAttribute, ParsedJsxAttributeValueKind,
-    ParsedJsxChild, ParsedLogicalOperator, ParsedObjectProperty, ParsedUnaryOperator, TextSpan,
+    ParsedJsxChild, ParsedLogicalOperator, ParsedObjectProperty, ParsedThisBinding,
+    ParsedUnaryOperator, TextSpan,
 };
 
 use super::spans::text_span_from_oxc_span;
@@ -59,11 +62,24 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         Expression::UnaryExpression(unary_expression) => {
             parse_unary_expression(unary_expression).unwrap_or(ParsedExpression::Unknown)
         }
+        Expression::UpdateExpression(update_expression) => {
+            parse_update_expression(update_expression).unwrap_or(ParsedExpression::Unknown)
+        }
+        Expression::FunctionExpression(function) => ParsedExpression::ArrowFunction(Box::new(
+            parse_function_expression(function),
+        )),
         Expression::ParenthesizedExpression(parenthesized_expression) => {
             return parse_expression(&parenthesized_expression.expression);
         }
         Expression::AwaitExpression(await_expression) => {
-            return parse_expression(&await_expression.argument);
+            let (operand, operand_span) = parse_expression(&await_expression.argument);
+            return (
+                ParsedExpression::Await {
+                    operand: Box::new(operand),
+                    operand_span: Some(text_span_from_oxc_span(operand_span)),
+                },
+                operand_span,
+            );
         }
         Expression::ConditionalExpression(conditional_expression) => {
             parse_conditional_expression(conditional_expression)
@@ -801,7 +817,16 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
                 non_null_expression.span,
             )
         }
-        _ => (ParsedExpression::Unknown, argument.span()),
+        // Every remaining argument form is an ordinary expression, and tsc
+        // checks it as one — `resolveUntypedCall` and the typed-call path both
+        // walk every argument through `checkExpression`. Falling through to the
+        // sentinel dropped whole `function`/`function*`/`async function`
+        // expressions (parameters *and* body went unchecked), along with JSX,
+        // `new`, template, tagged-template, `this` and update arguments.
+        other => match other.as_expression() {
+            Some(expression) => parse_expression(expression),
+            None => (ParsedExpression::Unknown, argument.span()),
+        },
     };
 
     ParsedCallArgument {
@@ -840,10 +865,12 @@ fn parse_arrow_function_expression(
     };
 
     Some(ParsedArrowFunction {
+        this_binding: ParsedThisBinding::Inherited,
         type_parameters: parse_type_parameters(arrow_expression.type_parameters.as_deref()),
         parameters,
         return_type,
         is_async: arrow_expression.r#async,
+        is_generator: false,
         body,
         body_reads: super::reads::collect_function_body_reads(&arrow_expression.body),
         span: Some(text_span_from_oxc_span(arrow_expression.span)),
@@ -967,9 +994,8 @@ pub(crate) fn parse_unary_expression(
         // evaluates to `string`. The rest have no modelled result, but dropping
         // the whole expression would stop their operands being checked at all.
         UnaryOperator::Typeof => ParsedUnaryOperator::Typeof,
-        UnaryOperator::BitwiseNot | UnaryOperator::Void | UnaryOperator::Delete => {
-            ParsedUnaryOperator::Discard
-        }
+        UnaryOperator::Delete => ParsedUnaryOperator::Delete,
+        UnaryOperator::BitwiseNot | UnaryOperator::Void => ParsedUnaryOperator::Discard,
     };
 
     let (operand, operand_span) = parse_expression(&unary_expression.argument);
@@ -1140,42 +1166,7 @@ fn parse_object_method_shorthand_named(
         return None;
     };
 
-    let mut parameters = function
-        .params
-        .items
-        .iter()
-        .filter_map(parse_function_parameter)
-        .collect::<Vec<_>>();
-    if let Some(rest) = function.params.rest.as_deref()
-        && let Some(rest_parameter) = super::functions::parse_rest_function_parameter(rest)
-    {
-        parameters.push(rest_parameter);
-    }
-
-    let return_type = function
-        .return_type
-        .as_ref()
-        .and_then(|annotation| parse_type_annotation(annotation));
-
-    let body = function
-        .body
-        .as_ref()
-        .map(|body| parse_statement_list_as_function_body(&body.statements))
-        .unwrap_or_default();
-
-    let arrow = ParsedArrowFunction {
-        type_parameters: parse_type_parameters(function.type_parameters.as_deref()),
-        parameters,
-        return_type,
-        is_async: function.r#async,
-        body: ParsedArrowFunctionBody::Block(body),
-        body_reads: function
-            .body
-            .as_ref()
-            .map(|body| super::reads::collect_function_body_reads(body))
-            .unwrap_or_default(),
-        span: Some(text_span_from_oxc_span(function.span)),
-    };
+    let arrow = function_as_arrow(function, ParsedThisBinding::Own);
 
     Some(ParsedObjectProperty {
         name,
@@ -1197,11 +1188,22 @@ pub(crate) fn parse_array_expression(
     let mut elements = Vec::new();
 
     for element in &array_expression.elements {
-        if element.is_spread() {
-            return None;
+        if element.is_elision() {
+            continue;
         }
 
-        if element.is_elision() {
+        // A spread element used to drop the *whole* literal, so `[...xs]` and
+        // `[...xs, tail]` — the commonest way to copy or extend an array — had
+        // no type at all and every diagnostic that depends on one went missing.
+        // Keep the operand and record that it stands for the elements of what
+        // it spreads.
+        if let ArrayExpressionElement::SpreadElement(spread) = element {
+            let (parsed_expression, span) = parse_expression(&spread.argument);
+            elements.push(crate::ParsedArrayElement {
+                expression: parsed_expression,
+                span: Some(text_span_from_oxc_span(span)),
+                spread: true,
+            });
             continue;
         }
 
@@ -1213,12 +1215,111 @@ pub(crate) fn parse_array_expression(
         elements.push(crate::ParsedArrayElement {
             expression: parsed_expression,
             span: Some(text_span_from_oxc_span(span)),
+            spread: false,
         });
     }
 
     Some(ParsedExpression::ArrayLiteral {
         elements,
         span: Some(text_span_from_oxc_span(array_expression.span())),
+    })
+}
+
+/// `x++` / `--o.p`. Without this the whole expression was dropped, so the
+/// operand was never even walked: neither its own errors nor the write it
+/// performs were checked.
+/// Lowers a `function` (expression or object-literal method) to the arrow shape
+/// the checker already knows how to walk. The `this` binding is what keeps the
+/// two apart afterwards: a method has its own, a plain function expression's is
+/// untyped.
+fn function_as_arrow(
+    function: &oxc_ast::ast::Function<'_>,
+    this_binding: ParsedThisBinding,
+) -> ParsedArrowFunction {
+    let mut parameters = function
+        .params
+        .items
+        .iter()
+        .filter_map(parse_function_parameter)
+        .collect::<Vec<_>>();
+    if let Some(rest) = function.params.rest.as_deref()
+        && let Some(rest_parameter) = parse_rest_function_parameter(rest)
+    {
+        parameters.push(rest_parameter);
+    }
+
+    ParsedArrowFunction {
+        this_binding,
+        type_parameters: parse_type_parameters(function.type_parameters.as_deref()),
+        parameters,
+        return_type: function
+            .return_type
+            .as_ref()
+            .and_then(|annotation| parse_type_annotation(annotation)),
+        is_async: function.r#async,
+        is_generator: function.generator,
+        body: ParsedArrowFunctionBody::Block(
+            function
+                .body
+                .as_ref()
+                .map(|body| parse_statement_list_as_function_body(&body.statements))
+                .unwrap_or_default(),
+        ),
+        body_reads: function
+            .body
+            .as_ref()
+            .map(|body| super::reads::collect_function_body_reads(body))
+            .unwrap_or_default(),
+        span: Some(text_span_from_oxc_span(function.span)),
+    }
+}
+
+/// `const f = function () { … }`. Without this the whole expression was dropped
+/// as `Unknown`, so nothing inside the body was checked at all.
+pub(crate) fn parse_function_expression(
+    function: &oxc_ast::ast::Function<'_>,
+) -> ParsedArrowFunction {
+    // oxc keeps a `this` parameter out of the parameter list; annotating it is
+    // what gives the body a typed `this`.
+    let this_binding = if function.this_param.is_some() {
+        ParsedThisBinding::Own
+    } else {
+        ParsedThisBinding::ImplicitAny
+    };
+    function_as_arrow(function, this_binding)
+}
+
+pub(crate) fn parse_update_expression(
+    update_expression: &UpdateExpression<'_>,
+) -> Option<ParsedExpression> {
+    // The operand is parsed into the same shape a *read* of it produces, so the
+    // checker resolves the updated binding exactly as it resolves the read.
+    let (operand, operand_span) = match &update_expression.argument {
+        SimpleAssignmentTarget::AssignmentTargetIdentifier(identifier) => (
+            ParsedExpression::Identifier {
+                name: identifier.name.to_string(),
+                span: Some(text_span_from_oxc_span(identifier.span)),
+            },
+            identifier.span,
+        ),
+        SimpleAssignmentTarget::StaticMemberExpression(member) => (
+            parse_static_member_expression(member)?,
+            member.span,
+        ),
+        SimpleAssignmentTarget::ComputedMemberExpression(member) => (
+            parse_computed_member_expression(member)?,
+            member.span,
+        ),
+        _ => return None,
+    };
+
+    if operand == ParsedExpression::Unknown {
+        return None;
+    }
+
+    Some(ParsedExpression::Update {
+        operand: Box::new(operand),
+        operand_span: Some(text_span_from_oxc_span(operand_span)),
     })
 }
 

@@ -68,6 +68,19 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
     });
     ctx.truncate_diagnostics(diagnostics_before);
 
+    // A generator returns a `Generator`/`AsyncGenerator`, not whatever its body
+    // completes with — surge does not model that shape, so the sketch stays at
+    // the sentinel rather than claiming `void` and binding a caller's type
+    // parameter to it (`run(async function* () { yield 'a' })`).
+    if arrow_function.is_generator && declared_return_type.is_none() {
+        return alloc_function_type(
+            parameters,
+            Type::Unknown,
+            false,
+            required_parameter_count(arrow_function.parameters.as_slice()),
+        );
+    }
+
     let return_type = match &arrow_function.body {
         ParsedArrowFunctionBody::Expression(expression) => {
             declared_return_type.unwrap_or_else(|| {

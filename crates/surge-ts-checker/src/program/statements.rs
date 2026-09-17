@@ -21,8 +21,10 @@ pub(crate) fn check_program_file_statements(
     function_signatures: &HashMap<FunctionDeclarationLocation, FunctionType>,
     ctx: &mut CheckerContext,
 ) {
+    let classes = super::forward_references::file_class_declarations(statements);
     for (statement_index, statement) in statements.iter().cloned().enumerate() {
         let statement = expand_module_if_alias(statement, &statements[..statement_index]);
+        super::forward_references::check_statement_forward_references(&statement, &classes, ctx);
         check_program_statement(
             statement,
             file_index,
@@ -491,7 +493,9 @@ pub(crate) fn check_program_statement(
         ParsedStatement::If(if_statement) => check_module_if_statement(&if_statement, ctx),
         ParsedStatement::Block(statements) => check_module_block(statements, ctx),
         ParsedStatement::TypeAliasDeclaration(_) => {}
-        ParsedStatement::InterfaceDeclaration(_) => {}
+        ParsedStatement::InterfaceDeclaration(interface) => {
+            super::heritage::check_interface_heritage(&interface, ctx);
+        }
         ParsedStatement::ClassDeclaration(class) => {
             super::check_class_declaration(&class, ctx);
         }

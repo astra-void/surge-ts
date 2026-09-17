@@ -1499,6 +1499,29 @@ fn exactly_one_callback_slot(left: &Type, right: &Type) -> bool {
 /// is variadic if either overload is. The shorter overload's return type is kept
 /// as the representative, matching the most basic form (e.g. `Array.from`'s
 /// `T[]`).
+/// surge models a resolved `Promise<T>` as its awaited `T` (the implicit-await
+/// modelling in `resolve_interface`), so one overload whose return reached that
+/// collapse and one that still holds the `Promise<T>` reference denote the same
+/// type — `tsc` keeps a signature per declaration and never sees a difference.
+/// Degrading the merged return over that silenced every check downstream of a
+/// global declared in two files: `fetch`, declared by both `lib.dom` and
+/// `@types/node`, answered the sentinel for its own result. Returns the wrapped
+/// form, so the merged signature still displays the way `tsc` prints it.
+fn promise_collapsed_pair_return(left: &Type, right: &Type) -> Option<Type> {
+    let left_awaited = crate::checks::call::promise_like_awaited_type(left);
+    let right_awaited = crate::checks::call::promise_like_awaited_type(right);
+    if left_awaited != right_awaited {
+        return None;
+    }
+    if &left_awaited != left {
+        return Some(left.clone());
+    }
+    if &right_awaited != right {
+        return Some(right.clone());
+    }
+    None
+}
+
 pub(crate) fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> FunctionType {
     let canonical_merge = a
         .id()
@@ -1572,10 +1595,12 @@ pub(crate) fn merge_overload_signatures(a: &FunctionType, b: &FunctionType) -> F
     // `$ZodFormattedError<T, U>`) against the no-argument overload's
     // `$ZodFormattedError<T>`. Extending this from the one-unresolved-return case
     // to every disagreement cost no false negatives on any corpus.
-    let return_type = if a.return_type() != b.return_type() {
-        Type::Unknown
-    } else {
+    let return_type = if a.return_type() == b.return_type() {
         shorter.return_type().clone()
+    } else if let Some(wrapped) = promise_collapsed_pair_return(a.return_type(), b.return_type()) {
+        wrapped
+    } else {
+        Type::Unknown
     };
     let merged = [a, b]
         .into_iter()

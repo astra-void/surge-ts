@@ -63,6 +63,7 @@ pub(crate) fn parse_function_declaration_named(
         .unwrap_or_default();
 
     Some(ParsedFunctionDeclaration {
+        has_this_parameter: function.this_param.is_some(),
         is_declare: function.declare,
         name,
         name_span,

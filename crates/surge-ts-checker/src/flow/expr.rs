@@ -146,6 +146,20 @@ pub(crate) fn check_expression_flow_impl(
             statement_index,
             ctx,
         ),
+        ParsedExpression::Update {
+            operand,
+            operand_span,
+        }
+        | ParsedExpression::Await {
+            operand,
+            operand_span,
+        } => check_expression_flow_impl(
+            operand,
+            operand_span.or(fallback_span),
+            flow_state,
+            statement_index,
+            ctx,
+        ),
         ParsedExpression::Binary {
             left,
             left_span,

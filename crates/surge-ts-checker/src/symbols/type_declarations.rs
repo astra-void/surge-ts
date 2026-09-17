@@ -307,6 +307,20 @@ pub(crate) fn merge_interface_infos(
     existing: &InterfaceInfo,
     incoming: &InterfaceInfo,
 ) -> InterfaceInfo {
+    // The same physical declarations folded in twice duplicate every member and
+    // every heritage clause: `declaration_fragments` chains without dedup, and
+    // an augmentation can now reach a consumer both through the target's own
+    // declaration table and through the specifier-keyed export-table patch.
+    if !incoming.body.declaration_fragments.is_empty()
+        && incoming
+            .body
+            .declaration_fragments
+            .iter()
+            .all(|fragment| existing.body.declaration_fragments.contains(fragment))
+    {
+        return existing.clone();
+    }
+
     let is_method = |member: &ParsedInterfaceMember| matches!(member.ty, ParsedType::Function(_));
     let existing_property_names: std::collections::HashSet<&str> = existing
         .body

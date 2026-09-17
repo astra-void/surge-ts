@@ -809,6 +809,22 @@ pub(crate) fn check_function_try_statement(
         );
         scopes.pop_child();
     } else {
+        // The same join the flow-active path performs. It is not conditional on
+        // definite-assignment tracking: reaching the code after a `try` whose
+        // handler diverts means the block completed, so what it narrowed holds
+        // — and a body with no tracked locals still narrows (`context.response
+        // = await fetch(…)` inside `try`, read after it, in ofetch).
+        let handler_diverts = try_statement.handler.as_ref().is_none_or(|handler| {
+            let flow = analyze_function_body_flow(&handler.body);
+            flow.guarantees_value_return || flow.guarantees_exit
+        });
+        let mut joinable_assignments = Vec::new();
+        if handler_diverts
+            && !analyze_function_body_flow(&try_statement.block).guarantees_value_return
+        {
+            branch_assigned_names(&try_statement.block, &mut joinable_assignments);
+        }
+
         scopes.push_child();
         check_function_body(
             try_statement.block,
@@ -817,7 +833,9 @@ pub(crate) fn check_function_try_statement(
             flow_state,
             ctx,
         );
+        let try_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
         scopes.pop_child();
+        adopt_branch_assignments(&try_assignment_types, scopes);
 
         if let Some(handler_clause) = try_statement.handler {
             scopes.push_child();

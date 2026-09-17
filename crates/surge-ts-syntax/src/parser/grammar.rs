@@ -12,7 +12,8 @@ use oxc_ast::ast::{
     ForInStatement, ForOfStatement, FormalParameters, Function, FunctionBody, MethodDefinitionKind,
     MethodDefinitionType, ModuleExportName, ObjectExpression, ObjectPropertyKind, Program,
     PropertyDefinitionType, PropertyKey, PropertyKind, Statement, TSGlobalDeclaration,
-    TSMethodSignature, TSMethodSignatureKind, TSModuleDeclaration, TSModuleDeclarationBody,
+    TSEnumMemberName, TSMethodSignature, TSMethodSignatureKind, TSModuleDeclaration,
+    TSModuleDeclarationBody,
     TSPropertySignature, TSSignature, VariableDeclaration, VariableDeclarationKind,
 };
 use oxc_ast_visit::Visit;
@@ -31,6 +32,9 @@ pub(crate) fn collect_grammar_diagnostics(program: &Program<'_>) -> Vec<ParsedGr
 #[derive(Default)]
 struct GrammarCollector {
     diagnostics: Vec<ParsedGrammarDiagnostic>,
+    /// Whether the file is strict-mode code, which a few rules are specific to.
+    /// An ES module always is; a script only with an explicit `"use strict"`.
+    strict_mode: bool,
     /// `declare namespace`/`declare module` nesting. An ambient container makes
     /// a bodyless declaration legal, so the implementation-missing checks stay
     /// quiet inside one.
@@ -769,6 +773,11 @@ fn property_key_name(key: &PropertyKey<'_>) -> Option<String> {
 
 impl<'a> Visit<'a> for GrammarCollector {
     fn visit_program(&mut self, program: &Program<'a>) {
+        self.strict_mode = program.source_type.is_module()
+            || program
+                .directives
+                .iter()
+                .any(|directive| directive.directive == "use strict");
         self.check_default_exports(&program.body);
         self.check_function_implementations(&program.body);
         oxc_ast_visit::walk::walk_program(self, program);
@@ -777,6 +786,51 @@ impl<'a> Visit<'a> for GrammarCollector {
     fn visit_function_body(&mut self, body: &FunctionBody<'a>) {
         self.check_function_implementations(&body.statements);
         oxc_ast_visit::walk::walk_function_body(self, body);
+    }
+
+    // An enum member initializer may only name members declared before it: the
+    // members are evaluated in order, so a forward reference reads a binding
+    // that does not have its value yet (tsc's `checkEnumDeclaration`, TS2651).
+    fn visit_ts_enum_declaration(&mut self, declaration: &oxc_ast::ast::TSEnumDeclaration<'a>) {
+        let mut declared_so_far: Vec<&str> = Vec::new();
+        let member_names: Vec<Option<String>> = declaration
+            .body
+            .members
+            .iter()
+            .map(|member| property_key_name_of_enum_member(&member.id))
+            .collect();
+
+        for (index, member) in declaration.body.members.iter().enumerate() {
+            if let Some(initializer) = &member.initializer {
+                let later: Vec<&str> = member_names
+                    .iter()
+                    .skip(index)
+                    .filter_map(|name| name.as_deref())
+                    .collect();
+                report_enum_forward_references(self, initializer, &later);
+            }
+            if let Some(name) = member_names[index].as_deref() {
+                declared_so_far.push(name);
+            }
+        }
+
+        oxc_ast_visit::walk::walk_ts_enum_declaration(self, declaration);
+    }
+
+    // `delete x` on a direct binding reference is a strict-mode syntax error
+    // (tsc's `checkStrictModeDeleteExpression`, binder.go:1409). `delete o.p`,
+    // the legal form, is checked by the checker's own operand rules.
+    fn visit_unary_expression(&mut self, unary: &oxc_ast::ast::UnaryExpression<'a>) {
+        if unary.operator == UnaryOperator::LogicalNot {
+            self.check_truthiness(&unary.argument);
+        }
+        if self.strict_mode
+            && unary.operator == oxc_syntax::operator::UnaryOperator::Delete
+            && let Expression::Identifier(identifier) = &unary.argument
+        {
+            self.push(Kind::DeleteOnIdentifierInStrictMode, identifier.span, None);
+        }
+        oxc_ast_visit::walk::walk_unary_expression(self, unary);
     }
 
     // `declare global { … }` is its own node, and everything inside it is
@@ -818,13 +872,6 @@ impl<'a> Visit<'a> for GrammarCollector {
     fn visit_ts_type_literal(&mut self, literal: &oxc_ast::ast::TSTypeLiteral<'a>) {
         self.check_interface_members(&literal.members);
         oxc_ast_visit::walk::walk_ts_type_literal(self, literal);
-    }
-
-    fn visit_unary_expression(&mut self, unary: &oxc_ast::ast::UnaryExpression<'a>) {
-        if unary.operator == UnaryOperator::LogicalNot {
-            self.check_truthiness(&unary.argument);
-        }
-        oxc_ast_visit::walk::walk_unary_expression(self, unary);
     }
 
     fn visit_if_statement(&mut self, statement: &oxc_ast::ast::IfStatement<'a>) {
@@ -955,5 +1002,46 @@ impl<'a> Visit<'a> for GrammarCollector {
     fn visit_for_in_statement(&mut self, statement: &ForInStatement<'a>) {
         self.visit_expression(&statement.right);
         self.visit_statement(&statement.body);
+    }
+}
+
+fn property_key_name_of_enum_member(name: &TSEnumMemberName<'_>) -> Option<String> {
+    match name {
+        TSEnumMemberName::Identifier(identifier) => Some(identifier.name.to_string()),
+        TSEnumMemberName::String(literal) => Some(literal.value.to_string()),
+        _ => None,
+    }
+}
+
+/// Reports every identifier in `expression` naming one of `later`. The walk
+/// covers the expression forms an enum initializer may take — an enum member
+/// must be a constant expression, so there are no function bodies to stop at.
+fn report_enum_forward_references(
+    collector: &mut GrammarCollector,
+    expression: &Expression<'_>,
+    later: &[&str],
+) {
+    match expression {
+        Expression::Identifier(identifier) => {
+            if later.contains(&identifier.name.as_str()) {
+                collector.push(Kind::EnumForwardReference, identifier.span, None);
+            }
+        }
+        Expression::BinaryExpression(binary) => {
+            report_enum_forward_references(collector, &binary.left, later);
+            report_enum_forward_references(collector, &binary.right, later);
+        }
+        Expression::UnaryExpression(unary) => {
+            report_enum_forward_references(collector, &unary.argument, later);
+        }
+        Expression::ParenthesizedExpression(parenthesized) => {
+            report_enum_forward_references(collector, &parenthesized.expression, later);
+        }
+        Expression::TemplateLiteral(template) => {
+            for interpolation in &template.expressions {
+                report_enum_forward_references(collector, interpolation, later);
+            }
+        }
+        _ => {}
     }
 }

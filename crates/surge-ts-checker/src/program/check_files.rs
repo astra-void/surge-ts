@@ -832,6 +832,8 @@ pub(crate) fn emit_grammar_diagnostics(
     for finding in findings {
         let diagnostic = match finding.kind {
             Kind::ConstNotInitialized => Diagnostic::ts1155(ctx.file_name.clone()),
+            Kind::DeleteOnIdentifierInStrictMode => Diagnostic::ts1102(ctx.file_name.clone()),
+            Kind::EnumForwardReference => Diagnostic::ts2651(ctx.file_name.clone()),
             Kind::DuplicateObjectLiteralProperty => Diagnostic::ts1117(ctx.file_name.clone()),
             Kind::FunctionImplementationMissing => Diagnostic::ts2391(ctx.file_name.clone()),
             Kind::ConstructorImplementationMissing => Diagnostic::ts2390(ctx.file_name.clone()),

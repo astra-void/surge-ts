@@ -11,6 +11,12 @@ use crate::metrics::alloc_object_type;
 fn mapped_key_is_open(constraint: &Type) -> bool {
     match constraint {
         Type::String | Type::Number | Type::Symbol => true,
+        // `any` is a key tsc accepts too, and it lands on the *string* index:
+        // `resolveMappedTypeMembers` takes the `TypeFlagsAny` branch and rewrites
+        // `indexKeyType` to `stringType`, which is why `Record<any, any>` is
+        // `{ [x: string]: any }`. Without it the mapped type degraded to the
+        // sentinel, and `T extends Record<any, any>` then answered backwards.
+        Type::Any => true,
         Type::Union(union) => union.types().iter().any(mapped_key_is_open),
         _ => false,
     }
@@ -21,6 +27,13 @@ fn mapped_key_is_open(constraint: &Type) -> bool {
 /// literal's numeric key does, while the key parameter stays the number literal.
 fn mapped_literal_keys(constraint: &Type) -> Option<Vec<(String, Type)>> {
     match constraint {
+        // An empty key set maps to an empty object, not a failure: tsc's
+        // `resolveMappedTypeMembers` walks the constraint's constituents and a
+        // `never` constraint simply contributes none, leaving the members
+        // table empty. Answering `None` here degraded `{ [K in keyof R]: … }`
+        // with `R = {}` to the sentinel, and `keyof` of that then decided a
+        // conditional from a type surge never resolved.
+        Type::Never => Some(Vec::new()),
         Type::StringLiteral(value) => Some(vec![(value.clone(), constraint.clone())]),
         Type::NumberLiteral(literal) => Some(vec![(literal.value.clone(), constraint.clone())]),
         Type::Union(union) => {
@@ -80,6 +93,18 @@ pub(crate) fn resolve_mapped_type(
     // fast path. Without this the mapped type collapsed to `unknown`, which
     // surfaced as a spurious missing-property error on every read.
     if mapped_key_is_open(&resolved_constraint.ty) {
+        // The literal-key branch below budgets its expansion; this one resolves
+        // the template just the same and needs the same ceiling. It went
+        // unguarded only because an open key used to be rare — once `any` keys
+        // stopped degrading, drizzle's `Omit`/`Readonly`/intersection chain
+        // expanded here without bound and the check never terminated.
+        let _expansion_scope = TypeExpansionScope::enter();
+        if !try_consume_type_expansion_step() {
+            return ResolvedType {
+                ty: Type::Unknown,
+                had_error: false,
+            };
+        }
         let mut value_substitution =
             substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
         value_substitution.insert(mapped.key_name.clone(), resolved_constraint.ty.clone());

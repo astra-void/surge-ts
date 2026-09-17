@@ -16,6 +16,7 @@ fn codes(diagnostics: &[surge_ts_diagnostics::Diagnostic]) -> Vec<String> {
 fn check(source_text: &str) -> Vec<surge_ts_diagnostics::Diagnostic> {
     let options = CheckerOptions {
         no_implicit_any: true,
+        strict_property_initialization: false,
         ..CheckerOptions::default()
     };
     check_source_with_options(source_text, "example.ts", options)
@@ -119,6 +120,7 @@ fn a_numeric_key_prefers_the_number_index_when_both_are_declared() {
 fn an_element_write_narrows_the_element_read() {
     let options = CheckerOptions {
         no_implicit_any: true,
+        strict_property_initialization: false,
         no_unchecked_indexed_access: true,
         ..CheckerOptions::default()
     };

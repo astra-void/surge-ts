@@ -51,8 +51,8 @@ pub fn check_source_with_options(
     }
     ctx.set_symbols(merged_sym);
 
-    for message in parsed.parser_errors {
-        let diagnostic = Diagnostic::surge_parser_error(message, file_name.clone());
+    for error in &parsed.parser_errors {
+        let diagnostic = crate::program::diagnostics::parser_error_diagnostic(error, &file_name);
         ctx.push(diagnostic);
     }
     crate::program::emit_grammar_diagnostics(&parsed.grammar_diagnostics, &mut ctx);
@@ -1189,7 +1189,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                         ctx.file_name_arc(),
                                         specifier.name_span,
                                         vec![],
-                                        surge_ts_syntax::ParsedType::Unknown,
+                                        surge_ts_syntax::ParsedType::ErrorType,
                                         None,
                                     ),
                                 );
@@ -1203,7 +1203,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                         ctx.file_name_arc(),
                                         specifier.name_span,
                                         vec![],
-                                        surge_ts_syntax::ParsedType::Unknown,
+                                        surge_ts_syntax::ParsedType::ErrorType,
                                         None,
                                     ),
                                 );
@@ -1234,7 +1234,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                     ctx.file_name_arc(),
                                     *name_span,
                                     vec![],
-                                    surge_ts_syntax::ParsedType::Unknown,
+                                    surge_ts_syntax::ParsedType::ErrorType,
                                     None,
                                 ),
                             );
@@ -1260,7 +1260,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                         ctx.file_name_arc(),
                                         specifier.name_span,
                                         vec![],
-                                        surge_ts_syntax::ParsedType::Unknown,
+                                        surge_ts_syntax::ParsedType::ErrorType,
                                         None,
                                     ),
                                 );
@@ -1274,7 +1274,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                         ctx.file_name_arc(),
                                         specifier.name_span,
                                         vec![],
-                                        surge_ts_syntax::ParsedType::Unknown,
+                                        surge_ts_syntax::ParsedType::ErrorType,
                                         None,
                                     ),
                                 );
@@ -1314,7 +1314,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
                                     ctx.file_name_arc(),
                                     None,
                                     vec![],
-                                    surge_ts_syntax::ParsedType::Unknown,
+                                    surge_ts_syntax::ParsedType::ErrorType,
                                     None,
                                 ),
                             );

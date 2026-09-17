@@ -562,8 +562,25 @@ fn check_children(
             ParsedJsxChild::Text => content_children.push(ChildContent::Text),
             ParsedJsxChild::Expression { expression, span } => {
                 if let Some(expression) = expression {
+                    // The element's own props say nothing about a callback
+                    // nested inside a child expression: `{items.map((item) =>
+                    // …)}` takes its parameter types from `map`, not from this
+                    // tag, and tsc reports it whatever the tag resolved to.
+                    // Only a *render prop* — a function written directly as the
+                    // child — is contextually typed by `props.children`, so the
+                    // suppression is kept for that one shape.
+                    // The suppression is cleared outright, not decremented:
+                    // a child expression sits outside the props context of
+                    // *every* enclosing element, and a nested tag raises the
+                    // depth again, so stepping down by one left it elevated.
+                    let release = !matches!(expression, ParsedExpression::ArrowFunction(_));
+                    let saved_depth = ctx.unmodelled_jsx_props_depth;
+                    if release {
+                        ctx.unmodelled_jsx_props_depth = 0;
+                    }
                     let inferred =
                         evaluate_expression(expression, span.or(fallback_span), symbols, ctx);
+                    ctx.unmodelled_jsx_props_depth = saved_depth;
                     let child_type = match inferred {
                         InferredExpression::Known(ty) if !ty.is_unknown() => Some(ty),
                         _ => None,

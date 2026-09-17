@@ -159,6 +159,9 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             types: Vec::new(),
             stub_external_modules: false,
             no_implicit_any: loaded.compiler_options.no_implicit_any,
+            strict_property_initialization: loaded
+                .compiler_options
+                .strict_property_initialization,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,

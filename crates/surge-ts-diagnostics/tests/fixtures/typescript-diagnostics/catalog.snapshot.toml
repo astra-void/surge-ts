@@ -185,6 +185,22 @@ message = "'{0}' is possibly 'undefined'."
 arity = 1
 
 [[diagnostic]]
+code = "TS2571"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Object is of type 'unknown'."
+arity = 0
+
+[[diagnostic]]
+code = "TS18050"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The value '{0}' cannot be used here."
+arity = 1
+
+[[diagnostic]]
 code = "TS2339"
 category = "Error"
 source = "typescript"
@@ -252,7 +268,7 @@ arity = 0
 code = "TS2356"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type."
 arity = 0
 
@@ -1023,4 +1039,580 @@ source = "surge-ts"
 support = "emitted"
 message = "Type declaration '{0}' circularly references itself."
 arity = 1
+
+[[diagnostic]]
+code = "TS2703"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The operand of a 'delete' operator must be a property reference."
+arity = 0
+
+[[diagnostic]]
+code = "TS2704"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The operand of a 'delete' operator cannot be a read-only property."
+arity = 0
+
+[[diagnostic]]
+code = "TS2790"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The operand of a 'delete' operator must be optional."
+arity = 0
+
+[[diagnostic]]
+code = "TS18011"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "The operand of a 'delete' operator cannot be a private identifier."
+arity = 0
+
+[[diagnostic]]
+code = "TS1102"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'delete' cannot be called on an identifier in strict mode."
+arity = 0
+
+[[diagnostic]]
+code = "TS2358"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of an 'instanceof' expression must be of type 'any', an object type or a type parameter."
+arity = 0
+
+[[diagnostic]]
+code = "TS2698"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Spread types may only be created from object types."
+arity = 0
+
+[[diagnostic]]
+code = "TS2416"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' in type '{1}' is not assignable to the same property in base type '{2}'."
+arity = 3
+
+[[diagnostic]]
+code = "TS2430"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Interface '{0}' incorrectly extends interface '{1}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS2564"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' has no initializer and is not definitely assigned in the constructor."
+arity = 1
+
+[[diagnostic]]
+code = "TS2403"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Subsequent variable declarations must have the same type.  Variable '{0}' must be of type '{1}', but here has type '{2}'."
+arity = 3
+
+[[diagnostic]]
+code = "TS2449"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class '{0}' used before its declaration."
+arity = 1
+
+[[diagnostic]]
+code = "TS2651"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A member initializer in a enum declaration cannot reference members declared after it, including members defined in other enums."
+arity = 0
+
+[[diagnostic]]
+code = "TS2729"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' is used before its initialization."
+arity = 1
+
+[[diagnostic]]
+code = "TS2683"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "'this' implicitly has type 'any' because it does not have a type annotation."
+arity = 0
+
+[[diagnostic]]
+code = "TS1019"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "An index signature parameter cannot have a question mark."
+arity = 0
+
+[[diagnostic]]
+code = "TS1021"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An index signature must have a type annotation."
+arity = 0
+
+[[diagnostic]]
+code = "TS1024"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'readonly' modifier can only appear on a property declaration or index signature."
+arity = 0
+
+[[diagnostic]]
+code = "TS1028"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Accessibility modifier already seen."
+arity = 0
+
+[[diagnostic]]
+code = "TS1047"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "A rest parameter cannot be optional."
+arity = 0
+
+[[diagnostic]]
+code = "TS1051"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "A 'set' accessor cannot have an optional parameter."
+arity = 0
+
+[[diagnostic]]
+code = "TS1092"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type parameters cannot appear on a constructor declaration."
+arity = 0
+
+[[diagnostic]]
+code = "TS1093"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type annotation cannot appear on a constructor declaration."
+arity = 0
+
+[[diagnostic]]
+code = "TS1096"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An index signature must have exactly one parameter."
+arity = 0
+
+[[diagnostic]]
+code = "TS1098"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Type parameter list cannot be empty."
+arity = 0
+
+[[diagnostic]]
+code = "TS1099"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Type argument list cannot be empty."
+arity = 0
+
+[[diagnostic]]
+code = "TS1108"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'return' statement can only be used within a function body."
+arity = 0
+
+[[diagnostic]]
+code = "TS1141"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "String literal expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1164"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Computed property names are not allowed in enums."
+arity = 0
+
+[[diagnostic]]
+code = "TS1172"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'extends' clause already seen."
+arity = 0
+
+[[diagnostic]]
+code = "TS1173"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'extends' clause must precede 'implements' clause."
+arity = 0
+
+[[diagnostic]]
+code = "TS1174"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Classes can only extend a single class."
+arity = 0
+
+[[diagnostic]]
+code = "TS1175"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'implements' clause already seen."
+arity = 0
+
+[[diagnostic]]
+code = "TS1176"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Interface declaration cannot have 'implements' clause."
+arity = 0
+
+[[diagnostic]]
+code = "TS1183"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "An implementation cannot be declared in ambient contexts."
+arity = 0
+
+[[diagnostic]]
+code = "TS1184"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Modifiers cannot appear here."
+arity = 0
+
+[[diagnostic]]
+code = "TS1187"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A parameter property may not be declared using a binding pattern."
+arity = 0
+
+[[diagnostic]]
+code = "TS1249"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "A decorator can only decorate a method implementation, not an overload."
+arity = 0
+
+[[diagnostic]]
+code = "TS1257"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A required element cannot follow an optional element."
+arity = 0
+
+[[diagnostic]]
+code = "TS1263"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Declarations with initializers cannot also have definite assignment assertions."
+arity = 0
+
+[[diagnostic]]
+code = "TS1264"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Declarations with definite assignment assertions must also have type annotations."
+arity = 0
+
+[[diagnostic]]
+code = "TS1265"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A rest element cannot follow another rest element."
+arity = 0
+
+[[diagnostic]]
+code = "TS1266"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An optional element cannot follow a rest element."
+arity = 0
+
+[[diagnostic]]
+code = "TS1276"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An 'accessor' property cannot be declared optional."
+arity = 0
+
+[[diagnostic]]
+code = "TS1318"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "An abstract accessor cannot have an implementation."
+arity = 0
+
+[[diagnostic]]
+code = "TS1354"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "'readonly' type modifier is only permitted on array and tuple literal types."
+arity = 0
+
+[[diagnostic]]
+code = "TS1363"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "A type-only import can specify a default import or named bindings, but not both."
+arity = 0
+
+[[diagnostic]]
+code = "TS1477"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "An instantiation expression cannot be followed by a property access."
+arity = 0
+
+[[diagnostic]]
+code = "TS1490"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "File appears to be binary."
+arity = 0
+
+[[diagnostic]]
+code = "TS1502"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "The Unicode (u) flag and the Unicode Sets (v) flag cannot be set simultaneously."
+arity = 0
+
+[[diagnostic]]
+code = "TS1545"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "'using' declarations are not allowed in ambient contexts."
+arity = 0
+
+[[diagnostic]]
+code = "TS1546"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "'await using' declarations are not allowed in ambient contexts."
+arity = 0
+
+[[diagnostic]]
+code = "TS2206"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "The 'type' modifier cannot be used on a named import when 'import type' is used on its import statement."
+arity = 0
+
+[[diagnostic]]
+code = "TS2207"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "The 'type' modifier cannot be used on a named export when 'export type' is used on its export statement."
+arity = 0
+
+[[diagnostic]]
+code = "TS2452"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An enum member cannot have a numeric name."
+arity = 0
+
+[[diagnostic]]
+code = "TS2499"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "An interface can only extend an identifier/qualified-name with optional type arguments."
+arity = 0
+
+[[diagnostic]]
+code = "TS2566"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "A rest element cannot have a property name."
+arity = 0
+
+[[diagnostic]]
+code = "TS2681"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A constructor cannot have a 'this' parameter."
+arity = 0
+
+[[diagnostic]]
+code = "TS2730"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An arrow function cannot have a 'this' parameter."
+arity = 0
+
+[[diagnostic]]
+code = "TS2784"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "'get' and 'set' accessors cannot declare 'this' parameters."
+arity = 0
+
+[[diagnostic]]
+code = "TS5085"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "A tuple member cannot be both optional and rest."
+arity = 0
+
+[[diagnostic]]
+code = "TS5086"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "A labeled tuple element is declared as optional with a question mark after the name and before the colon, rather than after the type."
+arity = 0
+
+[[diagnostic]]
+code = "TS5087"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "A labeled tuple element is declared as rest with a '...' before the name, rather than before the type."
+arity = 0
+
+[[diagnostic]]
+code = "TS8002"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "'import ... =' can only be used in TypeScript files."
+arity = 0
+
+[[diagnostic]]
+code = "TS8005"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "'implements' clauses can only be used in TypeScript files."
+arity = 0
+
+[[diagnostic]]
+code = "TS8012"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Parameter modifiers can only be used in TypeScript files."
+arity = 0
+
+[[diagnostic]]
+code = "TS8016"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Type assertion expressions can only be used in TypeScript files."
+arity = 0
+
+[[diagnostic]]
+code = "TS8037"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Type satisfaction expressions can only be used in TypeScript files."
+arity = 0
+
+[[diagnostic]]
+code = "TS17000"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "JSX attributes must only be assigned a non-empty 'expression'."
+arity = 0
+
+[[diagnostic]]
+code = "TS18010"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An accessibility modifier cannot be used with a private identifier."
+arity = 0
+
+[[diagnostic]]
+code = "TS18058"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Default imports are not allowed in a deferred import."
+arity = 0
+
+[[diagnostic]]
+code = "TS18059"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Named imports are not allowed in a deferred import."
+arity = 0
 

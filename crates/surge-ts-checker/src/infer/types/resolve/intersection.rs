@@ -294,6 +294,29 @@ fn dedup_identical_operands(members: Vec<Type>) -> Vec<Type> {
         .collect()
 }
 
+/// `SURGE_DISTRIBUTE_REFERENCE_UNIONS=1`: distribute an intersection over a
+/// union that sits behind a nominal reference, as tsc's `getIntersectionType`
+/// cross product does (`X & (A | B)` becomes `X & A | X & B`). Matching only a
+/// bare `Type::Union` operand leaves `ComponentType<P> & { getInitialProps? }`
+/// with the object operand alone — no call signature — so every
+/// `const App: AppType = (props) => …` is a false TS2322.
+///
+/// Off because a *downstream* divergence makes it a net loss (measured
+/// 2026-09-16, trpc FN 55 -> 70, FP 2 -> 4): with it on, jscodeshift's
+/// `JSCodeshift = Core & typeof namedTypes & typeof builders` merges down to the
+/// `namedTypes` operand alone — `Object(call=false, props=[Printable, …])` — so
+/// `j(file.source)` is a false TS2349 and the 15 diagnostics behind it go
+/// silent. `Core`'s *overloaded* call signatures are what get lost; surge's
+/// `ObjectType` carries a single `call_signature`. The instantiation budget is
+/// not the cause (`SURGE_ROOT_WORK_TRIP` reports zero trips), and the union call
+/// path is not either (`check_callable_union_call` never bails on this corpus).
+/// Fix the merge's handling of an overloaded operand first, then turn this on.
+fn distribute_reference_unions() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED
+        .get_or_init(|| std::env::var("SURGE_DISTRIBUTE_REFERENCE_UNIONS").as_deref() == Ok("1"))
+}
+
 pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
     let (members, unwrapped_open) = flatten_deferred_intersections(members);
     if members.iter().any(|ty| matches!(ty, Type::Any)) {
@@ -383,6 +406,14 @@ pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
         .enumerate()
         .filter_map(|(index, ty)| match ty {
             Type::Union(union) => Some((index, union.types().to_vec())),
+            // tsc's `getIntersectionType` builds the cross product from the
+            // *resolved* constituents, so a union behind a nominal reference
+            // distributes like a bare one. See
+            // [`distribute_reference_unions`] for why this is opt-in.
+            Type::Reference(_) if distribute_reference_unions() => match ty.peeled() {
+                Type::Union(union) => Some((index, union.types().to_vec())),
+                _ => None,
+            },
             _ => None,
         })
         .collect();

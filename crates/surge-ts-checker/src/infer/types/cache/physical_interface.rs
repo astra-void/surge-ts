@@ -505,7 +505,7 @@ pub(super) fn canonical_type_identity(
             .clone()
             .map(CanonicalTypeIdentity::NamedObject)
             .ok_or(InterfaceCacheSkipReason::UnsupportedTypeArgument),
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+        Type::Unknown | Type::GenuineUnknown | Type::ErrorType | Type::TypeParameter(_) => {
             Err(InterfaceCacheSkipReason::UnresolvedTypeArgument)
         }
         Type::Union(union) if widened => {

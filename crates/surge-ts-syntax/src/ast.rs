@@ -1,8 +1,22 @@
+/// A parse failure, kept in the shape tsc reports rather than flattened to a
+/// rendered string. oxc already computes a TS code and a span for the
+/// TypeScript-specific failures (`ts_error` in its `diagnostics` module), and
+/// both are needed to report one the way tsc does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParserError {
+    /// The TypeScript error number when oxc classified the failure as one
+    /// (`TS1172` -> `1172`); `None` for a generic parse failure.
+    pub code: Option<u32>,
+    /// oxc's own rendering, used when the code is unknown or uncatalogued.
+    pub message: String,
+    pub span: Option<TextSpan>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedSource {
     pub file_name: String,
     pub statements: Vec<ParsedStatement>,
-    pub parser_errors: Vec<String>,
+    pub parser_errors: Vec<ParserError>,
     pub is_module: bool,
     /// Leading `/// <reference types="..." />` directives, in source order.
     pub reference_type_directives: Vec<ReferenceTypeDirective>,
@@ -48,6 +62,11 @@ pub struct ParsedGrammarDiagnostic {
 pub enum ParsedGrammarDiagnosticKind {
     /// `const x;` outside an ambient context — TS1155.
     ConstNotInitialized,
+    /// `delete someBinding` in strict-mode code — TS1102. Only a *direct*
+    /// reference to a binding is a syntax error; `delete o.p` is the legal form.
+    DeleteOnIdentifierInStrictMode,
+    /// An enum member initializer naming a member declared after it — TS2651.
+    EnumForwardReference,
     /// A second property of the same name in one object literal — TS1117.
     DuplicateObjectLiteralProperty,
     /// An overload group with no implementation — TS2391.
@@ -184,6 +203,10 @@ pub enum ParsedType {
     Undefined,
     Void,
     Any,
+    /// A type the source itself does not resolve (an unresolved name, or a
+    /// name imported from a module that does not resolve). tsc models this as
+    /// `errorType`; see [`surge_ts_types::Type::ErrorType`].
+    ErrorType,
     Unknown,
     /// The genuine `unknown` keyword, kept distinct from [`ParsedType::Unknown`]
     /// (which doubles as surge's conservative degrade target for `intrinsic`
@@ -259,6 +282,7 @@ impl Clone for ParsedType {
             Self::Void => Self::Void,
             Self::Any => Self::Any,
             Self::Unknown => Self::Unknown,
+            Self::ErrorType => Self::ErrorType,
             Self::UnknownKeyword => Self::UnknownKeyword,
             Self::Never => Self::Never,
             Self::StringLiteral(value) => Self::StringLiteral(value.clone()),
@@ -296,6 +320,7 @@ impl ParsedType {
             | Self::Undefined
             | Self::Void
             | Self::Any
+            | Self::ErrorType
             | Self::Unknown
             | Self::UnknownKeyword
             | Self::Never
@@ -386,6 +411,12 @@ pub struct ParsedTypeOfType {
     /// namespace value of. `name` then carries the rendered `import("spec")`
     /// and `members` the qualifier written after it.
     pub import_specifier: Option<String>,
+    /// The instantiation expression's arguments: `typeof f<A, B>` binds the
+    /// generic value's type parameters in type position, exactly as a call with
+    /// explicit type arguments does. Empty for a plain `typeof f`. Dropping
+    /// these left `ReturnType<typeof withTRPC<TRouter, TSSRContext>>` — the one
+    /// member that degrades tRPC's exported client — at the sentinel.
+    pub type_arguments: Vec<ParsedType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -591,6 +622,12 @@ pub struct ParsedClassProperty {
     pub is_static: bool,
     pub is_override: bool,
     pub is_abstract: bool,
+    /// `declare x: T` — the property is declared elsewhere, so it carries no
+    /// initialization obligation of its own.
+    pub is_declare: bool,
+    /// `x!: T` — asserted to be initialized outside the constructor, which is
+    /// what exempts it from the initialization check.
+    pub has_definite_assertion: bool,
     pub optional: bool,
     pub readonly: bool,
     pub declared_type: Option<ParsedType>,
@@ -837,6 +874,20 @@ pub enum ParsedExpression {
     Unary {
         operator: ParsedUnaryOperator,
         operator_span: Option<TextSpan>,
+        operand: Box<ParsedExpression>,
+        operand_span: Option<TextSpan>,
+    },
+    /// `x++` / `x--` / `++x` / `--x`. All four forms check their operand the
+    /// same way and produce the same result type, so neither the operator nor
+    /// its position is recorded.
+    Update {
+        operand: Box<ParsedExpression>,
+        operand_span: Option<TextSpan>,
+    },
+    /// `await x`. The operand is kept so the checker can unwrap the awaited
+    /// type; erasing the `await` at parse time left every `await` expression
+    /// typed as the promise itself.
+    Await {
         operand: Box<ParsedExpression>,
         operand_span: Option<TextSpan>,
     },
@@ -1123,7 +1174,12 @@ pub enum ParsedUnaryOperator {
     Plus,
     Minus,
     Typeof,
-    /// `void`, `delete` and `~`: the result is not modelled, but the operand is
+    /// `delete o.p`. Kept apart from [`ParsedUnaryOperator::Discard`] because
+    /// its operand carries rules the other unmodelled operators have none of:
+    /// it must be a property reference, and that property must be optional and
+    /// writable.
+    Delete,
+    /// `void` and `~`: the result is not modelled, but the operand is
     /// still an expression that has to be checked.
     Discard,
 }
@@ -1164,6 +1220,10 @@ pub struct ParsedAssignment {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedFunctionDeclaration {
+    /// `function f(this: T)` — oxc keeps the `this` parameter out of the
+    /// parameter list, so its presence has to be carried separately. Only the
+    /// implicit-`this` check reads it; nothing about the signature depends on it.
+    pub has_this_parameter: bool,
     /// All value-position identifier names read anywhere in the body (including
     /// nested functions, spreads, for-in, and object methods), collected from the
     /// full oxc AST during parsing. Backs unused-binding diagnostics (TS6133).
@@ -1345,14 +1405,38 @@ pub struct ParsedFunctionParameter {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedArrowFunction {
+    /// What `this` means inside the body. A `function` expression and an
+    /// object-literal method both lower to this shape, and neither inherits
+    /// `this` the way a real arrow does.
+    pub this_binding: ParsedThisBinding,
     /// See [`ParsedFunctionDeclaration::body_reads`].
     pub body_reads: Vec<String>,
     pub type_parameters: Vec<ParsedTypeParameter>,
     pub parameters: Vec<ParsedFunctionParameter>,
     pub return_type: Option<ParsedType>,
     pub is_async: bool,
+    /// A `function*` / `async function*` expression lowered to this shape. Its
+    /// return type is a `Generator`/`AsyncGenerator`, never the body's
+    /// completion value — inferring the latter typed `async function* () {
+    /// yield 'a' }` as `void`.
+    pub is_generator: bool,
     pub body: ParsedArrowFunctionBody,
     pub span: Option<TextSpan>,
+}
+
+/// Where a lowered function body's `this` comes from. An arrow does not bind
+/// `this` at all, so it sees the enclosing function's; everything else lowered
+/// to [`ParsedArrowFunction`] binds its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParsedThisBinding {
+    /// A real arrow: `this` is whatever the enclosing function bound, which is
+    /// why `function f() { return () => this }` reports on the *arrow's* `this`.
+    Inherited,
+    /// An object-literal method or accessor, or a `function` expression that
+    /// annotates `this`: the body has a `this` of its own.
+    Own,
+    /// A `function` expression with no `this` parameter: `this` has no type.
+    ImplicitAny,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1383,6 +1467,9 @@ pub struct ParsedCallArgument {
 pub struct ParsedArrayElement {
     pub expression: ParsedExpression,
     pub span: Option<TextSpan>,
+    /// `[...xs]`. The element stands for however many elements `xs` holds, and
+    /// what it contributes is `xs`'s *element* type, not `xs` itself.
+    pub spread: bool,
 }
 
 /// Census-only estimated owned-heap size of a parsed type tree, used by the

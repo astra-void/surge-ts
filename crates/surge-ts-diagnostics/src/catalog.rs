@@ -40,6 +40,16 @@ pub fn cataloged_diagnostic_descriptors() -> &'static [DiagnosticDescriptor] {
     DIAGNOSTIC_CATALOG
 }
 
+/// The descriptor for a bare TypeScript error number, for diagnostics that
+/// arrive already classified by the parser rather than raised at a call site.
+pub fn emitted_descriptor_for_number(number: u32) -> Option<&'static DiagnosticDescriptor> {
+    DIAGNOSTIC_CATALOG.iter().find(|descriptor| {
+        descriptor.support == DiagnosticSupport::Emitted
+            && descriptor.argument_count == 0
+            && descriptor.number == Some(number)
+    })
+}
+
 pub fn cataloged_typescript_diagnostics() -> &'static [DiagnosticDescriptor] {
     cataloged_diagnostic_descriptors()
 }

@@ -67,6 +67,20 @@ pub enum Type {
     /// 'unknown') on a genuine-unknown receiver while staying silent on a
     /// degraded one, matching tsc's no-cascade behavior.
     GenuineUnknown,
+    /// A type tsc itself has no answer for — an unresolved type name or a type
+    /// imported from a module that does not resolve. tsc models this as
+    /// `errorType`, which is `any` with its own identity
+    /// (`newIntrinsicType(TypeFlagsAny, "error")`), so it stays permissive
+    /// everywhere and is only consulted where the *rule* differs.
+    ///
+    /// Behaves identically to [`Type::Unknown`] in every type operation and is
+    /// matched with it via [`Type::is_unknown`]; the distinction is provenance,
+    /// exactly as [`Type::GenuineUnknown`] carries it for the written keyword.
+    /// `Unknown` means "surge could not model this" and must stay silent to
+    /// avoid cascading its own gaps; `ErrorType` means "the source is genuinely
+    /// broken", which is where tsc keeps reporting — a callback parameter
+    /// contextually typed by it is still an implicit `any` (TS7006).
+    ErrorType,
     /// An unsubstituted type parameter standing in for itself, as bound by a
     /// signature or declaration pre-pass (`substitution.insert_placeholder`).
     ///
@@ -174,7 +188,7 @@ impl Type {
     pub fn is_unknown(&self) -> bool {
         matches!(
             self,
-            Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_)
+            Type::Unknown | Type::GenuineUnknown | Type::ErrorType | Type::TypeParameter(_)
         )
     }
 
@@ -385,7 +399,7 @@ impl Type {
             Type::Undefined => "undefined".to_string(),
             Type::Void => "void".to_string(),
             Type::Any => "any".to_string(),
-            Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+            Type::Unknown | Type::GenuineUnknown | Type::ErrorType | Type::TypeParameter(_) => {
                 "unknown".to_string()
             }
             Type::Never => "never".to_string(),

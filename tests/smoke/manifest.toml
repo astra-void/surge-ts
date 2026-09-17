@@ -93,10 +93,14 @@ name = "duplicate-let-const-declaration"
 path = "tests/smoke/duplicate_let_const_declaration.ts"
 expected_diagnostics = ["TS2451", "TS2451"]
 
+# A duplicate `var` is allowed where a duplicate `let`/`const` is not, but every
+# declaration still has to give it the same type. The two here do not, and tsc
+# reports TS2403 at (2,5); the empty expectation dated from before surge could
+# emit that code.
 [[case]]
 name = "duplicate-var-declaration-allowed"
 path = "tests/smoke/duplicate_var_declaration_allowed.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2403"]
 
 [[case]]
 name = "function-call-valid"
@@ -6357,9 +6361,9 @@ path = "tests/smoke/generic_call_inference_explicit_type_argument_valid.ts"
 expected_diagnostics = []
 
 [[case]]
-name = "generic-call-inference-tuple-return-suppressed"
-path = "tests/smoke/generic_call_inference_tuple_return_suppressed.ts"
-expected_diagnostics = []
+name = "generic-call-inference-tuple-return-inferred"
+path = "tests/smoke/generic_call_inference_tuple_return_inferred.ts"
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "generic-call-inference-tuple-return-explicit-type-argument-valid"

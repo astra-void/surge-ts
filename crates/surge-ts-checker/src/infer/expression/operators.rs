@@ -57,6 +57,7 @@ pub(crate) fn infer_unary_expression(
             _ => InferredExpression::Unknown,
         },
         ParsedUnaryOperator::Typeof => InferredExpression::Known(typeof_result_type()),
+        ParsedUnaryOperator::Delete => InferredExpression::Known(Type::Boolean),
         // `void` / `delete` / `~`: the operand has already been walked, and the
         // result stays unmodelled rather than guessing `undefined`/`boolean`/`number`.
         ParsedUnaryOperator::Discard => InferredExpression::Unknown,
@@ -66,6 +67,7 @@ pub(crate) fn infer_unary_expression(
                 InferredExpression::Known(Type::Number)
             }
             InferredExpression::Known(Type::Unknown)
+            | InferredExpression::Known(Type::ErrorType)
             | InferredExpression::Known(Type::GenuineUnknown)
             | InferredExpression::Known(Type::TypeParameter(_))
             | InferredExpression::UnresolvedIdentifier { .. }

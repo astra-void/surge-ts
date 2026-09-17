@@ -212,7 +212,7 @@ reason = "Cataloged for future coverage"
 
 [TS2352]
 status = "catalog-only"
-reason = "Cataloged for future coverage"
+reason = "Withheld: the comparable relation it needs is only as faithful as surge's structural expansion of a library's generic types. Fixture-exact, but 54 false positives on zod, which was otherwise diagnostic-exact"
 
 [TS2353]
 status = "emitted"
@@ -231,8 +231,13 @@ fixtures = [
 ]
 
 [TS2356]
-status = "catalog-only"
-reason = "The `++`/`--` operand rule is not implemented. It was emitted for unary `+`/`-`, which coerce in tsc, and that was a false positive"
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/increment-operand-write-rules-basic/src/index.ts",
+]
+oracle = [
+  "increment-operand-write-rules-basic",
+]
 
 [TS2362]
 status = "emitted"
@@ -969,3 +974,418 @@ status = "emitted"
 oracle = [
   "ts-extension-import-basic preset",
 ]
+
+[TS1102]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/delete-operator-operand-rules-basic/src/index.ts",
+]
+oracle = [
+  "delete-operator-operand-rules-basic",
+]
+
+[TS2703]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/delete-operator-operand-rules-basic/src/index.ts",
+]
+oracle = [
+  "delete-operator-operand-rules-basic",
+]
+
+[TS2704]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/delete-operator-operand-rules-basic/src/index.ts",
+]
+oracle = [
+  "delete-operator-operand-rules-basic",
+]
+
+[TS2790]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/delete-operator-operand-rules-basic/src/index.ts",
+]
+oracle = [
+  "delete-operator-operand-rules-basic",
+]
+
+[TS18011]
+status = "catalog-only"
+reason = "A private field is not parsed, so `delete this.#x` never reaches the operand rules; the shape rule deliberately stays silent on an operand surge did not model"
+
+[TS2358]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/instanceof-left-operand-type-basic/src/index.ts",
+]
+oracle = [
+  "instanceof-left-operand-type-basic",
+]
+
+[TS2698]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/object-spread-operand-type-basic/src/index.ts",
+]
+oracle = [
+  "object-spread-operand-type-basic",
+]
+
+[TS2416]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/heritage-member-compatibility-basic/src/index.ts",
+]
+oracle = [
+  "heritage-member-compatibility-basic",
+]
+
+[TS2430]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/interface-extends-member-compatibility-basic/src/index.ts",
+]
+oracle = [
+  "interface-extends-member-compatibility-basic",
+]
+
+[TS2564]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/property-initialization-basic/src/index.ts",
+]
+oracle = [
+  "property-initialization-basic",
+]
+
+[TS2403]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/var-redeclaration-type-basic/src/index.ts",
+]
+oracle = [
+  "var-redeclaration-type-basic",
+]
+
+[TS2449]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/class-used-before-declaration-basic/src/index.ts",
+]
+oracle = [
+  "class-used-before-declaration-basic",
+]
+
+[TS2651]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/enum-forward-reference-basic/src/index.ts",
+]
+oracle = [
+  "enum-forward-reference-basic",
+]
+
+[TS2729]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/property-used-before-initialization-basic/src/index.ts",
+]
+oracle = [
+  "property-used-before-initialization-basic",
+]
+
+[TS2683]
+status = "catalog-only"
+reason = "Withheld: an object-literal accessor under a contextual type reaches the check through a path that does not clear the implicit-this flag, so zod's `get shape() { … this.shape … }` was a false positive"
+
+[TS2571]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/nullable-receiver-naming-basic/src/index.ts",
+]
+oracle = [
+  "nullable-receiver-naming-basic",
+]
+
+[TS18050]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/nullable-receiver-naming-basic/src/index.ts",
+]
+oracle = [
+  "nullable-receiver-naming-basic",
+]
+
+[TS1021]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1024]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1028]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1092]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1093]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1096]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1108]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1172]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1173]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1174]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1175]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1187]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1257]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1265]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1266]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1276]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS18010]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS2452]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS2681]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS2730]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/parser-classified-diagnostics-basic/src",
+]
+oracle = [
+  "parser-classified-diagnostics-basic",
+]
+[TS1019]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1047]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1051]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1098]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1099]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1141]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1164]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1176]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1183]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1184]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1249]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1263]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1264]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1318]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1354]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1363]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1477]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1490]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1502]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1545]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS1546]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS17000]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS18058]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS18059]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS2206]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS2207]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS2499]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS2566]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS2784]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS5085]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS5086]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS5087]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS8002]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS8005]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS8012]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS8016]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+[TS8037]
+status = "catalog-only"
+reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."

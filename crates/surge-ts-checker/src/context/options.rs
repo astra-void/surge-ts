@@ -50,6 +50,9 @@ pub struct CompatibilityStats {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckerOptions {
     pub no_implicit_any: bool,
+    /// `strictPropertyInitialization`: an instance property with no initializer
+    /// must be definitely assigned in the constructor.
+    pub strict_property_initialization: bool,
     pub use_unknown_in_catch_variables: bool,
     pub no_implicit_returns: bool,
     pub no_fallthrough_cases_in_switch: bool,
@@ -134,6 +137,7 @@ impl Default for CheckerOptions {
     fn default() -> Self {
         Self {
             no_implicit_any: false,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,

@@ -22,7 +22,10 @@ mod ambient;
 pub(crate) mod binding;
 mod check_files;
 mod classes;
-mod diagnostics;
+mod forward_references;
+mod heritage;
+mod property_initialization;
+pub(crate) mod diagnostics;
 mod file_classify;
 mod globals;
 mod parse;
@@ -71,7 +74,7 @@ pub(crate) struct ParsedProgramFile {
     /// Identifier substrings (`typeofFoo`) only cause a harmless eager build.
     pub(crate) contains_typeof: bool,
     pub(crate) statements: Vec<ParsedStatement>,
-    pub(crate) parser_errors: Vec<String>,
+    pub(crate) parser_errors: Vec<surge_ts_syntax::ParserError>,
     pub(crate) is_module: bool,
     /// Specifiers written as `import("…")` in type positions (see
     /// [`surge_ts_syntax::ParsedSource::import_call_specifiers`]).
@@ -297,7 +300,12 @@ fn check_program_with_stats_and_jobs_inner(
         binding,
         globals,
     );
-    build_module_local_values(&parsed_files, &shared_state, &mut ctx);
+    build_module_local_values(
+        &parsed_files,
+        &shared_state.module_analyses,
+        &shared_state.module_import_bindings,
+        &mut ctx,
+    );
     record_rss_stage(
         timings.as_ref(),
         "module_local_values",
@@ -657,6 +665,22 @@ fn bind_and_analyze_modules(
         analysis_worker_count,
         preliminary_module_analyses,
     } = preliminary;
+    // A type published through a *value* export is resolved here, and a
+    // `typeof <value>` inside it reaches for the declaring module's local value
+    // table — which was only built after this whole pass, so the member died at
+    // the sentinel while the rest of the instantiation survived
+    // (`export const t = make<R>()` where the returned type has a `typeof f`
+    // member). The preliminary analyses already hold everything that build
+    // needs, so seed the map before publication; the authoritative build after
+    // the final analysis round replaces it.
+    if early_module_local_values_enabled() {
+        build_module_local_values(
+            parsed_files,
+            &preliminary_module_analyses,
+            &preliminary_module_import_bindings,
+            ctx,
+        );
+    }
     let module_binding_start = Instant::now();
     let export_resolution_start = Instant::now();
     // Superseded binding rounds are reassigned (not shadowed) so each round's
@@ -977,9 +1001,27 @@ fn finalize_module_bindings(
 // value declarations. The seed table omits the ambient globals (they are added
 // as a parent fallback inside the collector); the result is consulted via `get`
 // only, so the parent fallback covers them.
+/// Seed the module-local value tables before export publication instead of
+/// only after the final analysis round. `SURGE_EARLY_MODULE_LOCAL_VALUES=0`
+/// restores the old ordering.
+///
+/// A type published through a *value* export is resolved during
+/// `bind_and_analyze_modules`, and a `typeof <value>` inside it reaches for the
+/// declaring module's local value table — which that pass builds only after it
+/// finishes. So the `typeof` member died at the sentinel while the rest of the
+/// instantiation survived, which is what left tRPC's exported client open in
+/// every consumer.
+fn early_module_local_values_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("SURGE_EARLY_MODULE_LOCAL_VALUES").as_deref() != Ok("0")
+    })
+}
+
 fn build_module_local_values(
     parsed_files: &[ParsedProgramFile],
-    shared_state: &ProgramCheckSharedState,
+    module_analyses: &[Option<ModuleAnalysis>],
+    module_import_bindings: &[Option<ModuleImportBindings>],
     ctx: &mut CheckerContext,
 ) {
     let saved_file_name = ctx.file_name.clone();
@@ -994,7 +1036,7 @@ fn build_module_local_values(
         if !parsed_file.is_module {
             continue;
         }
-        let Some(analysis) = shared_state.module_analyses[file_index].as_ref() else {
+        let Some(analysis) = module_analyses[file_index].as_ref() else {
             continue;
         };
         // The table is only ever consulted to resolve a `typeof <value>`
@@ -1014,7 +1056,7 @@ fn build_module_local_values(
             continue;
         }
         let mut seed = SymbolTable::new();
-        if let Some(bindings) = shared_state.module_import_bindings[file_index].as_ref() {
+        if let Some(bindings) = module_import_bindings[file_index].as_ref() {
             for (name, symbol) in bindings.symbols.iter_shared() {
                 let _ = seed.insert_shared(name.clone(), symbol.clone());
             }
