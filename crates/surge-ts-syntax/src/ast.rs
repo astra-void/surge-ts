@@ -1367,6 +1367,17 @@ pub struct ParsedIfStatement {
     pub condition_span: Option<TextSpan>,
     pub then_body: Vec<ParsedFunctionBodyStatement>,
     pub else_body: Vec<ParsedFunctionBodyStatement>,
+    /// References the condition tests for truthiness that neither the then
+    /// branch nor the rest of their `&&` chain mentions again. tsc reports such a
+    /// reference when its type is a function (TS2774); whether it is used is a
+    /// question about the source, so it is answered here.
+    pub unreferenced_truthiness_tests: Vec<ParsedTruthinessTest>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedTruthinessTest {
+    pub expression: ParsedExpression,
+    pub span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

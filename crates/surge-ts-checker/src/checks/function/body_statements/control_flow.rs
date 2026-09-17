@@ -27,6 +27,31 @@ use super::{
     narrow_condition_and_aliases_in_scope, resolved_alias_condition, rewrite_discriminant_aliases,
 };
 
+/// TS2774: a condition that tests a function for truthiness, and never calls or
+/// otherwise mentions it where the test holds, is always true — tsc's
+/// `checkTestingKnownTruthyType`. Only a type that is certainly callable counts:
+/// a union (an optional method, `F | undefined`) has no call signature of its own.
+pub(crate) fn report_unreferenced_callable_conditions(
+    tests: &[surge_ts_syntax::ParsedTruthinessTest],
+    symbols: &crate::symbols::SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    for test in tests {
+        let InferredExpression::Known(ty) = crate::infer::infer_expression(&test.expression, symbols, ctx)
+        else {
+            continue;
+        };
+        let callable = match ty.peeled() {
+            Type::Function(_) => true,
+            Type::Object(object) => object.call_signature().is_some(),
+            _ => false,
+        };
+        if callable && let Some(span) = test.span {
+            ctx.push(Diagnostic::ts2774(ctx.file_name.clone()).with_span(convert_span(span)));
+        }
+    }
+}
+
 pub(crate) fn check_function_if_statement(
     if_statement: ParsedIfStatement,
     statement_index: usize,
@@ -35,6 +60,11 @@ pub(crate) fn check_function_if_statement(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
+    report_unreferenced_callable_conditions(
+        &if_statement.unreferenced_truthiness_tests,
+        &visible_symbols(scopes),
+        ctx,
+    );
     // `if (ok)` where `ok` is a boolean `const` alias narrows by the condition
     // the alias was written as, not by the opaque identifier.
     let alias_condition = resolved_alias_condition(&if_statement.condition, flow_state);

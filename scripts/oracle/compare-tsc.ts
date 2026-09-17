@@ -497,6 +497,7 @@ export const fixturePresets: Record<string, string> = {
   'or-false-branch-reference-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/or-false-branch-reference-narrowing-basic/tsconfig.json'),
   'optional-chain-discriminant-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-discriminant-narrowing-basic/tsconfig.json'),
   'keyof-union-and-mapped-distribution-basic': path.join(workspaceRoot, 'tests/compat-projects/keyof-union-and-mapped-distribution-basic/tsconfig.json'),
+  'uncalled-function-condition-basic': path.join(workspaceRoot, 'tests/compat-projects/uncalled-function-condition-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

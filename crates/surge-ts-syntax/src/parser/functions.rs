@@ -392,7 +392,129 @@ pub(super) fn parse_if_statement(if_statement: &IfStatement<'_>) -> Option<Parse
         condition_span: Some(text_span_from_oxc_span(condition_span)),
         then_body,
         else_body,
+        unreferenced_truthiness_tests: unreferenced_truthiness_tests(if_statement),
     })
+}
+
+/// tsc's `checkTestingKnownTruthyTypes` candidates in an `if` condition: the
+/// condition itself, the right operand of a top-level logical expression and
+/// every operand along its `||`/`??` chain, and the left operand of every `&&`,
+/// when that operand is a name or a member path. A
+/// candidate the then branch or the right side of its `&&` chain mentions
+/// again is dropped (`isSymbolUsedInConditionBody`,
+/// `isSymbolUsedInBinaryExpressionChain`), matched here by name and member path.
+fn unreferenced_truthiness_tests(
+    if_statement: &IfStatement<'_>,
+) -> Vec<crate::ParsedTruthinessTest> {
+    use oxc_ast::ast::LogicalOperator;
+
+    fn collect<'e, 'a>(
+        expression: &'e Expression<'a>,
+        tested: bool,
+        top_chain: bool,
+        and_rights: Vec<&'e Expression<'a>>,
+        found: &mut Vec<(&'e Expression<'a>, Vec<&'e Expression<'a>>)>,
+    ) {
+        match expression.without_parentheses() {
+            Expression::LogicalExpression(logical)
+                if matches!(logical.operator, LogicalOperator::Or | LogicalOperator::Coalesce) =>
+            {
+                collect(&logical.left, true, top_chain, Vec::new(), found);
+                collect(&logical.right, top_chain, top_chain, Vec::new(), found);
+            }
+            Expression::LogicalExpression(logical) => {
+                let mut rights = vec![&logical.right];
+                rights.extend(and_rights);
+                collect(&logical.left, true, false, rights, found);
+                collect(&logical.right, top_chain, top_chain, Vec::new(), found);
+            }
+            leaf if tested && member_path(leaf).is_some() => found.push((leaf, and_rights)),
+            _ => {}
+        }
+    }
+
+    let mut found = Vec::new();
+    collect(&if_statement.test, true, true, Vec::new(), &mut found);
+    found
+        .into_iter()
+        .filter_map(|(leaf, and_rights)| {
+            let path = member_path(leaf)?;
+            let mut chain = PathReferences::default();
+            for right in and_rights {
+                oxc_ast_visit::Visit::visit_expression(&mut chain, right);
+            }
+            if chain.mentions_name(&path) {
+                return None;
+            }
+            let mut body = PathReferences::default();
+            oxc_ast_visit::Visit::visit_statement(&mut body, &if_statement.consequent);
+            if body.mentions(&path) {
+                return None;
+            }
+            let (expression, span) = parse_expression(leaf);
+            Some(crate::ParsedTruthinessTest {
+                expression,
+                span: Some(text_span_from_oxc_span(span)),
+            })
+        })
+        .collect()
+}
+
+/// `a`, `this.m` or `a.b.c` as written; `None` for anything else, including a
+/// member of an asserted expression (`(x as T).m`), which tsc exempts.
+fn member_path(expression: &Expression<'_>) -> Option<Vec<String>> {
+    match expression {
+        Expression::Identifier(identifier) => Some(vec![identifier.name.to_string()]),
+        Expression::ThisExpression(_) => Some(vec!["this".to_string()]),
+        Expression::StaticMemberExpression(member) => {
+            let mut path = member_path(member.object.without_parentheses())?;
+            path.push(member.property.name.to_string());
+            Some(path)
+        }
+        _ => None,
+    }
+}
+
+#[derive(Default)]
+struct PathReferences {
+    names: std::collections::HashSet<String>,
+    paths: std::collections::HashSet<Vec<String>>,
+    member_names: std::collections::HashSet<String>,
+}
+
+impl PathReferences {
+    /// The `&&` chain check compares symbols only, so any reference to the
+    /// tested name — as a binding or as a member — counts.
+    fn mentions_name(&self, path: &[String]) -> bool {
+        let Some(last) = path.last() else {
+            return false;
+        };
+        self.names.contains(last) || self.member_names.contains(last)
+    }
+
+    /// A bare name is used by any reference to it; a member path only by a
+    /// member access along the same path.
+    fn mentions(&self, path: &[String]) -> bool {
+        match path {
+            [name] => self.names.contains(name),
+            _ => self.paths.contains(path),
+        }
+    }
+}
+
+impl<'a> oxc_ast_visit::Visit<'a> for PathReferences {
+    fn visit_identifier_reference(&mut self, identifier: &oxc_ast::ast::IdentifierReference<'a>) {
+        self.names.insert(identifier.name.to_string());
+    }
+
+    fn visit_static_member_expression(&mut self, member: &oxc_ast::ast::StaticMemberExpression<'a>) {
+        self.member_names.insert(member.property.name.to_string());
+        if let Some(mut path) = member_path(member.object.without_parentheses()) {
+            path.push(member.property.name.to_string());
+            self.paths.insert(path);
+        }
+        oxc_ast_visit::walk::walk_static_member_expression(self, member);
+    }
 }
 
 fn parse_while_statement(while_statement: &WhileStatement<'_>) -> Option<ParsedWhileStatement> {

@@ -294,6 +294,11 @@ pub(crate) fn check_module_if_statement(
     ctx: &mut CheckerContext,
 ) {
     let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    crate::checks::function::report_unreferenced_callable_conditions(
+        &if_statement.unreferenced_truthiness_tests,
+        &symbols,
+        ctx,
+    );
     // The condition is evaluated for its narrowing only: a condition that reads
     // a value surge models more loosely than tsc (`args.verbose` off a
     // parsed-options object that degraded to an index signature) would report

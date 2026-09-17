@@ -685,6 +685,16 @@ pub const TS2869: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2774: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2774",
+    number: Some(2774),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This condition will always return true since this function is always defined. Did you mean to call it instead?",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2871: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2871",
     number: Some(2871),
@@ -2104,6 +2114,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2745,
     TS2749,
     TS2869,
+    TS2774,
     TS2871,
     TS2872,
     TS2873,
@@ -2912,6 +2923,11 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2869(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2869, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2774(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2774, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

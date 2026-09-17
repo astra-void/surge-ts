@@ -557,6 +557,12 @@ oracle = [
   "syntactic-nullishness-coalesce-basic",
 ]
 
+[TS2774]
+status = "emitted"
+oracle = [
+  "uncalled-function-condition-basic",
+]
+
 [TS2872]
 status = "emitted"
 fixtures = [

@@ -545,6 +545,14 @@ message = "Right operand of ?? is unreachable because the left operand is never 
 arity = 0
 
 [[diagnostic]]
+code = "TS2774"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This condition will always return true since this function is always defined. Did you mean to call it instead?"
+arity = 0
+
+[[diagnostic]]
 code = "TS2871"
 category = "Error"
 source = "typescript"
