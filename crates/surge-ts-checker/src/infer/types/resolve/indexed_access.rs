@@ -276,6 +276,23 @@ pub(super) fn resolve_indexed_access_type(
     }
 
     match (&resolved_object.ty, &resolved_index.ty) {
+        // A string's apparent type has a numeric index signature of `string`
+        // and the `String` members (`"abc"["length"]`); a union of strings reads
+        // the same way.
+        (receiver, Type::Number | Type::NumberLiteral(_)) if is_string_like(receiver) => {
+            ResolvedType {
+                ty: Type::String,
+                had_error: false,
+            }
+        }
+        (receiver, Type::StringLiteral(key))
+            if is_string_like(receiver) && Type::String.get_property_access_type(key).is_some() =>
+        {
+            ResolvedType {
+                ty: Type::String.get_property_access_type(key).unwrap_or(Type::Unknown),
+                had_error: false,
+            }
+        }
         (Type::Object(object_type), Type::StringLiteral(key)) => {
             if let Some(property_ty) = object_type.get_property_access_type(&key) {
                 if generic_indexed_access {
@@ -643,5 +660,13 @@ pub(super) fn resolve_indexed_access_type(
                 had_error: true,
             }
         }
+    }
+}
+
+fn is_string_like(ty: &Type) -> bool {
+    match ty {
+        Type::String | Type::StringLiteral(_) => true,
+        Type::Union(union) => union.types().iter().all(is_string_like),
+        _ => false,
     }
 }
