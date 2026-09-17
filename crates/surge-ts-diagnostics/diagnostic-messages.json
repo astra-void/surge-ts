@@ -1336,6 +1336,14 @@
     "support": "catalog-only"
   },
   {
+    "code": "TS1064",
+    "category": "Error",
+    "message": "The return type of an async function or method must be the global Promise<T> type. Did you mean to write 'Promise<{0}>'?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS1092",
     "category": "Error",
     "message": "Type parameters cannot appear on a constructor declaration.",

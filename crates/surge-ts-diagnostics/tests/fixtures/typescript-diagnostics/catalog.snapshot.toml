@@ -1337,6 +1337,14 @@ message = "A 'set' accessor cannot have an optional parameter."
 arity = 0
 
 [[diagnostic]]
+code = "TS1064"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The return type of an async function or method must be the global Promise<T> type. Did you mean to write 'Promise<{0}>'?"
+arity = 1
+
+[[diagnostic]]
 code = "TS1092"
 category = "Error"
 source = "typescript"

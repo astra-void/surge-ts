@@ -855,6 +855,12 @@ pub(crate) fn emit_grammar_diagnostics(
                 };
                 Diagnostic::ts1029(first, second, ctx.file_name.clone())
             }
+            Kind::AsyncReturnTypeNotPromise => {
+                let Some(written) = finding.name.as_deref() else {
+                    continue;
+                };
+                Diagnostic::ts1064(written, ctx.file_name.clone())
+            }
             Kind::OptionalParameterWithInitializer => Diagnostic::ts1015(ctx.file_name.clone()),
             Kind::RequiredParameterAfterOptional => Diagnostic::ts1016(ctx.file_name.clone()),
             Kind::AmbientInitializer => Diagnostic::ts1039(ctx.file_name.clone()),

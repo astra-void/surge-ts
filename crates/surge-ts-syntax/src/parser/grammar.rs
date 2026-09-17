@@ -45,6 +45,34 @@ struct GrammarCollector {
 }
 
 impl GrammarCollector {
+    /// tsc's `checkReturnTypeAnnotation` for an `async` signature: the written
+    /// return type must be a reference to the global `Promise`. A written type
+    /// reference is left alone, since an alias may resolve to `Promise`.
+    fn check_async_return_type(&mut self, return_type: Option<&oxc_ast::ast::TSTypeAnnotation<'_>>) {
+        let Some(annotation) = return_type else {
+            return;
+        };
+        let written = &annotation.type_annotation;
+        if matches!(
+            written,
+            oxc_ast::ast::TSType::TSTypeReference(_)
+                | oxc_ast::ast::TSType::TSTypeQuery(_)
+                | oxc_ast::ast::TSType::TSImportType(_)
+                | oxc_ast::ast::TSType::TSIndexedAccessType(_)
+                | oxc_ast::ast::TSType::TSConditionalType(_)
+                | oxc_ast::ast::TSType::TSParenthesizedType(_)
+        ) {
+            return;
+        }
+        let span = written.span();
+        let text = self
+            .source_text
+            .get(span.start as usize..span.end as usize)
+            .unwrap_or_default()
+            .to_string();
+        self.push(Kind::AsyncReturnTypeNotPromise, span, Some(&text));
+    }
+
     fn push(&mut self, kind: Kind, span: Span, name: Option<&str>) {
         self.diagnostics.push(ParsedGrammarDiagnostic {
             kind,
@@ -1045,10 +1073,20 @@ impl<'a> Visit<'a> for GrammarCollector {
 
     fn visit_function(&mut self, function: &Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
         self.check_implicit_any_return(function);
+        if function.r#async && !function.generator {
+            self.check_async_return_type(function.return_type.as_deref());
+        }
         if function.body.is_none() {
             self.check_signature_parameters(&function.params, false);
         }
         oxc_ast_visit::walk::walk_function(self, function, flags);
+    }
+
+    fn visit_arrow_function_expression(&mut self, arrow: &oxc_ast::ast::ArrowFunctionExpression<'a>) {
+        if arrow.r#async {
+            self.check_async_return_type(arrow.return_type.as_deref());
+        }
+        oxc_ast_visit::walk::walk_arrow_function_expression(self, arrow);
     }
 
     fn visit_formal_parameters(&mut self, parameters: &FormalParameters<'a>) {

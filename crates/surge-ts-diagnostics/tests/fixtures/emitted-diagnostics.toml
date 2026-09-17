@@ -1,3 +1,8 @@
+[TS1064]
+status = "emitted"
+oracle = [
+  "async-return-type-promise-basic",
+]
 [TS2488]
 status = "emitted"
 oracle = [

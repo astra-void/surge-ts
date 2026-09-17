@@ -526,6 +526,7 @@ export const fixturePresets: Record<string, string> = {
   'import-member-suggestion-basic': path.join(workspaceRoot, 'tests/compat-projects/import-member-suggestion-basic/tsconfig.json'),
   'module-condition-comparison-basic': path.join(workspaceRoot, 'tests/compat-projects/module-condition-comparison-basic/tsconfig.json'),
   'parser-grammar-codes-basic': path.join(workspaceRoot, 'tests/compat-projects/parser-grammar-codes-basic/tsconfig.json'),
+  'async-return-type-promise-basic': path.join(workspaceRoot, 'tests/compat-projects/async-return-type-promise-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
