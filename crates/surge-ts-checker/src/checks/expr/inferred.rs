@@ -322,6 +322,8 @@ fn suggested_unresolved_name(
         .chain(ctx.symbols.iter())
         .chain(ctx.ambient_global_symbols.iter())
         .map(|(candidate, _)| candidate.as_ref())
+        // Globals the lib does not declare as bindings.
+        .chain(["undefined", "globalThis"])
         .collect();
     // Symbol tables have no declaration order to offer; a name order at least
     // keeps the tie-break deterministic.

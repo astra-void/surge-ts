@@ -16,6 +16,8 @@ pub(crate) fn emit_unknown_type_name(named_type: &ParsedNamedType, ctx: &mut Che
             } else {
                 Diagnostic::ts2591(&named_type.name, ctx.file_name.clone())
             }
+        } else if let Some(suggestion) = suggested_type_name(&named_type.name, ctx) {
+            Diagnostic::ts2552(&named_type.name, suggestion, ctx.file_name.clone())
         } else {
             Diagnostic::ts2304(&named_type.name, ctx.file_name.clone())
         };
@@ -24,6 +26,30 @@ pub(crate) fn emit_unknown_type_name(named_type: &ParsedNamedType, ctx: &mut Che
         diagnostic = diagnostic.with_span(convert_span(span));
     }
     ctx.push_utility_diagnostic_once(diagnostic);
+}
+
+/// The closest declared type name, as tsc's `resolveNameHelper` suggests for a
+/// type reference. A qualified or file-keyed table entry is not a name a bare
+/// reference could have meant.
+fn suggested_type_name(name: &str, ctx: &CheckerContext) -> Option<String> {
+    if name.contains('.') {
+        return None;
+    }
+    let mut candidates: Vec<&str> = ctx
+        .type_declarations
+        .iter()
+        .chain(ctx.ambient_global_type_declarations.iter())
+        .map(|(candidate, _)| candidate.as_ref())
+        .filter(|candidate| !candidate.contains(['.', '\0']))
+        .chain(
+            ctx.type_parameter_scopes
+                .iter()
+                .flat_map(|scope| scope.keys().map(String::as_str)),
+        )
+        .collect();
+    candidates.sort_unstable();
+    candidates.dedup();
+    crate::checks::expr::spelling_suggestion(name, candidates, 0).map(str::to_string)
 }
 
 pub(crate) fn emit_type_is_not_generic(
