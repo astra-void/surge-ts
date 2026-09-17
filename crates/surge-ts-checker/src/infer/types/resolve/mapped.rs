@@ -76,6 +76,43 @@ pub(crate) fn resolve_mapped_type(
             had_error: false,
         };
     }
+    // tsc's `instantiateMappedType`: a homomorphic mapping over a type variable
+    // instantiated to a union distributes over it, so `Partial<A | B>` is
+    // `Partial<A> | Partial<B>` and a member only one side declares survives.
+    // A constituent that is not an object (`undefined`, a primitive) maps to
+    // itself.
+    if let Some(ParsedType::Named(named)) = keyof_operand.as_ref()
+        && named.type_arguments.is_empty()
+        && substitution.get(&named.name).is_some()
+    {
+        let operand = resolve_parsed_type(
+            ParsedType::Named(named.clone()),
+            ctx,
+            resolving,
+            substitution,
+        );
+        if let Type::Union(union) = operand.ty.peeled() {
+            let mut members = Vec::with_capacity(union.types().len());
+            let mut had_error = operand.had_error;
+            for member in union.types() {
+                if !matches!(member.peeled(), Type::Object(_)) {
+                    members.push(member.clone());
+                    continue;
+                }
+                let mut member_substitution =
+                    substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+                member_substitution.insert(named.name.clone(), member.clone());
+                let mapped_member =
+                    resolve_mapped_type(mapped.clone(), ctx, resolving, &member_substitution);
+                had_error |= mapped_member.had_error;
+                members.push(mapped_member.ty);
+            }
+            return ResolvedType {
+                ty: union_type(members),
+                had_error,
+            };
+        }
+    }
     let resolved_constraint = resolve_parsed_type(*mapped.constraint, ctx, resolving, substitution);
 
     if resolved_constraint.had_error {

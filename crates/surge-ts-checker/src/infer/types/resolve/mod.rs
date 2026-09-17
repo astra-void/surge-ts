@@ -557,6 +557,15 @@ pub(crate) fn resolve_parsed_type(
                         keys.push(Type::StringLiteral(key.to_string()));
                     }
                 }
+                Type::Union(union) if !resolved_inner.had_error => {
+                    if let Some(ty) = union_key_type(union.types()) {
+                        return ResolvedType { ty, had_error: false };
+                    }
+                    return ResolvedType {
+                        ty: Type::Unknown,
+                        had_error: false,
+                    };
+                }
                 _ => {
                     return ResolvedType {
                         ty: Type::Unknown,
@@ -643,5 +652,42 @@ pub(crate) fn resolve_parsed_type_with_substitution(
 ) -> ResolvedType {
     with_type_copy_reason(TypeCopyReason::SubstitutionChanged, || {
         resolve_parsed_type(parsed_type, ctx, resolving, substitution)
+    })
+}
+
+/// `keyof (A | B)` is the intersection of the members' key sets (tsc's
+/// `getIndexType` over a union): a named key survives when every member has it
+/// or answers it through a string index. `None` when a member is not an object
+/// surge fully models, or when every member carries a string index — the key
+/// set is then `string | number`, which the mapped-type and indexed-access
+/// resolvers only accept as literal keys of the source.
+fn union_key_type(members: &[Type]) -> Option<Type> {
+    let objects = members
+        .iter()
+        .map(|member| match member.peeled() {
+            Type::Object(object) if !object.synthetic_open_index => Some(object),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if objects.iter().all(|object| object.string_index_type.is_some()) {
+        return None;
+    }
+    let mut named: Vec<&str> = objects
+        .iter()
+        .find(|object| object.string_index_type.is_none())?
+        .properties
+        .keys()
+        .map(|key| key.as_ref())
+        .filter(|key| !key.starts_with('['))
+        .collect();
+    named.retain(|key| {
+        objects
+            .iter()
+            .all(|object| object.string_index_type.is_some() || object.properties.contains_key(*key))
+    });
+    Some(match named.len() {
+        0 => Type::Never,
+        1 => Type::StringLiteral(named[0].to_string()),
+        _ => union_type(named.into_iter().map(|key| Type::StringLiteral(key.to_string())).collect()),
     })
 }
