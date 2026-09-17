@@ -959,6 +959,7 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
     check_implemented_interfaces(class, ctx);
     super::property_initialization::check_property_initialization(class, ctx);
     super::forward_references::check_class_property_initializers(class, ctx);
+    check_override_modifiers(class, ctx);
 
     // Ambient classes have no bodies; generic classes are out of scope and would
     // resolve member/`this` types against unbound type parameters.
@@ -1150,6 +1151,81 @@ fn check_implicit_override(class: &ParsedClassDeclaration, ctx: &mut CheckerCont
         };
         ctx.push(diagnostic);
     }
+}
+
+/// TS4112/TS4113: an `override` modifier needs a base class declaring the
+/// member. Without `extends` every such member is TS4112; with one, a member no
+/// base in the chain declares is TS4113 — decided only when the whole chain is
+/// source-declared classes surge resolved, since a base it cannot see may well
+/// declare it. Static members are not decided.
+fn check_override_modifiers(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    let overriding: Vec<(&String, Option<surge_ts_syntax::TextSpan>, bool)> = class
+        .members
+        .iter()
+        .filter_map(|member| match member {
+            ParsedClassMember::Method(method) if method.is_override => {
+                Some((&method.name, method.name_span, method.is_static))
+            }
+            ParsedClassMember::Property(property) if property.is_override => {
+                Some((&property.name, property.name_span, property.is_static))
+            }
+            ParsedClassMember::Accessor(accessor) if accessor.is_override => {
+                Some((&accessor.name, accessor.name_span, accessor.is_static))
+            }
+            _ => None,
+        })
+        .collect();
+    if overriding.is_empty() {
+        return;
+    }
+    let Some(base) = class.extends.first() else {
+        for (_, span, _) in overriding {
+            if let Some(span) = span {
+                ctx.push(Diagnostic::ts4112(&class.name, ctx.file_name.clone()).with_span(convert_span(span)));
+            }
+        }
+        return;
+    };
+    let Some(inherited) = complete_inherited_instance_member_names(&class.extends, ctx) else {
+        return;
+    };
+    for (name, span, is_static) in overriding {
+        if is_static || inherited.contains(name) {
+            continue;
+        }
+        if let Some(span) = span {
+            ctx.push(Diagnostic::ts4113(&base.name, ctx.file_name.clone()).with_span(convert_span(span)));
+        }
+    }
+}
+
+/// Every instance member name the base chain declares, abstract ones included,
+/// or `None` when any base is not a class declared in source.
+fn complete_inherited_instance_member_names(
+    extends: &[ParsedNamedType],
+    ctx: &CheckerContext,
+) -> Option<std::collections::HashSet<String>> {
+    let mut names = std::collections::HashSet::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut stack: Vec<String> = extends.iter().map(|base| base.name.clone()).collect();
+    while let Some(base_name) = stack.pop() {
+        if !visited.insert(base_name.clone()) {
+            continue;
+        }
+        let Some(TypeDeclarationInfo::Interface(info)) = ctx.lookup_type_declaration(&base_name) else {
+            return None;
+        };
+        if info.file_name.ends_with(".d.ts") || info.body.string_index_type.is_some() {
+            return None;
+        }
+        for member in &info.body.members {
+            names.insert(member.name.clone());
+        }
+        for parent in &info.body.extends {
+            stack.push(parent.name.clone());
+        }
+    }
+    Some(names)
 }
 
 /// Instance member names reachable through a chain of locally-declared base

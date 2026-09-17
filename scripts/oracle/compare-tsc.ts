@@ -504,6 +504,7 @@ export const fixturePresets: Record<string, string> = {
   'readonly-array-element-write-basic': path.join(workspaceRoot, 'tests/compat-projects/readonly-array-element-write-basic/tsconfig.json'),
   'named-constraint-primitive-argument-basic': path.join(workspaceRoot, 'tests/compat-projects/named-constraint-primitive-argument-basic/tsconfig.json'),
   'unannotated-method-return-type-basic': path.join(workspaceRoot, 'tests/compat-projects/unannotated-method-return-type-basic/tsconfig.json'),
+  'override-modifier-without-base-member-basic': path.join(workspaceRoot, 'tests/compat-projects/override-modifier-without-base-member-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

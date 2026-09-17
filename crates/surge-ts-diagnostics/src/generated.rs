@@ -815,6 +815,26 @@ pub const TS6196: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS4112: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4112",
+    number: Some(4112),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This member cannot have an 'override' modifier because its containing class '{0}' does not extend another class.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS4113: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4113",
+    number: Some(4113),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This member cannot have an 'override' modifier because it is not declared in the base class '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS4114: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS4114",
     number: Some(4114),
@@ -2137,6 +2157,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS6133,
     TS6198,
     TS6196,
+    TS4112,
+    TS4113,
     TS4114,
     TS7029,
     TS7030,
@@ -3030,6 +3052,24 @@ impl Diagnostic {
     pub fn ts6196(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS6196,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4112(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS4112,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4113(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS4113,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )

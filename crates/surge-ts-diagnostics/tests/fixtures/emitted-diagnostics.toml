@@ -630,6 +630,18 @@ oracle = [
   "zod/trpc real-project parity (noPropertyAccessFromIndexSignature)",
 ]
 
+[TS4112]
+status = "emitted"
+oracle = [
+  "override-modifier-without-base-member-basic",
+]
+
+[TS4113]
+status = "emitted"
+oracle = [
+  "override-modifier-without-base-member-basic",
+]
+
 [TS4114]
 status = "emitted"
 fixtures = [

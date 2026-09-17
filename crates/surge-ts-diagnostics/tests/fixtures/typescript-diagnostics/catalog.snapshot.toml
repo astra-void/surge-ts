@@ -649,6 +649,22 @@ message = "'{0}' is declared but never used."
 arity = 1
 
 [[diagnostic]]
+code = "TS4112"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This member cannot have an 'override' modifier because its containing class '{0}' does not extend another class."
+arity = 1
+
+[[diagnostic]]
+code = "TS4113"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This member cannot have an 'override' modifier because it is not declared in the base class '{0}'."
+arity = 1
+
+[[diagnostic]]
 code = "TS4114"
 category = "Error"
 source = "typescript"
