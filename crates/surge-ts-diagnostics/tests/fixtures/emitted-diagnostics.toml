@@ -375,6 +375,15 @@ oracle = [
   "computed-property-value-mismatch-basic",
 ]
 
+[TS2555]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/call-arity-message-basic/src/index.ts",
+]
+oracle = [
+  "call-arity-message-basic",
+]
+
 [TS2820]
 status = "emitted"
 fixtures = [

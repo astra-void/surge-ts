@@ -433,6 +433,14 @@ message = "Expected {0} arguments, but got {1}."
 arity = 2
 
 [[diagnostic]]
+code = "TS2555"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expected at least {0} arguments, but got {1}."
+arity = 2
+
+[[diagnostic]]
 code = "TS2576"
 category = "Error"
 source = "typescript"

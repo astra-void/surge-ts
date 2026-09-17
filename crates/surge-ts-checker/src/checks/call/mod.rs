@@ -1395,10 +1395,16 @@ pub(crate) fn check_function_type_call(
         } else {
             call_span.or(callee_span)
         };
-        ctx.push(diagnostic_with_syntax_span(
-            Diagnostic::ts2554(expected_count, actual, ctx.file_name.clone()),
-            span,
-        ));
+        // tsc's `getArgumentArityError`: a rest parameter makes the minimum the
+        // only bound, and optional parameters widen the count to a range.
+        let diagnostic = if actual < required && function_type.is_variadic() {
+            Diagnostic::ts2555(required, actual, ctx.file_name.clone())
+        } else if required < expected && !function_type.is_variadic() {
+            Diagnostic::ts2554(format!("{required}-{expected}"), actual, ctx.file_name.clone())
+        } else {
+            Diagnostic::ts2554(expected_count, actual, ctx.file_name.clone())
+        };
+        ctx.push(diagnostic_with_syntax_span(diagnostic, span));
         return None;
     }
 

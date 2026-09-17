@@ -545,6 +545,16 @@ pub const TS2554: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2555: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2555",
+    number: Some(2555),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Expected at least {0} arguments, but got {1}.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2576: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2576",
     number: Some(2576),
@@ -1330,6 +1340,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2551,
     TS2552,
     TS2554,
+    TS2555,
     TS2576,
     TS2588,
     TS2580,
@@ -1928,6 +1939,18 @@ impl Diagnostic {
     pub fn ts2554(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS2554,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2555(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2555,
             vec![
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),
