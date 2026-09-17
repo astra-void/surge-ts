@@ -588,8 +588,10 @@ fn check_switch_case_tests(
         if crate::checks::ops::types_overlap_for_equality(case_type, discriminant_type) {
             continue;
         }
-        let (case_name, discriminant_name) =
-            crate::checks::ops::equality_operand_display_names(case_type, discriminant_type);
+        // A relation error, not TS2367's pairing: the discriminant is named as
+        // declared and the case widens only against a literal-free target.
+        let case_name = crate::checks::expr::source_display_name(case_type, discriminant_type);
+        let discriminant_name = discriminant_type.name();
         let diagnostic = Diagnostic::ts2678(&case_name, &discriminant_name, ctx.file_name.clone());
         let diagnostic = match switch_case.test_span {
             Some(span) => diagnostic.with_span(convert_span(span)),

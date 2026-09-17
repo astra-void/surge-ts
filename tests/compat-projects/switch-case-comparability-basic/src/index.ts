@@ -41,3 +41,16 @@ export function byLocal(value: number): void {
       break;
   }
 }
+
+// The case is named as written against a literal discriminant, and the
+// discriminant keeps its declared literal union.
+declare const literalKind: "a" | "b";
+switch (literalKind) {
+  case 1:
+    break;
+}
+const fixedLiteral = 3;
+switch (fixedLiteral) {
+  case 4:
+    break;
+}
