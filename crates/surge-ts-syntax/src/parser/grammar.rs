@@ -178,6 +178,50 @@ impl GrammarCollector {
         self.top_level_constants = top_level_constants;
     }
 
+    /// Every member name declared more than once across the declarations of
+    /// one enum is TS2300 at each declaration, named as written.
+    fn check_duplicate_enum_members(&mut self, declarations: &[&oxc_ast::ast::TSEnumDeclaration<'_>]) {
+        let names: Vec<(String, Span)> = declarations
+            .iter()
+            .flat_map(|declaration| declaration.body.members.iter())
+            .filter_map(|member| {
+                property_key_name_of_enum_member(&member.id).map(|name| (name, member.id.span()))
+            })
+            .collect();
+        for (name, span) in &names {
+            if names.iter().filter(|(other, _)| other == name).count() < 2 {
+                continue;
+            }
+            let written = self
+                .source_text
+                .get(span.start as usize..span.end as usize)
+                .unwrap_or(name)
+                .to_string();
+            self.push(Kind::DuplicateMember, *span, Some(&written));
+        }
+    }
+
+    fn check_top_level_enum_merges(&mut self, statements: &[Statement<'_>]) {
+        let mut groups: Vec<(&str, Vec<&oxc_ast::ast::TSEnumDeclaration<'_>>)> = Vec::new();
+        for statement in statements {
+            let declaration = match statement {
+                Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+                other => other.as_declaration(),
+            };
+            let Some(Declaration::TSEnumDeclaration(enumeration)) = declaration else {
+                continue;
+            };
+            let name = enumeration.id.name.as_str();
+            match groups.iter_mut().find(|(group, _)| *group == name) {
+                Some((_, declarations)) => declarations.push(enumeration),
+                None => groups.push((name, vec![enumeration])),
+            }
+        }
+        for (_, declarations) in groups {
+            self.check_duplicate_enum_members(&declarations);
+        }
+    }
+
     fn collect_top_level_constants(&mut self, statements: &[Statement<'_>]) {
         for statement in statements {
             let declaration = match statement {
@@ -1190,6 +1234,7 @@ impl<'a> Visit<'a> for GrammarCollector {
                 .iter()
                 .any(|directive| directive.directive == "use strict");
         self.collect_top_level_constants(&program.body);
+        self.check_top_level_enum_merges(&program.body);
         self.check_default_exports(&program.body);
         self.check_function_implementations(&program.body);
         oxc_ast_visit::walk::walk_program(self, program);
@@ -1205,6 +1250,12 @@ impl<'a> Visit<'a> for GrammarCollector {
     // that does not have its value yet (tsc's `checkEnumDeclaration`, TS2651).
     fn visit_ts_enum_declaration(&mut self, declaration: &oxc_ast::ast::TSEnumDeclaration<'a>) {
         self.check_enum_member_values(declaration);
+        if !self
+            .top_level_enums
+            .contains(&(declaration.span.start, declaration.span.end))
+        {
+            self.check_duplicate_enum_members(std::slice::from_ref(&declaration));
+        }
         let mut declared_so_far: Vec<&str> = Vec::new();
         let member_names: Vec<Option<String>> = declaration
             .body
