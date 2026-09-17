@@ -291,6 +291,12 @@ pub(crate) fn summarize_function_statement_flow(
             let guarantees_exit =
                 has_default && !breaks_out && clauses_terminate && last_clause_terminates;
 
+            // Without a `default`, a switch whose clauses all return still falls
+            // through unless its cases cover the discriminant's type — which the
+            // checker decides and records while checking the body.
+            let guarantees_value_return = guarantees_value_return
+                && (has_default || !is_known_non_exhaustive(switch_statement.span));
+
             ReturnFlowSummary {
                 contains_value_return,
                 contains_return_with_value,
@@ -416,4 +422,28 @@ pub(crate) fn report_read_flow(
             FlowCheck::Blocked
         }
     }
+}
+
+thread_local! {
+    static NON_EXHAUSTIVE_SWITCHES: std::cell::RefCell<Vec<(usize, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn is_known_non_exhaustive(span: Option<surge_ts_syntax::TextSpan>) -> bool {
+    let Some(span) = span else {
+        return false;
+    };
+    NON_EXHAUSTIVE_SWITCHES.with(|spans| spans.borrow().contains(&(span.start, span.end)))
+}
+
+/// Runs `summarize` with the given `default`-less switches known not to cover
+/// their discriminant. Scoped to the call, so every other flow summary keeps
+/// the syntactic answer.
+pub(crate) fn with_non_exhaustive_switches<R>(spans: &[(usize, usize)], summarize: impl FnOnce() -> R) -> R {
+    NON_EXHAUSTIVE_SWITCHES.with(|installed| {
+        let previous = std::mem::replace(&mut *installed.borrow_mut(), spans.to_vec());
+        let result = summarize();
+        *installed.borrow_mut() = previous;
+        result
+    })
 }

@@ -530,6 +530,9 @@ pub(crate) struct CheckerContext {
     /// its element with `AccessFlagsAllowMissing`, so a tuple too short for it
     /// is not TS2493.
     pub(crate) allow_missing_tuple_element: bool,
+    /// Spans of the `default`-less switches checked in this file whose cases do
+    /// not cover their discriminant, which the missing-return check needs.
+    pub(crate) non_exhaustive_switches: Vec<(usize, usize)>,
     /// Set by the arrow path just before it checks a block body, consumed by
     /// the frame that body opens.
     pub(crate) next_body_frame_active: bool,
@@ -669,6 +672,7 @@ impl CheckerContext {
             in_contextual_return_check: false,
             split_returned_conditional: false,
             allow_missing_tuple_element: false,
+            non_exhaustive_switches: Vec::new(),
             next_body_frame_active: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
@@ -811,6 +815,7 @@ impl CheckerContext {
             in_contextual_return_check: false,
             split_returned_conditional: false,
             allow_missing_tuple_element: false,
+            non_exhaustive_switches: Vec::new(),
             next_body_frame_active: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
@@ -1187,6 +1192,7 @@ impl CheckerContext {
         self.file_type_only_import_names.clear();
         self.file_type_only_import_names_owner = None;
         self.checked_function_declaration_names.clear();
+        self.non_exhaustive_switches.clear();
         self.genuine_any_bindings.clear();
         self.this_is_implicitly_any = false;
         self.shorthand_property_depth = 0;

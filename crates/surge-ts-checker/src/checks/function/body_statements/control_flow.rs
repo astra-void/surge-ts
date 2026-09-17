@@ -677,6 +677,9 @@ pub(crate) fn check_function_switch_statement(
             .collect()
     };
     let has_default = switch_statement.cases.iter().any(|case| case.test.is_none());
+    let case_literals = (!has_default)
+        .then(|| switch_case_literals(&switch_statement.cases))
+        .flatten();
     let every_case_exits = switch_statement.cases.last().is_some_and(|case| !case.consequent.is_empty())
         && switch_statement
             .cases
@@ -747,8 +750,79 @@ pub(crate) fn check_function_switch_statement(
         && every_case_exits
         && let Some(condition) = no_case_matches.as_ref()
     {
+        record_non_exhaustive_switch(
+            &switch_statement.discriminant,
+            switch_statement.span,
+            case_literals.as_deref(),
+            scopes,
+            ctx,
+        );
         narrow_discriminant_in_scope(condition, scopes, false, ctx);
     }
+}
+
+/// tsc's `isExhaustiveSwitchStatement`, recorded only on positive evidence: a
+/// discriminant typed as a union of literals (or `boolean`) with a member no
+/// case names, or an open primitive no finite set of cases covers. Any case test
+/// that is not a literal, or a discriminant of another kind, records nothing.
+fn record_non_exhaustive_switch(
+    discriminant: &ParsedExpression,
+    span: Option<surge_ts_syntax::TextSpan>,
+    case_literals: Option<&[Type]>,
+    scopes: &ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    let (Some(span), Some(case_literals)) = (span, case_literals) else {
+        return;
+    };
+    let InferredExpression::Known(discriminant_type) =
+        crate::infer::infer_expression(discriminant, &visible_symbols(scopes), ctx)
+    else {
+        return;
+    };
+    let members: Vec<Type> = match discriminant_type.peeled() {
+        Type::String | Type::Number | Type::BigInt => {
+            ctx.non_exhaustive_switches.push((span.start, span.end));
+            return;
+        }
+        Type::Boolean => vec![Type::BooleanLiteral(true), Type::BooleanLiteral(false)],
+        Type::Union(union) => {
+            let mut members = Vec::new();
+            for member in union.types() {
+                match member {
+                    Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => {
+                        members.push(member.clone())
+                    }
+                    Type::Boolean => {
+                        members.push(Type::BooleanLiteral(true));
+                        members.push(Type::BooleanLiteral(false));
+                    }
+                    _ => return,
+                }
+            }
+            members
+        }
+        _ => return,
+    };
+    if members.iter().any(|member| !case_literals.contains(member)) {
+        ctx.non_exhaustive_switches.push((span.start, span.end));
+    }
+}
+
+/// The literal each case tests, or `None` when any case tests something else.
+fn switch_case_literals(cases: &[surge_ts_syntax::ParsedSwitchCase]) -> Option<Vec<Type>> {
+    cases
+        .iter()
+        .filter_map(|case| case.test.as_ref())
+        .map(|test| match test {
+            ParsedExpression::StringLiteral(value) => Some(Type::StringLiteral(value.clone())),
+            ParsedExpression::NumberLiteral(value) => Some(Type::NumberLiteral(
+                surge_ts_types::NumberLiteralType { value: value.clone() },
+            )),
+            ParsedExpression::BooleanLiteral(value) => Some(Type::BooleanLiteral(*value)),
+            _ => None,
+        })
+        .collect()
 }
 
 pub(crate) fn check_function_try_statement(

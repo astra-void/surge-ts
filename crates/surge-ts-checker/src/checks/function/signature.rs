@@ -1389,6 +1389,11 @@ pub(crate) fn check_function_body_with_signature_and_this(
 ) {
     let body_flow = analyze_function_body_flow(&body);
     let flow_facts = collect_function_flow_facts(&body);
+    // Whether a `default`-less switch covers its discriminant is only known once
+    // the body is checked, so such a body is kept to summarize again afterwards.
+    let recheck_body = (has_explicit_return_type && body_flow.guarantees_value_return)
+        .then(|| body_has_defaultless_switch(&body).then(|| body.clone()))
+        .flatten();
 
     let mut scopes = ScopeStack::from_root(merged_function_body_root_symbols(ctx));
     if let Some(name) = name {
@@ -1463,6 +1468,14 @@ pub(crate) fn check_function_body_with_signature_and_this(
         return;
     }
 
+    let body_flow = match recheck_body {
+        Some(body) if !ctx.non_exhaustive_switches.is_empty() => {
+            crate::flow::with_non_exhaustive_switches(&ctx.non_exhaustive_switches, || {
+                analyze_function_body_flow(&body)
+            })
+        }
+        _ => body_flow,
+    };
     if has_explicit_return_type && should_check_missing_return(function_type.return_type()) {
         emit_missing_return_diagnostic(
             body_flow,
@@ -1500,4 +1513,26 @@ pub(crate) fn merged_function_body_root_symbols(ctx: &CheckerContext) -> SymbolT
             .with_parent_fallback(ambient),
     );
     SymbolTable::with_parent(module_over_ambient)
+}
+
+fn body_has_defaultless_switch(body: &[ParsedFunctionBodyStatement]) -> bool {
+    body.iter().any(|statement| match statement {
+        ParsedFunctionBodyStatement::Switch(switch_statement) => {
+            switch_statement.cases.iter().all(|case| case.test.is_some())
+        }
+        ParsedFunctionBodyStatement::Block(block) => body_has_defaultless_switch(block),
+        ParsedFunctionBodyStatement::If(if_statement) => {
+            body_has_defaultless_switch(&if_statement.then_body)
+                || body_has_defaultless_switch(&if_statement.else_body)
+        }
+        ParsedFunctionBodyStatement::Try(try_statement) => {
+            body_has_defaultless_switch(&try_statement.block)
+                || try_statement
+                    .handler
+                    .as_ref()
+                    .is_some_and(|handler| body_has_defaultless_switch(&handler.body))
+                || body_has_defaultless_switch(&try_statement.finalizer)
+        }
+        _ => false,
+    })
 }
