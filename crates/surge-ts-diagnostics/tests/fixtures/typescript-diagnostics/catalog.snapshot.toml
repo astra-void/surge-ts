@@ -113,6 +113,14 @@ message = "'{0}' is defined as a property in class '{1}', but is overridden here
 arity = 3
 
 [[diagnostic]]
+code = "TS2613"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Module '{0}' has no default export. Did you mean to use 'import {1} from {0}' instead?"
+arity = 2
+
+[[diagnostic]]
 code = "TS2614"
 category = "Error"
 source = "typescript"
@@ -1071,6 +1079,14 @@ source = "typescript"
 support = "emitted"
 message = "An object literal cannot have property and accessor with the same name."
 arity = 0
+
+[[diagnostic]]
+code = "TS1192"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Module '{0}' has no default export."
+arity = 1
 
 [[diagnostic]]
 code = "TS1244"

@@ -438,7 +438,19 @@ fn resolve_default_and_named_import(
         {
             report_unresolved_module(ctx, import);
         } else {
-            emit_missing_export_diagnostic(ctx, &import.module_specifier, "default", *name_span);
+            emit_no_default_export_diagnostic(
+                ctx,
+                local_name,
+                *name_span,
+                resolve_relative_module(
+                    &ctx.file_name,
+                    &import.module_specifier,
+                    program_files,
+                    &ctx.module_file_index_by_identity,
+                )
+                .map(|resolution| resolution.resolved_file_index),
+                program_files,
+            );
         }
 
         if *is_type_only {
@@ -533,11 +545,12 @@ fn resolve_default_and_named_import(
                 resolved_index,
                 program_files,
             ) {
-                emit_missing_export_diagnostic(
+                emit_no_default_export_diagnostic(
                     ctx,
-                    &import.module_specifier,
-                    "default",
+                    local_name,
                     *name_span,
+                    resolved_index,
+                    program_files,
                 );
                 if *is_type_only {
                     let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
@@ -751,7 +764,19 @@ fn resolve_default_import(
         {
             report_unresolved_module(ctx, import);
         } else {
-            emit_missing_export_diagnostic(ctx, &import.module_specifier, "default", *name_span);
+            emit_no_default_export_diagnostic(
+                ctx,
+                local_name,
+                *name_span,
+                resolve_relative_module(
+                    &ctx.file_name,
+                    &import.module_specifier,
+                    program_files,
+                    &ctx.module_file_index_by_identity,
+                )
+                .map(|resolution| resolution.resolved_file_index),
+                program_files,
+            );
         }
         insert_unresolved_import_binding(local_name, ctx, import, symbols);
         return;
@@ -786,7 +811,13 @@ fn resolve_default_import(
             return;
         }
 
-        emit_missing_export_diagnostic(ctx, &import.module_specifier, "default", *name_span);
+        emit_no_default_export_diagnostic(
+            ctx,
+            local_name,
+            *name_span,
+            resolved_index,
+            program_files,
+        );
         insert_unknown_value_import(local_name, symbols);
         return;
     };

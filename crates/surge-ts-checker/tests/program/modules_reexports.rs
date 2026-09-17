@@ -40,7 +40,7 @@ fn mixed_default_named_relative_missing_default() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+    assert_eq!(codes(&diagnostics), vec!["TS1192"]);
 }
 
 #[test]
@@ -101,9 +101,9 @@ fn mixed_default_named_relative_no_cascade() {
         ),
     ]);
 
-    // The default export is missing (TS2305), but the named `helper` binds and
+    // The default export is missing (TS1192), but the named `helper` binds and
     // the unknown default binding must not cascade into TS2304 on `DefaultThing()`.
-    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+    assert_eq!(codes(&diagnostics), vec!["TS1192"]);
 }
 
 #[test]
@@ -441,7 +441,7 @@ fn module_re_export_star_does_not_export_default() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+    assert_eq!(codes(&diagnostics), vec!["TS1192"]);
 }
 
 #[test]

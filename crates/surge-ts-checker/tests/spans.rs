@@ -2128,10 +2128,11 @@ fn span_module_default_import_missing_export_points_to_default_name() {
         },
     ]);
 
+    // tsc: the module exports `getName`, so it suggests a named import.
     assert_eq!(
         diagnostic_tuples(&diagnostics),
         vec![(
-            "TS2305".to_string(),
+            "TS2613".to_string(),
             "index.ts".to_string(),
             Some(span("import getName from \"./user\";", "getName")),
         )]
@@ -2367,7 +2368,7 @@ fn span_ambient_module_missing_export_points_to_import_specifier() {
 }
 
 #[test]
-fn span_ambient_module_missing_default_points_to_default_import_name() {
+fn span_ambient_module_default_import_is_synthetic() {
     let diagnostics = check_program(vec![
         surge_ts_checker::SourceFileInput {
             file_name: "types/pkg.d.ts".to_string(),
@@ -2379,14 +2380,9 @@ fn span_ambient_module_missing_default_points_to_default_import_name() {
         },
     ]);
 
-    assert_eq!(
-        diagnostic_tuples(&diagnostics),
-        vec![(
-            "TS2305".to_string(),
-            "example.ts".to_string(),
-            Some(span("import foo from \"pkg\";", "foo")),
-        )]
-    );
+    // tsc: a declaration file's module can always be imported through a
+    // synthetic default.
+    assert!(diagnostic_tuples(&diagnostics).is_empty());
 }
 
 #[test]

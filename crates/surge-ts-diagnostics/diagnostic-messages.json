@@ -112,6 +112,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2613",
+    "category": "Error",
+    "message": "Module '{0}' has no default export. Did you mean to use 'import {1} from {0}' instead?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2614",
     "category": "Error",
     "message": "Module '{0}' has no exported member '{1}'. Did you mean to use 'import {1} from {0}' instead?",
@@ -1069,6 +1077,14 @@
     "message": "An object literal cannot have property and accessor with the same name.",
     "source": "typescript",
     "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1192",
+    "category": "Error",
+    "message": "Module '{0}' has no default export.",
+    "source": "typescript",
+    "arity": 1,
     "support": "emitted"
   },
   {

@@ -429,6 +429,46 @@ pub(crate) fn emit_unexported_local_import_diagnostic(
     });
 }
 
+/// tsc's `reportNonDefaultExport` for a default import from a module with no
+/// default export: TS2613 when the module exports a member of the imported
+/// name, TS1192 otherwise, naming the module by its resolved file (without
+/// extension) when it is known. A declaration file can always be imported
+/// synthetically (`canHaveSyntheticDefault`), so importing from one, or from
+/// an ambient module surge has no file for, is not an error.
+pub(crate) fn emit_no_default_export_diagnostic(
+    ctx: &mut CheckerContext,
+    local_name: &str,
+    name_span: Option<TextSpan>,
+    resolved_index: Option<usize>,
+    program_files: &[ParsedProgramFile],
+) {
+    let Some(file) = resolved_index.and_then(|index| program_files.get(index)) else {
+        return;
+    };
+    if file.file_kind.is_declaration() {
+        return;
+    }
+    let path = file.file_name.as_str();
+    let stem = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx"]
+        .iter()
+        .find_map(|extension| path.strip_suffix(extension))
+        .unwrap_or(path);
+    let module_name = format!("\"{stem}\"");
+    let exports_local_name = syntactic_export_names(resolved_index, program_files)
+        .is_some_and(|names| names.contains(&local_name));
+    let diagnostic = if exports_local_name {
+        // The catalog has no brace escape, so the import's braces ride in the
+        // argument.
+        Diagnostic::ts2613(&module_name, format!("{{ {local_name} }}"), ctx.file_name.clone())
+    } else {
+        Diagnostic::ts1192(module_name, ctx.file_name.clone())
+    };
+    ctx.push(match name_span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
+}
+
 pub(crate) fn emit_missing_named_import_diagnostic(
     ctx: &mut CheckerContext,
     module_specifier: &str,

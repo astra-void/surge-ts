@@ -159,7 +159,7 @@ fn ambient_module_default_export_value_mismatch() {
 }
 
 #[test]
-fn ambient_module_default_import_missing_default_ts2305() {
+fn ambient_module_default_import_is_synthetic() {
     let diagnostics = program(&[
         ("src/index.ts", "import value from \"pkg-default\";"),
         (
@@ -168,7 +168,9 @@ fn ambient_module_default_import_missing_default_ts2305() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+    // tsc: a declaration file's module can always be imported through a
+    // synthetic default.
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
 #[test]

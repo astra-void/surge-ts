@@ -1202,7 +1202,7 @@ fn module_default_import_missing_default_export() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2613"]);
 }
 
 #[test]
@@ -1265,7 +1265,7 @@ fn module_default_import_no_cascade_value_usage() {
         ("index.ts", "import getName from \"./user\";\ngetName;"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2305"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2613"]);
 }
 
 #[test]

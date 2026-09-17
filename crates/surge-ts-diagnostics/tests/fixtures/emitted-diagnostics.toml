@@ -15,6 +15,12 @@ oracle = [
   "enum-member-constant-values-basic",
 ]
 
+[TS1192]
+status = "emitted"
+oracle = [
+  "no-default-export-import-basic",
+]
+
 [TS2347]
 status = "emitted"
 oracle = [
@@ -80,6 +86,12 @@ oracle = [
 status = "emitted"
 oracle = [
   "member-kind-override-basic",
+]
+
+[TS2613]
+status = "emitted"
+oracle = [
+  "no-default-export-import-basic",
 ]
 
 [TS2676]
