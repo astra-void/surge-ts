@@ -1436,6 +1436,7 @@ pub(crate) fn resolve_interface_declaration(
     // overload's arity/arguments is accepted (`new Uint8Array(8)` and
     // `new Uint8Array([1,2,3])` both work).
     let mut merged_construct: Option<FunctionType> = None;
+    let mut construct_members: Vec<FunctionType> = Vec::new();
     for construct_signature in construct_signatures {
         let resolved = crate::program::with_dts_expansion_reason(
             crate::program::DtsExpansionReason::InterfaceConstructSignatureMapping,
@@ -1450,6 +1451,7 @@ pub(crate) fn resolve_interface_declaration(
         );
         had_error |= resolved.had_error;
         if let Type::Function(function_type) = resolved.ty {
+            construct_members.push(function_type.clone());
             merged_construct = Some(match merged_construct {
                 Some(existing) => crate::program::with_dts_expansion_reason(
                     crate::program::DtsExpansionReason::OverloadArrayMerge,
@@ -1460,6 +1462,9 @@ pub(crate) fn resolve_interface_declaration(
         }
     }
     if let Some(construct_signature) = merged_construct {
+        // The group is kept beside the fold, as a method overload group is: what
+        // `infer` reads off a constructor is its *last* signature.
+        let construct_signature = construct_signature.with_overloads(construct_members);
         object_type = object_type.with_construct_signature(construct_signature);
     } else if let Some(inherited) = inherited_construct_signature {
         object_type = object_type.with_construct_signature(inherited);

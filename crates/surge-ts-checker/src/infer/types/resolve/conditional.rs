@@ -518,15 +518,29 @@ fn bind_infer_captures(
                     depth,
                     reference_positional,
                 );
-            } else if let Some(signature) = pattern
+            } else if let Some(signature) = pattern.construct_signature.as_deref() {
                 // A constructor *type* (`abstract new (...args: infer P) => any`,
                 // `ConstructorParameters`' whole pattern) is an object carrying only
                 // a construct signature, so its captures live there rather than in a
-                // property.
-                .construct_signature
-                .as_deref()
-                .or(pattern.call_signature.as_deref())
-            {
+                // property — and it matches the check type's construct signatures,
+                // not a call signature the same value may also carry (`Date()`).
+                let check = match &peeled {
+                    Type::Object(object) => object
+                        .construct_signature()
+                        .map(|construct| Type::Function(construct.clone()))
+                        .unwrap_or_else(|| peeled.clone()),
+                    _ => peeled.clone(),
+                };
+                bind_signature_infer_captures(
+                    signature,
+                    &check,
+                    substitution,
+                    ctx,
+                    resolving,
+                    depth,
+                    reference_positional,
+                );
+            } else if let Some(signature) = pattern.call_signature.as_deref() {
                 bind_signature_infer_captures(
                     signature,
                     &peeled,
