@@ -145,6 +145,7 @@ fn lower_enum_declaration(
             is_declare: true,
             from_binding_pattern: false,
             has_definite_assertion: false,
+            array_pattern_span: None,
             kind: ParsedVariableKind::Const,
             name: declaration.id.name.to_string(),
             name_span,

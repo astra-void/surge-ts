@@ -1219,6 +1219,9 @@ pub struct ParsedVariableDeclaration {
     /// `let x!: T` — a definite-assignment assertion. The binding is asserted to
     /// be initialized elsewhere, so definite-assignment analysis skips it.
     pub has_definite_assertion: bool,
+    /// The innermost array pattern this binding is an element of, whose source
+    /// must be iterable (TS2488 is reported on the pattern).
+    pub array_pattern_span: Option<TextSpan>,
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub declared_type: Option<ParsedType>,

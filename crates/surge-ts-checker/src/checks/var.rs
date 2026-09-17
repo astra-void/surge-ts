@@ -201,10 +201,32 @@ pub(crate) fn check_variable_declaration_against_symbols(
         });
     let initializer_symbols = self_bound_symbols.as_ref().unwrap_or(symbols);
 
+    // tsc checks an array pattern's source once for iterability, and a
+    // source without the protocol types every element `any`.
+    let non_iterable_pattern_source = options.check_initializer
+        && variable
+            .array_pattern_span
+            .zip(variable.initializer.as_ref().and_then(array_pattern_source))
+            .is_some_and(|(pattern_span, source)| {
+                let InferredExpression::Known(source_type) = crate::infer::infer_expression(&source, symbols, ctx)
+                else {
+                    return false;
+                };
+                if !crate::checks::expr::is_definitely_not_iterable(&source_type, true) {
+                    return false;
+                }
+                let diagnostic = Diagnostic::ts2488(source_type.name(), ctx.file_name.clone())
+                    .with_span(convert_span(pattern_span));
+                ctx.push(diagnostic);
+                true
+            });
+
     let outer_allow_missing = ctx.allow_missing_tuple_element;
     ctx.allow_missing_tuple_element = variable.from_binding_pattern
         && matches!(variable.initializer, Some(ParsedExpression::NullishCoalescing { .. }));
-    let inferred_initializer = if options.check_initializer {
+    let inferred_initializer = if non_iterable_pattern_source {
+        InferredExpression::Known(Type::Any)
+    } else if options.check_initializer {
         variable
             .initializer
             .as_ref()
@@ -478,5 +500,31 @@ fn type_contains_unknown(ty: &Type) -> bool {
         }
         Type::Union(union) => union.types().iter().any(type_contains_unknown),
         _ => false,
+    }
+}
+
+/// The source an array-pattern element reads from: the object of the
+/// `source[index]` access the pattern lowers each element to, beneath a
+/// default's `??`.
+fn array_pattern_source(initializer: &ParsedExpression) -> Option<ParsedExpression> {
+    match initializer {
+        ParsedExpression::NullishCoalescing { left, .. } => array_pattern_source(left),
+        ParsedExpression::IndexAccess {
+            object_name,
+            object_span,
+            index,
+            ..
+        } if matches!(index.as_ref(), ParsedExpression::NumberLiteral(_)) => {
+            Some(ParsedExpression::Identifier {
+                name: object_name.clone(),
+                span: *object_span,
+            })
+        }
+        ParsedExpression::ElementAccess { object, index, .. }
+            if matches!(index.as_ref(), ParsedExpression::NumberLiteral(_)) =>
+        {
+            Some(object.as_ref().clone())
+        }
+        _ => None,
     }
 }

@@ -139,7 +139,7 @@ pub(crate) fn check_iterable_operand(
     ctx.push(Diagnostic::ts2488(ty.name(), file_name).with_span(convert_span(span)));
 }
 
-fn is_definitely_not_iterable(ty: &Type, nullish_is_error: bool) -> bool {
+pub(crate) fn is_definitely_not_iterable(ty: &Type, nullish_is_error: bool) -> bool {
     match ty {
         Type::Number
         | Type::NumberLiteral(_)

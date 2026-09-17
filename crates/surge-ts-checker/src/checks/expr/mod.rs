@@ -19,6 +19,7 @@ use index_access::*;
 pub(crate) use inferred::*;
 pub(crate) use operand_types::{
     check_instanceof_left_operand, check_iterable_operand, check_object_spread_type,
+    is_definitely_not_iterable,
 };
 pub(crate) use operand_writes::{check_delete_operand, check_update_operand, update_result_type};
 

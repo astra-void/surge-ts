@@ -2,6 +2,7 @@
 status = "emitted"
 oracle = [
   "spread-iterability-basic",
+  "array-pattern-iterability-basic",
 ]
 
 [TS5102]

@@ -477,6 +477,7 @@ fn parse_binding_pattern_declarations_with_definite(
                     kind,
                     from_binding_pattern: false,
                     has_definite_assertion,
+                    array_pattern_span: None,
                     name: binding_identifier.name.to_string(),
                     name_span: Some(text_span_from_oxc_span(binding_identifier.span)),
                     declared_type,
@@ -520,13 +521,26 @@ fn parse_binding_pattern_declarations_with_definite(
             ))
         }
         BindingPattern::ArrayPattern(array_pattern) => {
-            mark_binding_pattern_declarations(parse_array_pattern_declarations(
+            let pattern_span = text_span_from_oxc_span(array_pattern.span);
+            let declarations = parse_array_pattern_declarations(
                 array_pattern,
                 initializer,
                 initializer_span,
                 is_declare,
                 kind,
-            ))
+            )
+            .into_iter()
+            .map(|statement| match statement {
+                ParsedStatement::VariableDeclaration(mut variable)
+                    if variable.array_pattern_span.is_none() =>
+                {
+                    variable.array_pattern_span = Some(pattern_span);
+                    ParsedStatement::VariableDeclaration(variable)
+                }
+                other => other,
+            })
+            .collect();
+            mark_binding_pattern_declarations(declarations)
         }
     }
 }
