@@ -359,6 +359,9 @@ pub struct ParsedMappedType {
     pub constraint: Box<ParsedType>,
     pub value_type: Box<ParsedType>,
     pub optional: MappedOptionality,
+    /// The `readonly` modifier, with the same three states: `readonly` adds it,
+    /// `-readonly` removes it, and no modifier keeps the source property's.
+    pub readonly: MappedOptionality,
     /// The `as` clause (`[K in keyof T as Rename<K>]`): each key is mapped
     /// through it, `never` drops the key, a union of literals fans it out.
     pub name_type: Option<Box<ParsedType>>,

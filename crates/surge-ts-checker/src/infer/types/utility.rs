@@ -582,12 +582,27 @@ pub(crate) fn resolve_readonly_utility_type(
     }
 }
 
-/// `Readonly<T>`: `readonly` properties are not modelled, so an object is
-/// returned as it is; an array or tuple becomes the readonly shape; a union
-/// distributes (the mapped type is homomorphic); anything else is itself.
+/// `Readonly<T>`: an object's properties become `readonly`; an array or tuple
+/// becomes the readonly shape; a union distributes (the mapped type is
+/// homomorphic); anything else is itself.
 fn readonly_shape(source: &Type) -> Type {
     match source.peeled() {
-        Type::Object(object_type) => Type::Object(object_type),
+        Type::Object(object_type) => {
+            let mut properties = PropertyMap::default();
+            for (name, property) in object_type.properties.iter() {
+                properties.insert(
+                    name.clone(),
+                    ObjectProperty {
+                        readonly: true,
+                        ..property.clone()
+                    },
+                );
+            }
+            Type::Object(carry_open_marker(
+                alloc_object_type(properties, object_type.string_index_type.as_deref().cloned()),
+                &object_type,
+            ))
+        }
         sequence @ (Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)) => {
             crate::infer::types::resolve::readonly_reference(sequence)
         }

@@ -179,6 +179,11 @@ pub(crate) fn resolve_mapped_type(
             .and_then(|object| object.get_property(&key));
         let source_optional = source_property.is_some_and(|property| property.is_optional());
         let source_method = source_property.is_some_and(|property| property.is_method());
+        let readonly = match mapped.readonly {
+            MappedOptionality::Keep => source_property.is_some_and(|property| property.readonly),
+            MappedOptionality::Add => true,
+            MappedOptionality::Remove => false,
+        };
         // `-?` strips `undefined` from the mapped property as well as clearing
         // the optional flag; that is what makes `Required<{ b?: number }>` a
         // `number` rather than a required `number | undefined`.
@@ -196,7 +201,7 @@ pub(crate) fn resolve_mapped_type(
                     ty: property_type.clone(),
                     optional,
                     method: source_method,
-                    readonly: false,
+                    readonly,
                 },
             );
         }

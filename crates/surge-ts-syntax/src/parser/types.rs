@@ -313,11 +313,9 @@ fn parse_indexed_access_type(indexed_access: &TSIndexedAccessType<'_>) -> Option
     })))
 }
 
-/// The `readonly` modifier (`readonly [K in …]`, `-readonly`) is not
-/// modelled for properties anywhere, so it is ignored rather than degrading
-/// the whole mapping. The optionality modifier is modelled, and its three
-/// states are distinct: `-?` makes a property required even when the
-/// homomorphic source's is optional, so it cannot fold into `?`.
+/// A mapped type's modifiers have three distinct states: `-?` makes a property
+/// required even when the homomorphic source's is optional, so it cannot fold
+/// into `?`, and `readonly` works the same way.
 fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
     let name_type = match mapped_type.name_type.as_ref() {
         Some(name_type) => Some(Box::new(parse_type(name_type)?)),
@@ -325,6 +323,13 @@ fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
     };
 
     let optional = match mapped_type.optional {
+        Some(TSMappedTypeModifierOperator::True | TSMappedTypeModifierOperator::Plus) => {
+            MappedOptionality::Add
+        }
+        Some(TSMappedTypeModifierOperator::Minus) => MappedOptionality::Remove,
+        None => MappedOptionality::Keep,
+    };
+    let readonly = match mapped_type.readonly {
         Some(TSMappedTypeModifierOperator::True | TSMappedTypeModifierOperator::Plus) => {
             MappedOptionality::Add
         }
@@ -344,6 +349,7 @@ fn parse_mapped_type(mapped_type: &TSMappedType<'_>) -> Option<ParsedType> {
         constraint: Box::new(constraint),
         value_type: Box::new(value_type),
         optional,
+        readonly,
         name_type,
         span: Some(text_span_from_oxc_span(mapped_type.span)),
     })))
