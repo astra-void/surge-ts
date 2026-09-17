@@ -63,6 +63,12 @@ impl ScopeStack {
             .find_map(|frame| frame.symbols.get(name))
     }
 
+    /// Whether a frame of this function body declares `name` itself, shadowing
+    /// the module binding of the same name.
+    pub(crate) fn declares_locally(&self, name: &str) -> bool {
+        self.frames.iter().any(|frame| frame.symbols.get_own(name).is_some())
+    }
+
     pub(crate) fn insert_current(
         &mut self,
         name: impl Into<Arc<str>>,

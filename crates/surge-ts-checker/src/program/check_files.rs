@@ -981,6 +981,11 @@ pub(super) fn check_program_file(
                 .into_iter()
                 .filter(|name| !module_declared.contains(name)),
         );
+        ctx.set_file_import_names(
+            crate::program::ambient::import_bound_names(&parsed_file.statements)
+                .into_iter()
+                .filter(|name| !module_declared.contains(name)),
+        );
 
         if !ctx.umd_global_names.is_empty() {
             let declared = module_scope_declared_names(&parsed_file.statements);

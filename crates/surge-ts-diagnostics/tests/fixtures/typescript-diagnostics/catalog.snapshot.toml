@@ -545,6 +545,14 @@ message = "Right operand of ?? is unreachable because the left operand is never 
 arity = 0
 
 [[diagnostic]]
+code = "TS2632"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot assign to '{0}' because it is an import."
+arity = 1
+
+[[diagnostic]]
 code = "TS2769"
 category = "Error"
 source = "typescript"

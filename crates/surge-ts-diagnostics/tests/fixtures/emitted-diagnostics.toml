@@ -557,6 +557,12 @@ oracle = [
   "syntactic-nullishness-coalesce-basic",
 ]
 
+[TS2632]
+status = "emitted"
+oracle = [
+  "import-binding-assignment-basic",
+]
+
 [TS2769]
 status = "emitted"
 oracle = [

@@ -55,7 +55,8 @@ pub(crate) fn check_function_assignment(
             &visible_symbols,
             ctx,
         );
-        check_assignment_with_symbols(assignment, &visible_symbols, ctx);
+        let shadowed_locally = scopes.declares_locally(&target_name);
+        check_assignment_with_symbols(assignment, &visible_symbols, shadowed_locally, ctx);
         update_assigned_symbol_type(&target_name, inferred_value, scopes);
     }
 

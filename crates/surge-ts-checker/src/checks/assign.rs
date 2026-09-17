@@ -16,12 +16,13 @@ use crate::symbols::{SymbolKind, SymbolTable};
 
 pub(crate) fn check_assignment(assignment: ParsedAssignment, ctx: &mut CheckerContext) {
     let symbols = ctx.symbols.clone();
-    check_assignment_with_symbols(assignment, &symbols, ctx);
+    check_assignment_with_symbols(assignment, &symbols, false, ctx);
 }
 
 pub(crate) fn check_assignment_with_symbols(
     assignment: ParsedAssignment,
     symbols: &SymbolTable,
+    shadowed_locally: bool,
     ctx: &mut CheckerContext,
 ) {
     let Some(target_span) = assignment.target_span else {
@@ -38,6 +39,13 @@ pub(crate) fn check_assignment_with_symbols(
         ctx.push(diagnostic);
         return;
     };
+
+    if !shadowed_locally && ctx.is_import_binding(&assignment.target_name) {
+        let diagnostic = Diagnostic::ts2632(&assignment.target_name, ctx.file_name.clone())
+            .with_span(convert_span(target_span));
+        ctx.push(diagnostic);
+        return;
+    }
 
     if matches!(target.kind, SymbolKind::Const) {
         let diagnostic = Diagnostic::ts2588(&assignment.target_name, ctx.file_name.clone())

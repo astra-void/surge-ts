@@ -685,6 +685,16 @@ pub const TS2869: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2632: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2632",
+    number: Some(2632),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot assign to '{0}' because it is an import.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2769: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2769",
     number: Some(2769),
@@ -2144,6 +2154,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2745,
     TS2749,
     TS2869,
+    TS2632,
     TS2769,
     TS2774,
     TS2871,
@@ -2956,6 +2967,15 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2869(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2869, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2632(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2632,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
     }
 
     #[allow(clippy::needless_pass_by_value)]

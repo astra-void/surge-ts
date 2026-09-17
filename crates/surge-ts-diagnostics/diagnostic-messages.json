@@ -544,6 +544,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2632",
+    "category": "Error",
+    "message": "Cannot assign to '{0}' because it is an import.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2769",
     "category": "Error",
     "message": "No overload matches this call.",
