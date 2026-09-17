@@ -8,7 +8,7 @@ use surge_ts_syntax::{
     parse_source,
 };
 
-use crate::checks::{assign, call, expr, function as check_function, var};
+use crate::checks::{call, expr, function as check_function, var};
 use crate::context::{CheckerContext, DeclarationNamespace, DeclarationResolutionKey, FileKind};
 use crate::default_lib::load_generated_default_lib_inputs;
 use crate::infer::{report_duplicate_type_parameters, validate_local_type_declaration};
@@ -1104,7 +1104,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             var::check_variable_declaration(*variable, ctx);
         }
         ParsedStatement::Assignment(assignment) => {
-            assign::check_assignment(*assignment, ctx);
+            crate::program::check_module_assignment(*assignment, ctx);
         }
         ParsedStatement::MemberAssignment(assignment) => {
             let symbols = ctx
@@ -1114,7 +1114,9 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             crate::checks::function::check_member_assignment(*assignment, &mut scopes, ctx);
         }
         ParsedStatement::FunctionDeclaration(function) => {
-            check_function::check_function_declaration(*function, ctx);
+            crate::program::with_declared_mutable_module_bindings(ctx, |ctx| {
+                check_function::check_function_declaration(*function, ctx);
+            });
         }
         ParsedStatement::Call(call) => {
             let assertion = crate::program::module_call_expression(&call);

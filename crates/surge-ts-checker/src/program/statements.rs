@@ -131,6 +131,88 @@ fn module_alias_condition(
         .cloned()
 }
 
+/// Runs `check` with every narrowed module `let`/`var` read at its declared type.
+/// A function declaration is hoisted and may run before the narrowing
+/// assignment or guard, so its body does not see module narrowing of a binding
+/// that can still change.
+pub(crate) fn with_declared_mutable_module_bindings(
+    ctx: &mut CheckerContext,
+    check: impl FnOnce(&mut CheckerContext),
+) {
+    let narrowed: Vec<(std::sync::Arc<str>, crate::symbols::SymbolInfo, surge_ts_types::Type)> = ctx
+        .symbols
+        .narrowed_names()
+        .filter_map(|name| {
+            let symbol = ctx.symbols.get(name)?;
+            if !matches!(
+                symbol.kind,
+                crate::symbols::SymbolKind::Let | crate::symbols::SymbolKind::Var
+            ) {
+                return None;
+            }
+            let declared = ctx.symbols.declared_type(name)?;
+            (*declared != symbol.ty)
+                .then(|| (std::sync::Arc::clone(name), symbol.clone(), declared.clone()))
+        })
+        .collect();
+    // Widened in place, not on a copy: the check records declaration spans on
+    // the module table, which must survive it.
+    for (name, symbol, declared) in &narrowed {
+        let widened = crate::symbols::SymbolInfo {
+            ty: declared.clone(),
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        };
+        let _ = ctx.symbols.insert(std::sync::Arc::clone(name), widened);
+    }
+    check(ctx);
+    for (name, symbol, declared) in narrowed {
+        let _ = ctx.symbols.insert_narrowed(name, symbol, declared);
+    }
+}
+
+/// A module-scope assignment narrows the binding for the statements after it, as
+/// the same assignment does in a block (`x ??= v` included, which lowers to
+/// `x = x ?? v`). The assignment check itself is unchanged; the value's type is
+/// read again without its diagnostics to decide the narrowing.
+pub(crate) fn check_module_assignment(
+    assignment: surge_ts_syntax::ParsedAssignment,
+    ctx: &mut CheckerContext,
+) {
+    let target_name = assignment.target_name.clone();
+    let value = assignment.value.clone();
+    let value_span = assignment.value_span;
+    assign::check_assignment(assignment, ctx);
+
+    let Some(original) = ctx.symbols.get(&target_name) else {
+        return;
+    };
+    if matches!(original.kind, crate::symbols::SymbolKind::Const) {
+        return;
+    }
+    let original_ty = original.ty.clone();
+    let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    let checkpoint = ctx.diagnostics().len();
+    let inferred = expr::evaluate_expression(&value, value_span, &symbols, ctx);
+    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+
+    let mut scopes = crate::symbols::ScopeStack::from_root(symbols);
+    check_function::update_assigned_symbol_type(&target_name, inferred, &mut scopes);
+    let Some(updated) = scopes.resolve(&target_name) else {
+        return;
+    };
+    if updated.ty == original_ty {
+        return;
+    }
+    let updated = updated.clone();
+    let declared = ctx
+        .symbols
+        .declared_type(&target_name)
+        .cloned()
+        .unwrap_or(original_ty);
+    let _ = ctx.symbols.insert_narrowed(target_name, updated, declared);
+}
+
 /// A module-scope call written as a statement, as the expression an assertion
 /// signature is read from, when it could narrow an argument.
 pub(crate) fn module_call_expression(
@@ -323,7 +405,7 @@ pub(crate) fn check_program_statement(
             });
         }
         ParsedStatement::Assignment(assignment) => {
-            assign::check_assignment(*assignment, ctx);
+            check_module_assignment(*assignment, ctx);
         }
         ParsedStatement::MemberAssignment(assignment) => {
             let symbols = ctx
@@ -333,13 +415,15 @@ pub(crate) fn check_program_statement(
             crate::checks::function::check_member_assignment(*assignment, &mut scopes, ctx);
         }
         ParsedStatement::FunctionDeclaration(function) => {
-            check_program_function_declaration(
-                *function,
-                file_index,
-                statement_index,
-                function_signatures,
-                ctx,
-            );
+            with_declared_mutable_module_bindings(ctx, |ctx| {
+                check_program_function_declaration(
+                    *function,
+                    file_index,
+                    statement_index,
+                    function_signatures,
+                    ctx,
+                );
+            });
         }
         ParsedStatement::Call(call) => {
             let assertion = module_call_expression(&call);
