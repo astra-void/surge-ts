@@ -344,6 +344,7 @@ fn parse_this_property_assignment(
     Some(ParsedThisPropertyAssignment {
         property_name: member.property.name.to_string(),
         property_span,
+        target_span: Some(text_span_from_oxc_span(member.span)),
         value,
         value_span,
     })

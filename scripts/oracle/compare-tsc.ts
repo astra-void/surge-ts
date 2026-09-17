@@ -487,6 +487,9 @@ export const fixturePresets: Record<string, string> = {
   'conditional-expression-mismatch-anchor-basic': path.join(workspaceRoot, 'tests/compat-projects/conditional-expression-mismatch-anchor-basic/tsconfig.json'),
   'arrow-return-elaboration-basic': path.join(workspaceRoot, 'tests/compat-projects/arrow-return-elaboration-basic/tsconfig.json'),
   'arrow-unit-return-widening-basic': path.join(workspaceRoot, 'tests/compat-projects/arrow-unit-return-widening-basic/tsconfig.json'),
+  'member-write-missing-property-basic': path.join(workspaceRoot, 'tests/compat-projects/member-write-missing-property-basic/tsconfig.json'),
+  'this-write-missing-property-basic': path.join(workspaceRoot, 'tests/compat-projects/this-write-missing-property-basic/tsconfig.json'),
+  'this-write-target-anchor-basic': path.join(workspaceRoot, 'tests/compat-projects/this-write-target-anchor-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

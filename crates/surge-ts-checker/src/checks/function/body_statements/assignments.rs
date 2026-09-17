@@ -14,7 +14,7 @@ use crate::flow::{
     FlowCheck, FunctionFlowState, check_assignment_target_flow, check_expression_flow, mark_assignment_state,
 };
 use crate::infer::InferredExpression;
-use crate::symbols::{ScopeStack, SymbolInfo, SymbolTable};
+use crate::symbols::{ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
 use super::super::visible_symbols;
 
 pub(crate) fn check_function_assignment(
@@ -616,6 +616,28 @@ fn is_commonjs_export_declaration(target: &ParsedExpression, ctx: &CheckerContex
     }
 }
 
+/// tsc binds `fn.x = …` as a declaration of `x` on `fn` (an expando) when `fn`
+/// is a function declaration or a `const` initialized with a function or arrow
+/// expression (`getInitializerSymbol`). surge does not keep the initializer, so
+/// any `const` holding a function counts.
+fn is_expando_receiver(object: &ParsedExpression, symbols: &SymbolTable) -> bool {
+    let ParsedExpression::Identifier { name, .. } = object else {
+        return false;
+    };
+    let Some(symbol) = symbols.get(name) else {
+        return false;
+    };
+    match symbol.kind {
+        SymbolKind::Function => true,
+        SymbolKind::Const => match symbol.ty.peeled() {
+            Type::Function(_) => true,
+            Type::Object(object) => object.call_signature().is_some(),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 pub(crate) fn check_member_assignment(
     assignment: ParsedMemberAssignment,
     scopes: &mut ScopeStack,
@@ -672,6 +694,7 @@ pub(crate) fn check_member_assignment(
         object_span,
         property_name,
         property_span,
+        is_bracketed,
         ..
     } = &assignment.target
     else {
@@ -761,6 +784,25 @@ pub(crate) fn check_member_assignment(
                 Some(span) => diagnostic.with_span(convert_span(span)),
                 None => diagnostic,
             });
+        } else if !*is_bracketed
+            && !is_expando_receiver(object, &visible_symbols)
+            && let InferredExpression::MissingProperty {
+                property_name,
+                object_type,
+                span,
+            } = crate::infer::infer_expression(&assignment.target, &visible_symbols, ctx)
+        {
+            // Any other receiver reports a missing member exactly as a read of
+            // it does, gated by the same modelling checks the read applies.
+            let diagnostic = crate::checks::expr::missing_property_diagnostic(
+                &property_name,
+                &object_type,
+                &visible_symbols,
+                ctx.file_name.clone(),
+            );
+            if let Some(span) = span.or(*property_span).or(assignment.target_span) {
+                ctx.push(diagnostic.with_span(convert_span(span)));
+            }
         }
         return;
     };
@@ -854,21 +896,57 @@ pub(crate) fn check_this_property_assignment(
                 .get_property_access_type(&assignment.property_name)
         })
     else {
+        // A write to a member `this` does not declare is TS2339 in a `.ts`
+        // file (only JS binds `this.x = …` as a declaration), reported exactly
+        // where a read of it would be.
+        let read = ParsedExpression::PropertyAccess {
+            object: Box::new(ParsedExpression::This { span: None }),
+            object_span: None,
+            property_name: assignment.property_name.clone(),
+            property_span: assignment.property_span,
+            is_bracketed: false,
+        };
+        if let InferredExpression::MissingProperty {
+            property_name,
+            object_type,
+            span,
+        } = crate::infer::infer_expression(&read, &visible_symbols, ctx)
+            && let Some(span) = span.or(assignment.property_span)
+        {
+            let diagnostic = crate::checks::expr::missing_property_diagnostic(
+                &property_name,
+                &object_type,
+                &visible_symbols,
+                ctx.file_name.clone(),
+            );
+            ctx.push(diagnostic.with_span(convert_span(span)));
+        }
         return;
     };
 
-    let inferred_value = evaluate_expression(
+    // Evaluated against the member like an `o.p = …` write: the target types
+    // the value contextually, an object literal elaborates into its members, and
+    // a whole-value mismatch is reported on `this.<property>`.
+    let target_unresolved = crate::checks::assign::type_contains_unknown(&property_type);
+    let checkpoint = ctx.diagnostics().len();
+    let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
         &assignment.value,
         assignment.value_span,
+        assignment.target_span,
+        Some(&property_type),
+        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
         &visible_symbols,
         ctx,
     );
+    if target_unresolved {
+        ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    }
 
     let InferredExpression::Known(value_type) = inferred_value else {
         return;
     };
 
-    if value_type.is_unknown() || property_type.is_unknown() {
+    if target_unresolved || value_type.is_unknown() || property_type.is_unknown() {
         return;
     }
 
@@ -880,7 +958,7 @@ pub(crate) fn check_this_property_assignment(
             &property_type.name(),
             ctx.file_name.clone(),
         );
-        let diagnostic = match assignment.value_span {
+        let diagnostic = match assignment.target_span.or(assignment.value_span) {
             Some(span) => diagnostic.with_span(convert_span(span)),
             None => diagnostic,
         };

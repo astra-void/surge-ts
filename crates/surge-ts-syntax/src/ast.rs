@@ -587,6 +587,10 @@ pub struct ParsedClassDeclaration {
     /// is what makes an unimplemented one reportable.
     pub implements: Vec<ParsedNamedType>,
     pub members: Vec<ParsedClassMember>,
+    /// Value types of the instance side's string and number index signatures
+    /// (`[key: string]: T`), as on [`ParsedInterfaceDeclaration`].
+    pub string_index_type: Option<ParsedType>,
+    pub number_index_type: Option<ParsedType>,
     pub span: Option<TextSpan>,
 }
 
@@ -1343,6 +1347,8 @@ pub struct ParsedMemberAssignment {
 pub struct ParsedThisPropertyAssignment {
     pub property_name: String,
     pub property_span: Option<TextSpan>,
+    /// The whole `this.<property>` target, which a mismatch is reported on.
+    pub target_span: Option<TextSpan>,
     pub value: ParsedExpression,
     pub value_span: Option<TextSpan>,
 }

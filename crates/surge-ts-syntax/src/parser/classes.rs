@@ -29,7 +29,36 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
             .collect(),
     );
 
+    // The last instance signature of each key kind wins, as for an interface.
+    // A `symbol` or pattern key answers no named member (Prisma's client class
+    // declares `[K: symbol]`), so only `string` and `number` keys are kept.
+    let index_signature_of = |numeric: bool| {
+        class
+            .body
+            .body
+            .iter()
+            .filter_map(|element| match element {
+                ClassElement::TSIndexSignature(index_signature)
+                    if !index_signature.r#static
+                        && index_signature.parameters.first().is_some_and(|parameter| {
+                            matches!(
+                                parameter.type_annotation.type_annotation,
+                                oxc_ast::ast::TSType::TSStringKeyword(_)
+                                    | oxc_ast::ast::TSType::TSNumberKeyword(_)
+                            )
+                        })
+                        && super::types::index_signature_is_numeric(index_signature) == numeric =>
+                {
+                    super::types::parse_index_signature_value_type(index_signature)
+                }
+                _ => None,
+            })
+            .next_back()
+    };
+
     Some(ParsedClassDeclaration {
+        string_index_type: index_signature_of(false),
+        number_index_type: index_signature_of(true),
         is_declare: class.declare,
         is_abstract: class.r#abstract,
         name: id.name.to_string(),
