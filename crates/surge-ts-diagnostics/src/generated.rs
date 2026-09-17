@@ -715,6 +715,16 @@ pub const TS2459: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2469: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2469",
+    number: Some(2469),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The '{0}' operator cannot be applied to type 'symbol'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2632: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2632",
     number: Some(2632),
@@ -2207,6 +2217,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2869,
     TS2447,
     TS2459,
+    TS2469,
     TS2632,
     TS2769,
     TS2774,
@@ -3056,6 +3067,15 @@ impl Diagnostic {
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),
             ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2469(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2469,
+            vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
     }

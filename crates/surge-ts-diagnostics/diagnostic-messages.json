@@ -568,6 +568,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2469",
+    "category": "Error",
+    "message": "The '{0}' operator cannot be applied to type 'symbol'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2632",
     "category": "Error",
     "message": "Cannot assign to '{0}' because it is an import.",

@@ -569,6 +569,14 @@ message = "Module '{0}' declares '{1}' locally, but it is not exported."
 arity = 2
 
 [[diagnostic]]
+code = "TS2469"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The '{0}' operator cannot be applied to type 'symbol'."
+arity = 1
+
+[[diagnostic]]
 code = "TS2632"
 category = "Error"
 source = "typescript"

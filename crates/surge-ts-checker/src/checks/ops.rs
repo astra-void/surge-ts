@@ -20,7 +20,9 @@ pub(crate) fn evaluate_binary_expression(
         ParsedBinaryOperator::Add => evaluate_add_binary(
             left_result,
             right_result,
+            left_span.or(fallback_span),
             operator_span.or(fallback_span),
+            right_span.or(fallback_span),
             ctx,
         ),
         ParsedBinaryOperator::Subtract
@@ -50,6 +52,8 @@ pub(crate) fn evaluate_binary_expression(
             left_result,
             right_result,
             binary_operator_text(operator),
+            left_span.or(fallback_span),
+            right_span.or(fallback_span),
             operator_span.or(fallback_span),
             ctx,
         ),
@@ -187,7 +191,9 @@ pub(crate) fn evaluate_unary_expression(
 fn evaluate_add_binary(
     left_result: InferredExpression,
     right_result: InferredExpression,
+    left_span: Option<SyntaxTextSpan>,
     fallback_span: Option<SyntaxTextSpan>,
+    right_span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let Some(left_type) = inferred_type(&left_result) else {
@@ -206,6 +212,15 @@ fn evaluate_add_binary(
 
     if left_type.is_unknown() || right_type.is_unknown() {
         return InferredExpression::Unknown;
+    }
+
+    // A string operand makes `+` a concatenation, which a symbol cannot join
+    // (`checkForDisallowedESSymbolOperand`); without one the operands are
+    // judged as a whole below.
+    if (is_string_like_for_add(&left_type) || is_string_like_for_add(&right_type))
+        && report_symbol_operand("+", &left_type, &right_type, left_span, right_span, ctx)
+    {
+        return InferredExpression::Known(Type::String);
     }
 
     if matches!(left_type, Type::Any) || matches!(right_type, Type::Any) {
@@ -240,6 +255,34 @@ fn evaluate_add_binary(
         fallback_span,
     );
     InferredExpression::Unknown
+}
+
+/// TS2469 on the first operand that may be a symbol. Returns whether one was.
+fn report_symbol_operand(
+    operator_text: &str,
+    left_type: &Type,
+    right_type: &Type,
+    left_span: Option<SyntaxTextSpan>,
+    right_span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) -> bool {
+    fn maybe_symbol(ty: &Type) -> bool {
+        match ty {
+            Type::Symbol => true,
+            Type::Union(union) => union.types().iter().any(maybe_symbol),
+            _ => false,
+        }
+    }
+    let span = if maybe_symbol(left_type) {
+        left_span
+    } else if maybe_symbol(right_type) {
+        right_span
+    } else {
+        return false;
+    };
+    let file_name = ctx.file_name.clone();
+    push_diagnostic(ctx, Diagnostic::ts2469(operator_text, file_name), span);
+    true
 }
 
 fn is_string_like_for_add(ty: &Type) -> bool {
@@ -407,6 +450,8 @@ fn evaluate_comparison_binary(
     left_result: InferredExpression,
     right_result: InferredExpression,
     operator_text: &'static str,
+    left_span: Option<SyntaxTextSpan>,
+    right_span: Option<SyntaxTextSpan>,
     fallback_span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
@@ -419,6 +464,10 @@ fn evaluate_comparison_binary(
 
     if left_type.is_unknown() || right_type.is_unknown() {
         return InferredExpression::Unknown;
+    }
+
+    if report_symbol_operand(operator_text, left_type, right_type, left_span, right_span, ctx) {
+        return InferredExpression::Known(Type::Boolean);
     }
 
     if matches!(left_type, Type::Any) || matches!(right_type, Type::Any) {

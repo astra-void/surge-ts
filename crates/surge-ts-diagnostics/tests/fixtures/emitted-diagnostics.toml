@@ -575,6 +575,12 @@ oracle = [
   "import-unexported-local-basic",
 ]
 
+[TS2469]
+status = "emitted"
+oracle = [
+  "symbol-operand-rules-basic",
+]
+
 [TS2632]
 status = "emitted"
 oracle = [
