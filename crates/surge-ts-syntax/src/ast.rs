@@ -101,6 +101,10 @@ pub enum ParsedGrammarDiagnosticKind {
     NeverNullishCoalesceOperand,
     /// A `??` left operand whose syntax is always nullish — TS2871.
     AlwaysNullishCoalesceOperand,
+    /// A class member modifier written after one it must precede — TS1029.
+    /// `name` holds the two modifiers, the one that must come first separated
+    /// from the other by a NUL.
+    ModifierMustPrecede,
     /// A parameter written both optional and with a default — TS1015.
     OptionalParameterWithInitializer,
     /// A required parameter after an optional one — TS1016.

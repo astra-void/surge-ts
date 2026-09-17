@@ -5,6 +5,16 @@ use crate::{
     DiagnosticSupport,
 };
 
+pub const TS1029: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1029",
+    number: Some(1029),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' modifier must precede '{1}' modifier.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS5112: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS5112",
     number: Some(5112),
@@ -2096,6 +2106,7 @@ pub const TS18059: DiagnosticDescriptor = DiagnosticDescriptor {
 };
 
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
+    TS1029,
     TS5112,
     TS5102,
     TS5097,
@@ -2308,6 +2319,18 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
 ];
 
 impl Diagnostic {
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1029(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1029,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts5112(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS5112, Vec::<DiagnosticArg>::new(), file_name)

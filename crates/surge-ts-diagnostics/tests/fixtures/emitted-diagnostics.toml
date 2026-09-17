@@ -557,6 +557,12 @@ oracle = [
   "syntactic-nullishness-coalesce-basic",
 ]
 
+[TS1029]
+status = "emitted"
+oracle = [
+  "modifier-order-basic",
+]
+
 [TS2459]
 status = "emitted"
 oracle = [

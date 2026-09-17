@@ -847,6 +847,14 @@ pub(crate) fn emit_grammar_diagnostics(
                 };
                 Diagnostic::ts7008(name, "any", ctx.file_name.clone())
             }
+            Kind::ModifierMustPrecede => {
+                let Some((first, second)) =
+                    finding.name.as_deref().and_then(|pair| pair.split_once('\0'))
+                else {
+                    continue;
+                };
+                Diagnostic::ts1029(first, second, ctx.file_name.clone())
+            }
             Kind::OptionalParameterWithInitializer => Diagnostic::ts1015(ctx.file_name.clone()),
             Kind::RequiredParameterAfterOptional => Diagnostic::ts1016(ctx.file_name.clone()),
             Kind::AmbientInitializer => Diagnostic::ts1039(ctx.file_name.clone()),

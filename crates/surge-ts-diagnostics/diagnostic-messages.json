@@ -1,5 +1,13 @@
 [
   {
+    "code": "TS1029",
+    "category": "Error",
+    "message": "'{0}' modifier must precede '{1}' modifier.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS5112",
     "category": "Error",
     "message": "tsconfig.json is present but will not be loaded if files are specified on commandline. Use '--ignoreConfig' to skip this error.",

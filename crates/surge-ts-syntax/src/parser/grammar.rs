@@ -39,6 +39,9 @@ struct GrammarCollector {
     /// a bodyless declaration legal, so the implementation-missing checks stay
     /// quiet inside one.
     ambient_depth: usize,
+    /// The file's text, which modifier-order checks read: the AST keeps which
+    /// modifiers a member has, not the order they were written in.
+    source_text: String,
 }
 
 impl GrammarCollector {
@@ -172,6 +175,112 @@ impl GrammarCollector {
     ///
     /// Static and instance members are separate names, and an `abstract` or
     /// ambient member has no implementation to miss.
+    /// tsc's `checkGrammarModifiers` ordering rules for class members: an
+    /// accessibility modifier precedes `static`, `override`, `readonly`, `async`
+    /// and `abstract`; `static` precedes `override`, `readonly` and `async`;
+    /// `override` precedes `readonly` and `async`. The first violation of a
+    /// member is reported on the later modifier. A modifier list containing
+    /// anything but plain keywords (a decorator, a comment) or repeating one is
+    /// left alone, since tsc reports those differently.
+    fn check_member_modifier_order(&mut self, class: &Class<'_>) {
+        for element in &class.body.body {
+            let (element_span, decorators, key_start) = match element {
+                ClassElement::MethodDefinition(method) => {
+                    (method.span, &method.decorators, method.key.span().start)
+                }
+                ClassElement::PropertyDefinition(property) => {
+                    (property.span, &property.decorators, property.key.span().start)
+                }
+                ClassElement::AccessorProperty(property) => {
+                    (property.span, &property.decorators, property.key.span().start)
+                }
+                _ => continue,
+            };
+            let modifiers_start = decorators
+                .iter()
+                .map(|decorator| decorator.span.end)
+                .max()
+                .unwrap_or(element_span.start)
+                .max(element_span.start);
+            let Some(prefix) = self
+                .source_text
+                .get(modifiers_start as usize..key_start as usize)
+            else {
+                continue;
+            };
+            let mut seen: Vec<&str> = Vec::new();
+            let mut offset = modifiers_start as usize;
+            let mut rest = prefix;
+            let mut violation: Option<(&str, &str, usize, usize)> = None;
+            loop {
+                let trimmed = rest.trim_start();
+                offset += rest.len() - trimmed.len();
+                if trimmed.is_empty() {
+                    break;
+                }
+                if let Some(comment) = trimmed.strip_prefix("/*") {
+                    let Some(end) = comment.find("*/") else {
+                        seen.push("\u{0}");
+                        break;
+                    };
+                    let skipped = 2 + end + 2;
+                    offset += skipped;
+                    rest = &trimmed[skipped..];
+                    continue;
+                }
+                let word_len = trimmed
+                    .find(|c: char| c.is_whitespace())
+                    .unwrap_or(trimmed.len());
+                let word = &trimmed[..word_len];
+                if matches!(word, "get" | "set" | "*" | "[") {
+                    break;
+                }
+                let precedence: &[&str] = match word {
+                    // Outside an abstract class tsc stops at the misplaced
+                    // `abstract` itself, so the order is only judged inside one.
+                    "public" | "private" | "protected" if class.r#abstract => {
+                        &["override", "static", "accessor", "readonly", "async", "abstract"]
+                    }
+                    "public" | "private" | "protected" => {
+                        &["override", "static", "accessor", "readonly", "async"]
+                    }
+                    "static" => &["readonly", "async", "accessor", "override"],
+                    "override" => &["readonly", "accessor", "async"],
+                    "readonly" | "async" | "abstract" | "declare" | "accessor" => &[],
+                    _ => {
+                        violation = None;
+                        seen.clear();
+                        seen.push("\u{0}");
+                        break;
+                    }
+                };
+                if seen.contains(&word) {
+                    seen.push("\u{0}");
+                    break;
+                }
+                if violation.is_none()
+                    && let Some(earlier) = precedence.iter().find(|modifier| seen.contains(modifier))
+                {
+                    violation = Some((word, earlier, offset, word_len));
+                }
+                seen.push(word);
+                offset += word_len;
+                rest = &trimmed[word_len..];
+            }
+            if seen.contains(&"\u{0}") {
+                continue;
+            }
+            if let Some((first, second, start, len)) = violation {
+                let pair = format!("{first}\u{0}{second}");
+                self.push(
+                    Kind::ModifierMustPrecede,
+                    Span::new(start as u32, (start + len) as u32),
+                    Some(&pair),
+                );
+            }
+        }
+    }
+
     fn check_class_members(&mut self, class: &Class<'_>) {
         let ambient = self.is_ambient() || class.declare;
         let mut groups: Vec<MemberGroup> = Vec::new();
@@ -773,6 +882,7 @@ fn property_key_name(key: &PropertyKey<'_>) -> Option<String> {
 
 impl<'a> Visit<'a> for GrammarCollector {
     fn visit_program(&mut self, program: &Program<'a>) {
+        self.source_text = program.source_text.to_string();
         self.strict_mode = program.source_type.is_module()
             || program
                 .directives
@@ -858,6 +968,7 @@ impl<'a> Visit<'a> for GrammarCollector {
 
     fn visit_class(&mut self, class: &Class<'a>) {
         self.check_class_members(class);
+        self.check_member_modifier_order(class);
         oxc_ast_visit::walk::walk_class(self, class);
     }
 

@@ -1,6 +1,14 @@
 # Pinned verification snapshot for the current diagnostic catalog.
 
 [[diagnostic]]
+code = "TS1029"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier must precede '{1}' modifier."
+arity = 2
+
+[[diagnostic]]
 code = "TS5112"
 category = "Error"
 source = "typescript"
