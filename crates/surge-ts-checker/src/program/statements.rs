@@ -131,6 +131,76 @@ fn module_alias_condition(
         .cloned()
 }
 
+/// A module-scope call written as a statement, as the expression an assertion
+/// signature is read from, when it could narrow an argument.
+pub(crate) fn module_call_expression(
+    call: &surge_ts_syntax::ParsedCall,
+) -> Option<surge_ts_syntax::ParsedExpression> {
+    assertion_arguments_named(&call.arguments).then(|| surge_ts_syntax::ParsedExpression::Call {
+        callee_name: call.callee_name.clone(),
+        callee_span: call.callee_span,
+        type_arguments: call.type_arguments.clone(),
+        arguments: call.arguments.clone(),
+    })
+}
+
+pub(crate) fn assertion_candidate(expression: &surge_ts_syntax::ParsedExpression) -> bool {
+    match expression {
+        surge_ts_syntax::ParsedExpression::Call { arguments, .. }
+        | surge_ts_syntax::ParsedExpression::PropertyCall { arguments, .. } => {
+            assertion_arguments_named(arguments)
+        }
+        _ => false,
+    }
+}
+
+fn assertion_arguments_named(arguments: &[surge_ts_syntax::ParsedCallArgument]) -> bool {
+    arguments.iter().any(|argument| {
+        matches!(argument.expression, surge_ts_syntax::ParsedExpression::Identifier { .. })
+    })
+}
+
+/// `assertIsString(value);` narrows `value` for the rest of the module, as it
+/// does for the rest of a block (tsc's assertion signatures). The narrowing runs
+/// over a scope rooted at the module's symbols, and each argument binding it
+/// changed is carried back.
+pub(crate) fn narrow_module_assertion_call(
+    expression: Option<surge_ts_syntax::ParsedExpression>,
+    ctx: &mut CheckerContext,
+) {
+    let Some(expression) = expression else {
+        return;
+    };
+    let arguments = match &expression {
+        surge_ts_syntax::ParsedExpression::Call { arguments, .. }
+        | surge_ts_syntax::ParsedExpression::PropertyCall { arguments, .. } => arguments,
+        _ => return,
+    };
+    let names: Vec<String> = arguments
+        .iter()
+        .filter_map(|argument| match &argument.expression {
+            surge_ts_syntax::ParsedExpression::Identifier { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut scopes = crate::symbols::ScopeStack::from_root(
+        ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+    );
+    crate::checks::function::narrow_assertion_call_in_scope(&expression, &mut scopes, ctx);
+    for name in names {
+        let (Some(narrowed), Some(original)) = (scopes.resolve(&name), ctx.symbols.get(&name))
+        else {
+            continue;
+        };
+        if narrowed.ty == original.ty {
+            continue;
+        }
+        let narrowed = narrowed.clone();
+        let declared = original.ty.clone();
+        let _ = ctx.symbols.insert_narrowed(name, narrowed, declared);
+    }
+}
+
 /// A module-scope `if`: each branch is checked under its own narrowing, and
 /// when one branch cannot fall through (`if (isCancel(value)) process.exit(0)`)
 /// the statements after it see the other branch's narrowing, exactly as a
@@ -272,10 +342,14 @@ pub(crate) fn check_program_statement(
             );
         }
         ParsedStatement::Call(call) => {
+            let assertion = module_call_expression(&call);
             call::check_call(*call, ctx);
+            narrow_module_assertion_call(assertion, ctx);
         }
         ParsedStatement::Expression(expression) => {
+            let assertion = assertion_candidate(&expression).then(|| (*expression).clone());
             expr::check_expression_statement(*expression, ctx);
+            narrow_module_assertion_call(assertion, ctx);
         }
         ParsedStatement::If(if_statement) => check_module_if_statement(&if_statement, ctx),
         ParsedStatement::Block(statements) => check_module_block(statements, ctx),

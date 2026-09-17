@@ -1117,10 +1117,15 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             check_function::check_function_declaration(*function, ctx);
         }
         ParsedStatement::Call(call) => {
+            let assertion = crate::program::module_call_expression(&call);
             call::check_call(*call, ctx);
+            crate::program::narrow_module_assertion_call(assertion, ctx);
         }
         ParsedStatement::Expression(expression) => {
+            let assertion = crate::program::assertion_candidate(&expression)
+                .then(|| (*expression).clone());
             expr::check_expression_statement(*expression, ctx);
+            crate::program::narrow_module_assertion_call(assertion, ctx);
         }
         ParsedStatement::If(if_statement) => {
             crate::program::check_module_if_statement(&if_statement, ctx);
