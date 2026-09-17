@@ -521,6 +521,7 @@ export const fixturePresets: Record<string, string> = {
   'element-access-missing-key-basic': path.join(workspaceRoot, 'tests/compat-projects/element-access-missing-key-basic/tsconfig.json'),
   'array-pattern-iterability-basic': path.join(workspaceRoot, 'tests/compat-projects/array-pattern-iterability-basic/tsconfig.json'),
   'for-of-non-null-source-basic': path.join(workspaceRoot, 'tests/compat-projects/for-of-non-null-source-basic/tsconfig.json'),
+  'property-spelling-suggestion-basic': path.join(workspaceRoot, 'tests/compat-projects/property-spelling-suggestion-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

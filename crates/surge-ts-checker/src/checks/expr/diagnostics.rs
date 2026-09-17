@@ -108,7 +108,63 @@ pub(crate) fn missing_property_diagnostic(
         );
     }
 
+    if let Some(suggestion) = property_spelling_suggestion(property_name, object_type) {
+        return Diagnostic::ts2551(property_name, &object_type_name, suggestion, file_name);
+    }
     Diagnostic::ts2339(property_name, &object_type_name, file_name)
+}
+
+/// `String.prototype` members in lib declaration order, which breaks ties
+/// between equally close suggestions.
+const STRING_MEMBERS: &[&str] = &[
+    "toString", "charAt", "charCodeAt", "concat", "indexOf", "lastIndexOf", "localeCompare",
+    "match", "replace", "search", "slice", "split", "substring", "toLowerCase",
+    "toLocaleLowerCase", "toUpperCase", "toLocaleUpperCase", "trim", "length", "substr",
+    "valueOf", "codePointAt", "includes", "endsWith", "normalize", "repeat", "startsWith",
+    "padStart", "padEnd", "trimEnd", "trimStart", "trimLeft", "trimRight", "matchAll",
+    "replaceAll", "at",
+];
+
+const NUMBER_MEMBERS: &[&str] =
+    &["toString", "toFixed", "toExponential", "toPrecision", "valueOf", "toLocaleString"];
+
+/// tsc's `getSuggestedSymbolForNonexistentProperty` over the members surge can
+/// enumerate for the receiver. A union receiver offers none: tsc suggests from
+/// the members every constituent shares, which the reported member type does
+/// not say.
+pub(crate) fn property_spelling_suggestion(name: &str, object_type: &Type) -> Option<String> {
+    let candidates: Vec<String> = match object_type {
+        Type::Reference(_) => match object_type.peeled() {
+            Type::Reference(_) => return None,
+            peeled => return property_spelling_suggestion(name, &peeled),
+        },
+        Type::Object(object) => object.properties.keys().map(|key| key.to_string()).collect(),
+        Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) => surge_ts_types::array_property_names()
+            .iter()
+            .filter(|member| object_type.get_property_access_type(member).is_some())
+            .map(|member| member.to_string())
+            .collect(),
+        Type::String | Type::StringLiteral(_) => STRING_MEMBERS
+            .iter()
+            .filter(|member| Type::String.get_property_access_type(member).is_some())
+            .map(|member| member.to_string())
+            .collect(),
+        Type::Number | Type::NumberLiteral(_) => NUMBER_MEMBERS
+            .iter()
+            .filter(|member| Type::Number.get_property_access_type(member).is_some())
+            .map(|member| member.to_string())
+            .collect(),
+        _ => return None,
+    };
+    spelling_suggestion(
+        name,
+        candidates
+            .iter()
+            .map(String::as_str)
+            .filter(|candidate| !candidate.starts_with('[')),
+        0,
+    )
+    .map(str::to_string)
 }
 
 /// tsc's `getPropertyTypeForIndexType` for a literal key that neither a member
@@ -119,6 +175,7 @@ pub(crate) fn report_missing_element(
     key: &str,
     key_type: &Type,
     object_type: &Type,
+    key_span: Option<SyntaxTextSpan>,
     access_span: Option<SyntaxTextSpan>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
@@ -128,6 +185,15 @@ pub(crate) fn report_missing_element(
     }
     let object_type_name = object_type.name();
     let file_name = ctx.file_name.clone();
+    if static_member_owner_for_missing_instance_property(key, object_type, symbols).is_none()
+        && let Some(suggestion) = property_spelling_suggestion(key, object_type)
+    {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2551(key, &object_type_name, suggestion, file_name),
+            key_span.or(access_span),
+        ));
+        return;
+    }
     let diagnostic = match static_member_owner_for_missing_instance_property(key, object_type, symbols)
     {
         Some(class_name) => {

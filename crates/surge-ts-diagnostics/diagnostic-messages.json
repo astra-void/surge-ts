@@ -437,7 +437,7 @@
     "message": "Property '{0}' does not exist on type '{1}'. Did you mean '{2}'?",
     "source": "typescript",
     "arity": 3,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2552",

@@ -393,6 +393,7 @@ pub(super) fn evaluate_index_access(
                     &key,
                     &index_type,
                     &receiver_type,
+                    index_span,
                     element_access_span(object_span, index_span).or(fallback_span),
                     symbols,
                     ctx,

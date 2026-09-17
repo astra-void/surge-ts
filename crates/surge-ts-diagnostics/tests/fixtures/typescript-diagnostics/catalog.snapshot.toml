@@ -436,7 +436,7 @@ arity = 1
 code = "TS2551"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Property '{0}' does not exist on type '{1}'. Did you mean '{2}'?"
 arity = 3
 

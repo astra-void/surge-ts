@@ -552,7 +552,7 @@ pub const TS2551: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Property '{0}' does not exist on type '{1}'. Did you mean '{2}'?",
     argument_count: 3,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS2552: DiagnosticDescriptor = DiagnosticDescriptor {
