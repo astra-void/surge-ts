@@ -493,6 +493,7 @@ export const fixturePresets: Record<string, string> = {
   'this-parameter-typing-basic': path.join(workspaceRoot, 'tests/compat-projects/this-parameter-typing-basic/tsconfig.json'),
   'class-field-initializer-type-basic': path.join(workspaceRoot, 'tests/compat-projects/class-field-initializer-type-basic/tsconfig.json'),
   'tuple-index-out-of-bounds-basic': path.join(workspaceRoot, 'tests/compat-projects/tuple-index-out-of-bounds-basic/tsconfig.json'),
+  'destructuring-assignment-basic': path.join(workspaceRoot, 'tests/compat-projects/destructuring-assignment-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

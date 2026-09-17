@@ -227,6 +227,15 @@ fn parse_block_statement_as_function_body(
 fn parse_expression_statement_as_function_body(
     expression_statement: &ExpressionStatement<'_>,
 ) -> Option<Vec<ParsedFunctionBodyStatement>> {
+    let destructured = super::parse_destructuring_assignment(&expression_statement.expression);
+    if !destructured.is_empty() {
+        return Some(
+            destructured
+                .into_iter()
+                .map(|assignment| ParsedFunctionBodyStatement::Assignment(Box::new(assignment)))
+                .collect(),
+        );
+    }
     match &expression_statement.expression {
         Expression::AssignmentExpression(assignment) => {
             if let Some(this_assignment) = parse_this_property_assignment(assignment) {
