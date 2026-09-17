@@ -27,6 +27,7 @@ mod returns;
 pub(crate) use alias_conditions::*;
 pub(crate) use assignments::*;
 use branch_assignments::*;
+pub(crate) use branch_assignments::branch_assigned_names;
 pub(crate) use control_flow::*;
 pub(crate) use returns::*;
 

@@ -12,7 +12,7 @@ use super::super::narrow_discriminant_in_scope;
 /// The bindings a branch body assigns at its own statement level. Deeper
 /// assignments are discarded with their own inner frame before the branch ends,
 /// so they cannot reach the join.
-pub(super) fn branch_assigned_names(body: &[ParsedFunctionBodyStatement], names: &mut Vec<String>) {
+pub(crate) fn branch_assigned_names(body: &[ParsedFunctionBodyStatement], names: &mut Vec<String>) {
     for statement in body {
         match statement {
             ParsedFunctionBodyStatement::Assignment(assignment) => {

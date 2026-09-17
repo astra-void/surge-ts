@@ -304,18 +304,27 @@ pub(crate) fn check_module_if_statement(
         ctx,
     );
     ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    let mut assigned = Vec::new();
+    crate::checks::function::branch_assigned_names(&if_statement.then_body, &mut assigned);
+    crate::checks::function::branch_assigned_names(&if_statement.else_body, &mut assigned);
+    let mut branch_end_types = Vec::new();
     for (branch, branch_is_true) in [
         (&if_statement.then_body, true),
         (&if_statement.else_body, false),
     ] {
-        if branch.is_empty() {
-            continue;
-        }
         let branch_symbols = narrowed_module_symbols(&if_statement.condition, branch_is_true, ctx)
             .unwrap_or_else(|| {
                 ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext)
             });
-        check_statements_over_module_scope(branch.clone(), branch_symbols, ctx);
+        let end_types = if branch.is_empty() {
+            assigned
+                .iter()
+                .map(|name| branch_symbols.get(name).map(|symbol| symbol.ty.clone()))
+                .collect()
+        } else {
+            check_statements_over_module_scope(branch.clone(), branch_symbols, &assigned, ctx)
+        };
+        branch_end_types.push(end_types);
     }
     let scopes = crate::symbols::ScopeStack::from_root(symbols);
     let diverts = |body: &[surge_ts_syntax::ParsedFunctionBodyStatement]| {
@@ -326,6 +335,9 @@ pub(crate) fn check_module_if_statement(
     };
     let then_diverts = diverts(&if_statement.then_body);
     let else_diverts = !if_statement.else_body.is_empty() && diverts(&if_statement.else_body);
+    if !then_diverts && !else_diverts {
+        join_module_branch_assignments(&assigned, &branch_end_types, ctx);
+    }
     let surviving_branch = match (then_diverts, else_diverts) {
         (true, false) => false,
         (false, true) => true,
@@ -373,20 +385,61 @@ pub(crate) fn check_module_block(
     ctx: &mut CheckerContext,
 ) {
     let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
-    check_statements_over_module_scope(statements, symbols, ctx);
+    let _ = check_statements_over_module_scope(statements, symbols, &[], ctx);
 }
 
+/// Checks `statements` over a scope rooted at `symbols` and answers the type
+/// each of `names` ends with.
 fn check_statements_over_module_scope(
     statements: Vec<surge_ts_syntax::ParsedFunctionBodyStatement>,
     symbols: crate::symbols::SymbolTable,
+    names: &[String],
     ctx: &mut CheckerContext,
-) {
+) -> Vec<Option<surge_ts_types::Type>> {
     let mut scopes = crate::symbols::ScopeStack::from_root(symbols);
     let flow_facts = crate::flow::collect_function_flow_facts(&statements);
     let mut flow_state = crate::flow::FunctionFlowState::new(
         flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
     );
     crate::checks::function::check_function_body(statements, None, &mut scopes, &mut flow_state, ctx);
+    names
+        .iter()
+        .map(|name| scopes.resolve(name).map(|symbol| symbol.ty.clone()))
+        .collect()
+}
+
+/// Both edges of a module-scope `if` reach the code after it, so a binding
+/// either branch assigned is the union of what each edge left it as — bounded,
+/// as in a function body, by its declaration.
+fn join_module_branch_assignments(
+    names: &[String],
+    branch_end_types: &[Vec<Option<surge_ts_types::Type>>],
+    ctx: &mut CheckerContext,
+) {
+    for (index, name) in names.iter().enumerate() {
+        let Some(edges) = branch_end_types
+            .iter()
+            .map(|types| types.get(index).cloned().flatten())
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        let Some(current) = ctx.symbols.get(name) else {
+            continue;
+        };
+        let joined = surge_ts_types::union_type(edges);
+        let current = current.clone();
+        let declared = ctx.symbols.declared_type(name).cloned().unwrap_or(current.ty.clone());
+        if joined == current.ty || !surge_ts_types::is_assignable_to(&joined, &declared) {
+            continue;
+        }
+        let narrowed = crate::symbols::SymbolInfo {
+            ty: joined,
+            kind: current.kind,
+            function_signature: current.function_signature.clone(),
+        };
+        let _ = ctx.symbols.insert_narrowed(name.clone(), narrowed, declared);
+    }
 }
 
 pub(crate) fn check_program_statement(
