@@ -60,16 +60,16 @@ pub(crate) fn report_unresolved_module(ctx: &mut CheckerContext, import: &Parsed
     }
 }
 
-const MEANING_VALUE: u8 = 1 << 0;
-const MEANING_TYPE: u8 = 1 << 1;
-const MEANING_NAMESPACE: u8 = 1 << 2;
+pub(crate) const MEANING_VALUE: u8 = 1 << 0;
+pub(crate) const MEANING_TYPE: u8 = 1 << 1;
+pub(crate) const MEANING_NAMESPACE: u8 = 1 << 2;
 
 /// Meanings each top-level name is declared with in this file, mirroring the
 /// symbol-flag groups tsc's `checkAliasSymbol` builds its excluded meanings
 /// from. Only declarations count: an import binding contributes nothing, so a
 /// name that appears here alongside an import of the same name is exactly the
 /// collision tsc reports as TS2440.
-fn local_declaration_meanings(statements: &[ParsedStatement]) -> HashMap<&str, u8> {
+pub(crate) fn local_declaration_meanings(statements: &[ParsedStatement]) -> HashMap<&str, u8> {
     let mut meanings: HashMap<&str, u8> = HashMap::new();
     collect_local_declaration_meanings(statements, &mut meanings);
     meanings

@@ -553,6 +553,7 @@ export const fixturePresets: Record<string, string> = {
   'circular-type-alias-basic': path.join(workspaceRoot, 'tests/compat-projects/circular-type-alias-basic/tsconfig.json'),
   'no-default-export-import-basic': path.join(workspaceRoot, 'tests/compat-projects/no-default-export-import-basic/tsconfig.json'),
   'import-local-declaration-conflict-basic': path.join(workspaceRoot, 'tests/compat-projects/import-local-declaration-conflict-basic/tsconfig.json'),
+  'duplicate-export-declaration-basic': path.join(workspaceRoot, 'tests/compat-projects/duplicate-export-declaration-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

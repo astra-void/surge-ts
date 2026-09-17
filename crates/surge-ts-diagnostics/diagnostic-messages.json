@@ -112,6 +112,22 @@
     "support": "emitted"
   },
   {
+    "code": "TS2323",
+    "category": "Error",
+    "message": "Cannot redeclare exported variable '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2484",
+    "category": "Error",
+    "message": "Export declaration conflicts with exported declaration of '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2440",
     "category": "Error",
     "message": "Import declaration conflicts with local declaration of '{0}'.",

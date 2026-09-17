@@ -113,6 +113,22 @@ message = "'{0}' is defined as a property in class '{1}', but is overridden here
 arity = 3
 
 [[diagnostic]]
+code = "TS2323"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot redeclare exported variable '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2484"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Export declaration conflicts with exported declaration of '{0}'."
+arity = 1
+
+[[diagnostic]]
 code = "TS2440"
 category = "Error"
 source = "typescript"

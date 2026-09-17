@@ -51,6 +51,12 @@ oracle = [
   "member-kind-override-basic",
 ]
 
+[TS2323]
+status = "emitted"
+oracle = [
+  "duplicate-export-declaration-basic",
+]
+
 [TS2440]
 status = "emitted"
 oracle = [
@@ -67,6 +73,12 @@ oracle = [
 status = "emitted"
 oracle = [
   "enum-member-constant-values-basic",
+]
+
+[TS2484]
+status = "emitted"
+oracle = [
+  "duplicate-export-declaration-basic",
 ]
 
 [TS2488]

@@ -1,5 +1,11 @@
 use super::*;
 
+use std::collections::HashMap;
+
+use surge_ts_diagnostics::Diagnostic;
+
+use crate::context::convert_span;
+
 pub(crate) fn build_module_export_table(
     parsed_file: &ParsedProgramFile,
     local_type_declarations: &TypeDeclarationTable,
@@ -179,6 +185,160 @@ fn adopt_export_assignment_alias(
             resolved_export_table
                 .symbols
                 .insert_shared(name.clone(), symbol.clone());
+        }
+    }
+}
+
+/// Whether a declaration of this kind counts toward tsc's exported-declaration
+/// tally (`checkExternalModuleExports`). Interfaces, type aliases, namespaces
+/// and enums legally merge with another declaration of the same exported name,
+/// so only a variable, function or class makes a second export a redeclaration.
+fn export_declaration_counts_for_redeclare(declaration: &ParsedStatement) -> bool {
+    matches!(
+        declaration,
+        ParsedStatement::VariableDeclaration(_)
+            | ParsedStatement::FunctionDeclaration(_)
+            | ParsedStatement::ClassDeclaration(_)
+    )
+}
+
+fn exported_declaration_name_span(declaration: &ParsedStatement) -> Option<TextSpan> {
+    match declaration {
+        ParsedStatement::VariableDeclaration(variable) => variable.name_span,
+        ParsedStatement::FunctionDeclaration(function) => function.name_span,
+        ParsedStatement::ClassDeclaration(class) => class.name_span,
+        ParsedStatement::InterfaceDeclaration(interface) => interface.name_span,
+        ParsedStatement::TypeAliasDeclaration(alias) => alias.name_span,
+        ParsedStatement::NamespaceDeclaration(namespace) => namespace.name_span,
+        _ => None,
+    }
+}
+
+/// An exported name carried by both a local `export`ed declaration and an
+/// `export { … }` specifier is two declarations of one export. tsc reports the
+/// pair on every declaration as TS2323 unless the local one legally merges
+/// (`checkExternalModuleExports`), and separately reports the specifier as
+/// TS2484 when its target overlaps the local declaration in meaning
+/// (`checkAliasSymbol` with an export specifier).
+fn report_duplicate_export_declarations(
+    parsed_file: &ParsedProgramFile,
+    parsed_files: &[ParsedProgramFile],
+    local_module_export_tables: &[Option<ModuleExportTable>],
+    resolved_module_export_tables: &mut [Option<ModuleExportTable>],
+    resolving: &mut [bool],
+    ctx: &mut CheckerContext,
+) {
+    let mut exported_declarations: HashMap<&str, (u8, Option<TextSpan>, bool)> = HashMap::new();
+    for statement in &parsed_file.statements {
+        let ParsedStatement::ExportDeclaration(export) = statement else {
+            continue;
+        };
+        let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() else {
+            continue;
+        };
+        let meanings = local_declaration_meanings(std::slice::from_ref(declaration.as_ref()));
+        let Some((name, meaning)) = meanings.into_iter().next() else {
+            continue;
+        };
+        exported_declarations.insert(
+            name,
+            (
+                meaning,
+                exported_declaration_name_span(declaration.as_ref()),
+                export_declaration_counts_for_redeclare(declaration.as_ref()),
+            ),
+        );
+    }
+    if exported_declarations.is_empty() {
+        return;
+    }
+
+    let local_meanings = local_declaration_meanings(&parsed_file.statements);
+
+    for statement in &parsed_file.statements {
+        let ParsedStatement::ExportDeclaration(export) = statement else {
+            continue;
+        };
+        let ParsedExportDeclaration::Named {
+            specifiers,
+            module_specifier,
+            ..
+        } = export.as_ref()
+        else {
+            continue;
+        };
+        if !specifiers
+            .iter()
+            .any(|specifier| exported_declarations.contains_key(specifier.exported_name.as_str()))
+        {
+            continue;
+        }
+
+        let target_export_table = match module_specifier {
+            Some(module_specifier) => {
+                let resolved = try_resolve_module_export_table(
+                    module_specifier,
+                    ctx,
+                    parsed_files,
+                    local_module_export_tables,
+                    resolved_module_export_tables,
+                    resolving,
+                    &parsed_file.file_name,
+                );
+                ctx.set_file_name(parsed_file.file_name.clone());
+                let Some((target_export_table, _)) = resolved else {
+                    continue;
+                };
+                Some(target_export_table)
+            }
+            None => None,
+        };
+
+        for specifier in specifiers {
+            let Some(&(declaration_meaning, declaration_span, counts_for_redeclare)) =
+                exported_declarations.get(specifier.exported_name.as_str())
+            else {
+                continue;
+            };
+
+            let target_meaning = match &target_export_table {
+                Some(target_export_table) => {
+                    let mut meaning = 0;
+                    if lookup_type_export(target_export_table, &specifier.local_name).is_some() {
+                        meaning |= MEANING_TYPE;
+                    }
+                    if lookup_value_export(target_export_table, &specifier.local_name).is_some() {
+                        meaning |= MEANING_VALUE;
+                    }
+                    meaning
+                }
+                None => local_meanings
+                    .get(specifier.local_name.as_str())
+                    .copied()
+                    .unwrap_or(0),
+            };
+
+            if counts_for_redeclare {
+                for span in [declaration_span, specifier.name_span] {
+                    let diagnostic =
+                        Diagnostic::ts2323(&specifier.exported_name, ctx.file_name.clone());
+                    let diagnostic = match span {
+                        Some(span) => diagnostic.with_span(convert_span(span)),
+                        None => diagnostic,
+                    };
+                    ctx.push(diagnostic);
+                }
+            }
+
+            if declaration_meaning & target_meaning != 0 {
+                let diagnostic =
+                    Diagnostic::ts2484(&specifier.exported_name, ctx.file_name.clone());
+                let diagnostic = match specifier.name_span {
+                    Some(span) => diagnostic.with_span(convert_span(span)),
+                    None => diagnostic,
+                };
+                ctx.push(diagnostic);
+            }
         }
     }
 }
@@ -752,6 +912,16 @@ pub(crate) fn resolve_module_export_table(
             adopt_export_assignment_alias(&mut resolved_export_table, &target_export_table);
         }
     }
+
+    report_duplicate_export_declarations(
+        parsed_file,
+        parsed_files,
+        local_module_export_tables,
+        resolved_module_export_tables,
+        resolving,
+        ctx,
+    );
+    ctx.set_file_name(parsed_file.file_name.clone());
 
     if let Some(slot) = resolving.get_mut(file_index) {
         *slot = false;

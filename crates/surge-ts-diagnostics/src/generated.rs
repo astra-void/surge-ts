@@ -145,6 +145,26 @@ pub const TS2611: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2323: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2323",
+    number: Some(2323),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot redeclare exported variable '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2484: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2484",
+    number: Some(2484),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Export declaration conflicts with exported declaration of '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2440: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2440",
     number: Some(2440),
@@ -2420,6 +2440,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2305,
     TS2610,
     TS2611,
+    TS2323,
+    TS2484,
     TS2440,
     TS2613,
     TS2614,
@@ -2802,6 +2824,24 @@ impl Diagnostic {
                 DiagnosticArg::from(arg1.to_string()),
                 DiagnosticArg::from(arg2.to_string()),
             ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2323(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2323,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2484(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2484,
+            vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
     }
