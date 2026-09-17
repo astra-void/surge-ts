@@ -320,7 +320,11 @@ pub(crate) fn collect_local_value_symbols_from_statement(
                                 | surge_ts_types::Type::TypeParameter(_)
                         ) =>
                     {
-                        var::widen_implicit_variable_initializer_type(symbol_kind, &inferred_ty)
+                        var::widen_implicit_variable_initializer_type(
+                            symbol_kind,
+                            initializer,
+                            &inferred_ty,
+                        )
                     }
                     _ => surge_ts_types::Type::Unknown,
                 }

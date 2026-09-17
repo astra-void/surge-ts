@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use surge_ts_diagnostics::Diagnostic;
-use surge_ts_syntax::ParsedVariableDeclaration;
+use surge_ts_syntax::{ParsedExpression, ParsedVariableDeclaration};
 use surge_ts_types::{Type, TypeCopyReason, is_assignable_to};
 
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type_anchored};
@@ -236,9 +236,13 @@ pub(crate) fn check_variable_declaration_against_symbols(
                 );
             }
 
-            if declared_type.is_none() && !inferred_initializer_type.is_unknown() {
+            if declared_type.is_none()
+                && !inferred_initializer_type.is_unknown()
+                && let Some(initializer) = variable.initializer.as_ref()
+            {
                 Some(widen_implicit_variable_initializer_type(
                     symbol_kind,
+                    initializer,
                     inferred_initializer_type,
                 ))
             } else {
@@ -363,15 +367,85 @@ fn report_redeclared_var_type(
     });
 }
 
-pub(crate) fn widen_implicit_variable_initializer_type(symbol_kind: SymbolKind, ty: &Type) -> Type {
-    if matches!(symbol_kind, SymbolKind::Let | SymbolKind::Var) {
+pub(crate) fn widen_implicit_variable_initializer_type(
+    symbol_kind: SymbolKind,
+    initializer: &ParsedExpression,
+    ty: &Type,
+) -> Type {
+    // tsc widens only fresh literal types, and an assertion (`as const`,
+    // `as "a"`, `<T>x`) yields its regular type, so `let s = "a" as const`
+    // stays `"a"`.
+    let is_assertion = matches!(
+        initializer,
+        ParsedExpression::ConstAssertion { .. } | ParsedExpression::TypeAssertion { .. }
+    );
+    if matches!(symbol_kind, SymbolKind::Let | SymbolKind::Var) && !is_assertion {
         // tsc deep-widens `let`/`var` initializers, so object properties and
         // array/union members widen too (e.g. `let o = { a: 1 }` -> `{ a: number }`),
         // not just a top-level primitive literal.
         widen_type(ty)
+    } else if matches!(initializer, ParsedExpression::ObjectLiteral { .. }) {
+        widen_object_literal_members(initializer, ty)
     } else {
         ty.clone()
     }
+}
+
+/// A property initializer is a mutable location, so tsc widens its fresh
+/// literal type even under `const` (`checkExpressionForMutableLocation`):
+/// `const o = { a: 1 }` is `{ a: number }`. Only members written as literals
+/// are widened — surge does not track freshness, and an identifier or an
+/// assertion may carry a regular literal type that tsc keeps.
+fn widen_object_literal_members(initializer: &ParsedExpression, ty: &Type) -> Type {
+    let (ParsedExpression::ObjectLiteral { properties, .. }, Type::Object(object)) =
+        (initializer, ty)
+    else {
+        return ty.clone();
+    };
+    if object.alias_name.is_some() {
+        return ty.clone();
+    }
+    let mut widened_properties = (*object.properties).clone();
+    let mut changed = false;
+    for property in properties {
+        if property.is_spread || property.is_method || property.is_accessor {
+            continue;
+        }
+        let Some(member) = widened_properties.get_mut(property.name.as_str()) else {
+            continue;
+        };
+        let widened = match &property.value {
+            ParsedExpression::StringLiteral(_)
+            | ParsedExpression::NumberLiteral(_)
+            | ParsedExpression::BooleanLiteral(_)
+            | ParsedExpression::TemplateLiteral { .. } => widen_type(&member.ty),
+            nested @ ParsedExpression::ObjectLiteral { .. } => {
+                widen_object_literal_members(nested, &member.ty)
+            }
+            _ => continue,
+        };
+        if widened != member.ty {
+            member.ty = widened;
+            changed = true;
+        }
+    }
+    if !changed {
+        return ty.clone();
+    }
+    let mut rebuilt = crate::metrics::alloc_object_type(
+        widened_properties,
+        object.string_index_type.as_deref().cloned(),
+    );
+    if object.synthetic_open_index {
+        rebuilt = rebuilt.with_open_index_marker();
+    }
+    if let Some(call_signature) = object.call_signature() {
+        rebuilt = rebuilt.with_call_signature(call_signature.clone());
+    }
+    if let Some(construct_signature) = object.construct_signature() {
+        rebuilt = rebuilt.with_construct_signature(construct_signature.clone());
+    }
+    Type::Object(rebuilt)
 }
 
 /// Whether `ty` carries the `unknown` *degradation sentinel* anywhere in its

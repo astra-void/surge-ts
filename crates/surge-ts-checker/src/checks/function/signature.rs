@@ -421,7 +421,7 @@ pub(crate) fn map_function_signature(
 
             match inferred_initializer {
                 InferredExpression::Known(ty) => {
-                    widen_implicit_variable_initializer_type(SymbolKind::Let, &ty)
+                    widen_implicit_variable_initializer_type(SymbolKind::Let, initializer, &ty)
                 }
                 InferredExpression::UnresolvedIdentifier { .. }
                 | InferredExpression::MissingProperty { .. }

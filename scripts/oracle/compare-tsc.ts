@@ -481,6 +481,8 @@ export const fixturePresets: Record<string, string> = {
   'ambient-namespace-member-contextual-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-namespace-member-contextual-basic/tsconfig.json'),
   'missing-return-diagnostic-selection-basic': path.join(workspaceRoot, 'tests/compat-projects/missing-return-diagnostic-selection-basic/tsconfig.json'),
   'angle-bracket-assertion-basic': path.join(workspaceRoot, 'tests/compat-projects/angle-bracket-assertion-basic/tsconfig.json'),
+  'assertion-literal-freshness-basic': path.join(workspaceRoot, 'tests/compat-projects/assertion-literal-freshness-basic/tsconfig.json'),
+  'const-object-literal-member-widening-basic': path.join(workspaceRoot, 'tests/compat-projects/const-object-literal-member-widening-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
