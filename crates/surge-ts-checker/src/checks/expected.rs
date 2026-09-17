@@ -1850,108 +1850,168 @@ fn evaluate_conditional_expression_with_expected_type(
         return InferredExpression::Known(Type::Any);
     }
 
+    let split_branches = std::mem::take(&mut ctx.split_returned_conditional);
     let condition_result =
         evaluate_expression(condition, condition_span.or(fallback_span), symbols, ctx);
-    let true_result = evaluate_expression_with_expected_type(
+    if split_branches {
+        let true_mismatch = check_returned_conditional_branch(
+            when_true,
+            when_true_span.or(fallback_span),
+            expected_type,
+            expected_diagnostic,
+            true_symbols,
+            ctx,
+        );
+        let false_mismatch = check_returned_conditional_branch(
+            when_false,
+            when_false_span.or(fallback_span),
+            expected_type,
+            expected_diagnostic,
+            false_symbols,
+            ctx,
+        );
+        if true_mismatch || false_mismatch || matches!(condition_result, InferredExpression::Unknown)
+        {
+            return InferredExpression::Unknown;
+        }
+        return InferredExpression::Known(with_type_copy_reason(TypeCopyReason::ExpectedType, || {
+            expected_type.clone()
+        }));
+    }
+    // tsc types each branch under the contextual type but never elaborates a
+    // mismatch into a branch (`elaborateError` has no conditional case): the
+    // union of the branches is related to the target once, where the caller
+    // anchors it.
+    let true_result = evaluate_conditional_branch(
         when_true,
         when_true_span.or(fallback_span),
-        Some(expected_type),
+        expected_type,
         expected_diagnostic,
         true_symbols,
         ctx,
     );
-    let false_result = evaluate_expression_with_expected_type(
+    let false_result = evaluate_conditional_branch(
         when_false,
         when_false_span.or(fallback_span),
-        Some(expected_type),
+        expected_type,
         expected_diagnostic,
         false_symbols,
         ctx,
     );
 
-    let true_branch_span = when_true_span.or(fallback_span);
-    let false_branch_span = when_false_span.or(fallback_span);
-    let mut has_contextual_mismatch = false;
     let true_branch_type = known_branch_type(&true_result);
     let false_branch_type = known_branch_type(&false_result);
-    let branch_types_differ = match (true_branch_type, false_branch_type) {
-        (Some(true_type), Some(false_type)) => {
-            match (true_type.base_primitive(), false_type.base_primitive()) {
-                (Some(true_base), Some(false_base)) => true_base != false_base,
-                _ => true_type != false_type,
-            }
-        }
-        _ => false,
-    };
 
     // `cond ? anyValue : maybeString` is `any` in tsc — a branch typed `any`
-    // absorbs the union — so neither branch is reported against the expected
-    // type. Checking them individually made every such argument a false
-    // TS2345 for whatever the *other* branch happened to be.
+    // absorbs the union.
     if matches!(true_branch_type, Some(Type::Any)) || matches!(false_branch_type, Some(Type::Any)) {
         return InferredExpression::Known(Type::Any);
-    }
-
-    has_contextual_mismatch |= check_conditional_branch_expected_type(
-        true_result,
-        true_branch_span,
-        expected_type,
-        expected_diagnostic,
-        ctx,
-    );
-    if !branch_types_differ || !has_contextual_mismatch {
-        has_contextual_mismatch |= check_conditional_branch_expected_type(
-            false_result,
-            false_branch_span,
-            expected_type,
-            expected_diagnostic,
-            ctx,
-        );
     }
 
     if matches!(condition_result, InferredExpression::Unknown) {
         return InferredExpression::Unknown;
     }
 
-    if has_contextual_mismatch {
-        return InferredExpression::Unknown;
+    match (true_branch_type, false_branch_type) {
+        (Some(true_type), Some(false_type)) => {
+            if is_assignable_to(true_type, expected_type) && is_assignable_to(false_type, expected_type)
+            {
+                InferredExpression::Known(with_type_copy_reason(TypeCopyReason::ExpectedType, || {
+                    expected_type.clone()
+                }))
+            } else {
+                InferredExpression::Known(surge_ts_types::union_type(vec![
+                    true_type.clone(),
+                    false_type.clone(),
+                ]))
+            }
+        }
+        _ => InferredExpression::Unknown,
     }
-
-    InferredExpression::Known(with_type_copy_reason(TypeCopyReason::ExpectedType, || {
-        expected_type.clone()
-    }))
 }
 
-fn check_conditional_branch_expected_type(
-    branch_result: InferredExpression,
+/// Evaluates a value checked against a function's return type. A conditional
+/// is split so each branch is related, and reported, on its own.
+pub(crate) fn evaluate_return_expression_with_expected_type(
+    expression: &ParsedExpression,
+    fallback_span: Option<SyntaxTextSpan>,
+    return_type: &Type,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    ctx.split_returned_conditional = matches!(expression, ParsedExpression::Conditional { .. });
+    let result = evaluate_expression_with_expected_type(
+        expression,
+        fallback_span,
+        Some(return_type),
+        ExpectedTypeDiagnostic::TypeNotAssignable,
+        symbols,
+        ctx,
+    );
+    ctx.split_returned_conditional = false;
+    result
+}
+
+fn check_returned_conditional_branch(
+    branch: &ParsedExpression,
     branch_span: Option<SyntaxTextSpan>,
     expected_type: &Type,
     expected_diagnostic: ExpectedTypeDiagnostic,
+    symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> bool {
-    match branch_result {
+    ctx.split_returned_conditional = matches!(branch, ParsedExpression::Conditional { .. });
+    let result = evaluate_expression_with_expected_type(
+        branch,
+        branch_span,
+        Some(expected_type),
+        expected_diagnostic,
+        symbols,
+        ctx,
+    );
+    ctx.split_returned_conditional = false;
+    match result {
         InferredExpression::Known(branch_type) => {
-            if branch_type.is_unknown() {
+            if branch_type.is_unknown() || is_assignable_to(&branch_type, expected_type) {
                 return false;
             }
-
-            if is_assignable_to(&branch_type, expected_type) {
-                return false;
-            }
-
-            push_expected_type_mismatch(
-                &branch_type,
-                expected_type,
-                branch_span,
-                expected_diagnostic,
-                ctx,
-            );
+            push_expected_type_mismatch(&branch_type, expected_type, branch_span, expected_diagnostic, ctx);
             true
         }
-        InferredExpression::UnresolvedIdentifier { .. } => false,
-        InferredExpression::MissingProperty { .. } => false,
-        InferredExpression::Unknown => false,
+        // A nested conditional reports its own branches and yields the sentinel.
+        _ => true,
     }
+}
+
+/// A branch evaluated under the conditional's contextual type. When the branch
+/// does not fit that type, the mismatches elaborated inside it are dropped and
+/// the branch is typed on its own, so only the whole conditional is reported.
+fn evaluate_conditional_branch(
+    branch: &ParsedExpression,
+    branch_span: Option<SyntaxTextSpan>,
+    expected_type: &Type,
+    expected_diagnostic: ExpectedTypeDiagnostic,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let checkpoint = ctx.diagnostics().len();
+    let contextual = evaluate_expression_with_expected_type(
+        branch,
+        branch_span,
+        Some(expected_type),
+        expected_diagnostic,
+        symbols,
+        ctx,
+    );
+    let fits = match &contextual {
+        InferredExpression::Known(ty) => ty.is_unknown() || is_assignable_to(ty, expected_type),
+        _ => ctx.diagnostics().len() == checkpoint,
+    };
+    if fits {
+        return contextual;
+    }
+    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    evaluate_expression(branch, branch_span, symbols, ctx)
 }
 
 fn known_branch_type(branch_result: &InferredExpression) -> Option<&Type> {

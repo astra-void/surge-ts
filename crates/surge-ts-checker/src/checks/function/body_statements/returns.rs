@@ -4,7 +4,7 @@ use surge_ts_syntax::{
 };
 use surge_ts_types::{Type, is_assignable_to};
 
-use crate::checks::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
+use crate::checks::expected::evaluate_return_expression_with_expected_type;
 use crate::checks::expr::evaluate_expression;
 use crate::context::CheckerContext;
 use crate::context::convert_span;
@@ -119,11 +119,10 @@ pub(crate) fn check_function_return_statement(
     // unrelated and must survive.
     let was_in_return_check = ctx.in_contextual_return_check;
     ctx.in_contextual_return_check = ctx.in_contextual_return_body();
-    let inferred_expression = evaluate_expression_with_expected_type(
+    let inferred_expression = evaluate_return_expression_with_expected_type(
         expression,
         return_statement.expression_span,
-        Some(return_type),
-        ExpectedTypeDiagnostic::TypeNotAssignable,
+        return_type,
         symbols,
         ctx,
     );

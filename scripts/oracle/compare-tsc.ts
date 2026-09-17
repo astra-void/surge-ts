@@ -484,6 +484,9 @@ export const fixturePresets: Record<string, string> = {
   'assertion-literal-freshness-basic': path.join(workspaceRoot, 'tests/compat-projects/assertion-literal-freshness-basic/tsconfig.json'),
   'const-object-literal-member-widening-basic': path.join(workspaceRoot, 'tests/compat-projects/const-object-literal-member-widening-basic/tsconfig.json'),
   'assignment-target-anchor-basic': path.join(workspaceRoot, 'tests/compat-projects/assignment-target-anchor-basic/tsconfig.json'),
+  'conditional-expression-mismatch-anchor-basic': path.join(workspaceRoot, 'tests/compat-projects/conditional-expression-mismatch-anchor-basic/tsconfig.json'),
+  'arrow-return-elaboration-basic': path.join(workspaceRoot, 'tests/compat-projects/arrow-return-elaboration-basic/tsconfig.json'),
+  'arrow-unit-return-widening-basic': path.join(workspaceRoot, 'tests/compat-projects/arrow-unit-return-widening-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

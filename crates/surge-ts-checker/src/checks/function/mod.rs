@@ -5,7 +5,6 @@ use surge_ts_syntax::{
 };
 use surge_ts_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
 
-use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use super::expr::evaluate_expression;
 use crate::context::CheckerContext;
 use crate::context::convert_span;
@@ -629,6 +628,73 @@ fn infer_block_body_return_types() -> bool {
         .get_or_init(|| std::env::var("SURGE_INFER_BLOCK_RETURN_TYPES").as_deref() == Ok("1"))
 }
 
+/// tsc's `getReturnTypeFromBody` widens a single literal return type unless the
+/// contextual return type is literal-like for it (`isLiteralOfContextualType`),
+/// so `() => 1` returns `number` while `(): 1 => 1` and `c ? "a" : "b"` keep
+/// their literals. A contextual type surge could not settle keeps the literal.
+fn widen_unit_return_type(body_type: Type, contextual_return_type: Option<&Type>) -> Type {
+    if !matches!(
+        body_type,
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
+    ) {
+        return body_type;
+    }
+    if contextual_return_type.is_some_and(|contextual| is_literal_of_contextual_type(&body_type, contextual)) {
+        return body_type;
+    }
+    crate::checks::expr::widen_type(&body_type)
+}
+
+fn is_literal_of_contextual_type(candidate: &Type, contextual: &Type) -> bool {
+    match contextual {
+        Type::Unknown | Type::TypeParameter(_) => true,
+        Type::Reference(reference) => is_literal_of_contextual_type(candidate, &reference.resolve()),
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| is_literal_of_contextual_type(candidate, member)),
+        Type::StringLiteral(_) => matches!(candidate, Type::StringLiteral(_)),
+        Type::NumberLiteral(_) => matches!(candidate, Type::NumberLiteral(_)),
+        Type::BooleanLiteral(_) | Type::Boolean => matches!(candidate, Type::BooleanLiteral(_)),
+        _ => false,
+    }
+}
+
+/// tsc's `elaborateArrowFunction`: an expression-bodied arrow with no
+/// annotated parameters whose body does not fit the contextual return type is
+/// reported at the body, as the return types rather than the whole signatures.
+fn report_contextual_body_mismatch(
+    body_type: &Type,
+    contextual_return_type: &Type,
+    body_span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let Some(body_span) = body_span else {
+        return false;
+    };
+    if matches!(
+        contextual_return_type,
+        Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Void
+    ) || surge_ts_types::is_assignable_to(body_type, contextual_return_type)
+        || type_contains_unknown(body_type)
+        || type_contains_unknown(contextual_return_type)
+    {
+        return false;
+    }
+    let source_name = crate::checks::expr::source_display_name(body_type, contextual_return_type);
+    let target_name = contextual_return_type.name();
+    let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+        body_type,
+        contextual_return_type,
+        &source_name,
+        &target_name,
+        ctx.file_name.clone(),
+    )
+    .with_span(crate::context::convert_span(body_span));
+    ctx.push(diagnostic);
+    true
+}
+
 pub(crate) fn check_arrow_function_expression_anchored(
     arrow: ParsedArrowFunction,
     expected_type: Option<&FunctionType>,
@@ -645,9 +711,9 @@ pub(crate) fn check_arrow_function_expression_anchored(
         is_async,
         body,
         body_reads,
+        body_span,
         span: arrow_span,
     } = arrow;
-    let _ = is_async;
 
     // An arrow does not bind `this`, so it keeps whatever the enclosing function
     // established; a `function` expression and an object-literal method both
@@ -775,20 +841,52 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 };
                 let inferred_body = match return_type_for_body {
                     None => evaluate_expression(&expression, None, &visible_symbols, ctx),
-                    Some(return_type_for_body) => evaluate_expression_with_expected_type(
-                        &expression,
-                        None,
-                        Some(return_type_for_body),
-                        ExpectedTypeDiagnostic::TypeNotAssignable,
-                        &visible_symbols,
-                        ctx,
-                    ),
+                    // Only an annotated return type is checked through
+                    // `checkReturnExpression`; a contextual one is related by the
+                    // enclosing assignment, which does not split a conditional.
+                    Some(return_type_for_body) if !has_explicit_return_type => {
+                        super::expected::evaluate_expression_with_expected_type(
+                            &expression,
+                            None,
+                            Some(return_type_for_body),
+                            super::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                            &visible_symbols,
+                            ctx,
+                        )
+                    }
+                    Some(return_type_for_body) => {
+                        crate::checks::expected::evaluate_return_expression_with_expected_type(
+                            &expression,
+                            None,
+                            return_type_for_body,
+                            &visible_symbols,
+                            ctx,
+                        )
+                    }
                 };
 
                 if !has_explicit_return_type {
                     if let InferredExpression::Known(body_type) = inferred_body {
                         if !body_type.is_unknown() {
-                            return_type = body_type;
+                            if expected_type.is_some()
+                                && !is_async
+                                && parameters.iter().all(|parameter| parameter.declared_type.is_none())
+                                && report_contextual_body_mismatch(
+                                    &body_type,
+                                    &return_type,
+                                    body_span,
+                                    ctx,
+                                )
+                            {
+                                // Reported on the body: the arrow keeps the
+                                // contextual return so the enclosing relation
+                                // does not report it again.
+                            } else {
+                                return_type = widen_unit_return_type(
+                                    body_type,
+                                    expected_type.map(|expected| expected.return_type()),
+                                );
+                            }
                         }
                     }
                 }

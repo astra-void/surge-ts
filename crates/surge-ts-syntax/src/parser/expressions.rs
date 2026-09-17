@@ -871,6 +871,9 @@ fn parse_arrow_function_expression(
         .as_ref()
         .and_then(|annotation| parse_type_annotation(annotation));
 
+    let body_span = arrow_expression
+        .get_expression()
+        .map(|expression| text_span_from_oxc_span(expression.span()));
     let body = if let Some(expression) = arrow_expression.get_expression() {
         let (expression, _) = parse_expression(expression);
         ParsedArrowFunctionBody::Expression(Box::new(expression))
@@ -889,6 +892,7 @@ fn parse_arrow_function_expression(
         is_generator: false,
         body,
         body_reads: super::reads::collect_function_body_reads(&arrow_expression.body),
+        body_span,
         span: Some(text_span_from_oxc_span(arrow_expression.span)),
     })
 }
@@ -1286,6 +1290,7 @@ fn function_as_arrow(
             .as_ref()
             .map(|body| super::reads::collect_function_body_reads(body))
             .unwrap_or_default(),
+        body_span: None,
         span: Some(text_span_from_oxc_span(function.span)),
     }
 }

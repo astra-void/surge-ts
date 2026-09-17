@@ -1421,6 +1421,9 @@ pub struct ParsedArrowFunction {
     /// yield 'a' }` as `void`.
     pub is_generator: bool,
     pub body: ParsedArrowFunctionBody,
+    /// The expression of an expression-bodied arrow, which tsc anchors a
+    /// mismatched return on (`elaborateArrowFunction`).
+    pub body_span: Option<TextSpan>,
     pub span: Option<TextSpan>,
 }
 

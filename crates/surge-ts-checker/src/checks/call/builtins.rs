@@ -89,9 +89,11 @@ pub(crate) fn check_array_find_call(
         return None;
     }
 
+    // The lib's non-narrowing `find` overload types the predicate as returning
+    // `unknown`, so any truthy value is accepted.
     let callback_type = Type::Function(alloc_function_type(
         array_iteration_callback_parameters(element_type),
-        Type::Boolean,
+        Type::Any,
         false,
         1,
     ));

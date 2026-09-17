@@ -522,6 +522,10 @@ pub(crate) struct CheckerContext {
     /// contextual type, so only the mismatch verdicts get recorded — every other
     /// diagnostic raised inside the expression is unrelated and must survive.
     pub(crate) in_contextual_return_check: bool,
+    /// Set by a return-value check whose value is a conditional, consumed by
+    /// that conditional: tsc checks each branch of a returned conditional
+    /// against the return type on its own (`checkReturnExpression`).
+    pub(crate) split_returned_conditional: bool,
     /// Set by the arrow path just before it checks a block body, consumed by
     /// the frame that body opens.
     pub(crate) next_body_frame_active: bool,
@@ -659,6 +663,7 @@ impl CheckerContext {
             union_member_probe_depth: 0,
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
+            split_returned_conditional: false,
             next_body_frame_active: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
@@ -799,6 +804,7 @@ impl CheckerContext {
             union_member_probe_depth: 0,
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
+            split_returned_conditional: false,
             next_body_frame_active: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),

@@ -714,20 +714,16 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
             false,
             1,
         )),
-        "find" => Some(function_type(
-            vec![array_iteration_callback(element, Type::Boolean)],
-            element_or_undefined(element),
-            false,
-            1,
-        )),
-        "findLast" => Some(function_type(
-            vec![array_iteration_callback(element, Type::Boolean)],
+        // Like `filter` below, the lib types these predicates as returning
+        // `unknown` (the non-narrowing overload), so any truthy value is accepted.
+        "find" | "findLast" => Some(function_type(
+            vec![array_iteration_callback(element, Type::Any)],
             element_or_undefined(element),
             false,
             1,
         )),
         "findIndex" | "findLastIndex" => Some(function_type(
-            vec![array_iteration_callback(element, Type::Boolean)],
+            vec![array_iteration_callback(element, Type::Any)],
             Type::Number,
             false,
             1,
