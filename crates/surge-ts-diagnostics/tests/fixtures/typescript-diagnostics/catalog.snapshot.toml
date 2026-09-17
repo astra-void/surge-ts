@@ -332,7 +332,7 @@ arity = 0
 code = "TS2394"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "This overload signature is not compatible with its implementation signature."
 arity = 0
 

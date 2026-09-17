@@ -422,7 +422,7 @@ pub const TS2394: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "This overload signature is not compatible with its implementation signature.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS2448: DiagnosticDescriptor = DiagnosticDescriptor {

@@ -333,7 +333,7 @@
     "message": "This overload signature is not compatible with its implementation signature.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2448",

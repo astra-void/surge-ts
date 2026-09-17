@@ -22,6 +22,7 @@ pub(crate) fn check_program_file_statements(
     ctx: &mut CheckerContext,
 ) {
     let classes = super::forward_references::file_class_declarations(statements);
+    check_overload_implementation_compatibility(statements, file_index, function_signatures, ctx);
     for (statement_index, statement) in statements.iter().cloned().enumerate() {
         let statement = expand_module_if_alias(statement, &statements[..statement_index]);
         super::forward_references::check_statement_forward_references(&statement, &classes, ctx);
@@ -35,12 +36,152 @@ pub(crate) fn check_program_file_statements(
     }
 }
 
+/// tsc's `isImplementationCompatibleWithOverload` for a module-level function
+/// overload group (TS2394 on each overload): the return types must be related
+/// in either direction unless the overload returns `void`, the implementation
+/// may not require more arguments than the overload declares, and each of the
+/// overload's parameters must be assignable to the implementation's (strict
+/// variance, as for any function declaration). A generic group is erased to
+/// `any` by tsc, which surge approximates by not checking it; an implementation
+/// without a written return type, or any type surge could not resolve, is
+/// likewise left alone.
+fn check_overload_implementation_compatibility(
+    statements: &[ParsedStatement],
+    file_index: usize,
+    function_signatures: &HashMap<FunctionDeclarationLocation, FunctionType>,
+    ctx: &mut CheckerContext,
+) {
+    fn function_at(statement: &ParsedStatement) -> Option<&ParsedFunctionDeclaration> {
+        match statement {
+            ParsedStatement::FunctionDeclaration(function) => Some(function),
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => match declaration.as_ref() {
+                    ParsedStatement::FunctionDeclaration(function) => Some(function),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    let mut index = 0;
+    while index < statements.len() {
+        let Some(first) = function_at(&statements[index]) else {
+            index += 1;
+            continue;
+        };
+        let mut end = index + 1;
+        while end < statements.len()
+            && function_at(&statements[end]).is_some_and(|function| function.name == first.name)
+        {
+            end += 1;
+        }
+        let group: Vec<(usize, &ParsedFunctionDeclaration)> = (index..end)
+            .filter_map(|position| function_at(&statements[position]).map(|function| (position, function)))
+            .collect();
+        index = end;
+        let Some(&(implementation_index, implementation)) = group.last() else {
+            continue;
+        };
+        if group.len() < 2
+            || !implementation.has_body
+            || implementation.is_declare
+            || group.iter().any(|(_, function)| !function.type_parameters.is_empty())
+        {
+            continue;
+        }
+        let signature_at = |position: usize| {
+            function_signatures.get(&FunctionDeclarationLocation {
+                file_index,
+                statement_index: position,
+            })
+        };
+        let Some(implementation_type) = signature_at(implementation_index) else {
+            continue;
+        };
+        for &(position, overload) in &group[..group.len() - 1] {
+            if overload.has_body {
+                continue;
+            }
+            let Some(overload_type) = signature_at(position) else {
+                continue;
+            };
+            if overload_is_compatible(
+                implementation_type,
+                implementation.return_type.is_some(),
+                overload_type,
+            ) {
+                continue;
+            }
+            ctx.push(crate::spans::diagnostic_with_syntax_span(
+                Diagnostic::ts2394(ctx.file_name.clone()),
+                overload.name_span,
+            ));
+        }
+    }
+}
+
+fn overload_is_compatible(
+    implementation: &FunctionType,
+    implementation_returns_written: bool,
+    overload: &FunctionType,
+) -> bool {
+    use surge_ts_types::{Type, is_assignable_to};
+    let unresolved = |ty: &Type| ty.is_unknown() || matches!(ty, Type::TypeParameter(_) | Type::ErrorType);
+    let related = |left: &Type, right: &Type| {
+        unresolved(left) || unresolved(right) || is_assignable_to(left, right) || is_assignable_to(right, left)
+    };
+    if implementation_returns_written
+        && !matches!(overload.return_type(), Type::Void)
+        && !related(implementation.return_type(), overload.return_type())
+    {
+        return false;
+    }
+    // A tuple rest spreads into positions surge's tuples cannot mark optional.
+    let non_array_rest = |signature: &FunctionType| {
+        signature.is_variadic()
+            && signature
+                .parameters()
+                .last()
+                .is_some_and(|rest| !matches!(rest.peeled(), Type::Array(_)))
+    };
+    if non_array_rest(implementation) || non_array_rest(overload) {
+        return true;
+    }
+    let overload_count = overload.parameters().len();
+    if !overload.is_variadic() && implementation.required_parameter_count() > overload_count {
+        return false;
+    }
+    let parameter_at = |signature: &FunctionType, position: usize| -> Option<Type> {
+        let parameters = signature.parameters();
+        if signature.is_variadic() && position + 1 >= parameters.len() {
+            return parameters.last().map(|rest| match rest.peeled() {
+                Type::Array(element) => *element,
+                other => other,
+            });
+        }
+        let parameter = parameters.get(position)?;
+        Some(if position >= signature.required_parameter_count() {
+            surge_ts_types::union_type(vec![parameter.clone(), Type::Undefined])
+        } else {
+            parameter.clone()
+        })
+    };
+    let count = implementation.parameters().len().max(overload_count);
+    (0..count).all(|position| {
+        match (parameter_at(implementation, position), parameter_at(overload, position)) {
+            (Some(source), Some(target)) => {
+                unresolved(&source) || unresolved(&target) || is_assignable_to(&target, &source)
+            }
+            _ => true,
+        }
+    })
+}
+
 /// `const ok = typeof v === "string"; if (ok) …` narrows by the condition the
 /// alias was written as, as a function body does (tsc's aliased-condition
 /// narrowing). Module scope keeps no flow state to record the alias in, so the
-/// `const` is looked up among the statements before the `if`; its condition is
-/// only ever used for narrowing, since a module `if` discards the condition's
-/// diagnostics.
+/// `const` is looked up among the statements before the `if`.
 pub(crate) fn expand_module_if_alias(
     statement: ParsedStatement,
     preceding: &[ParsedStatement],

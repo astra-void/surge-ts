@@ -319,8 +319,10 @@ span_tests = [
 ]
 
 [TS2394]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "overload-implementation-compatibility-basic",
+]
 
 [TS2448]
 status = "emitted"
