@@ -514,6 +514,7 @@ export const fixturePresets: Record<string, string> = {
   'in-operator-operand-rules-basic': path.join(workspaceRoot, 'tests/compat-projects/in-operator-operand-rules-basic/tsconfig.json'),
   'branded-primitive-assignability-basic': path.join(workspaceRoot, 'tests/compat-projects/branded-primitive-assignability-basic/tsconfig.json'),
   'unary-operand-rules-basic': path.join(workspaceRoot, 'tests/compat-projects/unary-operand-rules-basic/tsconfig.json'),
+  'constructor-overload-group-basic': path.join(workspaceRoot, 'tests/compat-projects/constructor-overload-group-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

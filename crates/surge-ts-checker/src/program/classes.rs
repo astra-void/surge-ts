@@ -615,16 +615,36 @@ fn class_construct_signature(
         type_arguments: Vec::new(),
     }));
 
-    for member in &class.members {
-        if let ParsedClassMember::Constructor(constructor) = member {
-            return map_function_signature(
-                &constructor.parameters,
-                Some(&named_instance),
-                &[],
-                None,
-                ctx,
-            );
-        }
+    let constructors = class
+        .members
+        .iter()
+        .filter_map(|member| match member {
+            ParsedClassMember::Constructor(constructor) => Some(constructor),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    // Overloaded constructors are what `new` resolves against; outside an
+    // ambient class the last declaration is the implementation, which tsc
+    // hides behind its overloads.
+    let overloads = match constructors.as_slice() {
+        [] => &[][..],
+        [_] => &constructors[..],
+        [overloads @ .., _] if !class.is_declare => overloads,
+        _ => &constructors[..],
+    };
+    let mut signatures = overloads.iter().map(|constructor| {
+        map_function_signature(
+            &constructor.parameters,
+            Some(&named_instance),
+            &[],
+            None,
+            ctx,
+        )
+    });
+    if let Some(first) = signatures.next() {
+        return signatures.fold(first, |group, signature| {
+            crate::checks::function::merge_overload_group_signatures(&group, &signature)
+        });
     }
 
     if !class.extends.is_empty() {
