@@ -177,6 +177,17 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
                 .map(|expression| parse_expression(expression).0)
                 .collect(),
             span: Some(text_span_from_oxc_span(template.span)),
+            quasis: template
+                .quasis
+                .iter()
+                .map(|quasi| quasi.value.cooked.as_ref().map(|cooked| cooked.to_string()))
+                .collect(),
+            expression_spans: template
+                .expressions
+                .iter()
+                .map(|expression| Some(text_span_from_oxc_span(expression.span())))
+                .collect(),
+            is_tagged: false,
         },
         Expression::TaggedTemplateExpression(tagged) => ParsedExpression::TemplateLiteral {
             expressions: std::iter::once(parse_expression(&tagged.tag).0)
@@ -189,6 +200,17 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
                 )
                 .collect(),
             span: Some(text_span_from_oxc_span(tagged.span)),
+            quasis: Vec::new(),
+            expression_spans: std::iter::once(Some(text_span_from_oxc_span(tagged.tag.span())))
+                .chain(
+                    tagged
+                        .quasi
+                        .expressions
+                        .iter()
+                        .map(|expression| Some(text_span_from_oxc_span(expression.span()))),
+                )
+                .collect(),
+            is_tagged: true,
         },
         _ => ParsedExpression::Unknown,
     };

@@ -735,6 +735,16 @@ pub const TS2632: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2731: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2731",
+    number: Some(2731),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Implicit conversion of a 'symbol' to a 'string' will fail at runtime. Consider wrapping this expression in 'String(...)'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2736: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2736",
     number: Some(2736),
@@ -2229,6 +2239,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2459,
     TS2469,
     TS2632,
+    TS2731,
     TS2736,
     TS2769,
     TS2774,
@@ -3098,6 +3109,11 @@ impl Diagnostic {
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2731(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2731, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

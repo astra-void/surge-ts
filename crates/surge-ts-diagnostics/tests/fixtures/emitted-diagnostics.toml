@@ -587,6 +587,12 @@ oracle = [
   "import-binding-assignment-basic",
 ]
 
+[TS2731]
+status = "emitted"
+oracle = [
+  "template-expression-type-basic",
+]
+
 [TS2736]
 status = "emitted"
 oracle = [

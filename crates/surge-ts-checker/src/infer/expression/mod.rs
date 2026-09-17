@@ -502,14 +502,22 @@ pub(crate) fn infer_expression(
         ParsedExpression::JsxElement { .. } | ParsedExpression::JsxFragment { .. } => {
             InferredExpression::Known(jsx_element_type())
         }
-        ParsedExpression::TemplateLiteral { expressions, .. } => {
+        ParsedExpression::TemplateLiteral {
+            expressions,
+            quasis,
+            is_tagged,
+            ..
+        } => {
             // Walk the interpolations so their identifier reads are observed (e.g.
-            // for TS6133 use-tracking). The template's own type is left unmodeled,
-            // matching the prior behavior where templates were opaque.
+            // for TS6133 use-tracking).
             for expression in expressions {
                 let _ = infer_expression(expression, symbols, ctx);
             }
-            InferredExpression::Unknown
+            if *is_tagged {
+                InferredExpression::Unknown
+            } else {
+                InferredExpression::Known(template_literal_type(expressions, quasis))
+            }
         }
         ParsedExpression::Unknown => InferredExpression::Unknown,
     };
@@ -546,4 +554,40 @@ pub(crate) fn tuple_index_value(index_type: &Type) -> Option<usize> {
 
 fn is_known_non_unknown(result: &InferredExpression) -> bool {
     matches!(result, InferredExpression::Known(ty) if !ty.is_unknown())
+}
+
+/// tsc's `checkTemplateExpression`: a template whose interpolations all
+/// evaluate to constants is the fresh string literal of its text; any other is
+/// `string` (a template-literal *type* needs a contextual type surge does not
+/// model separately from `string`). Only string and integer literals are
+/// evaluated here — the forms whose JavaScript string conversion is certain.
+fn template_literal_type(expressions: &[ParsedExpression], quasis: &[Option<String>]) -> Type {
+    fn constant_text(expression: &ParsedExpression) -> Option<String> {
+        match expression {
+            ParsedExpression::StringLiteral(value) => Some(value.clone()),
+            ParsedExpression::NumberLiteral(value)
+                if value.parse::<i64>().is_ok_and(|number| number.to_string() == *value) =>
+            {
+                Some(value.clone())
+            }
+            _ => None,
+        }
+    }
+    if quasis.len() != expressions.len() + 1 {
+        return Type::String;
+    }
+    let mut text = String::new();
+    for (index, quasi) in quasis.iter().enumerate() {
+        let Some(quasi) = quasi else {
+            return Type::String;
+        };
+        text.push_str(quasi);
+        if let Some(expression) = expressions.get(index) {
+            match constant_text(expression) {
+                Some(value) => text.push_str(&value),
+                None => return Type::String,
+            }
+        }
+    }
+    Type::StringLiteral(text)
 }

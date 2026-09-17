@@ -50,10 +50,31 @@ pub(crate) fn evaluate_expression(
         }
         // A template's interpolations are ordinary expressions and carry their own
         // errors (`${process.env.PORT}` is still a TS4111 index-signature access).
-        // The result type stays unmodelled, as before.
-        ParsedExpression::TemplateLiteral { expressions, span } => {
-            for interpolation in expressions {
-                let _ = evaluate_expression(interpolation, (*span).or(fallback_span), symbols, ctx);
+        ParsedExpression::TemplateLiteral {
+            expressions,
+            span,
+            expression_spans,
+            is_tagged,
+            ..
+        } => {
+            for (index, interpolation) in expressions.iter().enumerate() {
+                let interpolation_span = expression_spans
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .or(*span)
+                    .or(fallback_span);
+                let result = evaluate_expression(interpolation, interpolation_span, symbols, ctx);
+                // A symbol cannot be converted to a string implicitly (TS2731).
+                if !(*is_tagged && index == 0)
+                    && let InferredExpression::Known(ty) = &result
+                    && type_may_be_symbol(ty)
+                {
+                    ctx.push(diagnostic_with_syntax_span(
+                        Diagnostic::ts2731(ctx.file_name.clone()),
+                        interpolation_span,
+                    ));
+                }
             }
             infer_expression(expression, symbols, ctx)
         }
@@ -1327,5 +1348,13 @@ fn check_numeric_unary_operand(
             Diagnostic::ts2736("+", &widen_type(operand_type).name(), ctx.file_name.clone()),
             operand_span,
         ));
+    }
+}
+
+fn type_may_be_symbol(ty: &Type) -> bool {
+    match ty {
+        Type::Symbol => true,
+        Type::Union(union) => union.types().iter().any(type_may_be_symbol),
+        _ => false,
     }
 }

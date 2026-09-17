@@ -585,6 +585,14 @@ message = "Cannot assign to '{0}' because it is an import."
 arity = 1
 
 [[diagnostic]]
+code = "TS2731"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Implicit conversion of a 'symbol' to a 'string' will fail at runtime. Consider wrapping this expression in 'String(...)'."
+arity = 0
+
+[[diagnostic]]
 code = "TS2736"
 category = "Error"
 source = "typescript"
