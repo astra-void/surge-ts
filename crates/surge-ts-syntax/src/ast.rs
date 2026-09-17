@@ -641,6 +641,22 @@ pub struct ParsedClassAccessor {
     pub setter_param_type: Option<ParsedType>,
     pub has_getter: bool,
     pub has_setter: bool,
+    /// The written `get`/`set` declarations this member merges, each with its
+    /// own body to check.
+    pub declarations: Vec<ParsedAccessorDeclaration>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedAccessorDeclaration {
+    pub is_getter: bool,
+    /// A setter's single parameter; empty for a getter.
+    pub parameters: Vec<ParsedFunctionParameter>,
+    pub return_type_span: Option<TextSpan>,
+    pub body: Vec<ParsedFunctionBodyStatement>,
+    /// See [`ParsedFunctionDeclaration::body_reads`].
+    pub body_reads: Vec<String>,
+    /// False for an abstract or ambient accessor.
+    pub has_body: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

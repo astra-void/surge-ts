@@ -129,6 +129,7 @@ fn merge_class_accessors(members: Vec<ParsedClassMember>) -> Vec<ParsedClassMemb
 
         match existing {
             Some(existing) => {
+                existing.declarations.extend(accessor.declarations);
                 if accessor.has_getter {
                     existing.has_getter = true;
                     existing.getter_return_type = accessor.getter_return_type;
@@ -268,6 +269,16 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                         setter_param_type,
                         has_getter: is_getter,
                         has_setter: !is_getter,
+                        declarations: vec![crate::ParsedAccessorDeclaration {
+                            is_getter,
+                            parameters,
+                            return_type_span: method.value.return_type.as_ref().map(
+                                |annotation| text_span_from_oxc_span(annotation.type_annotation.span()),
+                            ),
+                            body,
+                            body_reads,
+                            has_body: method.value.body.is_some(),
+                        }],
                     }))
                 }
             }

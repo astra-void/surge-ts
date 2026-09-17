@@ -532,6 +532,7 @@ export const fixturePresets: Record<string, string> = {
   'accessor-declaration-rules-basic': path.join(workspaceRoot, 'tests/compat-projects/accessor-declaration-rules-basic/tsconfig.json'),
   'enum-duplicate-members-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-duplicate-members-basic/tsconfig.json'),
   'relational-comparison-operands-basic': path.join(workspaceRoot, 'tests/compat-projects/relational-comparison-operands-basic/tsconfig.json'),
+  'class-accessor-bodies-basic': path.join(workspaceRoot, 'tests/compat-projects/class-accessor-bodies-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

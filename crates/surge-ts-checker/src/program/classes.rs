@@ -1066,8 +1066,63 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
                 };
                 check_class_property_initializer(property, this_type, ctx);
             }
-            ParsedClassMember::Accessor(_) => {}
+            ParsedClassMember::Accessor(accessor) => {
+                check_class_accessor_body(accessor, &instance_type, &static_type, ctx);
+            }
         }
+    }
+}
+
+/// Each accessor body is checked like a method's. A setter parameter written
+/// without a type takes the getter's annotation, as tsc infers it.
+fn check_class_accessor_body(
+    accessor: &surge_ts_syntax::ParsedClassAccessor,
+    instance_type: &Type,
+    static_type: &Type,
+    ctx: &mut CheckerContext,
+) {
+    for declaration in &accessor.declarations {
+        if !declaration.has_body {
+            continue;
+        }
+        let return_type = if declaration.is_getter {
+            accessor.getter_return_type.as_ref()
+        } else {
+            None
+        };
+        let mut parameters = declaration.parameters.clone();
+        // A getter without an annotation types the pair from its body, which
+        // is not modelled here; the parameter reads `any` rather than implicit.
+        if !declaration.is_getter
+            && accessor.has_getter
+            && let Some(parameter) = parameters.first_mut()
+            && parameter.declared_type.is_none()
+        {
+            parameter.declared_type =
+                Some(accessor.getter_return_type.clone().unwrap_or(ParsedType::Any));
+        }
+        let function_type = map_function_signature(&parameters, return_type, &[], None, ctx);
+        let this_type = if accessor.is_static {
+            static_type.clone()
+        } else {
+            instance_type.clone()
+        };
+        check_function_body_with_signature_and_this(
+            None,
+            parameters,
+            declaration.body.clone(),
+            &function_type,
+            &[],
+            None,
+            return_type.is_some(),
+            declaration.return_type_span.or(accessor.name_span),
+            Some(this_type),
+            false,
+            Some(declaration.body_reads.as_slice()),
+            false,
+            false,
+            ctx,
+        );
     }
 }
 
