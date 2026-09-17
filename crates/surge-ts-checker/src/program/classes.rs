@@ -450,6 +450,11 @@ fn syntactic_initializer_type(initializer: &surge_ts_syntax::ParsedExpression, k
         ParsedExpression::TemplateLiteral { expressions, .. } if expressions.is_empty() => {
             ParsedType::String
         }
+        // An empty array literal is `never[]` under strictNullChecks: nothing
+        // widens it to an evolving array the way a `let` binding would be.
+        ParsedExpression::ArrayLiteral { elements, .. } if elements.is_empty() => {
+            ParsedType::Array(Arc::new(ParsedType::Never))
+        }
         ParsedExpression::ArrayLiteral { elements, .. } => {
             let mut element_types = elements.iter().map(|element| match &element.expression {
                 _ if element.spread => None,

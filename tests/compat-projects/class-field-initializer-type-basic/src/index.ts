@@ -44,3 +44,15 @@ const nestedOn: number = store.state.nested.on;
 const mode: "b" = store.config.mode;
 store.empty.extra = 1;
 const widenedMode: string = store.config.mode;
+
+class Queue {
+  items = [];
+  static shared = [];
+
+  add() {
+    this.items.push(1);
+  }
+}
+new Queue().items.push("x");
+Queue.shared.push(2);
+const size: string = new Queue().items.length;

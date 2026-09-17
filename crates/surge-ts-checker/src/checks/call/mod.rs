@@ -1548,7 +1548,9 @@ pub(crate) fn check_function_type_call(
                 // `type_contains_unknown` does not see through a reference;
                 // this predicate peels one level, as the signature comparison
                 // already does for the same shape.
-                if !matches!(parameter_type, Type::Never)
+                // A rest slot of `never` (`push` on a `never[]`) is no such
+                // assertion, so it is checked like any other.
+                if (!matches!(parameter_type, Type::Never) || is_rest_position)
                     && !type_contains_unknown(&parameter_type)
                     && !surge_ts_types::parameter_type_is_degraded(&parameter_type)
                     && (genuine_unknown_argument || !type_contains_unknown(&argument_type))

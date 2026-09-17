@@ -174,7 +174,8 @@ fn static_member_owner_for_missing_instance_property(
 }
 
 pub(crate) fn source_display_name(source: &Type, target: &Type) -> String {
-    if type_contains_literal(target) {
+    // tsc does not generalize the source when the target is `never`.
+    if type_contains_literal(target) || matches!(target, Type::Never) {
         source.name()
     } else {
         widen_type(source).name()
