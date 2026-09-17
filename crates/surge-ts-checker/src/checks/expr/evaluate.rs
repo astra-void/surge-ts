@@ -242,6 +242,17 @@ pub(crate) fn evaluate_expression(
             if let Some(always_false) = equality_result_when_unequal(*operator) {
                 report_reference_and_nan_equality(left, right, always_false, fallback_span, symbols, ctx);
             }
+            if matches!(operator, surge_ts_syntax::ParsedBinaryOperator::In) {
+                check_in_operands(
+                    right,
+                    &left_result,
+                    &right_result,
+                    left_span.or(fallback_span),
+                    right_span.or(fallback_span),
+                    symbols,
+                    ctx,
+                );
+            }
 
             ops::evaluate_binary_expression(
                 left_result,
@@ -1184,5 +1195,79 @@ fn report_reference_and_nan_equality(
     };
     if is_global_nan(left) || is_global_nan(right) {
         ctx.push(diagnostic_with_syntax_span(Diagnostic::ts2845(result, ctx.file_name.clone()), span));
+    }
+}
+
+/// tsc's `checkInExpression`: the key must be assignable to
+/// `string | number | symbol`, and the right operand must be non-nullable and
+/// assignable to `object`. Operands surge could not settle are not judged.
+fn check_in_operands(
+    right: &ParsedExpression,
+    left_result: &InferredExpression,
+    right_result: &InferredExpression,
+    left_span: Option<SyntaxTextSpan>,
+    right_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let judgeable = |ty: &Type| {
+        !crate::checks::function::type_contains_unknown(ty)
+            && !matches!(ty, Type::Any | Type::GenuineUnknown | Type::ErrorType)
+    };
+    let property_key = surge_ts_types::union_type(vec![Type::String, Type::Number, Type::Symbol]);
+    // An intersection relates when some constituent does
+    // (`someTypeRelatedToType`). A branded key (`"marker" & { __brand: … }`)
+    // merges to its object side alone, which loses the primitive that makes it
+    // a valid key, so a merged intersection is not judged.
+    let key_assignable = |ty: &Type| {
+        matches!(ty.peeled(), Type::Object(object) if object.is_intersection)
+            || surge_ts_types::is_assignable_to(ty, &property_key)
+    };
+    if let InferredExpression::Known(left_type) = left_result
+        && judgeable(left_type)
+        && !key_assignable(left_type)
+    {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2322(
+                &source_display_name(left_type, &Type::String),
+                "string | number | symbol",
+                ctx.file_name.clone(),
+            ),
+            left_span,
+        ));
+    }
+    let InferredExpression::Known(right_type) = right_result else {
+        return;
+    };
+    if !judgeable(right_type) {
+        return;
+    }
+    let right_type = super::strip_reported_undefined_receiver(
+        right,
+        right_type.clone(),
+        right_span,
+        right_span,
+        symbols,
+        ctx,
+    );
+    fn is_primitive(ty: &Type) -> bool {
+        match ty {
+            Type::String
+            | Type::Number
+            | Type::Boolean
+            | Type::BigInt
+            | Type::Symbol
+            | Type::StringLiteral(_)
+            | Type::NumberLiteral(_)
+            | Type::BooleanLiteral(_) => true,
+            Type::Union(union) => union.types().iter().any(is_primitive),
+            _ => false,
+        }
+    }
+    if is_primitive(&right_type) {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2322(&right_type.name(), "object", ctx.file_name.clone()),
+            right_span,
+        ));
     }
 }
