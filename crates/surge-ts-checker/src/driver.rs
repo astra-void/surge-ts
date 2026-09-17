@@ -94,7 +94,9 @@ pub fn check_source_with_options(
 
     ctx.module_value_fallback = Some(std::sync::Arc::new(validation_symbols));
 
-    for statement in parsed.statements {
+    for (index, statement) in parsed.statements.iter().enumerate() {
+        let statement =
+            crate::program::expand_module_if_alias(statement.clone(), &parsed.statements[..index]);
         check_statement(statement, &mut ctx);
     }
     ctx.module_value_fallback = None;

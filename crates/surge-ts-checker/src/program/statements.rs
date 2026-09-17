@@ -22,6 +22,7 @@ pub(crate) fn check_program_file_statements(
     ctx: &mut CheckerContext,
 ) {
     for (statement_index, statement) in statements.iter().cloned().enumerate() {
+        let statement = expand_module_if_alias(statement, &statements[..statement_index]);
         check_program_statement(
             statement,
             file_index,
@@ -30,6 +31,104 @@ pub(crate) fn check_program_file_statements(
             ctx,
         );
     }
+}
+
+/// `const ok = typeof v === "string"; if (ok) …` narrows by the condition the
+/// alias was written as, as a function body does (tsc's aliased-condition
+/// narrowing). Module scope keeps no flow state to record the alias in, so the
+/// `const` is looked up among the statements before the `if`; its condition is
+/// only ever used for narrowing, since a module `if` discards the condition's
+/// diagnostics.
+pub(crate) fn expand_module_if_alias(
+    statement: ParsedStatement,
+    preceding: &[ParsedStatement],
+) -> ParsedStatement {
+    let ParsedStatement::If(mut if_statement) = statement else {
+        return statement;
+    };
+    if let Some(expanded) = expand_module_alias_condition(&if_statement.condition, preceding) {
+        if_statement.condition = expanded;
+    }
+    ParsedStatement::If(if_statement)
+}
+
+fn expand_module_alias_condition(
+    condition: &surge_ts_syntax::ParsedExpression,
+    preceding: &[ParsedStatement],
+) -> Option<surge_ts_syntax::ParsedExpression> {
+    use surge_ts_syntax::ParsedExpression;
+    match condition {
+        ParsedExpression::Identifier { name, .. } => module_alias_condition(name, preceding),
+        ParsedExpression::Unary {
+            operator: operator @ surge_ts_syntax::ParsedUnaryOperator::Not,
+            operator_span,
+            operand,
+            operand_span,
+        } => Some(ParsedExpression::Unary {
+            operator: *operator,
+            operator_span: *operator_span,
+            operand: Box::new(expand_module_alias_condition(operand, preceding)?),
+            operand_span: *operand_span,
+        }),
+        ParsedExpression::Logical {
+            left,
+            left_span,
+            operator,
+            operator_span,
+            right,
+            right_span,
+        } => {
+            let expanded_left = expand_module_alias_condition(left, preceding);
+            let expanded_right = expand_module_alias_condition(right, preceding);
+            if expanded_left.is_none() && expanded_right.is_none() {
+                return None;
+            }
+            Some(ParsedExpression::Logical {
+                left: Box::new(expanded_left.unwrap_or_else(|| (**left).clone())),
+                left_span: *left_span,
+                operator: *operator,
+                operator_span: *operator_span,
+                right: Box::new(expanded_right.unwrap_or_else(|| (**right).clone())),
+                right_span: *right_span,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The condition the latest module declaration of `name` aliases, when it is a
+/// local, unannotated `const` initialized with one. An exported one resolves to
+/// its export symbol, which tsc does not inline.
+fn module_alias_condition(
+    name: &str,
+    preceding: &[ParsedStatement],
+) -> Option<surge_ts_syntax::ParsedExpression> {
+    let variable = preceding.iter().rev().find_map(|statement| match statement {
+        ParsedStatement::VariableDeclaration(variable) if variable.name == name => {
+            Some(Some(variable))
+        }
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => match declaration.as_ref() {
+                ParsedStatement::VariableDeclaration(variable) if variable.name == name => {
+                    Some(None)
+                }
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    })??;
+    if !matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const)
+        || variable.is_declare
+        || variable.declared_type.is_some()
+    {
+        return None;
+    }
+    variable
+        .initializer
+        .as_ref()
+        .filter(|initializer| crate::checks::function::is_condition_shaped(initializer))
+        .cloned()
 }
 
 /// A module-scope `if`: each branch is checked under its own narrowing, and
