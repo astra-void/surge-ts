@@ -102,6 +102,7 @@ fn parse_return_statement(statement: &Statement<'_>) -> Option<ParsedReturnState
     Some(ParsedReturnStatement {
         expression,
         expression_span,
+        span: Some(text_span_from_oxc_span(return_statement.span)),
     })
 }
 

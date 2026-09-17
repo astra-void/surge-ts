@@ -874,6 +874,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                         crate::checks::expected::evaluate_return_expression_with_expected_type(
                             &expression,
                             None,
+                            None,
                             return_type_for_body,
                             &visible_symbols,
                             ctx,

@@ -1410,6 +1410,9 @@ pub struct ParsedThisPropertyAssignment {
 pub struct ParsedReturnStatement {
     pub expression: Option<ParsedExpression>,
     pub expression_span: Option<TextSpan>,
+    /// The whole statement, where tsc reports a returned value that does not
+    /// fit the return type.
+    pub span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

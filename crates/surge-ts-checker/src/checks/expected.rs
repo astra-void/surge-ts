@@ -1937,14 +1937,16 @@ fn evaluate_conditional_expression_with_expected_type(
 pub(crate) fn evaluate_return_expression_with_expected_type(
     expression: &ParsedExpression,
     fallback_span: Option<SyntaxTextSpan>,
+    statement_span: Option<SyntaxTextSpan>,
     return_type: &Type,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     ctx.split_returned_conditional = matches!(expression, ParsedExpression::Conditional { .. });
-    let result = evaluate_expression_with_expected_type(
+    let result = evaluate_expression_with_expected_type_anchored(
         expression,
         fallback_span,
+        statement_span,
         Some(return_type),
         ExpectedTypeDiagnostic::TypeNotAssignable,
         symbols,

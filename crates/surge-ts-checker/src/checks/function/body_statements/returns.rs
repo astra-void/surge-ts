@@ -123,6 +123,7 @@ pub(crate) fn check_function_return_statement(
     let inferred_expression = evaluate_return_expression_with_expected_type(
         expression,
         return_statement.expression_span,
+        return_statement.span,
         return_type,
         symbols,
         ctx,
@@ -176,7 +177,7 @@ pub(crate) fn check_function_return_statement(
                     ctx.file_name.clone(),
                 );
 
-                let diagnostic = match return_statement.expression_span {
+                let diagnostic = match return_statement.span.or(return_statement.expression_span) {
                     Some(span) => diagnostic.with_span(convert_span(span)),
                     None => diagnostic,
                 };
