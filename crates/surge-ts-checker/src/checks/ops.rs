@@ -481,43 +481,32 @@ fn evaluate_comparison_binary(
         return InferredExpression::Known(Type::Boolean);
     }
 
-    if is_comparison_operand_valid(left_type) && is_comparison_operand_valid(right_type) {
-        let left_base = left_type.base_primitive();
-        let right_base = right_type.base_primitive();
-
-        match (left_base.as_ref(), right_base.as_ref()) {
-            (Some(Type::Number), Some(Type::Number)) | (Some(Type::String), Some(Type::String)) => {
-                InferredExpression::Known(Type::Boolean)
-            }
-            _ => {
-                let file_name = ctx.file_name.clone();
-                push_diagnostic(
-                    ctx,
-                    Diagnostic::ts2365(
-                        operator_text,
-                        &operand_display_name(&left_type),
-                        &operand_display_name(&right_type),
-                        file_name,
-                    ),
-                    fallback_span,
-                );
-                InferredExpression::Unknown
-            }
-        }
-    } else {
-        let file_name = ctx.file_name.clone();
-        push_diagnostic(
-            ctx,
-            Diagnostic::ts2365(
-                operator_text,
-                &operand_display_name(&left_type),
-                &operand_display_name(&right_type),
-                file_name,
-            ),
-            fallback_span,
-        );
-        InferredExpression::Unknown
+    // tsc's `checkBinaryLikeExpression` for `<`/`>`/`<=`/`>=`: both operands
+    // numeric (`number | bigint`), or neither numeric and comparable to each
+    // other, with literals compared by their base type.
+    let left_numeric = is_numeric_comparison_operand(left_type);
+    let right_numeric = is_numeric_comparison_operand(right_type);
+    let comparable = || {
+        let left_base = widen_literal_for_comparison(left_type);
+        let right_base = widen_literal_for_comparison(right_type);
+        surge_ts_types::is_assignable_to(&left_base, &right_base)
+            || surge_ts_types::is_assignable_to(&right_base, &left_base)
+    };
+    if (left_numeric && right_numeric) || (!left_numeric && !right_numeric && comparable()) {
+        return InferredExpression::Known(Type::Boolean);
     }
+    let file_name = ctx.file_name.clone();
+    push_diagnostic(
+        ctx,
+        Diagnostic::ts2365(
+            operator_text,
+            &operand_display_name(&left_type),
+            &operand_display_name(&right_type),
+            file_name,
+        ),
+        fallback_span,
+    );
+    InferredExpression::Unknown
 }
 
 fn evaluate_equality_binary(
@@ -598,8 +587,23 @@ fn is_number_like_for_arithmetic(ty: &Type) -> bool {
     matches!(ty.base_primitive(), Some(Type::Number))
 }
 
-fn is_comparison_operand_valid(ty: &Type) -> bool {
-    matches!(ty.base_primitive(), Some(Type::Number) | Some(Type::String))
+fn is_numeric_comparison_operand(ty: &Type) -> bool {
+    match ty {
+        Type::Union(union) => union.types().iter().all(is_numeric_comparison_operand),
+        other => matches!(other.base_primitive(), Some(Type::Number) | Some(Type::BigInt)),
+    }
+}
+
+fn widen_literal_for_comparison(ty: &Type) -> Type {
+    match ty {
+        Type::StringLiteral(_) => Type::String,
+        Type::NumberLiteral(_) => Type::Number,
+        Type::BooleanLiteral(_) => Type::Boolean,
+        Type::Union(union) => {
+            surge_ts_types::union_type(union.types().iter().map(widen_literal_for_comparison).collect())
+        }
+        other => other.clone(),
+    }
 }
 
 pub(crate) fn types_overlap_for_equality(left: &Type, right: &Type) -> bool {

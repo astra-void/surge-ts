@@ -531,6 +531,7 @@ export const fixturePresets: Record<string, string> = {
   'enum-member-constant-values-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-member-constant-values-basic/tsconfig.json'),
   'accessor-declaration-rules-basic': path.join(workspaceRoot, 'tests/compat-projects/accessor-declaration-rules-basic/tsconfig.json'),
   'enum-duplicate-members-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-duplicate-members-basic/tsconfig.json'),
+  'relational-comparison-operands-basic': path.join(workspaceRoot, 'tests/compat-projects/relational-comparison-operands-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
