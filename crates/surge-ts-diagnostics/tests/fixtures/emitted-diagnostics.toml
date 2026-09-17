@@ -593,6 +593,18 @@ oracle = [
   "uncalled-function-condition-basic",
 ]
 
+[TS2839]
+status = "emitted"
+oracle = [
+  "equality-reference-and-nan-basic",
+]
+
+[TS2845]
+status = "emitted"
+oracle = [
+  "equality-reference-and-nan-basic",
+]
+
 [TS2872]
 status = "emitted"
 fixtures = [

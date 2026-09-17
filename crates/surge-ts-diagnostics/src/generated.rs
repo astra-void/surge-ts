@@ -745,6 +745,26 @@ pub const TS2774: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2839: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2839",
+    number: Some(2839),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This condition will always return '{0}' since JavaScript compares objects by reference, not value.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2845: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2845",
+    number: Some(2845),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This condition will always return '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2871: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2871",
     number: Some(2871),
@@ -2190,6 +2210,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2632,
     TS2769,
     TS2774,
+    TS2839,
+    TS2845,
     TS2871,
     TS2872,
     TS2873,
@@ -3055,6 +3077,24 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2774(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2774, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2839(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2839,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2845(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2845,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
     }
 
     #[allow(clippy::needless_pass_by_value)]

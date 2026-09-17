@@ -593,6 +593,22 @@ message = "This condition will always return true since this function is always 
 arity = 0
 
 [[diagnostic]]
+code = "TS2839"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This condition will always return '{0}' since JavaScript compares objects by reference, not value."
+arity = 1
+
+[[diagnostic]]
+code = "TS2845"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This condition will always return '{0}'."
+arity = 1
+
+[[diagnostic]]
 code = "TS2871"
 category = "Error"
 source = "typescript"

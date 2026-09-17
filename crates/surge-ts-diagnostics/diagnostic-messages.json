@@ -592,6 +592,22 @@
     "support": "emitted"
   },
   {
+    "code": "TS2839",
+    "category": "Error",
+    "message": "This condition will always return '{0}' since JavaScript compares objects by reference, not value.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2845",
+    "category": "Error",
+    "message": "This condition will always return '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2871",
     "category": "Error",
     "message": "This expression is always nullish.",

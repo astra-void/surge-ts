@@ -239,6 +239,9 @@ pub(crate) fn evaluate_expression(
             let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
             let right_result =
                 evaluate_expression(right, right_span.or(fallback_span), symbols, ctx);
+            if let Some(always_false) = equality_result_when_unequal(*operator) {
+                report_reference_and_nan_equality(left, right, always_false, fallback_span, symbols, ctx);
+            }
 
             ops::evaluate_binary_expression(
                 left_result,
@@ -1129,4 +1132,57 @@ pub(crate) fn empty_object_fallback_type(
         absent,
         string_index_type,
     )))
+}
+
+/// For an equality operator, the result it has when its operands differ:
+/// `false` for `==`/`===`, `true` for `!=`/`!==`.
+fn equality_result_when_unequal(operator: surge_ts_syntax::ParsedBinaryOperator) -> Option<bool> {
+    match operator {
+        surge_ts_syntax::ParsedBinaryOperator::StrictEquals | surge_ts_syntax::ParsedBinaryOperator::Equals => Some(false),
+        surge_ts_syntax::ParsedBinaryOperator::StrictNotEquals | surge_ts_syntax::ParsedBinaryOperator::NotEquals => Some(true),
+        _ => None,
+    }
+}
+
+/// tsc's equality checks that need only syntax: comparing against an object,
+/// array or `function` literal can never be true, since objects compare by
+/// reference (TS2839), and comparing against the global `NaN` never either
+/// (TS2845).
+fn report_reference_and_nan_equality(
+    left: &ParsedExpression,
+    right: &ParsedExpression,
+    unequal_result: bool,
+    span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let result = if unequal_result { "true" } else { "false" };
+    let is_object_literal = |expression: &ParsedExpression| match expression {
+        ParsedExpression::ObjectLiteral { .. } | ParsedExpression::ArrayLiteral { .. } => true,
+        // A `function` expression lowers to the arrow shape but binds its own
+        // `this`; tsc exempts a real arrow.
+        ParsedExpression::ArrowFunction(arrow) => {
+            !matches!(arrow.this_binding, surge_ts_syntax::ParsedThisBinding::Inherited)
+        }
+        _ => false,
+    };
+    if is_object_literal(left) || is_object_literal(right) {
+        ctx.push(diagnostic_with_syntax_span(Diagnostic::ts2839(result, ctx.file_name.clone()), span));
+    }
+    // The lib's `declare var NaN` binds as a `let`-like global; a parameter or
+    // block-scoped constant of the same name is not the global.
+    let is_global_nan = |expression: &ParsedExpression| {
+        matches!(expression, ParsedExpression::Identifier { name, .. } if name == "NaN")
+            && symbols
+                .get("NaN")
+                .is_some_and(|symbol| {
+                    matches!(
+                        symbol.kind,
+                        crate::symbols::SymbolKind::Var | crate::symbols::SymbolKind::Let
+                    )
+                })
+    };
+    if is_global_nan(left) || is_global_nan(right) {
+        ctx.push(diagnostic_with_syntax_span(Diagnostic::ts2845(result, ctx.file_name.clone()), span));
+    }
 }
