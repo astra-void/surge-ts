@@ -1100,6 +1100,7 @@ pub(crate) fn parse_object_properties(
                         is_accessor: false,
                         is_shorthand: false,
                         computed_key: None,
+                        paired_setter: None,
                     });
                 }
             };
@@ -1123,7 +1124,24 @@ pub(crate) fn parse_object_properties(
                 if property.kind == PropertyKind::Set && getter_names.contains(&key.name.as_str()) {
                     return None;
                 }
-                return parse_object_accessor(key, property);
+                let mut accessor = parse_object_accessor(key, property)?;
+                if property.kind == PropertyKind::Get {
+                    accessor.paired_setter = object_expression.properties.iter().find_map(|other| {
+                        let ObjectPropertyKind::ObjectProperty(other) = other else {
+                            return None;
+                        };
+                        let PropertyKey::StaticIdentifier(other_key) = &other.key else {
+                            return None;
+                        };
+                        let Expression::FunctionExpression(function) = &other.value else {
+                            return None;
+                        };
+                        (other.kind == PropertyKind::Set && other_key.name == key.name).then(|| {
+                            Box::new(function_as_arrow(function, ParsedThisBinding::Own))
+                        })
+                    });
+                }
+                return Some(accessor);
             }
 
             if property.kind != PropertyKind::Init {
@@ -1185,6 +1203,7 @@ pub(crate) fn parse_object_properties(
                         )
                     })
                     .map(|key| Box::new(parse_expression(key).0)),
+                paired_setter: None,
             })
         })
         .collect()
@@ -1235,6 +1254,7 @@ fn parse_object_method_shorthand_named(
         is_accessor: false,
         is_shorthand: false,
         computed_key: None,
+        paired_setter: None,
     })
 }
 

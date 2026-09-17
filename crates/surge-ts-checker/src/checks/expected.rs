@@ -1547,6 +1547,9 @@ fn evaluate_object_literal_with_expected_type(
         if property.is_shorthand {
             ctx.shorthand_property_depth -= 1;
         }
+        if let ParsedExpression::ArrowFunction(getter) = &property.value {
+            crate::infer::expression::check_paired_setter(property, getter, symbols, ctx);
+        }
         let inferred_property = match inferred_property {
             InferredExpression::Known(Type::Function(function_type)) if property.is_accessor => {
                 InferredExpression::Known(match function_type.parameters().first() {

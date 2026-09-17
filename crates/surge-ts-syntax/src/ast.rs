@@ -1184,6 +1184,9 @@ pub struct ParsedObjectProperty {
     /// (`{ [key]: v }`). `name` holds its written path; the checker names the
     /// property by the key's literal type once it is known.
     pub computed_key: Option<Box<ParsedExpression>>,
+    /// On a getter, the `set` accessor of the same name: its body is checked,
+    /// but the getter decides the property's type.
+    pub paired_setter: Option<Box<ParsedArrowFunction>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

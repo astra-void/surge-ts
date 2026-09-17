@@ -360,6 +360,7 @@ fn infer_object_property_type(
         let function_type = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
             check_arrow_function_expression(arrow.as_ref().clone(), symbols, ctx)
         });
+        check_paired_setter(property, arrow, symbols, ctx);
         if property.is_accessor {
             // A getter takes no parameters and yields its return type; a setter
             // takes one and yields that parameter's type.
@@ -372,4 +373,24 @@ fn infer_object_property_type(
     }
 
     infer_object_property_value(&property.value, symbols, ctx)
+}
+
+/// A getter's `set` partner is checked for its body alone. Its parameter,
+/// written without a type, takes the getter's annotation (or `any`).
+pub(crate) fn check_paired_setter(
+    property: &ParsedObjectProperty,
+    getter: &surge_ts_syntax::ParsedArrowFunction,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let Some(setter) = property.paired_setter.as_deref() else {
+        return;
+    };
+    let mut setter = setter.clone();
+    if let Some(parameter) = setter.parameters.first_mut()
+        && parameter.declared_type.is_none()
+    {
+        parameter.declared_type = Some(getter.return_type.clone().unwrap_or(surge_ts_syntax::ParsedType::Any));
+    }
+    let _ = check_arrow_function_expression(setter, symbols, ctx);
 }
