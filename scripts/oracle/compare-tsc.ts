@@ -518,6 +518,7 @@ export const fixturePresets: Record<string, string> = {
   'constructor-overload-group-basic': path.join(workspaceRoot, 'tests/compat-projects/constructor-overload-group-basic/tsconfig.json'),
   'void-expression-type-basic': path.join(workspaceRoot, 'tests/compat-projects/void-expression-type-basic/tsconfig.json'),
   'spread-iterability-basic': path.join(workspaceRoot, 'tests/compat-projects/spread-iterability-basic/tsconfig.json'),
+  'element-access-missing-key-basic': path.join(workspaceRoot, 'tests/compat-projects/element-access-missing-key-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

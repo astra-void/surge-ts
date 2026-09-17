@@ -770,8 +770,10 @@ status = "catalog-only"
 reason = "Cataloged for future coverage"
 
 [TS7053]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "element-access-missing-key-basic",
+]
 
 [TS7054]
 status = "catalog-only"

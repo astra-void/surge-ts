@@ -389,11 +389,14 @@ pub(super) fn evaluate_index_access(
             }
 
             if receiver_is_object_like {
-                let object_type_name = receiver_type.name();
-                ctx.push(diagnostic_with_syntax_span(
-                    Diagnostic::ts2339(object_name, &object_type_name, ctx.file_name.clone()),
-                    choose_span(object_span, fallback_span),
-                ));
+                report_missing_element(
+                    &key,
+                    &index_type,
+                    &receiver_type,
+                    element_access_span(object_span, index_span).or(fallback_span),
+                    symbols,
+                    ctx,
+                );
             }
             InferredExpression::Unknown
         }

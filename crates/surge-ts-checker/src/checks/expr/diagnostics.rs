@@ -100,10 +100,58 @@ pub(crate) fn missing_property_diagnostic(
     if let Some(class_name) =
         static_member_owner_for_missing_instance_property(property_name, object_type, symbols)
     {
-        return Diagnostic::ts2576(property_name, &object_type_name, &class_name, file_name);
+        return Diagnostic::ts2576(
+            property_name,
+            &object_type_name,
+            format!("{class_name}.{property_name}"),
+            file_name,
+        );
     }
 
     Diagnostic::ts2339(property_name, &object_type_name, file_name)
+}
+
+/// tsc's `getPropertyTypeForIndexType` for a literal key that neither a member
+/// nor an index signature answers: under `noImplicitAny` the whole element
+/// access is an implicit `any` (TS7053, or TS2576 for a static-member mixup);
+/// without it the access silently reads `any`.
+pub(crate) fn report_missing_element(
+    key: &str,
+    key_type: &Type,
+    object_type: &Type,
+    access_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    if !ctx.options.no_implicit_any {
+        return;
+    }
+    let object_type_name = object_type.name();
+    let file_name = ctx.file_name.clone();
+    let diagnostic = match static_member_owner_for_missing_instance_property(key, object_type, symbols)
+    {
+        Some(class_name) => {
+            let written_key = match key_type {
+                Type::StringLiteral(_) => format!("\"{key}\""),
+                _ => key.to_string(),
+            };
+            Diagnostic::ts2576(key, &object_type_name, format!("{class_name}[{written_key}]"), file_name)
+        }
+        None => Diagnostic::ts7053(key_type.name(), &object_type_name, file_name),
+    };
+    ctx.push(diagnostic_with_syntax_span(diagnostic, access_span));
+}
+
+/// `object[key]` from the start of the object through the closing bracket.
+pub(crate) fn element_access_span(
+    object_span: Option<SyntaxTextSpan>,
+    key_span: Option<SyntaxTextSpan>,
+) -> Option<SyntaxTextSpan> {
+    let (object_span, key_span) = (object_span?, key_span?);
+    Some(SyntaxTextSpan {
+        start: object_span.start,
+        end: key_span.end + 1,
+    })
 }
 
 const OBJECT_PROTOTYPE_MEMBERS: &[&str] = &[

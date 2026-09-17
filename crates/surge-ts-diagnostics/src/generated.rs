@@ -590,7 +590,7 @@ pub const TS2576: DiagnosticDescriptor = DiagnosticDescriptor {
     number: Some(2576),
     source: DiagnosticSource::TypeScript,
     category: DiagnosticCategory::Error,
-    message_template: "Property '{0}' does not exist on type '{1}'. Did you mean to access the static member '{2}.{0}' instead?",
+    message_template: "Property '{0}' does not exist on type '{1}'. Did you mean to access the static member '{2}' instead?",
     argument_count: 3,
     support: DiagnosticSupport::Emitted,
 };
@@ -1012,7 +1012,7 @@ pub const TS7053: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Element implicitly has an 'any' type because expression of type '{0}' can't be used to index type '{1}'.",
     argument_count: 2,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS7054: DiagnosticDescriptor = DiagnosticDescriptor {

@@ -469,7 +469,7 @@ code = "TS2576"
 category = "Error"
 source = "typescript"
 support = "emitted"
-message = "Property '{0}' does not exist on type '{1}'. Did you mean to access the static member '{2}.{0}' instead?"
+message = "Property '{0}' does not exist on type '{1}'. Did you mean to access the static member '{2}' instead?"
 arity = 3
 
 [[diagnostic]]
@@ -804,7 +804,7 @@ arity = 2
 code = "TS7053"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Element implicitly has an 'any' type because expression of type '{0}' can't be used to index type '{1}'."
 arity = 2
 

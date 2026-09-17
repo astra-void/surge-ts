@@ -799,6 +799,19 @@ fn evaluate_optional_property_access(
 ) -> InferredExpression {
     let _ = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
     let inferred_expression = infer_expression(expression, symbols, ctx);
+    if *is_bracketed
+        && let InferredExpression::MissingProperty { object_type, .. } = &inferred_expression
+    {
+        report_missing_element(
+            property_name,
+            &Type::StringLiteral(property_name.clone()),
+            object_type,
+            element_access_span(*object_span, *property_span).or(fallback_span),
+            symbols,
+            ctx,
+        );
+        return InferredExpression::Unknown;
+    }
     if let InferredExpression::MissingProperty {
         property_name,
         object_type,
@@ -1074,6 +1087,19 @@ fn evaluate_property_access(
     let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
     check_property_receiver(object, &receiver, *object_span, fallback_span, symbols, ctx);
     let inferred_expression = infer_expression(expression, symbols, ctx);
+    if *is_bracketed
+        && let InferredExpression::MissingProperty { object_type, .. } = &inferred_expression
+    {
+        report_missing_element(
+            property_name,
+            &Type::StringLiteral(property_name.clone()),
+            object_type,
+            element_access_span(*object_span, *property_span).or(fallback_span),
+            symbols,
+            ctx,
+        );
+        return InferredExpression::Unknown;
+    }
     report_inferred_expression(
         with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
             inferred_expression.clone()

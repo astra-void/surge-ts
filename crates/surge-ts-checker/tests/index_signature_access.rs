@@ -1,4 +1,4 @@
-use surge_ts_checker::check_source;
+use surge_ts_checker::{CheckerOptions, check_source, check_source_with_options};
 
 fn codes(diagnostics: &[surge_ts_diagnostics::Diagnostic]) -> Vec<String> {
     diagnostics
@@ -9,6 +9,19 @@ fn codes(diagnostics: &[surge_ts_diagnostics::Diagnostic]) -> Vec<String> {
 
 fn check(source_text: &str) -> Vec<surge_ts_diagnostics::Diagnostic> {
     check_source(source_text, "example.ts")
+}
+
+/// A literal key no member answers is an implicit `any` (TS7053), which tsc
+/// reports only under `noImplicitAny`.
+fn check_no_implicit_any(source_text: &str) -> Vec<surge_ts_diagnostics::Diagnostic> {
+    check_source_with_options(
+        source_text,
+        "example.ts",
+        CheckerOptions {
+            no_implicit_any: true,
+            ..CheckerOptions::default()
+        },
+    )
 }
 
 // A numeric key is converted to a string, so a string index signature answers it.
@@ -46,12 +59,12 @@ fn a_numeric_record_key_still_types_its_value() {
 // A literal-union key still enumerates properties, numeric literals included.
 #[test]
 fn a_literal_union_record_key_enumerates_properties() {
-    let diagnostics = check(
+    let diagnostics = check_no_implicit_any(
         "declare const rec: Record<1 | 2, boolean>;\n\
          export const a: boolean = rec[1];\n\
          export const b = rec[3];\n",
     );
-    assert_eq!(codes(&diagnostics), vec!["TS2339"]);
+    assert_eq!(codes(&diagnostics), vec!["TS7053"]);
 }
 
 // A written mapped type takes the same rule as the built-in `Record` — the
@@ -72,22 +85,22 @@ fn a_mapped_type_with_an_open_key_is_an_index_signature() {
 
 #[test]
 fn a_mapped_type_with_literal_keys_still_enumerates_them() {
-    let diagnostics = check(
+    let diagnostics = check_no_implicit_any(
         "type ByKey<K extends string | number> = { [P in K]: boolean };\n\
          declare const byLiteral: ByKey<1 | 2>;\n\
          export const a: boolean = byLiteral[1];\n\
          export const b = byLiteral[3];\n",
     );
-    assert_eq!(codes(&diagnostics), vec!["TS2339"]);
+    assert_eq!(codes(&diagnostics), vec!["TS7053"]);
 }
 
 // A receiver with neither the member nor an index signature still reports.
 #[test]
 fn a_missing_numeric_member_still_reports() {
-    let diagnostics = check(
+    let diagnostics = check_no_implicit_any(
         "interface Fixed { a: number }\n\
          declare const fixed: Fixed;\n\
          export const a = fixed[0];\n",
     );
-    assert_eq!(codes(&diagnostics), vec!["TS2339"]);
+    assert_eq!(codes(&diagnostics), vec!["TS7053"]);
 }

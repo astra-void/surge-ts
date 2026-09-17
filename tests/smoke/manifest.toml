@@ -2979,12 +2979,14 @@ expected_diagnostics = []
 [[case]]
 name = "array-index-access-non-array-receiver-no-cascade"
 path = "tests/smoke/array_index_access_non_array_receiver_no_cascade.ts"
-expected_diagnostics = ["TS2339"]
+expected_diagnostics = ["TS7053"]
+no_implicit_any = true
 
 [[case]]
 name = "array-index-access-missing-property-receiver-no-cascade"
 path = "tests/smoke/array_index_access_missing_property_receiver_no_cascade.ts"
-expected_diagnostics = ["TS2339"]
+expected_diagnostics = ["TS7053"]
+no_implicit_any = true
 
 [[case]]
 name = "array-index-access-string-index-mismatch-no-root-cascade"
@@ -3009,7 +3011,8 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "array-index-access-non-array-receiver"
 path = "tests/smoke/array_index_access_non_array_receiver.ts"
-expected_diagnostics = ["TS2339"]
+expected_diagnostics = ["TS7053"]
+no_implicit_any = true
 
 [[case]]
 name = "array-index-access-any-receiver-valid"
@@ -3684,7 +3687,8 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "tuple-index-access-non-tuple-non-array-receiver"
 path = "tests/smoke/tuple_index_access_non_tuple_non_array_receiver.ts"
-expected_diagnostics = ["TS2339"]
+expected_diagnostics = ["TS7053"]
+no_implicit_any = true
 
 [[case]]
 name = "tuple-type-alias-valid"
@@ -6558,7 +6562,8 @@ expected_diagnostics = []
 [[case]]
 name = "bracket-property-string-literal-interface-missing"
 path = "tests/smoke/bracket_property_string_literal_interface_missing.ts"
-expected_diagnostics = ["TS2339"]
+expected_diagnostics = ["TS7053"]
+no_implicit_any = true
 
 [[case]]
 name = "bracket-property-string-literal-type-alias-valid"
