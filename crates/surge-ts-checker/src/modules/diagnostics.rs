@@ -301,6 +301,77 @@ pub(crate) fn emit_missing_export_diagnostic(
     ctx.push(diagnostic);
 }
 
+/// An import naming something the resolved source module declares at its top
+/// level without exporting it (TS2459, or TS2614 when the module has a default
+/// export). Decided from the module's syntax only when that is conclusive: a
+/// source file whose export list has no `export *`, `export =` or form surge
+/// does not parse. surge's export tables also carry a module's local values, so
+/// without this the import silently bound the local.
+pub(crate) fn imported_name_is_unexported_local(
+    resolved_index: Option<usize>,
+    program_files: &[ParsedProgramFile],
+    name: &str,
+) -> bool {
+    let Some(file) = resolved_index.and_then(|index| program_files.get(index)) else {
+        return false;
+    };
+    if file.file_kind.is_declaration()
+        || ![".ts", ".tsx", ".mts", ".cts"]
+            .iter()
+            .any(|extension| file.file_name.ends_with(extension))
+    {
+        return false;
+    }
+    let mut exported: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for statement in &file.statements {
+        let ParsedStatement::ExportDeclaration(export) = statement else {
+            continue;
+        };
+        match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => {
+                exported.extend(crate::program::module_scope_declared_names(
+                    std::slice::from_ref(declaration.as_ref()),
+                ));
+            }
+            ParsedExportDeclaration::Named { specifiers, .. } => {
+                exported.extend(specifiers.iter().map(|specifier| specifier.exported_name.as_str()));
+            }
+            ParsedExportDeclaration::Default { .. } => {
+                exported.insert("default");
+            }
+            ParsedExportDeclaration::Namespace { exported_name, .. } => {
+                exported.insert(exported_name.as_str());
+            }
+            ParsedExportDeclaration::Empty { .. } => {}
+            ParsedExportDeclaration::All { .. }
+            | ParsedExportDeclaration::NamespaceExport { .. }
+            | ParsedExportDeclaration::Equals { .. }
+            | ParsedExportDeclaration::Unsupported { .. } => return false,
+        }
+    }
+    !exported.contains(name)
+        && crate::program::module_scope_declared_names(&file.statements).contains(name)
+}
+
+pub(crate) fn emit_unexported_local_import_diagnostic(
+    ctx: &mut CheckerContext,
+    module_specifier: &str,
+    name: &str,
+    name_span: Option<TextSpan>,
+    has_explicit_default_export: bool,
+) {
+    let specifier = quoted_module_specifier(module_specifier);
+    let diagnostic = if has_explicit_default_export {
+        Diagnostic::ts2614(specifier, name, ctx.file_name.clone())
+    } else {
+        Diagnostic::ts2459(specifier, name, ctx.file_name.clone())
+    };
+    ctx.push(match name_span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
+}
+
 pub(crate) fn emit_missing_named_import_diagnostic(
     ctx: &mut CheckerContext,
     module_specifier: &str,

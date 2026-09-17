@@ -545,6 +545,14 @@ message = "Right operand of ?? is unreachable because the left operand is never 
 arity = 0
 
 [[diagnostic]]
+code = "TS2459"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Module '{0}' declares '{1}' locally, but it is not exported."
+arity = 2
+
+[[diagnostic]]
 code = "TS2632"
 category = "Error"
 source = "typescript"

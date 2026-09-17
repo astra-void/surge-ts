@@ -506,6 +506,7 @@ export const fixturePresets: Record<string, string> = {
   'unannotated-method-return-type-basic': path.join(workspaceRoot, 'tests/compat-projects/unannotated-method-return-type-basic/tsconfig.json'),
   'override-modifier-without-base-member-basic': path.join(workspaceRoot, 'tests/compat-projects/override-modifier-without-base-member-basic/tsconfig.json'),
   'import-binding-assignment-basic': path.join(workspaceRoot, 'tests/compat-projects/import-binding-assignment-basic/tsconfig.json'),
+  'import-unexported-local-basic': path.join(workspaceRoot, 'tests/compat-projects/import-unexported-local-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

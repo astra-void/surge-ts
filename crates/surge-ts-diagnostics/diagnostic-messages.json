@@ -544,6 +544,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2459",
+    "category": "Error",
+    "message": "Module '{0}' declares '{1}' locally, but it is not exported.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2632",
     "category": "Error",
     "message": "Cannot assign to '{0}' because it is an import.",

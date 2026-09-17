@@ -557,6 +557,12 @@ oracle = [
   "syntactic-nullishness-coalesce-basic",
 ]
 
+[TS2459]
+status = "emitted"
+oracle = [
+  "import-unexported-local-basic",
+]
+
 [TS2632]
 status = "emitted"
 oracle = [

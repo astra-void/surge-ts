@@ -685,6 +685,16 @@ pub const TS2869: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2459: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2459",
+    number: Some(2459),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Module '{0}' declares '{1}' locally, but it is not exported.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2632: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2632",
     number: Some(2632),
@@ -2154,6 +2164,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2745,
     TS2749,
     TS2869,
+    TS2459,
     TS2632,
     TS2769,
     TS2774,
@@ -2967,6 +2978,18 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2869(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2869, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2459(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2459,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
     }
 
     #[allow(clippy::needless_pass_by_value)]

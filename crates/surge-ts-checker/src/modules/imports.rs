@@ -573,6 +573,28 @@ fn resolve_default_and_named_import(
     }
 
     for specifier in specifiers {
+        if imported_name_is_unexported_local(resolved_index, program_files, &specifier.imported_name) {
+            emit_unexported_local_import_diagnostic(
+                ctx,
+                &import.module_specifier,
+                &specifier.imported_name,
+                specifier.name_span,
+                module_has_explicit_default_export(
+                    &import.module_specifier,
+                    resolved_index,
+                    program_files,
+                    ctx,
+                ),
+            );
+            insert_unknown_type_import(
+                type_declarations,
+                &specifier.local_name,
+                ctx.file_name_arc(),
+                specifier.name_span,
+            );
+            insert_unknown_value_import(&specifier.local_name, symbols);
+            continue;
+        }
         // Named specifiers resolve against the module export by their imported
         // name; the local name is only the binding target (e.g. `helper as h`).
         let type_export = lookup_type_export(&export_table, &specifier.imported_name);
@@ -1300,6 +1322,28 @@ fn resolve_named_import(
             .unwrap_or(false);
 
     for specifier in specifiers {
+        if imported_name_is_unexported_local(resolved_index, program_files, &specifier.imported_name) {
+            emit_unexported_local_import_diagnostic(
+                ctx,
+                &import.module_specifier,
+                &specifier.imported_name,
+                specifier.name_span,
+                module_has_explicit_default_export(
+                    &import.module_specifier,
+                    resolved_index,
+                    program_files,
+                    ctx,
+                ),
+            );
+            insert_unknown_type_import(
+                type_declarations,
+                &specifier.local_name,
+                ctx.file_name_arc(),
+                specifier.name_span,
+            );
+            insert_unknown_value_import(&specifier.local_name, symbols);
+            continue;
+        }
         let type_export = lookup_type_export(&export_table, &specifier.imported_name);
         let value_export = lookup_value_export(&export_table, &specifier.imported_name);
         let has_qualified_type_exports = copy_qualified_type_exports(
