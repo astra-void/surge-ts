@@ -1480,7 +1480,7 @@ fn span_ts2349_property_non_callable_points_to_property() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2349", span(source, "store.value()"));
+    assert_single_span(source, diagnostics, "TS2349", span_nth(source, "value", 1));
 }
 
 #[test]

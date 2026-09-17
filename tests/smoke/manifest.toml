@@ -741,7 +741,7 @@ expected_diagnostics = []
 [[case]]
 name = "property-call-union-function-or-undefined-non-callable"
 path = "tests/smoke/property_call_union_function_or_undefined_non_callable.ts"
-expected_diagnostics = ["TS2349"]
+expected_diagnostics = ["TS2722"]
 
 [[case]]
 name = "property-call-unresolved-object-no-cascade"
@@ -796,7 +796,7 @@ expected_diagnostics = ["TS2349"]
 [[case]]
 name = "property-call-priority-arity-skips-arguments"
 path = "tests/smoke/property_call_priority_arity_skips_arguments.ts"
-expected_diagnostics = ["TS2554"]
+expected_diagnostics = ["TS2304", "TS2554"]
 
 [[case]]
 name = "property-call-priority-argument-mismatch-after-callable-resolved"
@@ -946,22 +946,22 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "property-call-optional-function-property-non-callable"
 path = "tests/smoke/property_call_optional_function_property_non_callable.ts"
-expected_diagnostics = ["TS2349"]
+expected_diagnostics = ["TS2722"]
 
 [[case]]
 name = "property-call-optional-function-property-no-argument-cascade"
 path = "tests/smoke/property_call_optional_function_property_no_argument_cascade.ts"
-expected_diagnostics = ["TS2349"]
+expected_diagnostics = ["TS2304", "TS2554", "TS2722"]
 
 [[case]]
 name = "property-call-optional-function-property-assignment-no-cascade"
 path = "tests/smoke/property_call_optional_function_property_assignment_no_cascade.ts"
-expected_diagnostics = ["TS2349"]
+expected_diagnostics = ["TS2304", "TS2554", "TS2722"]
 
 [[case]]
 name = "property-call-optional-function-property-return-no-cascade"
 path = "tests/smoke/property_call_optional_function_property_return_no_cascade.ts"
-expected_diagnostics = ["TS2349"]
+expected_diagnostics = ["TS2304", "TS2554", "TS2722"]
 
 [[case]]
 name = "property-call-optional-function-property-access-still-union-valid"
@@ -1051,7 +1051,7 @@ expected_diagnostics = []
 [[case]]
 name = "property-call-matches-identifier-call-arity-behavior"
 path = "tests/smoke/property_call_matches_identifier_call_arity_behavior.ts"
-expected_diagnostics = ["TS2554", "TS2554"]
+expected_diagnostics = ["TS2304", "TS2304", "TS2554", "TS2554"]
 
 [[case]]
 name = "property-call-matches-identifier-call-argument-behavior"
@@ -5679,7 +5679,7 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "function-type-union-call-not-supported-or-non-callable"
 path = "tests/smoke/function_type_union_call_not_supported_or_non_callable.ts"
-expected_diagnostics = ["TS2349"]
+expected_diagnostics = ["TS2722"]
 
 # Phase 1 callable unions: every member is a function with one shared call
 # signature (identical arity, mutually-assignable parameters). Return types may
@@ -5727,7 +5727,7 @@ expected_diagnostics = ["TS2349"]
 [[case]]
 name = "callable-union-function-or-undefined-still-non-callable"
 path = "tests/smoke/callable_union_function_or_undefined_still_non_callable.ts"
-expected_diagnostics = ["TS2349"]
+expected_diagnostics = ["TS2722"]
 
 [[case]]
 name = "callable-union-unresolved-member-no-cascade"

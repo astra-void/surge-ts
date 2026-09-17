@@ -40,6 +40,12 @@ oracle = [
   "accessor-declaration-rules-basic",
 ]
 
+[TS2722]
+status = "emitted"
+oracle = [
+  "possibly-undefined-invocation-basic",
+]
+
 [TS2724]
 status = "emitted"
 oracle = [

@@ -456,6 +456,8 @@ pub(crate) fn check_property_call_like(
                         let return_type = super::check_callable_union_call(
                             &union,
                             property_span,
+                            crate::checks::expr::element_access_span(object_span, property_span)
+                                .map(|span| SyntaxTextSpan { end: span.end - 1, ..span }),
                             call_span,
                             type_arguments,
                             arguments,
@@ -468,8 +470,8 @@ pub(crate) fn check_property_call_like(
                         ctx.push(diagnostic_with_syntax_span(
                             Diagnostic::ts2349(ctx.file_name.clone()),
                             crate::spans::choose_span(
-                                call_span,
-                                crate::spans::choose_span(property_span, object_span),
+                                property_span,
+                                crate::spans::choose_span(call_span, object_span),
                             ),
                         ));
                         return None;
@@ -586,6 +588,8 @@ pub(crate) fn check_property_call_like(
                 Type::Union(union) => super::check_callable_union_call(
                     &union,
                     property_span,
+                    crate::checks::expr::element_access_span(object_span, property_span)
+                        .map(|span| SyntaxTextSpan { end: span.end - 1, ..span }),
                     call_span,
                     type_arguments,
                     arguments,
@@ -596,8 +600,8 @@ pub(crate) fn check_property_call_like(
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2349(ctx.file_name.clone()),
                         crate::spans::choose_span(
-                            call_span,
-                            crate::spans::choose_span(property_span, object_span),
+                            property_span,
+                            crate::spans::choose_span(call_span, object_span),
                         ),
                     ));
                     None
@@ -887,8 +891,8 @@ pub(crate) fn check_optional_property_call(
                         ctx.push(diagnostic_with_syntax_span(
                             Diagnostic::ts2349(ctx.file_name.clone()),
                             crate::spans::choose_span(
-                                call_span,
-                                crate::spans::choose_span(property_span, object_span),
+                                property_span,
+                                crate::spans::choose_span(call_span, object_span),
                             ),
                         ));
                         return None;
@@ -999,8 +1003,8 @@ pub(crate) fn check_optional_property_call(
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2349(ctx.file_name.clone()),
                         crate::spans::choose_span(
-                            call_span,
-                            crate::spans::choose_span(property_span, object_span),
+                            property_span,
+                            crate::spans::choose_span(call_span, object_span),
                         ),
                     ));
                     None

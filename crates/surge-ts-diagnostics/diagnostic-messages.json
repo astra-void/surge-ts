@@ -1296,6 +1296,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2722",
+    "category": "Error",
+    "message": "Cannot invoke an object which is possibly 'undefined'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2724",
     "category": "Error",
     "message": "'{0}' has no exported member named '{1}'. Did you mean '{2}'?",

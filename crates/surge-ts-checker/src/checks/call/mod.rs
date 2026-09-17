@@ -205,6 +205,7 @@ pub(crate) fn check_call_like_with_expected_type(
         Type::Union(union) => check_callable_union_call(
             union,
             callee_span,
+            callee_span,
             call_span,
             type_arguments,
             arguments,
@@ -501,6 +502,7 @@ fn declaration_file_name(info: &crate::symbols::TypeDeclarationInfo) -> &str {
 fn check_callable_union_call(
     union: &UnionType,
     callee_span: Option<SyntaxTextSpan>,
+    callee_expression_span: Option<SyntaxTextSpan>,
     call_span: Option<SyntaxTextSpan>,
     type_arguments: &[ParsedType],
     arguments: &[ParsedCallArgument],
@@ -509,6 +511,46 @@ fn check_callable_union_call(
 ) -> Option<Type> {
     if union.types().iter().any(|ty| ty.is_unknown()) {
         return None;
+    }
+
+    // tsc's `resolveCallExpression` reads the callee through
+    // `checkNonNullExpression`: a possibly-`undefined` callee is TS2722 on the
+    // whole callee, and the call proceeds on the rest.
+    if union.types().iter().any(|ty| matches!(ty, Type::Undefined)) {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2722(ctx.file_name.clone()),
+            callee_expression_span.or(callee_span),
+        ));
+        let defined = union_type(
+            union
+                .types()
+                .iter()
+                .filter(|ty| !matches!(ty, Type::Undefined))
+                .cloned()
+                .collect(),
+        );
+        return match &defined {
+            Type::Union(defined) => check_callable_union_call(
+                defined,
+                callee_span,
+                callee_expression_span,
+                call_span,
+                type_arguments,
+                arguments,
+                symbols,
+                ctx,
+            ),
+            Type::Function(function_type) => check_function_type_call(
+                function_type,
+                callee_span,
+                call_span,
+                type_arguments,
+                arguments,
+                symbols,
+                ctx,
+            ),
+            _ => None,
+        };
     }
 
     let Some(members) = union_call_signature_members(union) else {
@@ -1474,6 +1516,20 @@ pub(crate) fn check_function_type_call(
             Diagnostic::ts2554(expected_count, actual, ctx.file_name.clone())
         };
         ctx.push(diagnostic_with_syntax_span(diagnostic, span));
+        // tsc still checks every argument of a call it rejected for arity. One
+        // the signature covers is contextually typed by it, which surge cannot
+        // apply without also relating it, so its callbacks stay unreported; an
+        // excess argument has no context at all.
+        for (index, argument) in arguments.iter().enumerate() {
+            let covered = index < expected || function_type.is_variadic();
+            if covered {
+                ctx.degraded_expected_type_depth += 1;
+            }
+            let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            if covered {
+                ctx.degraded_expected_type_depth -= 1;
+            }
+        }
         return None;
     }
 

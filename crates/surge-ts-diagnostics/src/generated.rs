@@ -1625,6 +1625,16 @@ pub const TS2651: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2722: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2722",
+    number: Some(2722),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot invoke an object which is possibly 'undefined'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2724: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2724",
     number: Some(2724),
@@ -2418,6 +2428,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2403,
     TS2449,
     TS2651,
+    TS2722,
     TS2724,
     TS2729,
     TS2683,
@@ -3943,6 +3954,11 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2651(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2651, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2722(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2722, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]
