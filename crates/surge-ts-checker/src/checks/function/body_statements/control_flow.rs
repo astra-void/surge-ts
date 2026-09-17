@@ -373,6 +373,14 @@ pub(crate) fn check_function_for_of_statement(
                     if has_numeric_property_names(iterable_type)
             );
         } else {
+            crate::checks::expr::check_property_receiver(
+                &for_of_statement.iterable,
+                &iterable_type,
+                for_of_statement.iterable_span,
+                None,
+                &visible_symbols,
+                ctx,
+            );
             if !for_of_statement.is_await {
                 crate::checks::expr::check_iterable_operand(
                     &iterable_type,

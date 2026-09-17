@@ -71,7 +71,7 @@ pub(crate) fn report_inferred_expression(
 /// otherwise, and a receiver that can be `undefined` is TS18048 named and
 /// TS2532 otherwise. The access itself proceeds on the non-`undefined` part, so
 /// nothing cascades.
-pub(super) fn check_property_receiver(
+pub(crate) fn check_property_receiver(
     object: &ParsedExpression,
     receiver: &InferredExpression,
     object_span: Option<SyntaxTextSpan>,
