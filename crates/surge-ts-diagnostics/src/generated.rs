@@ -1622,7 +1622,7 @@ pub const TS1019: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "An index signature parameter cannot have a question mark.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1021: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -1712,7 +1712,7 @@ pub const TS1098: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Type parameter list cannot be empty.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1099: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -1722,7 +1722,7 @@ pub const TS1099: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Type argument list cannot be empty.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1108: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -1802,7 +1802,7 @@ pub const TS1176: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Interface declaration cannot have 'implements' clause.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1183: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -1812,7 +1812,7 @@ pub const TS1183: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "An implementation cannot be declared in ambient contexts.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1184: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -1922,7 +1922,7 @@ pub const TS1354: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "'readonly' type modifier is only permitted on array and tuple literal types.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1363: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -1992,7 +1992,7 @@ pub const TS2206: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "The 'type' modifier cannot be used on a named import when 'import type' is used on its import statement.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS2207: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -2002,7 +2002,7 @@ pub const TS2207: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "The 'type' modifier cannot be used on a named export when 'export type' is used on its export statement.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS2452: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -2082,7 +2082,7 @@ pub const TS5086: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "A labeled tuple element is declared as optional with a question mark after the name and before the colon, rather than after the type.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS5087: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -2092,7 +2092,7 @@ pub const TS5087: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "A labeled tuple element is declared as rest with a '...' before the name, rather than before the type.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS8002: DiagnosticDescriptor = DiagnosticDescriptor {

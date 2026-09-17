@@ -1292,7 +1292,7 @@ arity = 0
 code = "TS1019"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "An index signature parameter cannot have a question mark."
 arity = 0
 
@@ -1364,7 +1364,7 @@ arity = 0
 code = "TS1098"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Type parameter list cannot be empty."
 arity = 0
 
@@ -1372,7 +1372,7 @@ arity = 0
 code = "TS1099"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Type argument list cannot be empty."
 arity = 0
 
@@ -1436,7 +1436,7 @@ arity = 0
 code = "TS1176"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Interface declaration cannot have 'implements' clause."
 arity = 0
 
@@ -1444,7 +1444,7 @@ arity = 0
 code = "TS1183"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "An implementation cannot be declared in ambient contexts."
 arity = 0
 
@@ -1532,7 +1532,7 @@ arity = 0
 code = "TS1354"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "'readonly' type modifier is only permitted on array and tuple literal types."
 arity = 0
 
@@ -1588,7 +1588,7 @@ arity = 0
 code = "TS2206"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "The 'type' modifier cannot be used on a named import when 'import type' is used on its import statement."
 arity = 0
 
@@ -1596,7 +1596,7 @@ arity = 0
 code = "TS2207"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "The 'type' modifier cannot be used on a named export when 'export type' is used on its export statement."
 arity = 0
 
@@ -1660,7 +1660,7 @@ arity = 0
 code = "TS5086"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "A labeled tuple element is declared as optional with a question mark after the name and before the colon, rather than after the type."
 arity = 0
 
@@ -1668,7 +1668,7 @@ arity = 0
 code = "TS5087"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "A labeled tuple element is declared as rest with a '...' before the name, rather than before the type."
 arity = 0
 

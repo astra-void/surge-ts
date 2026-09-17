@@ -1293,7 +1293,7 @@
     "message": "An index signature parameter cannot have a question mark.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1021",
@@ -1365,7 +1365,7 @@
     "message": "Type parameter list cannot be empty.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1099",
@@ -1373,7 +1373,7 @@
     "message": "Type argument list cannot be empty.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1108",
@@ -1437,7 +1437,7 @@
     "message": "Interface declaration cannot have 'implements' clause.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1183",
@@ -1445,7 +1445,7 @@
     "message": "An implementation cannot be declared in ambient contexts.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1184",
@@ -1533,7 +1533,7 @@
     "message": "'readonly' type modifier is only permitted on array and tuple literal types.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1363",
@@ -1589,7 +1589,7 @@
     "message": "The 'type' modifier cannot be used on a named import when 'import type' is used on its import statement.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2207",
@@ -1597,7 +1597,7 @@
     "message": "The 'type' modifier cannot be used on a named export when 'export type' is used on its export statement.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2452",
@@ -1661,7 +1661,7 @@
     "message": "A labeled tuple element is declared as optional with a question mark after the name and before the colon, rather than after the type.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS5087",
@@ -1669,7 +1669,7 @@
     "message": "A labeled tuple element is declared as rest with a '...' before the name, rather than before the type.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS8002",
