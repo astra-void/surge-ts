@@ -317,6 +317,7 @@ fn parse_export_specifier(specifier: &ExportSpecifier<'_>) -> Option<ParsedExpor
         local_name,
         exported_name,
         name_span: Some(text_span_from_oxc_span(specifier.local.span())),
+        exported_name_span: Some(text_span_from_oxc_span(specifier.exported.span())),
         is_type_only: matches!(specifier.export_kind, ImportOrExportKind::Type),
     })
 }

@@ -55,6 +55,7 @@ oracle = [
 status = "emitted"
 oracle = [
   "duplicate-export-declaration-basic",
+  "duplicate-export-specifier-basic",
 ]
 
 [TS2440]
@@ -79,6 +80,7 @@ oracle = [
 status = "emitted"
 oracle = [
   "duplicate-export-declaration-basic",
+  "duplicate-export-specifier-basic",
 ]
 
 [TS2488]
@@ -214,6 +216,9 @@ span_tests = [
 status = "emitted"
 fixtures = [
   "tests/smoke/manifest.toml",
+]
+oracle = [
+  "duplicate-export-specifier-basic",
 ]
 span_tests = [
   "crates/surge-ts-checker/tests/spans.rs",
@@ -474,6 +479,9 @@ fixtures = [
 status = "emitted"
 fixtures = [
   "tests/smoke/manifest.toml",
+]
+oracle = [
+  "duplicate-export-specifier-basic",
 ]
 span_tests = [
   "crates/surge-ts-checker/tests/spans.rs",

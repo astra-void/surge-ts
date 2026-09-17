@@ -554,6 +554,7 @@ export const fixturePresets: Record<string, string> = {
   'no-default-export-import-basic': path.join(workspaceRoot, 'tests/compat-projects/no-default-export-import-basic/tsconfig.json'),
   'import-local-declaration-conflict-basic': path.join(workspaceRoot, 'tests/compat-projects/import-local-declaration-conflict-basic/tsconfig.json'),
   'duplicate-export-declaration-basic': path.join(workspaceRoot, 'tests/compat-projects/duplicate-export-declaration-basic/tsconfig.json'),
+  'duplicate-export-specifier-basic': path.join(workspaceRoot, 'tests/compat-projects/duplicate-export-specifier-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

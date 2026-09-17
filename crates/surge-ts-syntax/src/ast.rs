@@ -855,6 +855,11 @@ pub struct ParsedExportSpecifier {
     pub local_name: String,
     pub exported_name: String,
     pub name_span: Option<TextSpan>,
+    /// The exported name's own span (`z` in `p as z`), where tsc anchors the
+    /// duplicate-export diagnostics. `name_span` stays the local name, which is
+    /// where the specifier node — and the conflict diagnostics reported on it —
+    /// begins.
+    pub exported_name_span: Option<TextSpan>,
     pub is_type_only: bool,
 }
 

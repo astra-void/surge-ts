@@ -3,6 +3,7 @@ use super::*;
 use std::collections::HashMap;
 
 use surge_ts_diagnostics::Diagnostic;
+use surge_ts_syntax::{ParsedExportSpecifier, ParsedVariableKind};
 
 use crate::context::convert_span;
 
@@ -189,6 +190,47 @@ fn adopt_export_assignment_alias(
     }
 }
 
+#[derive(Clone, Copy)]
+struct ExportedDeclaration {
+    meaning: u8,
+    name_span: Option<TextSpan>,
+    counts_for_redeclare: bool,
+    is_block_scoped_variable: bool,
+}
+
+/// Two `export { … }` specifiers publishing one name are duplicate exported
+/// identifiers. tsc reports every one of them, on the exported name rather than
+/// on the specifier, and words it as a block-scoped redeclaration when the name
+/// is also an exported `let`/`const` — the merged symbol is then the variable's.
+fn report_duplicate_export_specifiers(
+    specifiers_by_exported_name: &HashMap<&str, Vec<&ParsedExportSpecifier>>,
+    exported_declarations: &HashMap<&str, ExportedDeclaration>,
+    ctx: &mut CheckerContext,
+) {
+    let mut duplicated: Vec<&&str> = specifiers_by_exported_name
+        .keys()
+        .filter(|name| specifiers_by_exported_name[**name].len() > 1)
+        .collect();
+    duplicated.sort_unstable();
+    for exported_name in duplicated {
+        let specifiers = &specifiers_by_exported_name[*exported_name];
+        let declaration = exported_declarations.get(*exported_name);
+        let block_scoped = declaration.is_some_and(|declaration| declaration.is_block_scoped_variable);
+        let spans = declaration
+            .and_then(|declaration| declaration.name_span)
+            .into_iter()
+            .chain(specifiers.iter().filter_map(|specifier| specifier.exported_name_span));
+        for span in spans {
+            let diagnostic = if block_scoped {
+                Diagnostic::ts2451(*exported_name, ctx.file_name.clone())
+            } else {
+                Diagnostic::ts2300(*exported_name, ctx.file_name.clone())
+            };
+            ctx.push(diagnostic.with_span(convert_span(span)));
+        }
+    }
+}
+
 /// Whether a declaration of this kind counts toward tsc's exported-declaration
 /// tally (`checkExternalModuleExports`). Interfaces, type aliases, namespaces
 /// and enums legally merge with another declaration of the same exported name,
@@ -228,7 +270,7 @@ fn report_duplicate_export_declarations(
     resolving: &mut [bool],
     ctx: &mut CheckerContext,
 ) {
-    let mut exported_declarations: HashMap<&str, (u8, Option<TextSpan>, bool)> = HashMap::new();
+    let mut exported_declarations: HashMap<&str, ExportedDeclaration> = HashMap::new();
     for statement in &parsed_file.statements {
         let ParsedStatement::ExportDeclaration(export) = statement else {
             continue;
@@ -242,13 +284,38 @@ fn report_duplicate_export_declarations(
         };
         exported_declarations.insert(
             name,
-            (
+            ExportedDeclaration {
                 meaning,
-                exported_declaration_name_span(declaration.as_ref()),
-                export_declaration_counts_for_redeclare(declaration.as_ref()),
-            ),
+                name_span: exported_declaration_name_span(declaration.as_ref()),
+                counts_for_redeclare: export_declaration_counts_for_redeclare(declaration.as_ref()),
+                is_block_scoped_variable: matches!(
+                    declaration.as_ref(),
+                    ParsedStatement::VariableDeclaration(variable)
+                        if !matches!(variable.kind, ParsedVariableKind::Var)
+                ),
+            },
         );
     }
+
+    let mut specifiers_by_exported_name: HashMap<&str, Vec<&ParsedExportSpecifier>> =
+        HashMap::new();
+    for statement in &parsed_file.statements {
+        let ParsedStatement::ExportDeclaration(export) = statement else {
+            continue;
+        };
+        let ParsedExportDeclaration::Named { specifiers, .. } = export.as_ref() else {
+            continue;
+        };
+        for specifier in specifiers {
+            specifiers_by_exported_name
+                .entry(specifier.exported_name.as_str())
+                .or_default()
+                .push(specifier);
+        }
+    }
+
+    report_duplicate_export_specifiers(&specifiers_by_exported_name, &exported_declarations, ctx);
+
     if exported_declarations.is_empty() {
         return;
     }
@@ -295,11 +362,26 @@ fn report_duplicate_export_declarations(
         };
 
         for specifier in specifiers {
-            let Some(&(declaration_meaning, declaration_span, counts_for_redeclare)) =
-                exported_declarations.get(specifier.exported_name.as_str())
+            let Some(declaration) = exported_declarations.get(specifier.exported_name.as_str())
             else {
                 continue;
             };
+            // A second specifier exporting the same name is a fresh symbol in
+            // tsc's binder, not another declaration of this export, so only the
+            // first one merges with the declaration and is reported here.
+            if specifiers_by_exported_name
+                .get(specifier.exported_name.as_str())
+                .and_then(|specifiers| specifiers.first())
+                .is_none_or(|first| !std::ptr::eq(*first, specifier))
+            {
+                continue;
+            }
+            let ExportedDeclaration {
+                meaning: declaration_meaning,
+                name_span: declaration_span,
+                counts_for_redeclare,
+                ..
+            } = *declaration;
 
             let target_meaning = match &target_export_table {
                 Some(target_export_table) => {
