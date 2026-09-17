@@ -981,6 +981,10 @@ pub(crate) fn parse_conditional_expression(
         when_true_span: Some(text_span_from_oxc_span(when_true_span)),
         when_false: Box::new(when_false),
         when_false_span: Some(text_span_from_oxc_span(when_false_span)),
+        truthiness_tests: super::functions::unreferenced_truthiness_tests_in(
+            &conditional_expression.test,
+            super::functions::TruthinessBody::Expression(&conditional_expression.consequent),
+        ),
     })
 }
 

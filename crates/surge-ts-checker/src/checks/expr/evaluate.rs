@@ -309,7 +309,14 @@ pub(crate) fn evaluate_expression(
             when_true_span,
             when_false,
             when_false_span,
-        } => evaluate_conditional(
+            truthiness_tests,
+        } => {
+            crate::checks::function::report_unreferenced_callable_conditions(
+                truthiness_tests,
+                symbols,
+                ctx,
+            );
+            evaluate_conditional(
             condition,
             condition_span,
             when_true,
@@ -319,7 +326,8 @@ pub(crate) fn evaluate_expression(
             fallback_span,
             symbols,
             ctx,
-        ),
+        )
+        }
         ParsedExpression::OptionalPropertyAccess {
             object,
             object_span,

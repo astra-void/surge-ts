@@ -918,6 +918,9 @@ pub enum ParsedExpression {
         when_true_span: Option<TextSpan>,
         when_false: Box<ParsedExpression>,
         when_false_span: Option<TextSpan>,
+        /// See [`ParsedIfStatement::unreferenced_truthiness_tests`]; the guarded
+        /// code is `when_true`.
+        truthiness_tests: Vec<ParsedTruthinessTest>,
     },
     PropertyAccess {
         object: Box<ParsedExpression>,

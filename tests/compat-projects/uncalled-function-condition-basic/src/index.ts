@@ -48,3 +48,9 @@ class Widget {
     }
   }
 }
+
+const ternary = isReady ? 1 : 2;
+const ternaryMember = service.start ? "on" : "off";
+const ternaryUsed = isReady ? isReady() : false;
+const ternaryAndChain = isReady && service.start ? service.start() : undefined;
+const ternaryNested = isReady ? (isReady ? 1 : 2) : 3;

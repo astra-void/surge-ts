@@ -1789,10 +1789,12 @@ fn evaluate_conditional_expression_with_expected_type(
         when_true_span,
         when_false,
         when_false_span,
+        truthiness_tests,
     } = expression
     else {
         return evaluate_expression(expression, fallback_span, symbols, ctx);
     };
+    crate::checks::function::report_unreferenced_callable_conditions(truthiness_tests, symbols, ctx);
 
     // Narrow a discriminated union for each branch (`x.kind === "a" ? … : …`).
     let true_symbols =

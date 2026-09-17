@@ -221,6 +221,7 @@ pub(crate) fn check_expression_flow_impl(
             when_true_span,
             when_false,
             when_false_span,
+            ..
         } => {
             if check_expression_flow_impl(
                 condition,
