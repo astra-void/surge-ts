@@ -134,7 +134,8 @@ fn generic_call_type_arguments_ignored_or_pinned() {
         "function makeString(): string { return \"ok\"; } let value: string = makeString<string>();",
     )]);
 
-    assert!(diagnostics.is_empty());
+    // tsc: a non-generic function takes no type arguments.
+    assert_eq!(codes(&diagnostics), vec!["TS2558"]);
 }
 
 #[test]
@@ -1086,7 +1087,8 @@ fn generic_function_call_type_args_parser_safe() {
         "function makeString(): string { return \"ok\"; } let value: string = makeString<string>();",
     )]);
 
-    assert!(diagnostics.is_empty());
+    // tsc: a non-generic function takes no type arguments.
+    assert_eq!(codes(&diagnostics), vec!["TS2558"]);
 }
 
 #[test]
@@ -1096,7 +1098,8 @@ fn generic_function_call_type_args_ignored_policy_pinned() {
         "function makeString(): string { return \"ok\"; } let value: string = makeString<string>();",
     )]);
 
-    assert!(diagnostics.is_empty());
+    // tsc: a non-generic function takes no type arguments.
+    assert_eq!(codes(&diagnostics), vec!["TS2558"]);
 }
 
 #[test]
@@ -1106,7 +1109,8 @@ fn generic_function_call_type_args_wrong_arity_policy_pinned() {
         "function makeString(): string { return \"ok\"; } let value: string = makeString<string, number>();",
     )]);
 
-    assert!(diagnostics.is_empty());
+    // tsc: a non-generic function takes no type arguments.
+    assert_eq!(codes(&diagnostics), vec!["TS2558"]);
 }
 
 #[test]
