@@ -1288,6 +1288,14 @@ fn parsed_statement_bytes(statement: &surge_ts_syntax::ParsedStatement) -> u64 {
                                             .as_ref()
                                             .map_or(0, parsed_type_bytes)
                                 }
+                                M::StaticBlock(block) => {
+                                    string_vec_bytes(&block.body_reads)
+                                        + block
+                                            .body
+                                            .iter()
+                                            .map(parsed_body_statement_bytes)
+                                            .sum::<u64>()
+                                }
                                 M::Constructor(constructor) => {
                                     string_vec_bytes(&constructor.body_reads)
                                         + constructor

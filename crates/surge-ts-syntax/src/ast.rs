@@ -624,6 +624,15 @@ pub enum ParsedClassMember {
     Method(ParsedClassMethod),
     Accessor(ParsedClassAccessor),
     Constructor(ParsedClassConstructor),
+    /// `static { … }`: code run once with `this` bound to the class.
+    StaticBlock(ParsedClassStaticBlock),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedClassStaticBlock {
+    pub body: Vec<ParsedFunctionBodyStatement>,
+    /// See [`ParsedFunctionDeclaration::body_reads`].
+    pub body_reads: Vec<String>,
 }
 
 /// A `get`/`set` accessor pair, collapsed into a single member keyed by name.

@@ -209,6 +209,16 @@ pub(crate) fn collect_function_body_reads(body: &FunctionBody<'_>) -> Vec<String
     sorted_names(&collector.names)
 }
 
+/// The names read anywhere in a statement list outside a function body (a
+/// class `static` block), sorted and deduplicated.
+pub(crate) fn collect_statement_reads(statements: &[oxc_ast::ast::Statement<'_>]) -> Vec<String> {
+    let mut collector = ReadCollector::default();
+    for statement in statements {
+        collector.visit_statement(statement);
+    }
+    sorted_names(&collector.names)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

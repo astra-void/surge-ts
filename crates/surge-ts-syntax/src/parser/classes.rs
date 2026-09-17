@@ -323,10 +323,13 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 initializer_span,
             }))
         }
-        // Static blocks, index signatures, and accessor properties are not part of
-        // this slice.
-        ClassElement::StaticBlock(_)
-        | ClassElement::AccessorProperty(_)
-        | ClassElement::TSIndexSignature(_) => None,
+        ClassElement::StaticBlock(block) => {
+            Some(ParsedClassMember::StaticBlock(crate::ParsedClassStaticBlock {
+                body: parse_statement_list_as_function_body(&block.body),
+                body_reads: super::reads::collect_statement_reads(&block.body),
+            }))
+        }
+        // Index signatures and accessor properties are not part of this slice.
+        ClassElement::AccessorProperty(_) | ClassElement::TSIndexSignature(_) => None,
     }
 }

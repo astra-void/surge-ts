@@ -1069,6 +1069,25 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
             ParsedClassMember::Accessor(accessor) => {
                 check_class_accessor_body(accessor, &instance_type, &static_type, ctx);
             }
+            ParsedClassMember::StaticBlock(block) => {
+                let function_type = FunctionType::new(Vec::new(), Type::Void, false, 0);
+                check_function_body_with_signature_and_this(
+                    None,
+                    Vec::new(),
+                    block.body.clone(),
+                    &function_type,
+                    &[],
+                    None,
+                    false,
+                    None,
+                    Some(static_type.clone()),
+                    false,
+                    Some(block.body_reads.as_slice()),
+                    false,
+                    false,
+                    ctx,
+                );
+            }
         }
     }
 }
@@ -1214,7 +1233,7 @@ fn check_implicit_override(class: &ParsedClassDeclaration, ctx: &mut CheckerCont
                 accessor.is_static,
                 accessor.is_override,
             ),
-            ParsedClassMember::Constructor(_) => continue,
+            ParsedClassMember::Constructor(_) | ParsedClassMember::StaticBlock(_) => continue,
         };
         if is_static || is_override || !inherited.contains(name) {
             continue;
