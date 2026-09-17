@@ -1105,12 +1105,17 @@ pub(crate) fn parse_object_properties(
                 }
             };
 
-            // A computed accessor or method shorthand is still dropped; a computed
-            // *init* property is kept under the same `[…]` name the type side
-            // uses, so `{ [matcher]: … }` satisfies `Matcher` instead of
-            // inferring as `{}` with the member reported missing.
+            // A computed name is kept as the same `[…]` name the type side uses,
+            // so `{ [matcher]: … }` satisfies `Matcher` instead of inferring as
+            // `{}` with the member reported missing, and a computed accessor's
+            // body is still checked.
             if property.computed && property.kind != PropertyKind::Init {
-                return None;
+                let name = super::types::computed_key_name(&property.key)?;
+                let mut accessor =
+                    parse_object_method_shorthand_named(name, property.key.span(), property)?;
+                accessor.is_method = false;
+                accessor.is_accessor = true;
+                return Some(accessor);
             }
 
             // `get value() { … }` / `set value(v) { … }` declare the property

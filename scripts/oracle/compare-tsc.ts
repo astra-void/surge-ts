@@ -539,6 +539,7 @@ export const fixturePresets: Record<string, string> = {
   'function-expression-missing-return-basic': path.join(workspaceRoot, 'tests/compat-projects/function-expression-missing-return-basic/tsconfig.json'),
   'object-accessor-setter-body-basic': path.join(workspaceRoot, 'tests/compat-projects/object-accessor-setter-body-basic/tsconfig.json'),
   'class-static-block-body-basic': path.join(workspaceRoot, 'tests/compat-projects/class-static-block-body-basic/tsconfig.json'),
+  'computed-accessor-body-basic': path.join(workspaceRoot, 'tests/compat-projects/computed-accessor-body-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

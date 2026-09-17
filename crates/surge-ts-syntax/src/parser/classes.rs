@@ -149,9 +149,10 @@ fn merge_class_accessors(members: Vec<ParsedClassMember>) -> Vec<ParsedClassMemb
 fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
     match member {
         ClassElement::MethodDefinition(method) => {
-            // A computed accessor is dropped; a computed method keeps the `[…]`
-            // name the type side uses (`[Symbol.iterator]()`, `[matcher]()`).
-            if method.computed && method.kind != MethodDefinitionKind::Method {
+            // A computed constructor is not a constructor; a computed method or
+            // accessor keeps the `[…]` name the type side uses
+            // (`[Symbol.iterator]()`, `get [matcher]()`).
+            if method.computed && method.kind == MethodDefinitionKind::Constructor {
                 return None;
             }
 
@@ -230,8 +231,13 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                     }))
                 }
                 MethodDefinitionKind::Get | MethodDefinitionKind::Set => {
-                    let PropertyKey::StaticIdentifier(key) = &method.key else {
-                        return None;
+                    let (name, name_span) = if method.computed {
+                        (super::types::computed_key_name(&method.key)?, method.key.span())
+                    } else {
+                        let PropertyKey::StaticIdentifier(key) = &method.key else {
+                            return None;
+                        };
+                        (key.name.to_string(), key.span)
                     };
 
                     let is_getter = matches!(method.kind, MethodDefinitionKind::Get);
@@ -257,8 +263,8 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                     };
 
                     Some(ParsedClassMember::Accessor(ParsedClassAccessor {
-                        name: key.name.to_string(),
-                        name_span: Some(text_span_from_oxc_span(key.span)),
+                        name,
+                        name_span: Some(text_span_from_oxc_span(name_span)),
                         is_static: method.r#static,
                         is_override: method.r#override,
                         is_abstract: matches!(
