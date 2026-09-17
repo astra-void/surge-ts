@@ -263,8 +263,15 @@ pub(crate) fn evaluate_expression(
             let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
             let right_result =
                 evaluate_expression(right, right_span.or(fallback_span), symbols, ctx);
+            let binary_span = match (left_span, right_span) {
+                (Some(left_span), Some(right_span)) => Some(SyntaxTextSpan {
+                    start: left_span.start,
+                    end: right_span.end,
+                }),
+                _ => fallback_span,
+            };
             if let Some(always_false) = equality_result_when_unequal(*operator) {
-                report_reference_and_nan_equality(left, right, always_false, fallback_span, symbols, ctx);
+                report_reference_and_nan_equality(left, right, always_false, binary_span, symbols, ctx);
             }
             if matches!(operator, surge_ts_syntax::ParsedBinaryOperator::In) {
                 check_in_operands(
@@ -285,7 +292,7 @@ pub(crate) fn evaluate_expression(
                 *left_span,
                 *operator_span,
                 *right_span,
-                fallback_span,
+                binary_span,
                 ctx,
             )
         }

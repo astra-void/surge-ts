@@ -299,18 +299,12 @@ pub(crate) fn check_module_if_statement(
         &symbols,
         ctx,
     );
-    // The condition is evaluated for its narrowing only: a condition that reads
-    // a value surge models more loosely than tsc (`args.verbose` off a
-    // parsed-options object that degraded to an index signature) would report
-    // where tsc does not. Its diagnostics are discarded like a probe's.
-    let checkpoint = ctx.diagnostics().len();
     let _ = crate::checks::expr::evaluate_expression(
         &if_statement.condition,
         if_statement.condition_span,
         &symbols,
         ctx,
     );
-    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
     let mut assigned = Vec::new();
     crate::checks::function::branch_assigned_names(&if_statement.then_body, &mut assigned);
     crate::checks::function::branch_assigned_names(&if_statement.else_body, &mut assigned);
