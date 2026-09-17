@@ -1,7 +1,5 @@
-# assertion-overlap-basic
-
-> **Withheld — not emitted.** This check is `catalog-only`: the comparable relation it needs is only as faithful as surge's structural expansion of a library's generic types. It is exact on these fixtures and produced **54 false positives on zod**, which was otherwise diagnostic-exact.
-> The fixture and the analysis below are kept for whoever re-lands it;
+> **Partly withheld.** Between object types this check stays unemitted: the comparable relation it needs is only as faithful as surge's structural expansion of a library's generic types. It is exact on these fixtures and produced **54 false positives on zod**, which was otherwise diagnostic-exact. Assertions between primitives and their literals are emitted (`primitive-assertion-overlap-basic`).
+> The fixture and the analysis below are kept for whoever re-lands the rest;
 > the preset is unregistered so the sweep does not compare it.
 
 `x as T` was never checked, so TS2352 had no emission point.

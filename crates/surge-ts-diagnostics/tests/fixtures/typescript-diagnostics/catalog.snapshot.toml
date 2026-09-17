@@ -260,7 +260,7 @@ arity = 0
 code = "TS2352"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Conversion of type '{0}' to type '{1}' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first."
 arity = 2
 

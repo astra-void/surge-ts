@@ -1032,12 +1032,18 @@ fn evaluate_type_assertion(
                 symbols,
                 ctx,
             );
-            // TS2352 is withheld: the comparable relation this needs is only as
-            // good as surge's structural expansion of a library's generic types,
-            // and on real code (zod's `issue as errors.$ZodStringFormatIssues`)
-            // that produced 54 false positives against a project that was
-            // otherwise diagnostic-exact. See `assertion-overlap-basic`.
-            let _ = &source;
+            // TS2352 between object types is withheld: the comparable relation
+            // is only as good as surge's structural expansion of a library's
+            // generic types, and on real code (zod's
+            // `issue as errors.$ZodStringFormatIssues`) that produced 54 false
+            // positives against a project that was otherwise diagnostic-exact.
+            // Between primitives and their literals no expansion is involved.
+            if let InferredExpression::Known(source_type) = &source
+                && is_primitive_assertion_side(source_type)
+                && is_primitive_assertion_side(&resolved_type)
+            {
+                super::assertion::check_assertion_overlap(&source, &resolved_type, fallback_span, ctx);
+            }
         }
     }
 
@@ -1393,6 +1399,21 @@ fn type_may_be_symbol(ty: &Type) -> bool {
     match ty {
         Type::Symbol => true,
         Type::Union(union) => union.types().iter().any(type_may_be_symbol),
+        _ => false,
+    }
+}
+
+fn is_primitive_assertion_side(ty: &Type) -> bool {
+    match ty {
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => true,
+        Type::Union(union) => union.types().iter().all(is_primitive_assertion_side),
         _ => false,
     }
 }

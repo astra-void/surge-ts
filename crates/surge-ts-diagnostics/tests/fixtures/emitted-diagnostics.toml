@@ -271,8 +271,10 @@ status = "catalog-only"
 reason = "Cataloged for future coverage"
 
 [TS2352]
-status = "catalog-only"
-reason = "Withheld: the comparable relation it needs is only as faithful as surge's structural expansion of a library's generic types. Fixture-exact, but 54 false positives on zod, which was otherwise diagnostic-exact"
+status = "emitted"
+oracle = [
+  "primitive-assertion-overlap-basic",
+]
 
 [TS2353]
 status = "emitted"
