@@ -556,6 +556,7 @@ export const fixturePresets: Record<string, string> = {
   'duplicate-export-declaration-basic': path.join(workspaceRoot, 'tests/compat-projects/duplicate-export-declaration-basic/tsconfig.json'),
   'duplicate-export-specifier-basic': path.join(workspaceRoot, 'tests/compat-projects/duplicate-export-specifier-basic/tsconfig.json'),
   'declaration-merging-values-basic': path.join(workspaceRoot, 'tests/compat-projects/declaration-merging-values-basic/tsconfig.json'),
+  'non-literal-index-key-basic': path.join(workspaceRoot, 'tests/compat-projects/non-literal-index-key-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

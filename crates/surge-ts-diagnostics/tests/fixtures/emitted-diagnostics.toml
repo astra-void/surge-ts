@@ -937,6 +937,7 @@ reason = "Cataloged for future coverage"
 status = "emitted"
 oracle = [
   "element-access-missing-key-basic",
+  "non-literal-index-key-basic",
 ]
 
 [TS7054]

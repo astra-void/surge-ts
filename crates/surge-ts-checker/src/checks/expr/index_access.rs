@@ -343,10 +343,39 @@ pub(super) fn evaluate_index_access(
                             ctx,
                         ));
                     }
+                    if let Some(member_union) = union_literal_index_read(&object_type, &index_type)
+                    {
+                        return InferredExpression::Known(member_union);
+                    }
                     if object_type.number_index_type.is_some() && ctx.options.no_implicit_any {
                         ctx.push(diagnostic_with_syntax_span(
                             Diagnostic::ts7015(ctx.file_name.clone()),
                             choose_span(index_span, choose_span(object_span, fallback_span)),
+                        ));
+                        return InferredExpression::Unknown;
+                    }
+                    // `getPropertyTypeForIndexType`: a key the receiver answers
+                    // neither as a member nor through an index signature makes
+                    // the whole access an implicit `any`, exactly as a literal
+                    // key that misses does.
+                    //
+                    // Held to a member set surge wrote down itself: a nominal
+                    // reference's index signature can come from a base, a
+                    // mapped type or a `Record` surge has not expanded here
+                    // (zod's `$ZodShape`, `RegExpExecArray`), and an empty
+                    // object type is a modelling gap rather than a receiver
+                    // that answers nothing.
+                    if ctx.options.no_implicit_any
+                        && index_key_is_concrete(&index_type)
+                        && matches!(&receiver_type, Type::Object(written) if !written.properties.is_empty())
+                    {
+                        ctx.push(diagnostic_with_syntax_span(
+                            Diagnostic::ts7053(
+                                index_type.name(),
+                                receiver_type.name(),
+                                ctx.file_name.clone(),
+                            ),
+                            element_access_span(object_span, index_span).or(fallback_span),
                         ));
                     }
                 }
@@ -440,6 +469,45 @@ fn literal_tuple_element(ty: &Type, key: &str) -> Option<Type> {
 
 /// The member name a literal computed key stands for. A string index signature
 /// is keyed by the *string* form, so `1` and `"1"` name the same member.
+/// A union of literal keys indexes like each of them: `o[k]` with `k: "a" | "b"`
+/// reads `o["a"] | o["b"]`, and is only a missing key when one of them is. The
+/// union never reaches [`literal_index_key`], so without this it would look like
+/// a non-literal key the receiver cannot answer.
+fn union_literal_index_read(
+    object_type: &surge_ts_types::ObjectType,
+    index_type: &Type,
+) -> Option<Type> {
+    let Type::Union(union) = index_type else {
+        return None;
+    };
+    let members = union.types();
+    if members.is_empty() {
+        return None;
+    }
+    let mut member_types = Vec::with_capacity(members.len());
+    for member in members {
+        let key = literal_index_key(member)?;
+        member_types.push(object_type.get_property_access_type(&key)?);
+    }
+    Some(union_type(member_types))
+}
+
+/// Whether an index type is specific enough to hold the receiver to it. A
+/// degraded or still-open key (`any` because surge could not model the
+/// expression, an unresolved reference, an uninstantiated type parameter)
+/// answers nothing about which member is read.
+fn index_key_is_concrete(index_type: &Type) -> bool {
+    !matches!(
+        index_type,
+        Type::Any
+            | Type::Unknown
+            | Type::GenuineUnknown
+            | Type::ErrorType
+            | Type::TypeParameter(_)
+            | Type::Reference(_)
+    )
+}
+
 fn literal_index_key(index_type: &Type) -> Option<String> {
     match index_type {
         Type::StringLiteral(value) => Some(value.clone()),
