@@ -543,6 +543,7 @@ fixtures = [
 ]
 oracle = [
   "numeric-index-signature-basic",
+  "numeric-index-receiver-basic",
 ]
 
 [TS2418]
@@ -594,6 +595,9 @@ span_tests = [
 status = "emitted"
 fixtures = [
   "tests/compat-projects/indexed-access-basic/src/index.ts",
+]
+oracle = [
+  "numeric-index-receiver-basic",
 ]
 
 [TS2551]

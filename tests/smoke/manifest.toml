@@ -2839,7 +2839,7 @@ expected_diagnostics = []
 [[case]]
 name = "array-index-access-string-mismatch"
 path = "tests/smoke/array_index_access_string_mismatch.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = []
 
 [[case]]
 name = "array-index-access-number-valid"
@@ -2991,12 +2991,12 @@ no_implicit_any = true
 [[case]]
 name = "array-index-access-string-index-mismatch-no-root-cascade"
 path = "tests/smoke/array_index_access_string_index_mismatch_no_root_cascade.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = []
 
 [[case]]
 name = "array-index-access-boolean-index-mismatch-no-root-cascade"
 path = "tests/smoke/array_index_access_boolean_index_mismatch_no_root_cascade.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2538"]
 
 [[case]]
 name = "array-index-access-unresolved-object-no-cascade"
@@ -3362,12 +3362,12 @@ expected_diagnostics = ["TS2339"]
 [[case]]
 name = "tuple-index-access-string-index-mismatch-no-root-cascade"
 path = "tests/smoke/tuple_index_access_string_index_mismatch_no_root_cascade.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = []
 
 [[case]]
 name = "tuple-index-access-boolean-index-mismatch-no-root-cascade"
 path = "tests/smoke/tuple_index_access_boolean_index_mismatch_no_root_cascade.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2538"]
 
 [[case]]
 name = "tuple-index-access-any-receiver-index-not-checked"

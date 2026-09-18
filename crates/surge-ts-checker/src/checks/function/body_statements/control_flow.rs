@@ -440,6 +440,10 @@ pub(crate) fn check_function_for_of_statement(
 fn has_numeric_property_names(ty: &Type) -> bool {
     match ty.peeled() {
         Type::Object(object) => object.has_numeric_property_names(),
+        // An array or tuple is indexed by number and nothing else, which is the
+        // whole point of the rule: `for (const k in xs) xs[k]` is the idiom it
+        // exists for.
+        Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) => true,
         _ => false,
     }
 }

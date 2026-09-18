@@ -553,11 +553,14 @@ pub(crate) fn jsx_element_type() -> Type {
 }
 
 pub(crate) fn tuple_index_value(index_type: &Type) -> Option<usize> {
-    let Type::NumberLiteral(NumberLiteralType { value }) = index_type else {
-        return None;
-    };
-
-    value.parse::<usize>().ok()
+    // tsc converts a numeric-like string literal key to its number, so `t["0"]`
+    // selects the same element `t[0]` does.
+    match index_type {
+        Type::NumberLiteral(NumberLiteralType { value }) | Type::StringLiteral(value) => {
+            value.parse::<usize>().ok()
+        }
+        _ => None,
+    }
 }
 
 fn is_known_non_unknown(result: &InferredExpression) -> bool {
