@@ -867,8 +867,27 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
             }
         }
         ParsedStatement::NamespaceDeclaration(namespace) => {
-            if exportable_values.get_own(&namespace.name).is_none() {
+            // A namespace declared twice in one file is one namespace: its
+            // bodies merge, so the second block's members join the object the
+            // first one produced rather than being dropped (or replacing it).
+            let existing = exportable_values
+                .get_own(&namespace.name)
+                .map(|symbol| symbol.ty.clone());
+            let merges = existing
+                .as_ref()
+                .is_none_or(|ty| matches!(ty, Type::Object(_)));
+            if merges {
                 let ty = namespace_value_object_type_resolved(namespace, ctx);
+                let ty = match (existing, &ty) {
+                    (Some(Type::Object(previous)), Type::Object(current)) => {
+                        let mut properties = previous.properties.as_ref().clone();
+                        for (name, property) in current.properties.iter() {
+                            properties.insert(name.clone(), property.clone());
+                        }
+                        Type::Object(crate::metrics::alloc_object_type(properties, None))
+                    }
+                    _ => ty,
+                };
                 let _ = exportable_values.insert(
                     namespace.name.clone(),
                     SymbolInfo {
@@ -1297,7 +1316,16 @@ fn resolve_namespace_value_annotations(
             }
             ParsedStatement::NamespaceDeclaration(inner) => {
                 let inner_prefix = format!("{prefix}.{}", inner.name);
-                let mut inner_properties = surge_ts_types::PropertyMap::default();
+                // Seeded with whatever a sibling block of the same namespace
+                // already contributed, so the merge `fill_namespace_value_properties`
+                // performed is not thrown away when the annotations resolve.
+                let mut inner_properties = match properties
+                    .get(inner.name.as_str())
+                    .map(|property| &property.ty)
+                {
+                    Some(Type::Object(previous)) => previous.properties.as_ref().clone(),
+                    _ => surge_ts_types::PropertyMap::default(),
+                };
                 fill_namespace_value_properties(inner, &mut inner_properties);
                 resolve_namespace_value_annotations(
                     inner,
@@ -1394,10 +1422,22 @@ pub(crate) fn fill_namespace_value_properties(
                 );
             }
             ParsedStatement::NamespaceDeclaration(inner_namespace) => {
-                properties.insert(
-                    inner_namespace.name.as_str().into(),
-                    ObjectProperty::required(namespace_value_object_type(inner_namespace)),
-                );
+                let name: std::sync::Arc<str> = inner_namespace.name.as_str().into();
+                let inner = namespace_value_object_type(inner_namespace);
+                // A nested namespace written twice merges the same way a
+                // top-level one does; without this the second block replaces
+                // the first and its siblings' members go missing.
+                let merged = match (properties.get(&name).map(|previous| &previous.ty), &inner) {
+                    (Some(Type::Object(previous)), Type::Object(current)) => {
+                        let mut properties = previous.properties.as_ref().clone();
+                        for (name, property) in current.properties.iter() {
+                            properties.insert(name.clone(), property.clone());
+                        }
+                        Type::Object(crate::metrics::alloc_object_type(properties, None))
+                    }
+                    _ => inner,
+                };
+                properties.insert(name, ObjectProperty::required(merged));
             }
             _ => {}
         }

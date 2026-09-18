@@ -146,6 +146,7 @@ fn lower_enum_declaration(
             from_binding_pattern: false,
             has_definite_assertion: false,
             array_pattern_span: None,
+            is_enum_object: true,
             kind: ParsedVariableKind::Const,
             name: declaration.id.name.to_string(),
             name_span,
@@ -201,5 +202,128 @@ fn format_auto_value(value: f64) -> String {
         format!("{}", value as i64)
     } else {
         format!("{value}")
+    }
+}
+
+/// An `enum` declared more than once in one scope is one enum: tsc merges the
+/// bodies. The lowering runs per declaration, so the object sides (and the
+/// union alias holding the member types) are folded together here — otherwise
+/// one declaration's members silently replace the other's.
+pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStatement>) {
+    use std::collections::HashMap;
+
+    let mut objects: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut aliases: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (index, statement) in statements.iter().enumerate() {
+        match peel_exported(statement) {
+            ParsedStatement::VariableDeclaration(variable) if variable.is_enum_object => {
+                objects.entry(variable.name.as_str()).or_default().push(index);
+            }
+            ParsedStatement::TypeAliasDeclaration(alias)
+                if alias.enum_name.as_deref() == Some(alias.name.as_str()) =>
+            {
+                aliases.entry(alias.name.as_str()).or_default().push(index);
+            }
+            _ => {}
+        }
+    }
+
+    let duplicated: Vec<Vec<usize>> = objects
+        .into_values()
+        .chain(aliases.into_values())
+        .filter(|indices| indices.len() > 1)
+        .collect();
+    if duplicated.is_empty() {
+        return;
+    }
+
+    let mut dropped: Vec<usize> = Vec::new();
+    for indices in duplicated {
+        let (first, rest) = indices.split_first().expect("non-empty group");
+        let mut properties: Vec<ParsedObjectTypeProperty> = Vec::new();
+        let mut member_types: Vec<ParsedType> = Vec::new();
+        for index in rest {
+            match peel_exported(&statements[*index]) {
+                ParsedStatement::VariableDeclaration(variable) => {
+                    if let Some(ParsedType::Object(object)) = variable.declared_type.as_ref() {
+                        properties.extend(object.properties.iter().cloned());
+                    }
+                }
+                ParsedStatement::TypeAliasDeclaration(alias) => {
+                    push_union_members(&alias.ty, &mut member_types);
+                }
+                _ => {}
+            }
+            dropped.push(*index);
+        }
+
+        let Some(target) = exported_enum_statement_mut(&mut statements[*first]) else {
+            continue;
+        };
+        match target {
+            ParsedStatement::VariableDeclaration(variable) => {
+                if let Some(ParsedType::Object(object)) = variable.declared_type.as_mut() {
+                    let object = std::sync::Arc::make_mut(object);
+                    for property in properties {
+                        if !object.properties.iter().any(|kept| kept.name == property.name) {
+                            object.properties.push(property);
+                        }
+                    }
+                }
+            }
+            ParsedStatement::TypeAliasDeclaration(alias) => {
+                let mut merged = Vec::new();
+                push_union_members(&alias.ty, &mut merged);
+                for member in member_types {
+                    if !merged.contains(&member) {
+                        merged.push(member);
+                    }
+                }
+                alias.ty = match merged.len() {
+                    1 => merged.pop().expect("one member"),
+                    _ => ParsedType::Union(std::sync::Arc::new(merged)),
+                };
+            }
+            _ => {}
+        }
+    }
+
+    dropped.sort_unstable();
+    let mut index = 0;
+    statements.retain(|_| {
+        let keep = dropped.binary_search(&index).is_err();
+        index += 1;
+        keep
+    });
+}
+
+fn push_union_members(ty: &ParsedType, members: &mut Vec<ParsedType>) {
+    match ty {
+        ParsedType::Union(union) => members.extend(union.iter().cloned()),
+        other => members.push(other.clone()),
+    }
+}
+
+fn peel_exported(statement: &ParsedStatement) -> &ParsedStatement {
+    match statement {
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            crate::ParsedExportDeclaration::Statement { declaration, .. } => {
+                peel_exported(declaration.as_ref())
+            }
+            _ => statement,
+        },
+        other => other,
+    }
+}
+
+fn exported_enum_statement_mut(statement: &mut ParsedStatement) -> Option<&mut ParsedStatement> {
+    match statement {
+        ParsedStatement::ExportDeclaration(export) => match export.as_mut() {
+            crate::ParsedExportDeclaration::Statement { declaration, .. } => {
+                exported_enum_statement_mut(declaration.as_mut())
+            }
+            _ => None,
+        },
+        other => Some(other),
     }
 }

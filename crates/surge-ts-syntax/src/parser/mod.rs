@@ -473,6 +473,7 @@ fn parse_binding_pattern_declarations_with_definite(
         BindingPattern::BindingIdentifier(binding_identifier) => {
             vec![ParsedStatement::VariableDeclaration(Box::new(
                 ParsedVariableDeclaration {
+                    is_enum_object: false,
                     is_declare,
                     kind,
                     from_binding_pattern: false,
@@ -769,12 +770,16 @@ pub(crate) fn parse_ts_module_declaration(
     };
 
     let statements = match &module.body {
-        Some(TSModuleDeclarationBody::TSModuleBlock(block)) => block
-            .body
-            .iter()
-            .filter_map(parse_statement)
-            .flatten()
-            .collect(),
+        Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
+            let mut statements: Vec<ParsedStatement> = block
+                .body
+                .iter()
+                .filter_map(parse_statement)
+                .flatten()
+                .collect();
+            enums::merge_lowered_enum_declarations(&mut statements);
+            statements
+        }
         _ => {
             return vec![ParsedStatement::UnsupportedDeclaration {
                 span: Some(text_span_from_oxc_span(module.span)),
@@ -798,12 +803,16 @@ fn parse_ts_namespace_declaration(
     module: &TSModuleDeclaration<'_>,
 ) -> Vec<ParsedStatement> {
     let statements = match &module.body {
-        Some(TSModuleDeclarationBody::TSModuleBlock(block)) => block
-            .body
-            .iter()
-            .filter_map(parse_statement)
-            .flatten()
-            .collect(),
+        Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
+            let mut statements: Vec<ParsedStatement> = block
+                .body
+                .iter()
+                .filter_map(parse_statement)
+                .flatten()
+                .collect();
+            enums::merge_lowered_enum_declarations(&mut statements);
+            statements
+        }
         // `namespace A.B { ... }` nests as a module body; flatten it into a
         // dotted-name namespace so members resolve as `A.B.Member`.
         Some(TSModuleDeclarationBody::TSModuleDeclaration(inner)) => {
@@ -827,13 +836,14 @@ fn parse_ts_namespace_declaration(
 }
 
 fn parse_ts_global_declaration(global: &TSGlobalDeclaration<'_>) -> Vec<ParsedStatement> {
-    let statements = global
+    let mut statements: Vec<ParsedStatement> = global
         .body
         .body
         .iter()
         .filter_map(parse_statement)
         .flatten()
         .collect();
+    enums::merge_lowered_enum_declarations(&mut statements);
 
     vec![ParsedStatement::DeclareModuleDeclaration(Box::new(
         ParsedDeclareModuleDeclaration {

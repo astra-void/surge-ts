@@ -82,13 +82,15 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         super::suppressions::collect_suppressed_ranges(source_text, &parsed.program.comments);
 
     let collect_statements = || -> Vec<crate::ParsedStatement> {
-        parsed
+        let mut statements: Vec<crate::ParsedStatement> = parsed
             .program
             .body
             .iter()
             .filter_map(super::parse_statement)
             .flatten()
-            .collect()
+            .collect();
+        super::enums::merge_lowered_enum_declarations(&mut statements);
+        statements
     };
 
     // Declaration files never participate in noUnusedLocals, and `declare`
