@@ -130,6 +130,11 @@ pub(crate) struct InterfaceBody {
     /// locally does not exist, so those members carry their own scope here.
     /// Empty for every declaration that was never augmented.
     pub(crate) fragment_scopes: Vec<(InterfaceDeclarationFragmentId, Arc<TypeDeclarationScope>)>,
+    /// The `private`/`protected` members of the class this is the instance side
+    /// of, static ones included; empty for a plain interface. Only
+    /// accessibility checks read it — the shape never depends on it — and it
+    /// lives in the shared body rather than the often-copied header.
+    pub(crate) restricted_members: Vec<surge_ts_syntax::ParsedRestrictedMember>,
 }
 
 impl InterfaceBody {
@@ -173,6 +178,7 @@ impl Clone for InterfaceBody {
             declaration_fragments: self.declaration_fragments.clone(),
             member_fragments: self.member_fragments.clone(),
             fragment_scopes: self.fragment_scopes.clone(),
+            restricted_members: self.restricted_members.clone(),
         }
     }
 }
@@ -243,6 +249,7 @@ impl InterfaceInfo {
                 declaration_fragments: vec![declaration_fragment],
                 member_fragments,
                 fragment_scopes: Vec::new(),
+                restricted_members: Vec::new(),
             }),
             cached_resolution_key: std::sync::OnceLock::new(),
             cached_alias_id: std::sync::OnceLock::new(),
@@ -401,6 +408,15 @@ pub(crate) fn merge_interface_infos(
         }
     }
     Arc::make_mut(&mut merged_info.body).fragment_scopes = fragment_scopes;
+    if !existing.body.restricted_members.is_empty() || !incoming.body.restricted_members.is_empty() {
+        Arc::make_mut(&mut merged_info.body).restricted_members = existing
+            .body
+            .restricted_members
+            .iter()
+            .chain(incoming.body.restricted_members.iter())
+            .cloned()
+            .collect();
+    }
     merged_info
 }
 

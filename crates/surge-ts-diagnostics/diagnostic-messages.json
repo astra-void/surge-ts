@@ -128,6 +128,22 @@
     "support": "emitted"
   },
   {
+    "code": "TS2341",
+    "category": "Error",
+    "message": "Property '{0}' is private and only accessible within class '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2445",
+    "category": "Error",
+    "message": "Property '{0}' is protected and only accessible within class '{1}' and its subclasses.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2440",
     "category": "Error",
     "message": "Import declaration conflicts with local declaration of '{0}'.",

@@ -814,7 +814,20 @@ fn evaluate_optional_property_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    let _ = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
+    let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
+    if !*is_bracketed
+        && let InferredExpression::Known(receiver_type) = &receiver
+    {
+        check_member_accessibility(
+            object,
+            receiver_type,
+            property_name,
+            *property_span,
+            false,
+            symbols,
+            ctx,
+        );
+    }
     let inferred_expression = infer_expression(expression, symbols, ctx);
     if *is_bracketed
         && let InferredExpression::MissingProperty { object_type, .. } = &inferred_expression
@@ -1110,6 +1123,21 @@ fn evaluate_property_access(
     // types the access but reports none of that.
     let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
     check_property_receiver(object, &receiver, *object_span, fallback_span, symbols, ctx);
+    // `c["x"]` is tsc's deliberate escape hatch: element access skips the
+    // accessibility check that `c.x` gets.
+    if !*is_bracketed
+        && let InferredExpression::Known(receiver_type) = &receiver
+    {
+        check_member_accessibility(
+            object,
+            receiver_type,
+            property_name,
+            *property_span,
+            false,
+            symbols,
+            ctx,
+        );
+    }
     let inferred_expression = infer_expression(expression, symbols, ctx);
     if *is_bracketed
         && let InferredExpression::MissingProperty { object_type, .. } = &inferred_expression

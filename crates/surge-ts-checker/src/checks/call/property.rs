@@ -242,6 +242,16 @@ pub(crate) fn check_property_call_like(
             }
         };
 
+    crate::checks::expr::check_member_accessibility(
+        object,
+        &object_ty,
+        property_name,
+        property_span,
+        false,
+        symbols,
+        ctx,
+    );
+
     let object_type_name = object_ty.name();
 
     // Computed before the dispatch below so the narrowed element can be matched
@@ -771,6 +781,15 @@ pub(crate) fn check_optional_property_call(
     // an unmodelled receiver (`messages?.map((item) => <article>…</article>)`)
     // went unchecked, which is where trpc's missing UMD-global reports live.
     let base_type = surge_ts_types::remove_undefined(&object_type);
+    crate::checks::expr::check_member_accessibility(
+        object,
+        &base_type,
+        property_name,
+        property_span,
+        false,
+        symbols,
+        ctx,
+    );
     let base_type_name = base_type.name();
 
     // Same awaited-value modelling as the non-optional path: `result?.catch(...)`

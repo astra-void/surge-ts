@@ -764,6 +764,17 @@ pub(crate) fn check_member_assignment(
         ctx,
     );
     let _ = object_span;
+    if !*is_bracketed {
+        crate::checks::expr::check_member_accessibility(
+            object,
+            &object_type,
+            property_name,
+            *property_span,
+            true,
+            &visible_symbols,
+            ctx,
+        );
+    }
 
     // A write checks against the property's *declared* type: after
     // `if (o.flag === undefined)` the read type is narrowed to `undefined`, but

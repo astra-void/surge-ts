@@ -33,6 +33,12 @@ oracle = [
   "accessor-declaration-rules-basic",
 ]
 
+[TS2341]
+status = "emitted"
+oracle = [
+  "member-accessibility-basic",
+]
+
 [TS2423]
 status = "emitted"
 oracle = [
@@ -62,6 +68,12 @@ oracle = [
 status = "emitted"
 oracle = [
   "import-local-declaration-conflict-basic",
+]
+
+[TS2445]
+status = "emitted"
+oracle = [
+  "member-accessibility-basic",
 ]
 
 [TS2456]

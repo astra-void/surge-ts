@@ -630,11 +630,37 @@ pub struct ParsedClassDeclaration {
     /// is what makes an unimplemented one reportable.
     pub implements: Vec<ParsedNamedType>,
     pub members: Vec<ParsedClassMember>,
+    /// Members declared `private` or `protected`, including constructor
+    /// parameter properties. Everything not listed is public.
+    pub restricted_members: Vec<ParsedRestrictedMember>,
     /// Value types of the instance side's string and number index signatures
     /// (`[key: string]: T`), as on [`ParsedInterfaceDeclaration`].
     pub string_index_type: Option<ParsedType>,
     pub number_index_type: Option<ParsedType>,
     pub span: Option<TextSpan>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParsedMemberAccessibility {
+    Private,
+    Protected,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedRestrictedMember {
+    pub name: String,
+    pub is_static: bool,
+    pub accessibility: ParsedMemberAccessibility,
+    /// Set when only one side of an accessor pair carries the modifier
+    /// (`public get x()` beside `private set x(v)`): a read checks the getter's
+    /// accessibility and a write the setter's.
+    pub accessor_side: Option<ParsedAccessorSide>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParsedAccessorSide {
+    Get,
+    Set,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -51,6 +51,9 @@ pub(crate) fn class_instance_interface_info(
         None,
     );
     info.is_abstract_class = class.is_abstract;
+    if !class.restricted_members.is_empty() {
+        Arc::make_mut(&mut info.body).restricted_members = class.restricted_members.clone();
+    }
     info
 }
 
@@ -974,6 +977,15 @@ fn declared_member_name(member: &ParsedClassMember) -> Option<String> {
 }
 
 pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    // Everything checked from here on is lexically inside the class, which is
+    // what decides whether its `private`/`protected` members are reachable.
+    let lineage = crate::checks::expr::enclosing_class_lineage(class, ctx);
+    ctx.enclosing_classes.push(lineage);
+    check_class_declaration_inside(class, ctx);
+    ctx.enclosing_classes.pop();
+}
+
+fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
     check_inherited_abstract_members(class, ctx);
     check_extended_base_class(class, ctx);
     check_implemented_interfaces(class, ctx);

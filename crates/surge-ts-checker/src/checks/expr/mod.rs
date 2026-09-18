@@ -2,6 +2,7 @@
 // good enough is surge's structural expansion of a library's generic types.
 // See `tests/compat-projects/assertion-overlap-basic/README.md`.
 #[allow(dead_code)]
+mod accessibility;
 mod assertion;
 mod diagnostics;
 mod evaluate;
@@ -11,6 +12,7 @@ mod inferred;
 mod operand_types;
 mod operand_writes;
 
+pub(crate) use accessibility::{ClassIdentity, check_member_accessibility, enclosing_class_lineage};
 pub(crate) use diagnostics::*;
 pub(crate) use evaluate::*;
 pub(crate) use guarded_unknown::downgrade_guarded_genuine_unknown;

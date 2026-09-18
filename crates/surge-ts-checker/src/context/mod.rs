@@ -551,6 +551,11 @@ pub(crate) struct CheckerContext {
     /// siblings unqualified (`EventHandler<…>` inside `React.ChangeEventHandler`),
     /// so a bare name that does not resolve is retried against these prefixes.
     pub(crate) namespace_member_prefix_stack: Vec<String>,
+    /// The classes whose bodies enclose the code being checked, innermost last.
+    /// Each entry is the class's declaration identity followed by its bases',
+    /// so a `private` member is accessible when its declaring class heads an
+    /// entry and a `protected` one when it appears anywhere in one.
+    pub(crate) enclosing_classes: Vec<Vec<crate::checks::expr::ClassIdentity>>,
     /// Lowest `resolving`-stack index that any cycle truncation has re-entered
     /// since this field was last reset. A resolution that pushed its declaration
     /// at stack depth `floor` is independent of the enclosing `resolving` context
@@ -683,6 +688,7 @@ impl CheckerContext {
             next_body_frame_active: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
+            enclosing_classes: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
             structural_resolution_frames: Vec::new(),
             type_literal_member_frames: Vec::new(),
@@ -828,6 +834,7 @@ impl CheckerContext {
             next_body_frame_active: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
+            enclosing_classes: Vec::new(),
             lowest_cycle_target_index: usize::MAX,
             structural_resolution_frames: Vec::new(),
             type_literal_member_frames: Vec::new(),
@@ -1227,6 +1234,7 @@ impl CheckerContext {
         self.genuine_any_bindings.clear();
         self.this_is_implicitly_any = false;
         self.shorthand_property_depth = 0;
+        self.enclosing_classes.clear();
         debug_assert!(
             self.diagnostics.is_empty(),
             "begin_file_check: previous file's diagnostics were not taken"

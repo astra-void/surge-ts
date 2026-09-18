@@ -7,7 +7,8 @@ use oxc_span::GetSpan;
 
 use crate::{
     ParsedClassAccessor, ParsedClassConstructor, ParsedClassDeclaration, ParsedClassMember,
-    ParsedClassMethod, ParsedClassProperty, ParsedNamedType,
+    ParsedAccessorSide, ParsedClassMethod, ParsedClassProperty, ParsedMemberAccessibility,
+    ParsedNamedType, ParsedRestrictedMember,
 };
 
 use super::expressions::parse_expression;
@@ -82,8 +83,91 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
             })
             .collect(),
         members,
+        restricted_members: restricted_class_members(class),
         span: Some(text_span_from_oxc_span(class.span)),
     })
+}
+
+fn restricted_class_members(class: &Class<'_>) -> Vec<ParsedRestrictedMember> {
+    let mut restricted = Vec::new();
+    for element in &class.body.body {
+        let (key, computed, is_static, accessibility, accessor_side) = match element {
+            ClassElement::MethodDefinition(method)
+                if method.kind == MethodDefinitionKind::Constructor =>
+            {
+                for parameter in &method.value.params.items {
+                    if let oxc_ast::ast::BindingPattern::BindingIdentifier(identifier) =
+                        &parameter.pattern
+                        && let Some(accessibility) = restricted_accessibility(parameter.accessibility)
+                    {
+                        restricted.push(ParsedRestrictedMember {
+                            name: identifier.name.to_string(),
+                            is_static: false,
+                            accessibility,
+                            accessor_side: None,
+                        });
+                    }
+                }
+                continue;
+            }
+            ClassElement::MethodDefinition(method) => (
+                &method.key,
+                method.computed,
+                method.r#static,
+                method.accessibility,
+                match method.kind {
+                    MethodDefinitionKind::Get => Some(ParsedAccessorSide::Get),
+                    MethodDefinitionKind::Set => Some(ParsedAccessorSide::Set),
+                    _ => None,
+                },
+            ),
+            ClassElement::PropertyDefinition(property) => (
+                &property.key,
+                property.computed,
+                property.r#static,
+                property.accessibility,
+                None,
+            ),
+            ClassElement::AccessorProperty(property) => (
+                &property.key,
+                property.computed,
+                property.r#static,
+                property.accessibility,
+                None,
+            ),
+            _ => continue,
+        };
+        let Some(accessibility) = restricted_accessibility(accessibility) else {
+            continue;
+        };
+        let name = if computed {
+            super::types::computed_key_name(key)
+        } else {
+            match key {
+                PropertyKey::StaticIdentifier(key) => Some(key.name.to_string()),
+                _ => None,
+            }
+        };
+        if let Some(name) = name {
+            restricted.push(ParsedRestrictedMember {
+                name,
+                is_static,
+                accessibility,
+                accessor_side,
+            });
+        }
+    }
+    restricted
+}
+
+fn restricted_accessibility(
+    accessibility: Option<oxc_ast::ast::TSAccessibility>,
+) -> Option<ParsedMemberAccessibility> {
+    match accessibility? {
+        oxc_ast::ast::TSAccessibility::Private => Some(ParsedMemberAccessibility::Private),
+        oxc_ast::ast::TSAccessibility::Protected => Some(ParsedMemberAccessibility::Protected),
+        oxc_ast::ast::TSAccessibility::Public => None,
+    }
 }
 
 fn parse_class_heritage(class: &Class<'_>) -> Vec<ParsedNamedType> {
