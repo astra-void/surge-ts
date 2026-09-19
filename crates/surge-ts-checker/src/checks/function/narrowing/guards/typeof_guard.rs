@@ -30,6 +30,26 @@ pub(super) fn typeof_tag_of(member: &Type) -> Option<&'static str> {
     }
 }
 
+/// Every `typeof` tag a value of `ty` can report, or `None` when some member's
+/// tag cannot be decided (`any`, `unknown`, an unmodelled shape).
+pub(crate) fn typeof_tags_of(ty: &Type) -> Option<Vec<&'static str>> {
+    let members: Vec<Type> = match ty.peeled() {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other],
+    };
+    let mut tags = Vec::new();
+    for member in &members {
+        let tag = match member {
+            Type::Boolean | Type::BooleanLiteral(_) => "boolean",
+            other => typeof_tag_of(other)?,
+        };
+        if !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    Some(tags)
+}
+
 /// Narrows a union by a `typeof x === "tag"` guard. `keep_matching` keeps the
 /// members whose runtime tag is `tag` (the `=== true` branch); otherwise removes
 /// them. Members with an undecidable tag are kept either way.

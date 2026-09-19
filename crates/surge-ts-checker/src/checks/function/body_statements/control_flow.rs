@@ -609,13 +609,28 @@ fn check_switch_case_tests(
 }
 
 pub(crate) fn check_function_switch_statement(
-    switch_statement: ParsedSwitchStatement,
+    mut switch_statement: ParsedSwitchStatement,
     statement_index: usize,
     return_type: Option<&Type>,
     scopes: &mut ScopeStack,
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
+    // A template without substitutions is a string literal to tsc, as a case
+    // test too (`case \`number\`:` under `switch (typeof x)`).
+    for case in &mut switch_statement.cases {
+        if let Some(ParsedExpression::TemplateLiteral {
+            expressions,
+            quasis,
+            is_tagged: false,
+            ..
+        }) = &case.test
+            && expressions.is_empty()
+            && let [Some(text)] = quasis.as_slice()
+        {
+            case.test = Some(ParsedExpression::StringLiteral(text.clone()));
+        }
+    }
     if ctx.options.no_fallthrough_cases_in_switch {
         emit_switch_fallthrough_diagnostics(&switch_statement, ctx);
     }
@@ -802,6 +817,30 @@ fn record_non_exhaustive_switch(
     let (Some(span), Some(case_literals)) = (span, case_literals) else {
         return;
     };
+    // `switch (typeof x)` is exhaustive when its cases name every tag `x` can
+    // have, not every tag `typeof` can produce.
+    if let ParsedExpression::Unary {
+        operator: surge_ts_syntax::ParsedUnaryOperator::Typeof,
+        operand,
+        ..
+    } = discriminant
+    {
+        let InferredExpression::Known(operand_type) =
+            crate::infer::infer_expression(operand, &visible_symbols(scopes), ctx)
+        else {
+            return;
+        };
+        let Some(tags) = crate::checks::function::narrowing::typeof_tags_of(&operand_type) else {
+            return;
+        };
+        if tags
+            .iter()
+            .any(|tag| !case_literals.contains(&Type::StringLiteral((*tag).to_string())))
+        {
+            ctx.non_exhaustive_switches.push((span.start, span.end));
+        }
+        return;
+    }
     let InferredExpression::Known(discriminant_type) =
         crate::infer::infer_expression(discriminant, &visible_symbols(scopes), ctx)
     else {

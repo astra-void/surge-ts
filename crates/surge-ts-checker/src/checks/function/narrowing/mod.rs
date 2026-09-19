@@ -17,6 +17,7 @@ mod type_guards;
 pub(crate) use element_reference::*;
 use guards::*;
 pub(crate) use predicate::*;
+pub(crate) use guards::typeof_tags_of;
 pub(crate) use reference::*;
 pub(crate) use truthy::*;
 pub(crate) use type_guards::*;
