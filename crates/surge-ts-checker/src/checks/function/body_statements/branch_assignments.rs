@@ -92,11 +92,57 @@ fn loop_assigned_names(body: &[ParsedFunctionBodyStatement], names: &mut Vec<Str
 /// starts the body at its declared type rather than at whatever it was narrowed
 /// to on entry — otherwise `let min: number | null = null` read as `null`
 /// throughout a loop that assigns it.
+thread_local! {
+    static IN_LOOP_PREPASS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(super) fn in_loop_prepass() -> bool {
+    IN_LOOP_PREPASS.with(std::cell::Cell::get)
+}
+
 pub(super) fn widen_loop_assigned_bindings(
     body: &[ParsedFunctionBodyStatement],
+    return_type: Option<&Type>,
     scopes: &mut ScopeStack,
+    flow_state: &mut crate::flow::FunctionFlowState,
+    ctx: &mut CheckerContext,
 ) {
-    widen_assigned_bindings(&[body], scopes);
+    let names = deep_assigned_names(&[body]);
+    if names.is_empty() {
+        return;
+    }
+    // A loop nested inside the body being pre-checked settles for the
+    // declarations, so nesting costs one extra pass, not one per level.
+    if IN_LOOP_PREPASS.with(std::cell::Cell::get) {
+        widen_assigned_bindings(&[body], scopes);
+        return;
+    }
+    // The back edge carries what the body leaves each binding as: check the
+    // body once with nothing reported, read those types, and start the real
+    // pass at the union of the entry and back-edge types.
+    let entry_types = branch_assignment_types(&names, scopes);
+    let saved_scopes = scopes.clone();
+    let saved_flow = flow_state.clone();
+    let diagnostics_before = ctx.diagnostics().len();
+    IN_LOOP_PREPASS.with(|flag| flag.set(true));
+    scopes.push_child();
+    crate::checks::function::check_function_body(body.to_vec(), return_type, scopes, flow_state, ctx);
+    let back_edge_types = branch_assignment_types(&names, scopes);
+    IN_LOOP_PREPASS.with(|flag| flag.set(false));
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    *scopes = saved_scopes;
+    *flow_state = saved_flow;
+    let head_types: Vec<(String, Type)> = entry_types
+        .iter()
+        .filter_map(|(name, entry)| {
+            let back_edge = back_edge_types.iter().find(|(other, _)| other == name)?;
+            let joined = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                union_type(vec![entry.clone(), back_edge.1.clone()])
+            });
+            (joined != *entry).then(|| (name.clone(), joined))
+        })
+        .collect();
+    adopt_branch_assignments(&head_types, scopes);
 }
 
 /// Every plain binding any of `bodies` assigns, at any depth.

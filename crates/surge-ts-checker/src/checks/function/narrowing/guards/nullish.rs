@@ -77,7 +77,10 @@ pub(crate) fn narrow_union_by_nullish(
     test: NullishTest,
 ) -> Option<Type> {
     let Type::Union(union) = ty else {
-        return None;
+        // A binding narrowed to exactly the tested value is `never` where the
+        // test fails: `m === null || v > m` reads `m` as `never` on the right
+        // when `m` was `null`.
+        return (!keep_matching && test.selects(ty)).then_some(Type::Never);
     };
     if !union.types().iter().any(|member| test.selects(member)) {
         return None;

@@ -1016,6 +1016,62 @@ pub(crate) fn check_this_property_assignment(
     }
 }
 
+/// tsc's `getAssignmentReducedType` for a write surge could not relate
+/// exactly: the declared union keeps the members the value may inhabit, or is
+/// taken whole when none can be told apart. A binding narrowed to `null` that
+/// is assigned an object (`d ??= { … }`) no longer reads as `null` afterwards.
+/// A non-nullable value rules out the nullable members even where surge's
+/// model of the value is too coarse to relate it to the others.
+fn assignment_reduced_declared_type(
+    declared: Option<&Type>,
+    current: &Type,
+    value: &Type,
+) -> Option<Type> {
+    let declared = declared?;
+    if declared == current || value.is_unknown() {
+        return None;
+    }
+    let Type::Union(union) = declared else {
+        return Some(declared.clone());
+    };
+    let nullish = |ty: &Type| matches!(ty, Type::Null | Type::Undefined | Type::Void);
+    let value_nullable = match value {
+        Type::Union(members) => members.types().iter().any(nullish),
+        other => nullish(other),
+    };
+    let kept: Vec<Type> = union
+        .types()
+        .iter()
+        .filter(|member| {
+            is_assignable_to(value, member) || (!value_nullable && !nullish(member))
+        })
+        .cloned()
+        .collect();
+    Some(if kept.is_empty() {
+        declared.clone()
+    } else {
+        union_type(kept)
+    })
+}
+
+fn widen_to_declared(target_name: &str, scopes: &mut ScopeStack) {
+    let Some(symbol) = scopes.resolve(target_name) else {
+        return;
+    };
+    let Some(declared) = scopes.visible_symbols().declared_type(target_name).cloned() else {
+        return;
+    };
+    if symbol.ty == declared {
+        return;
+    }
+    let updated = SymbolInfo {
+        ty: declared.clone(),
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+    scopes.insert_current_narrowed(target_name, updated, declared);
+}
+
 pub(crate) fn update_assigned_symbol_type(
     target_name: &str,
     inferred_value: InferredExpression,
@@ -1026,6 +1082,12 @@ pub(crate) fn update_assigned_symbol_type(
     };
 
     if value_ty.is_unknown() {
+        // Outside a loop pre-pass an unmodelled value keeps the narrowing
+        // rather than guessing; inside it, the back edge must not claim the
+        // binding still holds what it held on entry.
+        if super::branch_assignments::in_loop_prepass() {
+            widen_to_declared(target_name, scopes);
+        }
         return;
     }
 
@@ -1084,6 +1146,13 @@ pub(crate) fn update_assigned_symbol_type(
         // value — `let s: Wide = "a"; s = "c";` is `"c"`, not a rejected write.
         narrowed_by_assignment = true;
         value_ty
+    } else if let Some(reduced) = assignment_reduced_declared_type(
+        scopes.visible_symbols().declared_type(target_name),
+        &symbol.ty,
+        &value_ty,
+    ) {
+        narrowed_by_assignment = true;
+        reduced
     } else {
         // Preserve the declared/inferred symbol type when an incompatible assignment
         // is already reported to avoid cascading return/usage diagnostics.
