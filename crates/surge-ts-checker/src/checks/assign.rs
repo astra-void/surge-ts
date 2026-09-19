@@ -108,15 +108,25 @@ pub(crate) fn check_assignment_with_symbols(
     }
 }
 
+const MAX_REFERENCE_DEPTH: usize = 50;
+
 pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
+    type ReferenceKey = (std::sync::Arc<str>, std::sync::Arc<[surge_ts_types::Type]>);
     thread_local! {
         // References already on the walk, to break the cyclic structural graphs
         // lazy nominal references form (interface A whose member resolves to B
         // whose member resolves back to A). Re-entering one introduces no *new*
         // `unknown`, so it reports false — same guard as the return-type walker in
         // `checks::function::body`.
-        static VISITING_REFERENCES: std::cell::RefCell<Vec<(std::sync::Arc<str>, std::sync::Arc<[surge_ts_types::Type]>)>> =
+        static VISITING_REFERENCES: std::cell::RefCell<Vec<ReferenceKey>> =
             const { std::cell::RefCell::new(Vec::new()) };
+        // Verdicts for references already walked under the current outermost
+        // call. A library's reference graph is a DAG reached along many paths,
+        // and re-walking each shared node made the walk exponential. A `false`
+        // is kept only when no on-path assumption fed it.
+        static WALKED_REFERENCES: std::cell::RefCell<surge_ts_types::fx::FxHashMap<(std::sync::Arc<str>, u64), Vec<(std::sync::Arc<[surge_ts_types::Type]>, bool)>>> =
+            std::cell::RefCell::new(Default::default());
+        static CYCLE_ASSUMPTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     }
     match ty {
         surge_ts_types::Type::Unknown | surge_ts_types::Type::TypeParameter(_) => true,
@@ -134,8 +144,35 @@ pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
                     .any(|(id, arguments)| *id == reference.id && *arguments == reference.arguments)
             });
             if on_path {
+                CYCLE_ASSUMPTIONS.with(|count| count.set(count.get() + 1));
                 return false;
             }
+            // A generic reference whose expansion instantiates itself with ever
+            // larger arguments never revisits an on-path key. Past the bound the
+            // walk answers "unmodelled", which only suppresses a comparison.
+            if VISITING_REFERENCES.with(|visiting| visiting.borrow().len()) >= MAX_REFERENCE_DEPTH {
+                return true;
+            }
+            let digest = reference
+                .arguments
+                .iter()
+                .fold(0u64, |acc, argument| {
+                    acc.rotate_left(5) ^ surge_ts_types::type_conflict_digest(argument)
+                });
+            let memo_key = (reference.id.clone(), digest);
+            let walked = WALKED_REFERENCES.with(|walked| {
+                walked.borrow().get(&memo_key).and_then(|entries| {
+                    entries
+                        .iter()
+                        .find(|(arguments, _)| *arguments == reference.arguments)
+                        .map(|(_, verdict)| *verdict)
+                })
+            });
+            if let Some(verdict) = walked {
+                return verdict;
+            }
+            let outermost = VISITING_REFERENCES.with(|visiting| visiting.borrow().is_empty());
+            let assumptions_before = CYCLE_ASSUMPTIONS.with(std::cell::Cell::get);
             VISITING_REFERENCES.with(|visiting| {
                 visiting
                     .borrow_mut()
@@ -145,6 +182,18 @@ pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
             VISITING_REFERENCES.with(|visiting| {
                 visiting.borrow_mut().pop();
             });
+            if outermost {
+                WALKED_REFERENCES.with(|walked| walked.borrow_mut().clear());
+                CYCLE_ASSUMPTIONS.with(|count| count.set(0));
+            } else if result || CYCLE_ASSUMPTIONS.with(std::cell::Cell::get) == assumptions_before {
+                WALKED_REFERENCES.with(|walked| {
+                    walked
+                        .borrow_mut()
+                        .entry(memo_key)
+                        .or_default()
+                        .push((reference.arguments.clone(), result));
+                });
+            }
             result
         }
         surge_ts_types::Type::Array(element) => type_contains_unknown(element),

@@ -29,6 +29,7 @@ pub(crate) fn is_condition_shaped(expression: &ParsedExpression) -> bool {
                 | ParsedBinaryOperator::Equals
                 | ParsedBinaryOperator::StrictNotEquals
                 | ParsedBinaryOperator::NotEquals
+                | ParsedBinaryOperator::Instanceof
         ),
         _ => false,
     }

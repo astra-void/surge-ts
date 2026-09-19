@@ -22,7 +22,7 @@ use super::super::{
 };
 use super::{
     adopt_branch_assignments, body_ends_in_never_call, branch_assigned_names,
-    branch_assignment_types,
+    branch_assignment_types, widen_loop_assigned_bindings,
     join_branch_assignments, join_branch_pair, narrow_aliased_guard_after_exit,
     narrow_condition_and_aliases_in_scope, resolved_alias_condition, rewrite_discriminant_aliases,
 };
@@ -265,6 +265,7 @@ pub(crate) fn check_function_while_statement(
     // before the first iteration.
     let mut assigned = Vec::new();
     branch_assigned_names(&body, &mut assigned);
+    widen_loop_assigned_bindings(&body, scopes);
     if runs_at_least_once {
         scopes.push_child();
         check_function_body(body, return_type, scopes, flow_state, ctx);
@@ -397,6 +398,7 @@ pub(crate) fn check_function_for_of_statement(
 
     let mut assigned = Vec::new();
     branch_assigned_names(&for_of_statement.body, &mut assigned);
+    widen_loop_assigned_bindings(&for_of_statement.body, scopes);
     let entry_types = branch_assignment_types(&assigned, scopes);
     scopes.push_child();
     // `for (const _ in ref)` acts as a non-null assertion on `ref` for the

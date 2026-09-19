@@ -36,7 +36,8 @@ pub(super) fn instanceof_matches(member: &Type, ctor_name: &str) -> Option<bool>
         other => {
             let name = other.name();
             let base = name.split('<').next().unwrap_or(name.as_str());
-            Some(base == ctor_name)
+            let own_name = base.rsplit('.').next().unwrap_or(base);
+            Some(base == ctor_name || own_name == ctor_name)
         }
     }
 }
@@ -183,11 +184,16 @@ pub(crate) fn parse_instanceof_condition(
     else {
         return None;
     };
-    let ParsedExpression::Identifier {
-        name: ctor_name, ..
-    } = right.as_ref()
-    else {
-        return None;
+    // A namespace-qualified constructor (`x instanceof schemas.$ZodType`) is
+    // matched by its own name, the last segment.
+    let ctor_name = match right.as_ref() {
+        ParsedExpression::Identifier { name, .. } => name,
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } if matches!(object.as_ref(), ParsedExpression::Identifier { .. }) => property_name,
+        _ => return None,
     };
     Some((left.as_ref(), ctor_name.as_str()))
 }

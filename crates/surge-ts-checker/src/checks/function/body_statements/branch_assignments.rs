@@ -49,6 +49,81 @@ pub(crate) fn branch_assigned_names(body: &[ParsedFunctionBodyStatement], names:
     }
 }
 
+/// Every plain binding a loop body assigns, at any depth. Unlike a branch, a
+/// loop's nested assignments reach its head through the back edge.
+fn loop_assigned_names(body: &[ParsedFunctionBodyStatement], names: &mut Vec<String>) {
+    for statement in body {
+        match statement {
+            ParsedFunctionBodyStatement::Assignment(assignment) => {
+                if !names.iter().any(|name| *name == assignment.target_name) {
+                    names.push(assignment.target_name.clone());
+                }
+            }
+            ParsedFunctionBodyStatement::Block(block) => loop_assigned_names(block, names),
+            ParsedFunctionBodyStatement::If(if_statement) => {
+                loop_assigned_names(&if_statement.then_body, names);
+                loop_assigned_names(&if_statement.else_body, names);
+            }
+            ParsedFunctionBodyStatement::While(while_statement) => {
+                loop_assigned_names(&while_statement.body, names);
+            }
+            ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
+                loop_assigned_names(&for_of_statement.body, names);
+            }
+            ParsedFunctionBodyStatement::Switch(switch_statement) => {
+                for case in &switch_statement.cases {
+                    loop_assigned_names(&case.consequent, names);
+                }
+            }
+            ParsedFunctionBodyStatement::Try(try_statement) => {
+                loop_assigned_names(&try_statement.block, names);
+                if let Some(handler) = &try_statement.handler {
+                    loop_assigned_names(&handler.body, names);
+                }
+                loop_assigned_names(&try_statement.finalizer, names);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// tsc types a binding at a loop head as the union of the entry edge and every
+/// back edge. surge checks a loop body once, so a binding the body reassigns
+/// starts the body at its declared type rather than at whatever it was narrowed
+/// to on entry — otherwise `let min: number | null = null` read as `null`
+/// throughout a loop that assigns it.
+pub(super) fn widen_loop_assigned_bindings(
+    body: &[ParsedFunctionBodyStatement],
+    scopes: &mut ScopeStack,
+) {
+    let mut names = Vec::new();
+    loop_assigned_names(body, &mut names);
+    for name in names {
+        let Some(symbol) = scopes.resolve(&name) else {
+            continue;
+        };
+        let Some(declared) = scopes.visible_symbols().declared_type(&name).cloned() else {
+            continue;
+        };
+        if declared == symbol.ty || declared.is_unknown() {
+            continue;
+        }
+        let widened = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+            union_type(vec![symbol.ty.clone(), declared])
+        });
+        let kind = symbol.kind;
+        let function_signature = symbol.function_signature.clone();
+        let _ = scopes.update_visible(
+            &name,
+            SymbolInfo {
+                ty: widened,
+                kind,
+                function_signature,
+            },
+        );
+    }
+}
+
 /// Joins a then-branch's end types with the fall-through (condition-false) types
 /// for the bindings it assigned. tsc types the code after `if (!x) { x = … }`
 /// from both incoming edges; surge's branch scope discards the assignment
