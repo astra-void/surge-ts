@@ -359,9 +359,7 @@ impl Type {
 
     pub fn builtin_constructor_result_type(name: &str) -> Option<Type> {
         match name {
-            "Date" => Some(Type::Any),
             "Array" => Some(Type::Array(Box::new(Type::Any))),
-            "Uint8Array" => Some(Type::Array(Box::new(Type::Number))),
             "Map" => Some(Type::Object(ObjectType::new(
                 {
                     let mut properties = crate::PropertyMap::default();
