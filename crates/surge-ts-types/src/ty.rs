@@ -270,7 +270,36 @@ impl Type {
     }
 
     pub fn get_property_access_type(&self, name: &str) -> Option<Type> {
+        let own = self.own_property_access_type(name);
+        // A primitive's, array's or function's apparent type is a lib interface
+        // (`Number`, `Array<T>`, `Function`), and every object type answers the
+        // global `Object` members its own declaration does not restate —
+        // `getPropertyOfType`'s final `globalObjectType` fallback. Without it
+        // `var o: Object = 1` was rejected for lacking `hasOwnProperty`.
         match self {
+            Type::String
+            | Type::StringLiteral(_)
+            | Type::Number
+            | Type::NumberLiteral(_)
+            | Type::BigInt
+            | Type::Symbol
+            | Type::Boolean
+            | Type::BooleanLiteral(_)
+            | Type::Function(_)
+            | Type::Array(_)
+            | Type::Tuple(_)
+            | Type::OpenTuple(_) => {
+                own.or_else(|| crate::object::object_prototype_member_type(name))
+            }
+            _ => own,
+        }
+    }
+
+    fn own_property_access_type(&self, name: &str) -> Option<Type> {
+        match self {
+            Type::Boolean | Type::BooleanLiteral(_) if name == "valueOf" => {
+                Some(function_type(vec![], Type::Boolean, false, 0))
+            }
             Type::Object(object) => object.get_property_access_type(name).or_else(|| {
                 // A callable or constructable object *is* a `Function`, so it
                 // carries `name`, `length`, `call`/`apply`/`bind` — `typeof C`

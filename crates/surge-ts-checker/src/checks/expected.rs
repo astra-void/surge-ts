@@ -1382,6 +1382,22 @@ fn expected_member_is_degraded(ty: &Type) -> bool {
     }
 }
 
+/// `hasExcessProperties` skips a target the global `Object` is a subset of:
+/// every object is an `Object`, so none of a literal's properties is excess.
+fn is_global_object_interface(object: &surge_ts_types::ObjectType) -> bool {
+    const OBJECT_MEMBERS: [&str; 7] = [
+        "constructor",
+        "toString",
+        "toLocaleString",
+        "valueOf",
+        "hasOwnProperty",
+        "isPrototypeOf",
+        "propertyIsEnumerable",
+    ];
+    object.alias_name.as_deref() == Some("Object")
+        && object.properties.keys().all(|name| OBJECT_MEMBERS.contains(&name.as_ref()))
+}
+
 /// tsc's excess-property report: the first property the target does not
 /// declare, reported once. It runs only after the written properties have
 /// checked out — a property that fails against its expected type reports
@@ -1392,7 +1408,9 @@ fn report_excess_property(
     fallback_span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) -> bool {
-    if expected_object_type.allows_string_index_access() || expected_object_type.properties.is_empty()
+    if expected_object_type.allows_string_index_access()
+        || expected_object_type.properties.is_empty()
+        || is_global_object_interface(expected_object_type)
     {
         return false;
     }
@@ -1655,9 +1673,11 @@ fn evaluate_object_literal_with_expected_type(
         expected_object_type
             .required_properties()
             .filter(|(property_name, _)| {
-                !properties
-                    .iter()
-                    .any(|property| property.name == property_name.as_ref())
+                // The literal's apparent type answers the global `Object` members.
+                surge_ts_types::object_prototype_member_type(property_name).is_none()
+                    && !properties
+                        .iter()
+                        .any(|property| property.name == property_name.as_ref())
             })
             .map(|(property_name, _)| property_name.to_string())
             .collect()

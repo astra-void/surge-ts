@@ -364,7 +364,7 @@ pub fn is_numeric_key(name: &str) -> bool {
 /// type of every non-nullish value. Parameter types are approximated as `any`
 /// (the real signatures take `PropertyKey`/`Object`) since only arity and the
 /// return type matter for the diagnostics surge emits.
-fn object_prototype_member_type(name: &str) -> Option<Type> {
+pub fn object_prototype_member_type(name: &str) -> Option<Type> {
     let member = match name {
         "toString" | "toLocaleString" => FunctionType::new(vec![], Type::String, false, 0),
         "valueOf" => FunctionType::new(vec![], Type::Any, false, 0),
