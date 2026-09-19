@@ -2804,6 +2804,16 @@ pub(crate) fn record_type_argument_candidate(
         return;
     }
 
+    // tsc's `getCommonSupertype`: nullable candidates do not compete — the
+    // supertype is chosen among the rest and every candidate's `null` and
+    // `undefined` are added back, so `eq(b as B, d as D | undefined)` binds
+    // `T` to `B | undefined`. The supertype is the leftmost candidate every
+    // later one is a subtype of (`getSupertypeOrUnion`).
+    if let Some(merged) = common_supertype_candidate(&existing, &candidate) {
+        substitution.set(type_parameter_name.to_string(), merged, false);
+        return;
+    }
+
     if let Some(common_primitive) = common_primitive_candidate(&existing, &candidate) {
         substitution.set(type_parameter_name.to_string(), common_primitive, false);
         return;
@@ -2821,6 +2831,42 @@ pub(crate) fn record_type_argument_candidate(
             false,
         );
     }
+}
+
+fn common_supertype_candidate(existing: &Type, candidate: &Type) -> Option<Type> {
+    let split = |ty: &Type| -> (Option<Type>, Vec<Type>) {
+        let members: Vec<Type> = match ty {
+            Type::Union(union) => union.types().to_vec(),
+            other => vec![other.clone()],
+        };
+        let (nullable, primary): (Vec<Type>, Vec<Type>) = members
+            .into_iter()
+            .partition(|member| matches!(member, Type::Null | Type::Undefined));
+        let primary = (!primary.is_empty()).then(|| surge_ts_types::union_type(primary));
+        (primary, nullable)
+    };
+    let (existing_primary, mut nullable) = split(existing);
+    let (candidate_primary, candidate_nullable) = split(candidate);
+    if nullable.is_empty() && candidate_nullable.is_empty() {
+        return None;
+    }
+    nullable.extend(candidate_nullable);
+    let primary = match (existing_primary, candidate_primary) {
+        (None, None) => None,
+        (Some(only), None) | (None, Some(only)) => Some(only),
+        (Some(left), Some(right)) => {
+            if left == right || is_assignable_to(&right, &left) {
+                Some(left)
+            } else if is_assignable_to(&left, &right) {
+                Some(right)
+            } else {
+                Some(common_primitive_candidate(&left, &right)?)
+            }
+        }
+    };
+    let mut members: Vec<Type> = primary.into_iter().collect();
+    members.extend(nullable);
+    Some(surge_ts_types::union_type(members))
 }
 
 pub(crate) fn common_primitive_candidate(existing: &Type, candidate: &Type) -> Option<Type> {
