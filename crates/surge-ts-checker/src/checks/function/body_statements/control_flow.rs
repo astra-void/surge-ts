@@ -22,7 +22,8 @@ use super::super::{
 };
 use super::{
     adopt_branch_assignments, body_ends_in_never_call, branch_assigned_names,
-    branch_assignment_types, widen_loop_assigned_bindings,
+    branch_assignment_types, deep_assigned_names, widen_assigned_bindings,
+    widen_loop_assigned_bindings,
     join_branch_assignments, join_branch_pair, narrow_aliased_guard_after_exit,
     narrow_condition_and_aliases_in_scope, resolved_alias_condition, rewrite_discriminant_aliases,
 };
@@ -851,6 +852,43 @@ fn switch_case_literals(cases: &[surge_ts_syntax::ParsedSwitchCase]) -> Option<V
         .collect()
 }
 
+/// Undoes the widening the handler was checked under, except for what the
+/// handler itself assigned: that stands at the handler's end.
+fn restore_after_catch(
+    before_catch: &[(String, Type)],
+    catch_body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+    scopes: &mut ScopeStack,
+) {
+    let catch_assigned = deep_assigned_names(&[catch_body]);
+    let catch_end = branch_assignment_types(&catch_assigned, scopes);
+    adopt_branch_assignments(before_catch, scopes);
+    adopt_branch_assignments(&catch_end, scopes);
+}
+
+/// A `finally` block runs however the `try` and `catch` ended — part-way
+/// included — so a binding either assigns is read at its declared type there.
+/// The types the join left for the code after the statement come back once it
+/// is checked.
+fn check_finalizer(
+    finalizer: Vec<surge_ts_syntax::ParsedFunctionBodyStatement>,
+    assigning_bodies: &[&[surge_ts_syntax::ParsedFunctionBodyStatement]],
+    return_type: Option<&Type>,
+    scopes: &mut ScopeStack,
+    flow_state: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    if finalizer.is_empty() {
+        return;
+    }
+    let assigned = deep_assigned_names(assigning_bodies);
+    let after_try = branch_assignment_types(&assigned, scopes);
+    widen_assigned_bindings(assigning_bodies, scopes);
+    scopes.push_child();
+    check_function_body(finalizer, return_type, scopes, flow_state, ctx);
+    scopes.pop_child();
+    adopt_branch_assignments(&after_try, scopes);
+}
+
 pub(crate) fn check_function_try_statement(
     try_statement: ParsedTryStatement,
     _statement_index: usize,
@@ -875,6 +913,7 @@ pub(crate) fn check_function_try_statement(
         if handler_diverts && !try_guarantees_value_return {
             branch_assigned_names(&try_statement.block, &mut joinable_assignments);
         }
+        let try_block_for_widening = try_statement.block.clone();
         scopes.push_child();
         flow_state.begin_branch_capture();
         check_function_body(
@@ -890,9 +929,18 @@ pub(crate) fn check_function_try_statement(
         scopes.pop_child();
         branch_deltas.push(try_delta);
 
+        let try_block_assigned = deep_assigned_names(&[&try_block_for_widening]);
+        let catch_body_for_widening = try_statement
+            .handler
+            .as_ref()
+            .map(|handler| handler.body.clone())
+            .unwrap_or_default();
         if let Some(handler_clause) = try_statement.handler {
             let catch_guarantees_value_return =
                 analyze_function_body_flow(&handler_clause.body).guarantees_value_return;
+            // The handler can be entered from any point in the block.
+            let before_catch = branch_assignment_types(&try_block_assigned, scopes);
+            widen_assigned_bindings(&[&try_block_for_widening], scopes);
             scopes.push_child();
             if let Some(binding_name) = handler_clause.binding_name.as_ref() {
                 if let Some(declared_type) = handler_clause.declared_type.as_ref() {
@@ -940,19 +988,19 @@ pub(crate) fn check_function_try_statement(
             catch_delta.continues = !catch_guarantees_value_return;
             scopes.pop_child();
             branch_deltas.push(catch_delta);
+            restore_after_catch(&before_catch, &catch_body_for_widening, scopes);
         }
 
         merge_branch_deltas(flow_state, &branch_deltas, false);
         adopt_branch_assignments(&try_assignment_types, scopes);
-        scopes.push_child();
-        check_function_body(
+        check_finalizer(
             try_statement.finalizer,
+            &[&try_block_for_widening, &catch_body_for_widening],
             return_type,
             scopes,
             flow_state,
             ctx,
         );
-        scopes.pop_child();
     } else {
         // The same join the flow-active path performs. It is not conditional on
         // definite-assignment tracking: reaching the code after a `try` whose
@@ -970,6 +1018,13 @@ pub(crate) fn check_function_try_statement(
             branch_assigned_names(&try_statement.block, &mut joinable_assignments);
         }
 
+        let try_block_for_widening = try_statement.block.clone();
+        let catch_body_for_widening = try_statement
+            .handler
+            .as_ref()
+            .map(|handler| handler.body.clone())
+            .unwrap_or_default();
+        let try_block_assigned = deep_assigned_names(&[&try_block_for_widening]);
         scopes.push_child();
         check_function_body(
             try_statement.block,
@@ -983,6 +1038,9 @@ pub(crate) fn check_function_try_statement(
         adopt_branch_assignments(&try_assignment_types, scopes);
 
         if let Some(handler_clause) = try_statement.handler {
+            // The handler can be entered from any point in the block.
+            let before_catch = branch_assignment_types(&try_block_assigned, scopes);
+            widen_assigned_bindings(&[&try_block_for_widening], scopes);
             scopes.push_child();
             if let Some(binding_name) = handler_clause.binding_name.as_ref() {
                 if let Some(declared_type) = handler_clause.declared_type.as_ref() {
@@ -1026,17 +1084,17 @@ pub(crate) fn check_function_try_statement(
                 ctx,
             );
             scopes.pop_child();
+            restore_after_catch(&before_catch, &catch_body_for_widening, scopes);
         }
 
-        scopes.push_child();
-        check_function_body(
+        check_finalizer(
             try_statement.finalizer,
+            &[&try_block_for_widening, &catch_body_for_widening],
             return_type,
             scopes,
             flow_state,
             ctx,
         );
-        scopes.pop_child();
     }
 }
 

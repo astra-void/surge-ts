@@ -96,9 +96,26 @@ pub(super) fn widen_loop_assigned_bindings(
     body: &[ParsedFunctionBodyStatement],
     scopes: &mut ScopeStack,
 ) {
+    widen_assigned_bindings(&[body], scopes);
+}
+
+/// Every plain binding any of `bodies` assigns, at any depth.
+pub(super) fn deep_assigned_names(bodies: &[&[ParsedFunctionBodyStatement]]) -> Vec<String> {
     let mut names = Vec::new();
-    loop_assigned_names(body, &mut names);
-    for name in names {
+    for body in bodies {
+        loop_assigned_names(body, &mut names);
+    }
+    names
+}
+
+/// Widens each binding `bodies` assign to its declared type, for code that
+/// can be reached from any point inside them — a loop head through its back
+/// edge, a `catch` or `finally` from wherever the `try` threw.
+pub(super) fn widen_assigned_bindings(
+    bodies: &[&[ParsedFunctionBodyStatement]],
+    scopes: &mut ScopeStack,
+) {
+    for name in deep_assigned_names(bodies) {
         let Some(symbol) = scopes.resolve(&name) else {
             continue;
         };

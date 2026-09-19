@@ -1103,8 +1103,16 @@ pub(crate) fn update_assigned_symbol_type(
     if narrowed_by_assignment {
         // Assignment narrowing is block-scoped: written into the current frame it
         // is discarded when a branch scope pops, so `if (t === "draft-4") t = "draft-04";`
-        // leaves the declared union in place for the code that follows.
-        scopes.insert_current(target_name, updated);
+        // leaves the declared union in place for the code that follows. The
+        // declaration rides along, or a binding captured from an enclosing
+        // function (an IIFE body) would read as undeclared afterwards and the
+        // next write would be checked against this narrowing.
+        let declared = scopes
+            .visible_symbols()
+            .declared_type(target_name)
+            .cloned()
+            .unwrap_or_else(|| symbol.ty.clone());
+        scopes.insert_current_narrowed(target_name, updated, declared);
         return;
     }
 

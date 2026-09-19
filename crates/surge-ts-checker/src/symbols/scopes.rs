@@ -158,9 +158,19 @@ impl ScopeStack {
         for frame in self.frames.iter_mut().rev() {
             if frame.symbols.get(&name).is_some() {
                 record_scope_stack_visible_symbol_handle_copy_count(1);
+                // The new type narrows the same binding, so its declaration
+                // must stay readable from the entry that now answers for it.
+                let declared = self.visible_symbols.declared_type(&name).cloned();
                 self.visible_symbols
                     .insert_handle(name.clone(), clone_symbol_info_handle(&symbol));
-                frame.symbols.insert_handle(name, symbol);
+                if declared.is_some() && self.visible_symbols.declared_type(&name).is_none() {
+                    self.visible_symbols.set_declared_type(name.clone(), declared.clone());
+                }
+                let frame_declared = frame.symbols.declared_type(&name).cloned().or(declared);
+                frame.symbols.insert_handle(name.clone(), symbol);
+                if frame_declared.is_some() && frame.symbols.declared_type(&name).is_none() {
+                    frame.symbols.set_declared_type(name, frame_declared);
+                }
                 return true;
             }
         }
