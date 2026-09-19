@@ -258,6 +258,7 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
                     optional: narrowed_optional,
                     method: existing.method,
                     readonly: existing.readonly,
+                    restriction: existing.restriction.clone(),
                 },
             );
             Some(Type::Object(object_type))

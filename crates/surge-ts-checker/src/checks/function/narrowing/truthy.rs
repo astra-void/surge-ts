@@ -153,6 +153,7 @@ pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type 
                         optional: false,
                         method: existing.method,
                         readonly: existing.readonly,
+                        restriction: existing.restriction.clone(),
                     },
                 );
             }

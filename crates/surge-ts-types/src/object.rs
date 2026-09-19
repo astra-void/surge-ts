@@ -130,6 +130,18 @@ pub struct ObjectProperty {
     /// fingerprint — two objects differing only here land in one bucket and are
     /// told apart by equality.
     pub readonly: bool,
+    /// A class member declared `private` or `protected`, with the declaration
+    /// it belongs to. tsc relates such a member only to itself (private) or to
+    /// a restricted member (protected), whatever its type. Participates in
+    /// equality but not in the property fingerprint, like `readonly`.
+    pub restriction: Option<MemberRestriction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberRestriction {
+    pub private: bool,
+    /// Identity of the declaring class: its file and the offset of its name.
+    pub owner: Arc<str>,
 }
 
 impl ObjectProperty {
@@ -139,6 +151,7 @@ impl ObjectProperty {
             optional: false,
             method: false,
             readonly: false,
+            restriction: None,
         }
     }
 
@@ -148,6 +161,7 @@ impl ObjectProperty {
             optional: true,
             method: false,
             readonly: false,
+            restriction: None,
         }
     }
 

@@ -727,6 +727,7 @@ fn narrow_value_guards_in_scope(
                     optional: base_property_type.optional,
                     method: base_property_type.method,
                     readonly: base_property_type.readonly,
+                    restriction: base_property_type.restriction.clone(),
                 },
             );
             (
@@ -859,6 +860,7 @@ mod tests {
                     optional: *optional,
                     method: false,
                     readonly: false,
+                    restriction: None,
                 },
             );
         }

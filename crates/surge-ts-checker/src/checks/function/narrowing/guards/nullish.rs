@@ -162,6 +162,7 @@ pub(crate) fn narrow_nullish_equality_symbol_table(
                     optional: narrowed_optional,
                     method: property.method,
                     readonly: property.readonly,
+                    restriction: property.restriction.clone(),
                 },
             );
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);

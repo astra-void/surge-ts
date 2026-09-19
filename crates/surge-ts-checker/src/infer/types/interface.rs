@@ -700,7 +700,7 @@ pub(crate) fn resolve_interface(
     let degraded_during_expansion =
         crate::program::expansion_degradation_epoch() != degradation_before;
     let clean = !had_error && !emitted_diagnostics && !degraded_during_expansion;
-    let mut ty = resolved.ty;
+    let mut ty = attach_member_restrictions(resolved.ty, &interface);
     if cache_eligible
         && (physical_default_lib || cycle_free)
         && physical_interface_cache_enabled()
@@ -1696,4 +1696,47 @@ pub(crate) fn generated_default_lib_map_instance_type() -> Type {
     properties.insert("size".into(), ObjectProperty::required(Type::Number));
 
     Type::Object(alloc_object_type(properties, None))
+}
+
+/// Marks the instance members a class declares `private` or `protected` with
+/// the class they belong to, for the relation's modifier rules. Inherited
+/// members already carry their own declaring class's mark. A member whose
+/// accessor pair splits its modifiers is left unmarked.
+fn attach_member_restrictions(ty: Type, interface: &InterfaceInfo) -> Type {
+    if interface.body.restricted_members.is_empty() {
+        return ty;
+    }
+    let Some(name_span) = interface.name_span else {
+        return ty;
+    };
+    let Type::Object(mut object) = ty else {
+        return ty;
+    };
+    let owner: std::sync::Arc<str> = format!("{}\0{}", interface.file_name, name_span.start).into();
+    let mut properties = None;
+    for restricted in &interface.body.restricted_members {
+        if restricted.is_static || restricted.accessor_side.is_some() {
+            continue;
+        }
+        let Some(property) = object.properties.get(restricted.name.as_str()) else {
+            continue;
+        };
+        let restriction = surge_ts_types::MemberRestriction {
+            private: restricted.accessibility == surge_ts_syntax::ParsedMemberAccessibility::Private,
+            owner: owner.clone(),
+        };
+        if property.restriction.as_ref() == Some(&restriction) {
+            continue;
+        }
+        let mut property = property.clone();
+        property.restriction = Some(restriction);
+        properties
+            .get_or_insert_with(|| (*object.properties).clone())
+            .insert(restricted.name.as_str().into(), property);
+    }
+    if let Some(properties) = properties {
+        object.properties = std::sync::Arc::new(properties);
+        object.property_map_id = None;
+    }
+    Type::Object(object)
 }

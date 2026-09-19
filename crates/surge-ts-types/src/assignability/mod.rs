@@ -12,6 +12,11 @@ pub enum ObjectAssignabilityFailure {
         source_type: Type,
         target_type: Type,
     },
+    /// A `private` member related to anything but itself, or a `protected`
+    /// one to or from a public member (`propertyRelatedTo`).
+    AccessibilityMismatch {
+        property_name: String,
+    },
 }
 
 thread_local! {
@@ -160,25 +165,21 @@ fn record_assignability_assumption() {
     ASSIGNABILITY_ASSUMPTION_EVENTS.with(|events| events.set(events.get() + 1));
 }
 
-/// Widest source discriminant a distribution is attempted over, and widest
-/// target union it is attempted against. Both are small in practice (a parse
-/// status is three states); the caps keep a pathological union from turning one
-/// failed comparison into a quadratic sweep.
-const MAX_DISCRIMINANT_LITERALS: usize = 16;
+/// Widest target union a discriminated distribution is attempted against. The
+/// cap keeps a pathological union from turning one failed comparison into a
+/// quadratic sweep.
 const MAX_DISCRIMINATED_UNION_MEMBERS: usize = 32;
 
-fn is_unit_literal(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
-    )
-}
-
-/// tsc distributes an object over a union-typed discriminant before giving up on
-/// a discriminated-union target: `{ status: "valid" | "dirty"; value: T }` is
-/// assignable to `OK<T> | DIRTY<T>` because *each* status the source can carry
-/// picks a member the rest of the object fits. Member-wise `any` misses that,
-/// because the whole source matches no single member.
+/// tsc's `typeRelatedToDiscriminatedType`: an object source is related to a
+/// union target when every combination of the values its discriminant
+/// properties can hold picks target members, and each picked member accepts
+/// the rest of the source. `{ done: boolean; value: T }` relates to
+/// `{ done: true; value: T } | { done: false; value: T }` although neither
+/// member accepts it whole.
+///
+/// A discriminant is a property the target's members declare with differing
+/// types, at least one of them a unit type (a literal, `true`/`false`,
+/// `undefined` or `null`). More than 25 combinations is too complex, as in tsc.
 ///
 /// Runs only after the plain member-wise check already failed.
 fn discriminated_union_assignable(from: &Type, to_union: &crate::UnionType) -> bool {
@@ -189,75 +190,125 @@ fn discriminated_union_assignable(from: &Type, to_union: &crate::UnionType) -> b
     if members.len() > MAX_DISCRIMINATED_UNION_MEMBERS {
         return false;
     }
-
-    // Nothing below runs unless the source carries a property that could *be* a
-    // discriminant, so answer that from the source alone first. Peeling resolves
-    // and clones each member's structural form, and this whole function runs on
-    // every object-against-union comparison the member-wise check already
-    // rejected — peeling up to 32 members before knowing there is a candidate
-    // made the common "no discriminant here" answer the expensive one.
-    if !from_object.properties.values().any(|property| {
-        matches!(&property.ty, Type::Union(literals)
-            if literals.types().len() <= MAX_DISCRIMINANT_LITERALS
-                && literals.types().iter().all(is_unit_literal))
-    }) {
-        return false;
-    }
-
-    let peeled_members: Vec<Type> = members.iter().map(Type::peeled).collect();
-    if !peeled_members
-        .iter()
-        .all(|member| matches!(member, Type::Object(_)))
-    {
-        return false;
-    }
-
-    for (property_name, property) in from_object.properties.iter() {
-        let Type::Union(source_literals) = &property.ty else {
-            continue;
+    let is_unit = |ty: &Type| {
+        matches!(
+            ty,
+            Type::StringLiteral(_)
+                | Type::NumberLiteral(_)
+                | Type::BooleanLiteral(_)
+                | Type::Boolean
+                | Type::Undefined
+                | Type::Null
+        )
+    };
+    let has_unit_part = |ty: &Type| match ty {
+        Type::Union(union) => union.types().iter().any(is_unit),
+        other => is_unit(other),
+    };
+    let distributed = |ty: &Type| -> Vec<Type> {
+        let mut values = Vec::new();
+        let mut push = |ty: &Type| match ty {
+            Type::Boolean => {
+                values.push(Type::BooleanLiteral(true));
+                values.push(Type::BooleanLiteral(false));
+            }
+            other => values.push(other.clone()),
         };
-        if source_literals.types().len() > MAX_DISCRIMINANT_LITERALS
-            || !source_literals.types().iter().all(is_unit_literal)
-        {
-            continue;
+        match ty {
+            Type::Union(union) => union.types().iter().for_each(&mut push),
+            other => push(other),
         }
-        // Every target member must discriminate on this property for the
-        // distribution to be sound.
-        if !peeled_members.iter().all(|member| {
-            member
-                .get_property_access_type(property_name)
-                .is_some_and(|ty| is_unit_literal(&ty))
-        }) {
-            continue;
-        }
+        values
+    };
 
-        if source_literals.types().iter().all(|literal| {
-            let mut narrowed_properties = (*from_object.properties).clone();
-            narrowed_properties.insert(
-                property_name.clone(),
-                crate::ObjectProperty {
-                    ty: literal.clone(),
-                    optional: property.optional,
-                    method: property.method,
-                    readonly: false,
-                },
-            );
-            let narrowed = Type::Object(
-                ObjectType::new(
-                    narrowed_properties,
-                    from_object.string_index_type.as_deref().cloned(),
-                )
-                .with_number_index_type(from_object.number_index_type.as_deref().cloned()),
-            );
-            peeled_members
-                .iter()
-                .any(|member| is_assignable_to(&narrowed, member))
-        }) {
-            return true;
+    // Answered from the source alone first: peeling every member is the
+    // expensive part, and most failed object-to-union comparisons have no
+    // candidate discriminant at all.
+    if !from_object.properties.values().any(|property| has_unit_part(&property.ty)) {
+        return false;
+    }
+    let peeled_members: Vec<Type> = members.iter().map(Type::peeled).collect();
+    let member_property = |member: &Type, name: &str| -> Option<Type> {
+        let Type::Object(object) = member else {
+            return None;
+        };
+        let property = object.properties.get(name)?;
+        Some(if property.is_optional() {
+            crate::union_type(vec![property.ty.clone(), Type::Undefined])
+        } else {
+            property.ty.clone()
+        })
+    };
+
+    let mut discriminants: Vec<(&str, Vec<Type>)> = Vec::new();
+    let mut combinations = 1usize;
+    for (name, property) in from_object.properties.iter() {
+        let declared: Vec<Type> = peeled_members
+            .iter()
+            .filter_map(|member| member_property(member, name))
+            .collect();
+        let uniform = declared.windows(2).all(|pair| pair[0] == pair[1]);
+        if declared.is_empty() || uniform || !declared.iter().any(has_unit_part) {
+            continue;
+        }
+        let values = distributed(&property.ty);
+        combinations = combinations.saturating_mul(values.len());
+        if combinations > 25 || values.is_empty() {
+            return false;
+        }
+        discriminants.push((name.as_ref(), values));
+    }
+    if discriminants.is_empty() {
+        return false;
+    }
+
+    let mut matching: Vec<usize> = Vec::new();
+    for index in 0..combinations {
+        let mut combination = Vec::with_capacity(discriminants.len());
+        let mut n = index;
+        for (_, values) in discriminants.iter().rev() {
+            combination.push(&values[n % values.len()]);
+            n /= values.len();
+        }
+        combination.reverse();
+        let mut has_match = false;
+        for (member_index, member) in peeled_members.iter().enumerate() {
+            let fits = discriminants.iter().zip(&combination).all(|((name, _), value)| {
+                member_property(member, name).is_some_and(|declared| is_assignable_to(value, &declared))
+            });
+            if fits {
+                has_match = true;
+                if !matching.contains(&member_index) {
+                    matching.push(member_index);
+                }
+            }
+        }
+        if !has_match {
+            return false;
         }
     }
 
-    false
+    let excluded: Vec<&str> = discriminants.iter().map(|(name, _)| *name).collect();
+    let without_discriminants = |object: &ObjectType| {
+        let mut properties = (*object.properties).clone();
+        for name in &excluded {
+            properties.shift_remove(*name);
+        }
+        let mut stripped = ObjectType::new(properties, object.string_index_type.as_deref().cloned())
+            .with_number_index_type(object.number_index_type.as_deref().cloned());
+        if let Some(signature) = object.call_signature() {
+            stripped = stripped.with_call_signature(signature.clone());
+        }
+        if let Some(signature) = object.construct_signature() {
+            stripped = stripped.with_construct_signature(signature.clone());
+        }
+        Type::Object(stripped)
+    };
+    let source = without_discriminants(from_object);
+    matching.iter().all(|&member_index| match &peeled_members[member_index] {
+        Type::Object(member) => is_assignable_to(&source, &without_discriminants(member)),
+        _ => false,
+    })
 }
 
 /// tsc's `isTypeComparableTo`. Same engine as [`is_assignable_to`], decided
@@ -1019,6 +1070,23 @@ fn strip_undefined_member(ty: &Type) -> Option<Type> {
     }
 }
 
+/// tsc's `propertyRelatedTo` modifier rules. A private member on either side
+/// relates only to the same declaration. A protected target needs a protected
+/// source; tsc also requires the source's class to derive from the target's,
+/// which the member alone cannot tell, so any protected source is accepted.
+/// A protected source never relates to a public target.
+fn restrictions_relate(
+    source: Option<&crate::MemberRestriction>,
+    target: Option<&crate::MemberRestriction>,
+) -> bool {
+    match (source, target) {
+        (None, None) => true,
+        (Some(source), Some(target)) if source.private || target.private => source == target,
+        (Some(_), Some(_)) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+    }
+}
+
 pub fn object_assignability_failure(
     source: &Type,
     target: &Type,
@@ -1046,6 +1114,17 @@ pub fn object_assignability_failure(
                 property_name: property_name.to_string(),
             });
         };
+
+        if let Some(source_property) = source_property
+            && !restrictions_relate(
+                source_property.restriction.as_ref(),
+                target_property.restriction.as_ref(),
+            )
+        {
+            return Some(ObjectAssignabilityFailure::AccessibilityMismatch {
+                property_name: property_name.to_string(),
+            });
+        }
 
         if source_property.is_some()
             && source_property.is_some_and(|p| p.is_optional())

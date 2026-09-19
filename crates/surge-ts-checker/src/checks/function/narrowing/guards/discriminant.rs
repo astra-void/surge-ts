@@ -171,6 +171,7 @@ pub(crate) fn narrow_discriminant_symbol_table(
                     optional: base_property_type.optional,
                     method: base_property_type.method,
                     readonly: base_property_type.readonly,
+                    restriction: base_property_type.restriction.clone(),
                 },
             );
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);

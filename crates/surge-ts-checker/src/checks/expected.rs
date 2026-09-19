@@ -1741,12 +1741,12 @@ fn evaluate_object_literal_with_expected_type(
                 ExpectedTypeDiagnostic::SatisfiesNotAssignable => {
                     Diagnostic::ts1360(&source_type_name, &target_type_name, ctx.file_name.clone())
                 }
-                _ => missing_properties_diagnostic(
+                _ => crate::checks::expr::missing_properties_diagnostic(
                     property_name,
                     &missing_property_names,
                     &source_type_name,
                     &target_type_name,
-                    ctx,
+                    &ctx.file_name,
                 ),
             }
         };
@@ -1766,42 +1766,6 @@ fn evaluate_object_literal_with_expected_type(
         timings.object_literal_checking += object_start.elapsed()
     });
     result
-}
-
-/// tsc names *every* missing required property, and picks the code by how many
-/// there are: one is TS2741, two to five are listed in full as TS2739, and six
-/// or more list the first four as TS2740 with the rest counted.
-fn missing_properties_diagnostic(
-    first_missing: &str,
-    missing: &[String],
-    source_type_name: &str,
-    target_type_name: &str,
-    ctx: &CheckerContext,
-) -> Diagnostic {
-    const LISTED_WHEN_TRUNCATED: usize = 4;
-    const MAX_LISTED: usize = 5;
-
-    match missing.len() {
-        0 | 1 => Diagnostic::ts2741(
-            first_missing,
-            source_type_name,
-            target_type_name,
-            ctx.file_name.clone(),
-        ),
-        count if count <= MAX_LISTED => Diagnostic::ts2739(
-            source_type_name,
-            target_type_name,
-            missing.join(", "),
-            ctx.file_name.clone(),
-        ),
-        count => Diagnostic::ts2740(
-            source_type_name,
-            target_type_name,
-            missing[..LISTED_WHEN_TRUNCATED].join(", "),
-            count - LISTED_WHEN_TRUNCATED,
-            ctx.file_name.clone(),
-        ),
-    }
 }
 
 fn object_literal_source_type_name(
@@ -2097,17 +2061,21 @@ fn push_expected_type_mismatch(
         ExpectedTypeDiagnostic::TypeNotAssignable => {
             crate::checks::expr::type_not_assignable_diagnostic(
                 source_type,
-                expected_type,
+                &reported_target,
                 &source_type_name,
                 &expected_type_name,
                 ctx.file_name.clone(),
             )
         }
-        ExpectedTypeDiagnostic::ArgumentNotAssignable => Diagnostic::ts2345(
-            &source_type_name,
-            &expected_type_name,
-            ctx.file_name.clone(),
-        ),
+        ExpectedTypeDiagnostic::ArgumentNotAssignable => {
+            crate::checks::expr::argument_not_assignable_diagnostic(
+                source_type,
+                &reported_target,
+                &source_type_name,
+                &expected_type_name,
+                ctx.file_name.clone(),
+            )
+        }
         ExpectedTypeDiagnostic::SatisfiesNotAssignable => Diagnostic::ts1360(
             &source_type_name,
             &expected_type_name,

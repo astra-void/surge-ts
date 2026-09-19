@@ -22,6 +22,7 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
                         optional: v.optional,
                         method: v.method,
                         readonly: false,
+                        restriction: v.restriction.clone(),
                     },
                 );
             }
@@ -297,6 +298,14 @@ fn static_member_owner_for_missing_instance_property(
 /// relates a definitely non-nullable source to a `T | null | undefined` target
 /// as `T` alone, so the message names `T`.
 pub(crate) fn reported_relation_target(source: &Type, target: &Type) -> Type {
+    let peeled_source;
+    let source = match source {
+        Type::Reference(_) => {
+            peeled_source = source.peeled();
+            &peeled_source
+        }
+        other => other,
+    };
     let definitely_non_nullable = matches!(
         source,
         Type::String

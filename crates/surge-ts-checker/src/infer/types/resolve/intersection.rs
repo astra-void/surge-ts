@@ -428,7 +428,7 @@ pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
         && product <= MAX_DISTRIBUTED_UNION_ARITY
         && let Some(_guard) = DistributionDepth::enter()
     {
-        let operand_names: Vec<String> = members.iter().map(Type::name).collect();
+        let operand_names: Vec<String> = members.iter().map(intersection_operand_name).collect();
         let mut distributed = Vec::with_capacity(product);
         for selection in 0..product {
             let mut operands = members.clone();
@@ -437,7 +437,7 @@ pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
             for (index, arms) in &union_operands {
                 let arm = &arms[remaining % arms.len()];
                 remaining /= arms.len();
-                names[*index] = arm.name();
+                names[*index] = intersection_operand_name(arm);
                 operands[*index] = arm.clone();
             }
             distributed.push(merge_intersection_members_now(
@@ -452,7 +452,7 @@ pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
     let display_name = (!members.is_empty()).then(|| {
         members
             .iter()
-            .map(Type::name)
+            .map(intersection_operand_name)
             .collect::<Vec<_>>()
             .join(" & ")
     });
@@ -584,7 +584,7 @@ impl surge_ts_types::ResolveReference for LazyIntersectionMerge {
                 let display_name = (!self.members.is_empty()).then(|| {
                     self.members
                         .iter()
-                        .map(Type::name)
+                        .map(intersection_operand_name)
                         .collect::<Vec<_>>()
                         .join(" & ")
                 });
@@ -758,6 +758,7 @@ fn merge_intersection_members_now(
                             optional: existing.is_optional() && property.is_optional(),
                             method: existing.method,
                             readonly: false,
+                            restriction: existing.restriction.clone(),
                         };
                         properties.insert(name.clone(), merged_property);
                     }
@@ -969,5 +970,18 @@ fn is_phantom_member_type(ty: &Type) -> bool {
                 && object.construct_signature().is_none()
         }
         _ => false,
+    }
+}
+
+/// An intersection operand as tsc prints it: a function or union type is
+/// parenthesized, since `() => void & T` would read as a function returning
+/// the intersection.
+pub(crate) fn intersection_operand_name(ty: &Type) -> String {
+    let name = ty.name();
+    match ty {
+        Type::Function(_) => format!("({name})"),
+        // A named union prints as its alias and needs no parentheses.
+        Type::Union(_) if name.contains(" | ") => format!("({name})"),
+        _ => name,
     }
 }

@@ -264,6 +264,7 @@ pub(crate) fn resolve_mapped_type(
                     optional,
                     method: source_method,
                     readonly,
+                    restriction: None,
                 },
             );
         }
