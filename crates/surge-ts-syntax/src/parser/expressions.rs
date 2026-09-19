@@ -1196,7 +1196,7 @@ pub(crate) fn parse_object_properties(
                 PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
                 PropertyKey::StringLiteral(literal) => (literal.value.to_string(), literal.span),
                 PropertyKey::NumericLiteral(literal) => {
-                    (literal.raw_str().to_string(), literal.span)
+                    (literal.value.to_string(), literal.span)
                 }
                 _ => return None,
             };

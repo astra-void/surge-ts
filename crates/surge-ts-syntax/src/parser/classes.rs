@@ -145,7 +145,7 @@ fn restricted_class_members(class: &Class<'_>) -> Vec<ParsedRestrictedMember> {
         } else {
             match key {
                 PropertyKey::StaticIdentifier(key) => Some(key.name.to_string()),
-                _ => None,
+                key => super::types::computed_key_name(key),
             }
         };
         if let Some(name) = name {
@@ -278,10 +278,11 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                     let (name, name_span) = if method.computed {
                         (super::types::computed_key_name(&method.key)?, method.key.span())
                     } else {
-                        let PropertyKey::StaticIdentifier(key) = &method.key else {
-                            return None;
-                        };
-                        (key.name.to_string(), key.span)
+                        match &method.key {
+                            PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+                            // `1: T` and `"a": T` name members as their computed forms do.
+                            key => (super::types::computed_key_name(key)?, key.span()),
+                        }
                     };
                     let return_type = method
                         .value
@@ -318,10 +319,11 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                     let (name, name_span) = if method.computed {
                         (super::types::computed_key_name(&method.key)?, method.key.span())
                     } else {
-                        let PropertyKey::StaticIdentifier(key) = &method.key else {
-                            return None;
-                        };
-                        (key.name.to_string(), key.span)
+                        match &method.key {
+                            PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+                            // `1: T` and `"a": T` name members as their computed forms do.
+                            key => (super::types::computed_key_name(key)?, key.span()),
+                        }
                     };
 
                     let is_getter = matches!(method.kind, MethodDefinitionKind::Get);
@@ -377,10 +379,11 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             let (name, name_span) = if property.computed {
                 (super::types::computed_key_name(&property.key)?, property.key.span())
             } else {
-                let PropertyKey::StaticIdentifier(key) = &property.key else {
-                    return None;
-                };
-                (key.name.to_string(), key.span)
+                match &property.key {
+                    PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+                    // `1: T` and `"a": T` name members as their computed forms do.
+                    key => (super::types::computed_key_name(key)?, key.span()),
+                }
             };
 
             let declared_type = property

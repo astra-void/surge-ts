@@ -328,38 +328,52 @@ pub(super) fn parse_member_assignment(
 fn parse_this_property_assignment(
     assignment: &oxc_ast::ast::AssignmentExpression<'_>,
 ) -> Option<ParsedThisPropertyAssignment> {
-    let AssignmentTarget::StaticMemberExpression(member) = &assignment.left else {
-        return None;
+    // `this["x"] = v` with a literal key writes the same member as `this.x`.
+    let (object, property_name, property_span, member_span, is_bracketed) = match &assignment.left {
+        AssignmentTarget::StaticMemberExpression(member) => (
+            &member.object,
+            member.property.name.to_string(),
+            member.property.span,
+            member.span,
+            false,
+        ),
+        AssignmentTarget::ComputedMemberExpression(member) => {
+            let Expression::StringLiteral(key) = &member.expression else {
+                return None;
+            };
+            (&member.object, key.value.to_string(), key.span, member.span, true)
+        }
+        _ => return None,
     };
 
-    let Expression::ThisExpression(this_expression) = &member.object else {
+    let Expression::ThisExpression(this_expression) = object else {
         return None;
     };
 
     let (value, value_span) = parse_expression(&assignment.right);
     let value_span = Some(text_span_from_oxc_span(value_span));
-    let property_span = Some(text_span_from_oxc_span(member.property.span));
+    let property_span = Some(text_span_from_oxc_span(property_span));
     let target = ParsedExpression::PropertyAccess {
         object: Box::new(ParsedExpression::This {
             span: Some(text_span_from_oxc_span(this_expression.span)),
         }),
         object_span: Some(text_span_from_oxc_span(this_expression.span)),
-        property_name: member.property.name.to_string(),
+        property_name: property_name.clone(),
         property_span,
-        is_bracketed: false,
+        is_bracketed,
     };
     let value = super::logical_assignment_value(
         assignment.operator,
         target,
-        Some(text_span_from_oxc_span(member.span)),
+        Some(text_span_from_oxc_span(member_span)),
         value,
         value_span,
     )?;
 
     Some(ParsedThisPropertyAssignment {
-        property_name: member.property.name.to_string(),
+        property_name,
         property_span,
-        target_span: Some(text_span_from_oxc_span(member.span)),
+        target_span: Some(text_span_from_oxc_span(member_span)),
         value,
         value_span,
     })

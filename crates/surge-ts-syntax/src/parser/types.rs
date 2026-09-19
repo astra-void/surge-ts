@@ -1142,7 +1142,7 @@ pub(crate) fn computed_key_name(key: &PropertyKey<'_>) -> Option<String> {
         // `interface StoreMutators<S, A> { ['zustand/immer']: WithImmer<S> }`
         // augmentation contributed nothing at all.
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
-        PropertyKey::NumericLiteral(literal) => Some(literal.raw_str().to_string()),
+        PropertyKey::NumericLiteral(literal) => Some(literal.value.to_string()),
         // `[-1]` names the property `-1`, as a written literal key would.
         PropertyKey::UnaryExpression(unary) => {
             super::expressions::signed_number_literal_text(unary)
@@ -1199,7 +1199,9 @@ pub(crate) fn parse_type_property_signature(
     // chain degrades to `{}` regardless.
     let (name, key_span) = match &property_signature.key {
         PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
-        PropertyKey::NumericLiteral(literal) => (literal.raw_str().to_string(), literal.span),
+        // A numeric name is the number's canonical string: `1.0` and `1.`
+        // name the same member as `1`.
+        PropertyKey::NumericLiteral(literal) => (literal.value.to_string(), literal.span),
         PropertyKey::StringLiteral(literal) => (literal.value.to_string(), literal.span),
         _ => return None,
     };
