@@ -156,6 +156,42 @@ pub(crate) fn infer_tuple_index_access(
     InferredExpression::Unknown
 }
 
+/// `E.A` read off an enum's object is the enum member type `E.A`, not the
+/// bare value it holds, so it keeps the enum's nominal identity: `F.X` is not
+/// an `E` even when both are `0`. Only a member whose `E.A` alias resolves to
+/// an enum reference is answered here; anything else falls back to the object.
+fn enum_member_value_type(
+    object: &ParsedExpression,
+    property_name: &str,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let ParsedExpression::Identifier { name, .. } = object else {
+        return None;
+    };
+    let crate::symbols::TypeDeclarationInfo::Alias(alias) = ctx.lookup_type_declaration(name)? else {
+        return None;
+    };
+    if alias.enum_name.as_deref() != Some(name.as_str()) {
+        return None;
+    }
+    // A local value of the same name shadows the enum.
+    if symbols.get(name).is_some_and(|symbol| !matches!(symbol.kind, crate::symbols::SymbolKind::Const)) {
+        return None;
+    }
+    let member_name = format!("{name}.{property_name}");
+    ctx.lookup_type_declaration(&member_name)?;
+    let member = crate::infer::map_parsed_type(
+        surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            name: member_name,
+            span: None,
+            type_arguments: Vec::new(),
+        })),
+        ctx,
+    );
+    matches!(&member, Type::Reference(reference) if reference.enum_owner.is_some()).then_some(member)
+}
+
 pub(crate) fn infer_property_access(
     object: &ParsedExpression,
     _object_span: &Option<TextSpan>,
@@ -166,6 +202,9 @@ pub(crate) fn infer_property_access(
 ) -> InferredExpression {
     record_property_lookup();
     let property_access_start = Instant::now();
+    if let Some(member) = enum_member_value_type(object, property_name, symbols, ctx) {
+        return InferredExpression::Known(member);
+    }
     let object_type = match infer_expression(object, symbols, ctx) {
         InferredExpression::Known(ty) => ty,
         InferredExpression::UnresolvedIdentifier { name, span } => {

@@ -63,6 +63,8 @@ fn type_contains_literal(ty: &Type) -> bool {
         | Type::BooleanLiteral(_)
         | Type::Null
         | Type::Undefined => true,
+        // An enum is a union of enum literal types.
+        Type::Reference(reference) if reference.enum_owner.is_some() => true,
         Type::Union(types) => types.types().iter().any(type_contains_literal),
         _ => false,
     }

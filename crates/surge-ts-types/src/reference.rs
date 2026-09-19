@@ -92,6 +92,11 @@ pub struct TypeReference {
     /// assignability needs to recognise the target. Display-only provenance, like
     /// `render_structurally`: it stays out of `nominal_eq` and canonical identity.
     pub numeric_enum: bool,
+    /// The `enum` this reference is (or is a member type of), by declaring
+    /// file and name. Enum types are nominal: a member of one enum never
+    /// relates to another enum, whatever the values. Provenance like
+    /// `numeric_enum`, outside `nominal_eq` and canonical identity.
+    pub enum_owner: Option<Arc<str>>,
     resolver: Arc<dyn ResolveReference>,
 }
 
@@ -119,6 +124,7 @@ impl TypeReference {
             arguments: arguments.into(),
             render_structurally: false,
             numeric_enum: false,
+            enum_owner: None,
             resolver,
         }
     }
@@ -133,6 +139,12 @@ impl TypeReference {
     /// Marks this reference as a numeric `enum` type.
     pub fn numeric_enum(mut self) -> Self {
         self.numeric_enum = true;
+        self
+    }
+
+    /// Marks this reference as the `enum` `owner`, or one of its member types.
+    pub fn with_enum_owner(mut self, owner: Arc<str>) -> Self {
+        self.enum_owner = Some(owner);
         self
     }
 

@@ -1291,19 +1291,28 @@ fn wrap_enum_member_reference(
     }
     // tsc qualifies an exported enum's type with the module it came from and
     // names a file-local one bare.
+    // A member type prints as `Enum.Member`.
+    let own_name = match alias.name.rsplit_once(&format!("{enum_name}.")) {
+        Some((_, member)) if !member.is_empty() => format!("{enum_name}.{member}"),
+        _ => enum_name.to_string(),
+    };
     let display = if alias.enum_exported {
         format!(
-            "import({:?}).{enum_name}",
+            "import({:?}).{own_name}",
             module_path_for_display(&alias.file_name)
         )
     } else {
-        enum_name.to_string()
+        own_name
     };
     let numeric = enum_resolution_is_numeric(&resolved.ty);
     let interned = intern_instantiation(ctx, decl_key, &[], resolved.ty.clone());
     let reference = make_type_reference(reference_id.to_string(), display, Vec::new(), interned);
+    let owner: std::sync::Arc<str> = format!("{}\0{enum_name}", alias.file_name).into();
     let reference = match (numeric, reference) {
-        (true, Type::Reference(reference)) => Type::Reference(reference.numeric_enum()),
+        (true, Type::Reference(reference)) => {
+            Type::Reference(reference.numeric_enum().with_enum_owner(owner))
+        }
+        (false, Type::Reference(reference)) => Type::Reference(reference.with_enum_owner(owner)),
         (_, reference) => reference,
     };
     ResolvedType {

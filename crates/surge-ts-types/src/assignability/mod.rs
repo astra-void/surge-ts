@@ -465,6 +465,21 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
 }
 
 fn assignability_arms(from: &Type, to: &Type) -> bool {
+    // Enum types are nominal (`isEnumTypeRelatedTo`): a member of one enum
+    // never relates to another enum, even where the values coincide.
+    if let (Type::Reference(from_ref), Type::Reference(to_ref)) = (from, to)
+        && let (Some(from_enum), Some(to_enum)) = (&from_ref.enum_owner, &to_ref.enum_owner)
+        && from_enum != to_enum
+    {
+        return false;
+    }
+    // Relate a union source to an enum member by member, before the target
+    // is peeled to its values and the members' enum identity is lost.
+    if let (Type::Union(from_union), Type::Reference(to_ref)) = (from, to)
+        && to_ref.enum_owner.is_some()
+    {
+        return union_source_related(from_union, to);
+    }
     // Nominal identity: two objects resolved from the same non-generic named
     // declaration are the same type, even if one expanded to a structurally
     // different shape (a deeply cyclic library type can resolve to different
