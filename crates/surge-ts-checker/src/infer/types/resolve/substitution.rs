@@ -171,6 +171,14 @@ pub(crate) fn extend_substitution_with_type_parameters(
             Some(_) if inferable_from_arguments => Type::Unknown,
             Some(resolved) if !resolved.had_error => resolved.ty,
             Some(_) => Type::Unknown,
+            // An unconstrained parameter with nothing to default to stands for
+            // itself: it relates like the sentinel everywhere, but a generic
+            // signature compared with a non-generic one can tell it is bound.
+            None if parameter.constraint.is_none() => {
+                Type::TypeParameter(surge_ts_types::TypeParameterType {
+                    name: parameter.name.as_str().into(),
+                })
+            }
             None => Type::Unknown,
         };
 

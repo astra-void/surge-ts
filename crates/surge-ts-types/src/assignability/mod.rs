@@ -935,7 +935,97 @@ fn required_count_ignoring_trailing_void(parameters: &[Type], required: usize) -
 }
 
 fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bool {
+    if let Some(opaque_target) = opaque_generic_target(source, target) {
+        return is_signature_assignable_to(source, &opaque_target, false);
+    }
     is_signature_assignable_to(source, target, false)
+}
+
+/// tsc's `compareSignaturesRelated` instantiates a *generic source* in the
+/// context of the target, but a generic target compared with a non-generic
+/// source keeps its type parameters as they are: `T` in `<T>(x: T) => T[]`
+/// is a type of its own that `number` does not satisfy, so
+/// `(x: number) => number[]` is not assignable to it. surge's type-parameter
+/// placeholders relate like `unknown`, so for this comparison each of the
+/// target's parameters is replaced with an opaque type only it can inhabit.
+/// Constrained parameters are left alone: the head is display text and does
+/// not carry a resolved constraint to relate through.
+fn opaque_generic_target(source: &FunctionType, target: &FunctionType) -> Option<FunctionType> {
+    if source.type_parameter_head().is_some() {
+        return None;
+    }
+    let head = target.type_parameter_head()?;
+    let mut names = Vec::new();
+    for segment in head.split(',') {
+        let segment = segment.trim();
+        if segment.is_empty() || segment.contains(' ') || segment.contains('<') {
+            return None;
+        }
+        names.push(segment.to_string());
+    }
+    let opaque = |name: &str| {
+        let mut properties = crate::PropertyMap::default();
+        properties.insert(
+            format!("\u{0}type parameter {name}").into(),
+            crate::ObjectProperty::required(Type::Never),
+        );
+        Type::Object(ObjectType::new(properties, None))
+    };
+    let mut changed = false;
+    let substitute = |ty: &Type, changed: &mut bool| substitute_type_parameters(ty, &names, &opaque, changed);
+    let parameters: Vec<Type> = target
+        .parameters()
+        .iter()
+        .map(|parameter| substitute(parameter, &mut changed))
+        .collect();
+    let return_type = substitute(target.return_type(), &mut changed);
+    changed.then(|| {
+        FunctionType::new(
+            parameters,
+            return_type,
+            target.is_variadic(),
+            target.required_parameter_count(),
+        )
+    })
+}
+
+fn substitute_type_parameters(
+    ty: &Type,
+    names: &[String],
+    opaque: &dyn Fn(&str) -> Type,
+    changed: &mut bool,
+) -> Type {
+    match ty {
+        Type::TypeParameter(parameter) if names.iter().any(|name| **name == *parameter.name) => {
+            *changed = true;
+            opaque(&parameter.name)
+        }
+        Type::Array(element) => Type::Array(Box::new(substitute_type_parameters(element, names, opaque, changed))),
+        Type::Tuple(elements) => Type::Tuple(
+            elements
+                .iter()
+                .map(|element| substitute_type_parameters(element, names, opaque, changed))
+                .collect(),
+        ),
+        Type::Union(union) => crate::union_type(
+            union
+                .types()
+                .iter()
+                .map(|member| substitute_type_parameters(member, names, opaque, changed))
+                .collect(),
+        ),
+        Type::Function(function) => Type::Function(FunctionType::new(
+            function
+                .parameters()
+                .iter()
+                .map(|parameter| substitute_type_parameters(parameter, names, opaque, changed))
+                .collect(),
+            substitute_type_parameters(function.return_type(), names, opaque, changed),
+            function.is_variadic(),
+            function.required_parameter_count(),
+        )),
+        other => other.clone(),
+    }
 }
 
 /// `bivariant_parameters` relaxes the contravariant parameter test to accept

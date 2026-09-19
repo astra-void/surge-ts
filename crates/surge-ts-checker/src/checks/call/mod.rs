@@ -2236,16 +2236,17 @@ pub(crate) fn is_open_instantiation(ty: &Type) -> bool {
 
 pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => true,
+        Type::Unknown | Type::GenuineUnknown => true,
+        Type::TypeParameter(parameter) => !crate::checks::assign::is_bound_type_parameter(parameter),
         Type::Array(element) => type_contains_unknown(element),
         Type::Reference(reference) if reference.is_readonly_array() => {
             reference.arguments.iter().any(type_contains_unknown)
         }
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
-        Type::Function(function) => {
+        Type::Function(function) => crate::checks::assign::with_signature_type_parameters(function, || {
             function.parameters().iter().any(type_contains_unknown)
                 || type_contains_unknown(function.return_type())
-        }
+        }),
         Type::Object(object) => {
             object
                 .properties

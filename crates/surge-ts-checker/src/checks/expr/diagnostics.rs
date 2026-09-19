@@ -347,8 +347,39 @@ pub(crate) fn source_display_name(source: &Type, target: &Type) -> String {
         widen_type(source).name()
     } else if type_contains_literal(target) || matches!(target, Type::Never) {
         source.name()
+    } else if let Some(enum_name) = enum_base_display(source) {
+        enum_name
     } else {
         widen_type(source).name()
+    }
+}
+
+/// `getBaseTypeOfLiteralType` for enum literals: an enum member type (or a
+/// union of one enum's members) generalizes to the enum itself.
+fn enum_base_display(source: &Type) -> Option<String> {
+    let member_base = |ty: &Type| -> Option<(std::sync::Arc<str>, String)> {
+        let Type::Reference(reference) = ty else {
+            return None;
+        };
+        let owner = reference.enum_owner.clone()?;
+        let display = reference.display.to_string();
+        let base = if *reference.id == *owner {
+            display
+        } else {
+            display.rsplit_once('.').map(|(base, _)| base.to_string())?
+        };
+        Some((owner, base))
+    };
+    match source {
+        Type::Reference(_) => member_base(source).map(|(_, base)| base),
+        Type::Union(union) => {
+            let mut members = union.types().iter().map(member_base);
+            let (owner, base) = members.next()??;
+            members
+                .all(|member| member.is_some_and(|(other, _)| other == owner))
+                .then_some(base)
+        }
+        _ => None,
     }
 }
 

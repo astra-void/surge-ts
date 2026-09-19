@@ -428,9 +428,8 @@ impl Type {
             Type::Null => "null".to_string(),
             Type::Void => "void".to_string(),
             Type::Any => "any".to_string(),
-            Type::Unknown | Type::GenuineUnknown | Type::ErrorType | Type::TypeParameter(_) => {
-                "unknown".to_string()
-            }
+            Type::Unknown | Type::GenuineUnknown | Type::ErrorType => "unknown".to_string(),
+            Type::TypeParameter(parameter) => parameter.name.to_string(),
             Type::Never => "never".to_string(),
             Type::StringLiteral(value) => format!("{value:?}"),
             Type::NumberLiteral(value) => value.value.clone(),

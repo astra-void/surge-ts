@@ -533,13 +533,14 @@ fn widen_object_literal_members(initializer: &ParsedExpression, ty: &Type) -> Ty
 /// genuine TS2322s. Only surge's could-not-model sentinel warrants no-cascade.
 fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
-        Type::Unknown | Type::TypeParameter(_) => true,
+        Type::Unknown => true,
+        Type::TypeParameter(parameter) => !crate::checks::assign::is_bound_type_parameter(parameter),
         Type::Array(element) => type_contains_unknown(element),
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
-        Type::Function(function) => {
+        Type::Function(function) => crate::checks::assign::with_signature_type_parameters(function, || {
             function.parameters().iter().any(type_contains_unknown)
                 || type_contains_unknown(function.return_type())
-        }
+        }),
         Type::Object(object) => {
             object
                 .properties

@@ -219,6 +219,12 @@ impl FunctionType {
     }
 
     /// Attaches the rendered type-parameter list, without the angle brackets.
+    /// The rendered type-parameter list of a declared generic signature, if
+    /// any. An instantiated signature carries none.
+    pub fn type_parameter_head(&self) -> Option<&str> {
+        self.type_parameter_head.as_deref()
+    }
+
     pub fn with_type_parameter_head(mut self, head: Option<String>) -> Self {
         self.type_parameter_head = head.filter(|head| !head.is_empty()).map(Arc::from);
         self

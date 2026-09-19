@@ -115,6 +115,80 @@ pub(crate) fn check_assignment_with_symbols(
 
 const MAX_REFERENCE_DEPTH: usize = 50;
 
+thread_local! {
+    static BOUND_TYPE_PARAMETERS: std::cell::RefCell<Vec<std::sync::Arc<str>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether `parameter` is declared by a generic signature enclosing the type
+/// being walked (see [`with_signature_type_parameters`]). Such a placeholder
+/// is a bound name, not a type surge failed to model.
+pub(crate) fn is_bound_type_parameter(parameter: &surge_ts_types::TypeParameterType) -> bool {
+    BOUND_TYPE_PARAMETERS.with(|bound| bound.borrow().iter().any(|name| **name == *parameter.name))
+}
+
+/// Runs `walk` with no type parameter bound. A reference's expansion is a
+/// different scope: a placeholder met inside it is not the enclosing
+/// signature's parameter, and treating it as unmodelled keeps the walk
+/// short-circuiting as it always has.
+pub(crate) fn without_bound_type_parameters<R>(walk: impl FnOnce() -> R) -> R {
+    let saved = BOUND_TYPE_PARAMETERS.with(|stack| std::mem::take(&mut *stack.borrow_mut()));
+    let result = walk();
+    BOUND_TYPE_PARAMETERS.with(|stack| *stack.borrow_mut() = saved);
+    result
+}
+
+/// Runs `walk` with `function`'s own type parameters bound.
+pub(crate) fn with_signature_type_parameters<R>(
+    function: &surge_ts_types::FunctionType,
+    walk: impl FnOnce() -> R,
+) -> R {
+    let bound = function
+        .type_parameter_head()
+        .map(declared_type_parameter_names)
+        .unwrap_or_default();
+    let pushed = bound.len();
+    BOUND_TYPE_PARAMETERS.with(|stack| stack.borrow_mut().extend(bound));
+    let result = walk();
+    BOUND_TYPE_PARAMETERS.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        let keep = stack.len() - pushed;
+        stack.truncate(keep);
+    });
+    result
+}
+
+/// The names a rendered type-parameter head (`const T extends X, U = Y`)
+/// declares.
+fn declared_type_parameter_names(head: &str) -> Vec<std::sync::Arc<str>> {
+    let mut names = Vec::new();
+    let mut depth = 0usize;
+    let mut segment = String::new();
+    let mut flush = |segment: &mut String, names: &mut Vec<std::sync::Arc<str>>| {
+        if let Some(name) = segment
+            .split_whitespace()
+            .find(|word| !matches!(*word, "const" | "in" | "out"))
+        {
+            names.push(name.into());
+        }
+        segment.clear();
+    };
+    for ch in head.chars() {
+        match ch {
+            '<' | '(' | '{' | '[' => depth += 1,
+            '>' | ')' | '}' | ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                flush(&mut segment, &mut names);
+                continue;
+            }
+            _ => {}
+        }
+        segment.push(ch);
+    }
+    flush(&mut segment, &mut names);
+    names
+}
+
 pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
     type ReferenceKey = (std::sync::Arc<str>, std::sync::Arc<[surge_ts_types::Type]>);
     thread_local! {
@@ -134,7 +208,10 @@ pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
         static CYCLE_ASSUMPTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     }
     match ty {
-        surge_ts_types::Type::Unknown | surge_ts_types::Type::TypeParameter(_) => true,
+        surge_ts_types::Type::Unknown => true,
+        // A signature's own type parameter is a bound name, not a type surge
+        // failed to model.
+        surge_ts_types::Type::TypeParameter(parameter) => !is_bound_type_parameter(parameter),
         // A degraded member hidden behind a lazy nominal reference must suppress
         // the comparison exactly as an inline one does: `is_assignable_to` peels
         // the reference and compares the unmodelled members structurally, so
@@ -183,7 +260,7 @@ pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
                     .borrow_mut()
                     .push((reference.id.clone(), reference.arguments.clone()));
             });
-            let result = type_contains_unknown(&reference.resolve());
+            let result = without_bound_type_parameters(|| type_contains_unknown(&reference.resolve()));
             VISITING_REFERENCES.with(|visiting| {
                 visiting.borrow_mut().pop();
             });
@@ -203,10 +280,10 @@ pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
         }
         surge_ts_types::Type::Array(element) => type_contains_unknown(element),
         surge_ts_types::Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
-        surge_ts_types::Type::Function(function) => {
+        surge_ts_types::Type::Function(function) => with_signature_type_parameters(function, || {
             function.parameters().iter().any(type_contains_unknown)
                 || type_contains_unknown(function.return_type())
-        }
+        }),
         surge_ts_types::Type::Object(object) => {
             object
                 .properties
