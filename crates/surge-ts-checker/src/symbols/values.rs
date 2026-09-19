@@ -126,6 +126,10 @@ pub(crate) struct SymbolTable {
     // Mutations and `iter*` operate on `symbols` alone; `parent` is only ever set
     // on transient, lookup-only scope roots that are never iterated.
     parent: Option<Arc<SymbolTable>>,
+    // A block-scoped declaration boundary over `parent`: a namespace body is
+    // its own scope, so an enclosing `let`/`const` of the same name is shadowed
+    // rather than redeclared.
+    declaration_scope_root: bool,
 }
 
 impl Clone for SymbolTable {
@@ -141,6 +145,7 @@ impl Clone for SymbolTable {
             declared_types: self.declared_types.clone(),
             alias_conditions: self.alias_conditions.clone(),
             parent: self.parent.clone(),
+            declaration_scope_root: self.declaration_scope_root,
         }
     }
 }
@@ -165,6 +170,7 @@ impl SymbolTable {
             declared_types: self.declared_types.clone(),
             alias_conditions: self.alias_conditions.clone(),
             parent: self.parent.clone(),
+            declaration_scope_root: self.declaration_scope_root,
         }
     }
 
@@ -178,6 +184,7 @@ impl SymbolTable {
             declared_types: None,
             alias_conditions: None,
             parent: Some(parent),
+            declaration_scope_root: false,
         }
     }
 
@@ -203,6 +210,7 @@ impl SymbolTable {
             declared_types: parent.declared_types.clone(),
             alias_conditions: parent.alias_conditions.clone(),
             parent: Some(parent),
+            declaration_scope_root: false,
         }
     }
 }
@@ -453,9 +461,19 @@ impl SymbolTable {
         if let Some(existing) = self.symbols.get(name) {
             return matches!(existing.as_ref().kind, SymbolKind::Let | SymbolKind::Const);
         }
-        self.parent
-            .as_ref()
-            .is_some_and(|parent| parent.contains_let_or_const(name))
+        !self.declaration_scope_root
+            && self
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent.contains_let_or_const(name))
+    }
+
+    /// A lookup-only scope over `parent` that starts a new block-scoped
+    /// declaration space (see `declaration_scope_root`).
+    pub(crate) fn declaration_scope(parent: Arc<SymbolTable>) -> Self {
+        let mut table = Self::with_parent(parent);
+        table.declaration_scope_root = true;
+        table
     }
 
     /// Records the name span of the first declaration of `name` in this scope so

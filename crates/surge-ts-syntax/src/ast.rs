@@ -227,6 +227,9 @@ pub struct ParsedNamespaceDeclaration {
     pub name_span: Option<TextSpan>,
     pub statements: Vec<ParsedStatement>,
     pub span: Option<TextSpan>,
+    /// Written `declare namespace`, so every declaration in the body is
+    /// ambient.
+    pub is_declare: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

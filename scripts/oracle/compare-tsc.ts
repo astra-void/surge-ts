@@ -561,6 +561,7 @@ export const fixturePresets: Record<string, string> = {
   'member-accessibility-basic': path.join(workspaceRoot, 'tests/compat-projects/member-accessibility-basic/tsconfig.json'),
   'null-type-basic': path.join(workspaceRoot, 'tests/compat-projects/null-type-basic/tsconfig.json'),
   'null-type-loose-basic': path.join(workspaceRoot, 'tests/compat-projects/null-type-loose-basic/tsconfig.json'),
+  'namespace-body-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-body-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

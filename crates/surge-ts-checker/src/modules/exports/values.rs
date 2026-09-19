@@ -878,15 +878,9 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                 .is_none_or(|ty| matches!(ty, Type::Object(_)));
             if merges {
                 let ty = namespace_value_object_type_resolved(namespace, ctx);
-                let ty = match (existing, &ty) {
-                    (Some(Type::Object(previous)), Type::Object(current)) => {
-                        let mut properties = previous.properties.as_ref().clone();
-                        for (name, property) in current.properties.iter() {
-                            properties.insert(name.clone(), property.clone());
-                        }
-                        Type::Object(crate::metrics::alloc_object_type(properties, None))
-                    }
-                    _ => ty,
+                let ty = match existing {
+                    Some(previous) => merge_namespace_value_objects(&previous, &ty),
+                    None => ty,
                 };
                 let _ = exportable_values.insert(
                     namespace.name.clone(),
@@ -1239,6 +1233,27 @@ pub(crate) fn collect_namespace_member_value_symbols(
 /// namespace's member *set* is precise — enabling TS2339 on real typos — without
 /// re-resolving a partially modelled surface and cascading. Used to bind an
 /// `export = <namespace>` value so `import * as Ns` exposes `Ns.member`.
+/// Merges a later block of a namespace into the value object an earlier block
+/// produced. Nested namespaces merge member by member at every depth, so
+/// `namespace M { namespace N { … } }` written twice keeps both `N` bodies.
+fn merge_namespace_value_objects(previous: &Type, current: &Type) -> Type {
+    let (Type::Object(previous), Type::Object(current)) = (previous, current) else {
+        return current.clone();
+    };
+    let mut properties = previous.properties.as_ref().clone();
+    for (name, property) in current.properties.iter() {
+        let merged = match properties.get(name) {
+            Some(existing) => surge_ts_types::ObjectProperty {
+                ty: merge_namespace_value_objects(&existing.ty, &property.ty),
+                ..property.clone()
+            },
+            None => property.clone(),
+        };
+        properties.insert(name.clone(), merged);
+    }
+    Type::Object(crate::metrics::alloc_object_type(properties, None))
+}
+
 pub(crate) fn namespace_value_object_type(namespace: &ParsedNamespaceDeclaration) -> Type {
     let mut properties = surge_ts_types::PropertyMap::default();
     fill_namespace_value_properties(namespace, &mut properties);
@@ -1427,15 +1442,9 @@ pub(crate) fn fill_namespace_value_properties(
                 // A nested namespace written twice merges the same way a
                 // top-level one does; without this the second block replaces
                 // the first and its siblings' members go missing.
-                let merged = match (properties.get(&name).map(|previous| &previous.ty), &inner) {
-                    (Some(Type::Object(previous)), Type::Object(current)) => {
-                        let mut properties = previous.properties.as_ref().clone();
-                        for (name, property) in current.properties.iter() {
-                            properties.insert(name.clone(), property.clone());
-                        }
-                        Type::Object(crate::metrics::alloc_object_type(properties, None))
-                    }
-                    _ => inner,
+                let merged = match properties.get(&name) {
+                    Some(previous) => merge_namespace_value_objects(&previous.ty, &inner),
+                    None => inner,
                 };
                 properties.insert(name, ObjectProperty::required(merged));
             }

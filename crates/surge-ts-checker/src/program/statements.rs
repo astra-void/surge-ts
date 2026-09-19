@@ -693,13 +693,139 @@ pub(crate) fn check_program_statement(
             }
         },
         ParsedStatement::DeclareModuleDeclaration(_) => {}
-        // Namespace members are bound during type-declaration collection; the
-        // namespace itself produces no value-level checks here.
-        ParsedStatement::NamespaceDeclaration(_) => {}
+        ParsedStatement::NamespaceDeclaration(namespace) => {
+            check_namespace_body(&namespace, file_index, ctx);
+        }
         ParsedStatement::UnsupportedDeclaration { span } => {
             emit_unsupported_declaration_diagnostic(ctx, span);
         }
     }
+}
+
+/// tsc's `checkModuleDeclaration` checks the body as ordinary source
+/// elements, in a scope of its own: the body's values (exported or not)
+/// shadow the enclosing ones, and its bare type references resolve against the
+/// namespace's qualified members.
+///
+/// The scope mirrors a module file's: hoisted function declarations are bound
+/// up front, and the body's other values back later references through the
+/// module value fallback, together with what other blocks of the same
+/// namespace export.
+fn check_namespace_body(
+    namespace: &surge_ts_syntax::ParsedNamespaceDeclaration,
+    file_index: usize,
+    ctx: &mut CheckerContext,
+) {
+    let ambient_body;
+    let namespace = if namespace.is_declare {
+        ambient_body = ambient_namespace(namespace);
+        &ambient_body
+    } else {
+        namespace
+    };
+    let prefix = match ctx.namespace_member_prefix_stack.last() {
+        Some(outer) => format!("{outer}.{}", namespace.name),
+        None => namespace.name.clone(),
+    };
+    ctx.namespace_member_prefix_stack.push(prefix);
+
+    let enclosing = std::sync::Arc::new(
+        ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+    );
+    let type_declarations = ctx.type_declarations.clone();
+    let namespace_values = crate::modules::collect_exportable_value_symbols(
+        &namespace.statements,
+        &type_declarations,
+        &enclosing,
+        None,
+        false,
+        ctx,
+    );
+    let mut body_values = crate::symbols::SymbolTable::new();
+    for (name, symbol) in namespace_values.iter_shared() {
+        let inherited = enclosing
+            .get_handle(name)
+            .is_some_and(|outer| std::sync::Arc::ptr_eq(&outer, symbol));
+        if !inherited {
+            let _ = body_values.insert_shared(name.clone(), symbol.clone());
+        }
+    }
+    let merged = (!namespace.name.contains('.'))
+        .then(|| {
+            enclosing.get_handle(&namespace.name).or_else(|| {
+                ctx.module_value_fallback
+                    .as_ref()
+                    .and_then(|fallback| fallback.get_handle(&namespace.name))
+            })
+        })
+        .flatten();
+    if let Some(merged) = merged
+        && let surge_ts_types::Type::Object(object) = &merged.ty
+    {
+        for (name, property) in object.properties.iter() {
+            let own = body_values.get_own(name).map(|symbol| symbol.ty.clone());
+            // Another block's export, or this block's nested namespace, which
+            // the merged object carries with every block's members.
+            if own.is_none() || matches!(own, Some(surge_ts_types::Type::Object(_))) {
+                let _ = body_values.insert(
+                    name.to_string(),
+                    crate::symbols::SymbolInfo {
+                        ty: property.ty.clone(),
+                        kind: crate::symbols::SymbolKind::Var,
+                        function_signature: None,
+                    },
+                );
+            }
+        }
+    }
+    let saved_fallback = ctx.module_value_fallback.take();
+    let body_values = match saved_fallback.clone() {
+        Some(outer) => body_values.with_parent_fallback(outer),
+        None => body_values,
+    };
+    ctx.module_value_fallback = Some(std::sync::Arc::new(body_values));
+
+    let mut symbols = crate::symbols::SymbolTable::declaration_scope(enclosing);
+    let mut function_signatures = HashMap::new();
+    collect_function_signatures_from_statements(
+        &namespace.statements,
+        file_index,
+        &mut symbols,
+        &mut function_signatures,
+        ctx,
+    );
+    let saved_symbols = std::mem::take(&mut ctx.symbols);
+    ctx.set_symbols(symbols);
+    check_program_file_statements(&namespace.statements, file_index, &function_signatures, ctx);
+    ctx.set_symbols(saved_symbols);
+    ctx.module_value_fallback = saved_fallback;
+    ctx.namespace_member_prefix_stack.pop();
+}
+
+/// A `declare namespace` makes every declaration in it ambient, nested
+/// namespaces and classes included (a `declare class` has no initializers to
+/// check).
+fn ambient_namespace(
+    namespace: &surge_ts_syntax::ParsedNamespaceDeclaration,
+) -> surge_ts_syntax::ParsedNamespaceDeclaration {
+    fn ambient_statement(statement: &mut ParsedStatement) {
+        match statement {
+            ParsedStatement::ClassDeclaration(class) => class.is_declare = true,
+            ParsedStatement::NamespaceDeclaration(inner) => {
+                inner.is_declare = true;
+                inner.statements.iter_mut().for_each(ambient_statement);
+            }
+            ParsedStatement::ExportDeclaration(export) => {
+                if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_mut() {
+                    ambient_statement(declaration);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut ambient = namespace.clone();
+    ambient.statements.iter_mut().for_each(ambient_statement);
+    ambient
 }
 
 pub(crate) fn emit_unsupported_declaration_diagnostics(

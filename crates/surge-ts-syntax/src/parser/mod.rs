@@ -831,6 +831,7 @@ fn parse_ts_namespace_declaration(
             name_span,
             statements,
             span: Some(text_span_from_oxc_span(module.span)),
+            is_declare: module.declare,
         },
     ))]
 }
