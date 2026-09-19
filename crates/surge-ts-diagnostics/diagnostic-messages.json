@@ -264,9 +264,41 @@
     "support": "emitted"
   },
   {
+    "code": "TS2531",
+    "category": "Error",
+    "message": "Object is possibly 'null'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2533",
+    "category": "Error",
+    "message": "Object is possibly 'null' or 'undefined'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18047",
+    "category": "Error",
+    "message": "'{0}' is possibly 'null'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS18048",
     "category": "Error",
     "message": "'{0}' is possibly 'undefined'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18049",
+    "category": "Error",
+    "message": "'{0}' is possibly 'null' or 'undefined'.",
     "source": "typescript",
     "arity": 1,
     "support": "emitted"
@@ -1440,9 +1472,25 @@
     "support": "emitted"
   },
   {
+    "code": "TS2721",
+    "category": "Error",
+    "message": "Cannot invoke an object which is possibly 'null'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2722",
     "category": "Error",
     "message": "Cannot invoke an object which is possibly 'undefined'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2723",
+    "category": "Error",
+    "message": "Cannot invoke an object which is possibly 'null' or 'undefined'.",
     "source": "typescript",
     "arity": 0,
     "support": "emitted"

@@ -363,7 +363,7 @@ pub(crate) fn check_property_call_like(
             }
             let mut result_types = vec![];
             for ty in union_type.types() {
-                if *ty == Type::Undefined {
+                if matches!(ty, Type::Undefined | Type::Null) {
                     result_types.push(Type::Undefined);
                     continue;
                 }
@@ -780,7 +780,7 @@ pub(crate) fn check_optional_property_call(
     // arguments, and returning here skipped it — everything inside a callback on
     // an unmodelled receiver (`messages?.map((item) => <article>…</article>)`)
     // went unchecked, which is where trpc's missing UMD-global reports live.
-    let base_type = surge_ts_types::remove_undefined(&object_type);
+    let base_type = surge_ts_types::remove_nullish(&object_type);
     crate::checks::expr::check_member_accessibility(
         object,
         &base_type,
@@ -837,7 +837,7 @@ pub(crate) fn check_optional_property_call(
         Type::Union(union_type) => {
             let mut result_types = vec![];
             for ty in union_type.types() {
-                if *ty == Type::Undefined {
+                if matches!(ty, Type::Undefined | Type::Null) {
                     result_types.push(Type::Undefined);
                     continue;
                 }
@@ -878,7 +878,7 @@ pub(crate) fn check_optional_property_call(
                     return None;
                 };
 
-                let property_type_base = surge_ts_types::remove_undefined(&property_type);
+                let property_type_base = surge_ts_types::remove_nullish(&property_type);
 
                 let declared_member = property_type_base.clone();
                 match callable_property_signature(property_type_base) {
@@ -984,7 +984,7 @@ pub(crate) fn check_optional_property_call(
                 return None;
             };
 
-            let property_type_base = surge_ts_types::remove_undefined(&property_type);
+            let property_type_base = surge_ts_types::remove_nullish(&property_type);
 
             let declared_member = property_type_base.clone();
             match callable_property_signature(property_type_base) {

@@ -25,7 +25,7 @@ pub(super) fn typeof_tag_of(member: &Type) -> Option<&'static str> {
         {
             Some("function")
         }
-        Type::Object(_) | Type::Array(_) | Type::Tuple(_) => Some("object"),
+        Type::Object(_) | Type::Array(_) | Type::Tuple(_) | Type::Null => Some("object"),
         _ => None,
     }
 }

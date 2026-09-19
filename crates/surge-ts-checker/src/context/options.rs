@@ -53,6 +53,7 @@ pub struct CheckerOptions {
     /// `strictPropertyInitialization`: an instance property with no initializer
     /// must be definitely assigned in the constructor.
     pub strict_property_initialization: bool,
+    pub strict_null_checks: bool,
     pub use_unknown_in_catch_variables: bool,
     pub no_implicit_returns: bool,
     pub no_fallthrough_cases_in_switch: bool,
@@ -138,6 +139,7 @@ impl Default for CheckerOptions {
         Self {
             no_implicit_any: false,
             strict_property_initialization: false,
+            strict_null_checks: true,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,

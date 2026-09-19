@@ -107,9 +107,7 @@ impl JsonParser<'_> {
             b'{' => self.object(),
             b'[' => self.array(),
             b'"' => self.string().map(|_| ParsedType::String),
-            // surge has no `null` type of its own; `null` and `undefined` are
-            // the same `ParsedType::Undefined` everywhere else too.
-            b'n' => self.eat_keyword("null").then_some(ParsedType::Undefined),
+            b'n' => self.eat_keyword("null").then_some(ParsedType::Null),
             b't' => self.eat_keyword("true").then_some(ParsedType::Boolean),
             b'f' => self.eat_keyword("false").then_some(ParsedType::Boolean),
             b'-' | b'0'..=b'9' => self.number().then_some(ParsedType::Number),
@@ -358,7 +356,7 @@ mod tests {
         assert_eq!(parse_json_module_type(r#""x""#), Some(ParsedType::String));
         assert_eq!(parse_json_module_type("-1.5e3"), Some(ParsedType::Number));
         assert_eq!(parse_json_module_type("true"), Some(ParsedType::Boolean));
-        assert_eq!(parse_json_module_type("null"), Some(ParsedType::Undefined));
+        assert_eq!(parse_json_module_type("null"), Some(ParsedType::Null));
     }
 
     #[test]

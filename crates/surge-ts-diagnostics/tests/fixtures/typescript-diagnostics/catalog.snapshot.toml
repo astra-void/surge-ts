@@ -265,11 +265,43 @@ message = "Object is possibly 'undefined'."
 arity = 0
 
 [[diagnostic]]
+code = "TS2531"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Object is possibly 'null'."
+arity = 0
+
+[[diagnostic]]
+code = "TS2533"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Object is possibly 'null' or 'undefined'."
+arity = 0
+
+[[diagnostic]]
+code = "TS18047"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is possibly 'null'."
+arity = 1
+
+[[diagnostic]]
 code = "TS18048"
 category = "Error"
 source = "typescript"
 support = "emitted"
 message = "'{0}' is possibly 'undefined'."
+arity = 1
+
+[[diagnostic]]
+code = "TS18049"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is possibly 'null' or 'undefined'."
 arity = 1
 
 [[diagnostic]]
@@ -1441,11 +1473,27 @@ message = "A member initializer in a enum declaration cannot reference members d
 arity = 0
 
 [[diagnostic]]
+code = "TS2721"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot invoke an object which is possibly 'null'."
+arity = 0
+
+[[diagnostic]]
 code = "TS2722"
 category = "Error"
 source = "typescript"
 support = "emitted"
 message = "Cannot invoke an object which is possibly 'undefined'."
+arity = 0
+
+[[diagnostic]]
+code = "TS2723"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot invoke an object which is possibly 'null' or 'undefined'."
 arity = 0
 
 [[diagnostic]]

@@ -17,6 +17,7 @@ fn check(source_text: &str) -> Vec<surge_ts_diagnostics::Diagnostic> {
     let options = CheckerOptions {
         no_implicit_any: true,
         strict_property_initialization: false,
+        strict_null_checks: true,
         ..CheckerOptions::default()
     };
     check_source_with_options(source_text, "example.ts", options)
@@ -121,6 +122,7 @@ fn an_element_write_narrows_the_element_read() {
     let options = CheckerOptions {
         no_implicit_any: true,
         strict_property_initialization: false,
+        strict_null_checks: true,
         no_unchecked_indexed_access: true,
         ..CheckerOptions::default()
     };

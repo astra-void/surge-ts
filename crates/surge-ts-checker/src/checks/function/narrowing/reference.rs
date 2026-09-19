@@ -35,6 +35,7 @@ pub(super) enum ReferenceGuard<'a> {
     },
     Nullish {
         keep_matching: bool,
+        test: super::guards::NullishTest,
     },
     Assigned {
         assigned: &'a Type,
@@ -55,6 +56,21 @@ pub(super) enum ReferenceGuard<'a> {
 }
 
 impl ReferenceGuard<'_> {
+    /// Whether the guard holding proves the tested reference is not
+    /// `undefined` — and so, for `base?.p`, that `base` is not nullish either:
+    /// a nullish base makes the whole chain `undefined`.
+    fn proves_defined(&self) -> bool {
+        match self {
+            Self::Truthy => true,
+            Self::Typeof { tag, keep_matching } => (*tag == "undefined") != *keep_matching,
+            Self::Nullish {
+                keep_matching: false,
+                test,
+            } => test.undefined,
+            _ => false,
+        }
+    }
+
     /// Narrows one leaf — a property's type plus its `optional` flag, or a whole
     /// binding's type with `optional = false`. `None` leaves the leaf alone.
     pub(super) fn narrow_leaf(&self, ty: &Type, optional: bool) -> Option<(Type, bool)> {
@@ -102,9 +118,12 @@ impl ReferenceGuard<'_> {
                 let narrowed = narrow_union_by_arraybufferview(&effective, *keep_views)?;
                 (optional || narrowed != *ty).then_some((narrowed, false))
             }
-            Self::Nullish { keep_matching } => {
+            Self::Nullish {
+                keep_matching,
+                test,
+            } => {
                 let effective = Self::effective_leaf_type(ty, optional);
-                let narrowed = narrow_union_by_nullish(&effective, *keep_matching)?;
+                let narrowed = narrow_union_by_nullish(&effective, *keep_matching, *test)?;
                 (optional || narrowed != *ty).then_some((narrowed, false))
             }
             Self::Predicate {
@@ -257,8 +276,8 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
                     // `undefined`, which is falsy. Keeping the nullish member
                     // left `opts?.t ? f(opts.t) : …` reading `opts.t` as
                     // `string | undefined`.
-                    None if matches!(guard, ReferenceGuard::Truthy)
-                        && matches!(member, Type::Undefined | Type::Void) =>
+                    None if guard.proves_defined()
+                        && matches!(member, Type::Undefined | Type::Null | Type::Void) =>
                     {
                         narrowed_any = true;
                     }
@@ -266,6 +285,9 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
                     // narrow" and for "this member cannot satisfy the guard at
                     // all", and keeping the member was wrong in the second case.
                     None if property_path_is_impossible(member, path, guard) => {
+                        narrowed_any = true;
+                    }
+                    None if nullish_discriminant_rules_out(member, union.types(), path, guard) => {
                         narrowed_any = true;
                     }
                     None => members.push(member.clone()),
@@ -292,25 +314,69 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
 /// such a member (it *is* the undefined one), and the truthy guard reaches its
 /// own arm above.
 fn property_path_is_impossible(member: &Type, path: &[String], guard: ReferenceGuard<'_>) -> bool {
-    if !matches!(
-        guard,
-        ReferenceGuard::Nullish {
-            keep_matching: false
-        }
-    ) {
+    let ReferenceGuard::Nullish {
+        keep_matching: false,
+        test,
+    } = guard
+    else {
         return false;
-    }
+    };
     let Some(leaf) = property_path_leaf_type(member, path) else {
         return false;
     };
-    match leaf {
-        Type::Undefined | Type::Void | Type::Never => true,
-        Type::Union(union) => union
-            .types()
-            .iter()
-            .all(|member| matches!(member, Type::Undefined | Type::Void | Type::Never)),
+    let selected = |ty: &Type| match ty {
+        Type::Null => test.null,
+        Type::Undefined | Type::Void => test.undefined,
+        Type::Never => true,
         _ => false,
+    };
+    match leaf {
+        Type::Union(union) => union.types().iter().all(selected),
+        other => selected(&other),
     }
+}
+
+/// tsc's `narrowTypeByDiscriminant` for a nullish equality: `null` and
+/// `undefined` are unit types, so a property some member declares as one of
+/// them discriminates the union, and `x.p === null` drops every member whose
+/// `p` can never be `null`.
+fn nullish_discriminant_rules_out(
+    member: &Type,
+    members: &[Type],
+    path: &[String],
+    guard: ReferenceGuard<'_>,
+) -> bool {
+    let ReferenceGuard::Nullish {
+        keep_matching: true,
+        test,
+    } = guard
+    else {
+        return false;
+    };
+    let selects = |ty: &Type| match ty {
+        Type::Null => test.null,
+        Type::Undefined | Type::Void => test.undefined,
+        _ => false,
+    };
+    let leaf_members = |ty: &Type| -> Option<Vec<Type>> {
+        match property_path_leaf_type(ty, path)?.peeled() {
+            Type::Union(union) => Some(union.types().to_vec()),
+            other => Some(vec![other]),
+        }
+    };
+    let Some(leaf) = leaf_members(member) else {
+        return false;
+    };
+    let definitely_unselected = leaf.iter().all(|ty| {
+        !selects(ty)
+            && !ty.is_unknown()
+            && !matches!(ty, Type::Any | Type::Never | Type::Reference(_))
+    });
+    definitely_unselected
+        && members.iter().any(|other| {
+            !std::ptr::eq(other, member)
+                && leaf_members(other).is_some_and(|leaf| leaf.iter().any(selects))
+        })
 }
 
 /// The declared type at the end of `path`, with an optional slot's `undefined`
@@ -501,13 +567,14 @@ pub(super) fn collect_reference_guards<'a>(
         return;
     }
 
-    if let Some((subject, eq)) = parse_nullish_equality_condition(condition) {
+    if let Some((subject, eq, test)) = parse_nullish_equality_condition(condition) {
         if let Some((base, path)) = reference_path(subject) {
             guards.push((
                 base,
                 path,
                 ReferenceGuard::Nullish {
                     keep_matching: branch_is_true == eq,
+                    test,
                 },
             ));
         }

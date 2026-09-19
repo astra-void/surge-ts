@@ -166,12 +166,14 @@ pub(crate) fn check_function_return_statement(
                 {
                     return;
                 }
+                let reported_target =
+                    crate::checks::expr::reported_relation_target(&source_type, &return_type);
                 let source_type_name =
-                    crate::checks::expr::source_display_name(&source_type, &return_type);
-                let target_type_name = return_type.name();
+                    crate::checks::expr::source_display_name(&source_type, &reported_target);
+                let target_type_name = reported_target.name();
                 let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
                     &source_type,
-                    &return_type,
+                    &reported_target,
                     &source_type_name,
                     &target_type_name,
                     ctx.file_name.clone(),

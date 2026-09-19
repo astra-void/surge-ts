@@ -69,6 +69,22 @@ thread_local! {
         const { std::cell::Cell::new(Relation::Assignable) };
 }
 
+static STRICT_NULL_CHECKS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// `compilerOptions.strictNullChecks` for the program being checked. Without
+/// it `null` and `undefined` are in the domain of every type: tsc's
+/// `isSimpleTypeRelatedTo` relates them to anything but `never`, and
+/// `getUnionType` drops them from a union with any other member. Process-wide
+/// because it is fixed for a whole program and read by the free-function type
+/// engine on every checker thread.
+pub fn set_strict_null_checks(enabled: bool) {
+    STRICT_NULL_CHECKS.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn strict_null_checks() -> bool {
+    STRICT_NULL_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn current_relation() -> Relation {
     CURRENT_RELATION.with(std::cell::Cell::get)
 }
@@ -306,6 +322,12 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         // applies to sentinel arguments in the same-generic fast path below.
         // tsc's `errorType` is `any`, so it flows both ways like the sentinel.
         || matches!(from, Type::Unknown | Type::ErrorType | Type::TypeParameter(_))
+    {
+        return true;
+    }
+    if matches!(from, Type::Null | Type::Undefined)
+        && !strict_null_checks()
+        && !matches!(to, Type::Never)
     {
         return true;
     }

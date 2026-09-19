@@ -559,6 +559,8 @@ export const fixturePresets: Record<string, string> = {
   'non-literal-index-key-basic': path.join(workspaceRoot, 'tests/compat-projects/non-literal-index-key-basic/tsconfig.json'),
   'numeric-index-receiver-basic': path.join(workspaceRoot, 'tests/compat-projects/numeric-index-receiver-basic/tsconfig.json'),
   'member-accessibility-basic': path.join(workspaceRoot, 'tests/compat-projects/member-accessibility-basic/tsconfig.json'),
+  'null-type-basic': path.join(workspaceRoot, 'tests/compat-projects/null-type-basic/tsconfig.json'),
+  'null-type-loose-basic': path.join(workspaceRoot, 'tests/compat-projects/null-type-loose-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -53,6 +53,7 @@ pub enum Type {
     BigInt,
     Symbol,
     Undefined,
+    Null,
     Void,
     Any,
     Unknown,
@@ -426,6 +427,7 @@ impl Type {
             Type::BigInt => "bigint".to_string(),
             Type::Symbol => "symbol".to_string(),
             Type::Undefined => "undefined".to_string(),
+            Type::Null => "null".to_string(),
             Type::Void => "void".to_string(),
             Type::Any => "any".to_string(),
             Type::Unknown | Type::GenuineUnknown | Type::ErrorType | Type::TypeParameter(_) => {
@@ -440,7 +442,6 @@ impl Type {
                 if let Some(alias_name) = &object.alias_name {
                     return alias_name.to_string();
                 }
-
                 return object_structural_name(object);
             }
             Type::Array(element) => format!("{}[]", array_element_name(element)),

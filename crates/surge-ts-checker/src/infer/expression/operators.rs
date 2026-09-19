@@ -72,6 +72,7 @@ pub(crate) fn infer_unary_expression(
             | InferredExpression::MissingProperty { .. }
             | InferredExpression::Unknown
             | InferredExpression::Known(Type::Undefined)
+            | InferredExpression::Known(Type::Null)
             | InferredExpression::Known(Type::Void)
             | InferredExpression::Known(Type::String)
             | InferredExpression::Known(Type::Number)

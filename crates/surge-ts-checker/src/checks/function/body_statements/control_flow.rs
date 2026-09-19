@@ -470,7 +470,7 @@ pub(crate) fn for_of_element_type(iterable_type: &Type) -> Type {
             let element_types = union
                 .types()
                 .iter()
-                .filter(|ty| **ty != Type::Undefined)
+                .filter(|ty| !matches!(ty, Type::Undefined | Type::Null))
                 .map(for_of_element_type)
                 .collect::<Vec<_>>();
 
@@ -586,8 +586,8 @@ fn check_switch_case_tests(
         // says nothing, and a nullish test is comparable to anything.
         if case_type.is_unknown()
             || discriminant_type.is_unknown()
-            || matches!(case_type, Type::Any | Type::Undefined)
-            || matches!(discriminant_type, Type::Any | Type::Undefined)
+            || matches!(case_type, Type::Any | Type::Undefined | Type::Null)
+            || matches!(discriminant_type, Type::Any | Type::Undefined | Type::Null)
         {
             continue;
         }

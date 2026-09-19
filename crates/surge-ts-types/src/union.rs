@@ -162,8 +162,17 @@ impl UnionType {
                 // Distinct members can render to one name — every member of a
                 // nominal enum displays as the enum itself — and tsc prints that
                 // name once.
+                // tsc prints a union in type-id order, where the `null` and
+                // `undefined` intrinsics sort after every other constituent.
+                let rank = |ty: &Type| match ty {
+                    Type::Null => 1,
+                    Type::Undefined => 2,
+                    _ => 0,
+                };
+                let mut ordered: Vec<&Type> = self.types().iter().collect();
+                ordered.sort_by_key(|ty| rank(ty));
                 let mut rendered: Vec<String> = Vec::with_capacity(self.types().len());
-                for member in self.types() {
+                for member in ordered {
                     let name = member.name();
                     if !rendered.iter().any(|existing| *existing == name) {
                         rendered.push(name);
@@ -236,12 +245,12 @@ pub fn remove_nullish(ty: &Type) -> Type {
             let filtered: Vec<Type> = union
                 .types()
                 .iter()
-                .filter(|t| **t != Type::Undefined && **t != Type::Void)
+                .filter(|t| !matches!(t, Type::Undefined | Type::Null | Type::Void))
                 .cloned()
                 .collect();
             union_type(filtered)
         }
-        Type::Undefined | Type::Void => Type::Unknown,
+        Type::Undefined | Type::Null | Type::Void => Type::Unknown,
         _ => ty.clone(),
     }
 }
@@ -268,6 +277,12 @@ pub fn union_type(types: Vec<Type>) -> Type {
     // every member was `never`, the union itself is `never`.
     let had_members = !flattened.is_empty();
     flattened.retain(|ty| !matches!(ty, Type::Never));
+
+    if !crate::strict_null_checks()
+        && flattened.iter().any(|ty| !matches!(ty, Type::Null | Type::Undefined))
+    {
+        flattened.retain(|ty| !matches!(ty, Type::Null | Type::Undefined));
+    }
 
     let unique = order_tuple_members(fold_boolean_literals(dedup_members(flattened)));
 

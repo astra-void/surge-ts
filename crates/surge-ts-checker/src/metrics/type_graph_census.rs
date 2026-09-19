@@ -84,6 +84,7 @@ impl TypeGraphCensus {
             | Type::BigInt
             | Type::Symbol
             | Type::Undefined
+            | Type::Null
             | Type::Void
             | Type::Any
             | Type::Unknown

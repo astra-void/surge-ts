@@ -253,6 +253,7 @@ pub(super) fn parsed_annotation_display(annotation: &surge_ts_syntax::ParsedType
         ParsedType::BigInt => "bigint".to_string(),
         ParsedType::Symbol => "symbol".to_string(),
         ParsedType::Undefined => "undefined".to_string(),
+        ParsedType::Null => "null".to_string(),
         ParsedType::Void => "void".to_string(),
         ParsedType::Any => "any".to_string(),
         ParsedType::ErrorType | ParsedType::Unknown | ParsedType::UnknownKeyword => {

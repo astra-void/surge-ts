@@ -528,6 +528,7 @@ impl Project {
             strict_property_initialization: loaded
                 .compiler_options
                 .strict_property_initialization,
+            strict_null_checks: loaded.compiler_options.strict_null_checks,
             use_unknown_in_catch_variables: loaded.compiler_options.use_unknown_in_catch_variables,
             no_implicit_returns: loaded.compiler_options.no_implicit_returns,
             no_fallthrough_cases_in_switch: loaded.compiler_options.no_fallthrough_cases_in_switch,

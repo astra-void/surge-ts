@@ -34,7 +34,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSNumberKeyword(_) => Some(ParsedType::Number),
         TSType::TSBooleanKeyword(_) => Some(ParsedType::Boolean),
         TSType::TSUndefinedKeyword(_) => Some(ParsedType::Undefined),
-        TSType::TSNullKeyword(_) => Some(ParsedType::Undefined),
+        TSType::TSNullKeyword(_) => Some(ParsedType::Null),
         // `object` is every non-primitive: the empty object type models its
         // member surface exactly (a property read off it is an error, an
         // assignment out of it is checked), and the marker is what keeps a

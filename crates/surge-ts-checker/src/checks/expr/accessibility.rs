@@ -178,7 +178,7 @@ pub(crate) fn check_member_accessibility(
         ParsedExpression::Identifier { name, .. } => symbols.declared_type(name),
         _ => None,
     };
-    let receiver_type = surge_ts_types::remove_undefined(declared.unwrap_or(receiver_type));
+    let receiver_type = surge_ts_types::remove_nullish(declared.unwrap_or(receiver_type));
     let Some((class, is_static)) = receiver_class(object, &receiver_type, symbols, ctx) else {
         return;
     };

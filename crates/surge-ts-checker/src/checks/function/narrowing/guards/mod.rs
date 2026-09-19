@@ -18,7 +18,7 @@ pub(super) use arrayness::*;
 pub(super) use discriminant::*;
 pub(super) use instanceof::*;
 pub(super) use literal_equality::*;
-pub(super) use nullish::*;
+pub(crate) use nullish::*;
 pub(super) use predicate::*;
 pub(super) use property_presence::*;
 pub(super) use typeof_guard::*;

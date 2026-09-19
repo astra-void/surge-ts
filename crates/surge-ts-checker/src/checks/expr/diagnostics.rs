@@ -53,9 +53,15 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
 
 /// `true` if `ty` is a literal type or a union containing one. tsc keeps the
 /// source literal in assignability messages when the target is literal-like.
+/// tsc's `typeCouldHaveTopLevelSingletonTypes`: a unit type — a literal, or
+/// `null`/`undefined` — at the top level of the target.
 fn type_contains_literal(ty: &Type) -> bool {
     match ty {
-        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => true,
+        Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::Null
+        | Type::Undefined => true,
         Type::Union(types) => types.types().iter().any(type_contains_literal),
         _ => false,
     }
@@ -284,6 +290,42 @@ fn static_member_owner_for_missing_instance_property(
         Some(class_name.to_string())
     } else {
         None
+    }
+}
+
+/// The target a relation failure is reported against. tsc's `isRelatedTo`
+/// relates a definitely non-nullable source to a `T | null | undefined` target
+/// as `T` alone, so the message names `T`.
+pub(crate) fn reported_relation_target(source: &Type, target: &Type) -> Type {
+    let definitely_non_nullable = matches!(
+        source,
+        Type::String
+            | Type::Number
+            | Type::Boolean
+            | Type::BigInt
+            | Type::Symbol
+            | Type::StringLiteral(_)
+            | Type::NumberLiteral(_)
+            | Type::BooleanLiteral(_)
+            | Type::Object(_)
+            | Type::Function(_)
+            | Type::Array(_)
+            | Type::Tuple(_)
+            | Type::OpenTuple(_)
+    );
+    let Type::Union(union) = target else {
+        return target.clone();
+    };
+    if !definitely_non_nullable || union.types().len() > 3 {
+        return target.clone();
+    }
+    let mut non_nullable = union
+        .types()
+        .iter()
+        .filter(|member| !matches!(member, Type::Null | Type::Undefined));
+    match (non_nullable.next(), non_nullable.next()) {
+        (Some(only), None) => only.clone(),
+        _ => target.clone(),
     }
 }
 

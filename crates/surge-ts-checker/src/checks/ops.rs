@@ -540,7 +540,9 @@ fn evaluate_equality_binary(
     // is nullable, so `x === undefined` / `x === null` never reports TS2367
     // whatever `x` is. The test is on the operand as a whole, not on individual
     // union constituents, so it stays here rather than inside the overlap walk.
-    if matches!(left_type, Type::Undefined) || matches!(right_type, Type::Undefined) {
+    if matches!(left_type, Type::Undefined | Type::Null)
+        || matches!(right_type, Type::Undefined | Type::Null)
+    {
         return InferredExpression::Known(Type::Boolean);
     }
 
@@ -694,7 +696,7 @@ fn equality_kind(ty: &Type) -> Option<EqualityKind> {
         Type::Boolean | Type::BooleanLiteral(_) => Some(EqualityKind::Boolean),
         Type::BigInt => Some(EqualityKind::BigInt),
         Type::Symbol => Some(EqualityKind::Symbol),
-        Type::Undefined => Some(EqualityKind::Undefined),
+        Type::Undefined | Type::Null => Some(EqualityKind::Undefined),
         Type::Void => Some(EqualityKind::Void),
         Type::Object(_) => Some(EqualityKind::Object),
         Type::Function(_) => Some(EqualityKind::Function),

@@ -38,7 +38,7 @@ pub(crate) fn narrow_truthy_guarded_identifiers(
         let narrowed = match &target {
             TruthyGuardTarget::Identifier(_) => {
                 with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-                    surge_ts_types::remove_undefined(&symbol.ty)
+                    surge_ts_types::remove_nullish(&symbol.ty)
                 })
             }
             TruthyGuardTarget::Property { property, .. } => {
@@ -140,7 +140,7 @@ pub(crate) fn truthy_guard_base_identifier(expression: &ParsedExpression) -> Opt
 }
 
 pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type {
-    let narrowed_base = surge_ts_types::remove_undefined(&ty.peeled());
+    let narrowed_base = surge_ts_types::remove_nullish(&ty.peeled());
 
     match narrowed_base {
         Type::Object(mut object_type) => {
@@ -149,7 +149,7 @@ pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type 
                 properties.insert(
                     property.into(),
                     surge_ts_types::ObjectProperty {
-                        ty: surge_ts_types::remove_undefined(&existing.ty),
+                        ty: surge_ts_types::remove_nullish(&existing.ty),
                         optional: false,
                         method: existing.method,
                         readonly: existing.readonly,
@@ -411,7 +411,7 @@ pub(crate) fn type_truthiness(ty: &Type) -> Option<bool> {
         Type::BooleanLiteral(value) => Some(*value),
         Type::StringLiteral(value) => Some(!value.is_empty()),
         Type::NumberLiteral(literal) => Some(literal.value.parse::<f64>().ok()? != 0.0),
-        Type::Undefined | Type::Void | Type::Never => Some(false),
+        Type::Undefined | Type::Null | Type::Void | Type::Never => Some(false),
         Type::Function(_) | Type::Array(_) | Type::Tuple(_) => Some(true),
         Type::Object(object) => (!object.properties.is_empty()
             || object.call_signature().is_some()
@@ -530,7 +530,7 @@ pub(crate) fn narrow_truthy_guarded_symbol_table(
         let narrowed = match &target {
             TruthyGuardTarget::Identifier(_) => {
                 with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-                    surge_ts_types::remove_undefined(&symbol.ty)
+                    surge_ts_types::remove_nullish(&symbol.ty)
                 })
             }
             TruthyGuardTarget::Property { property, .. } => {

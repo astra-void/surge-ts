@@ -125,7 +125,7 @@ pub(crate) fn strip_reported_undefined_receiver(
     ) {
         return object_type;
     }
-    surge_ts_types::remove_undefined(&object_type)
+    surge_ts_types::remove_nullish(&object_type)
 }
 
 /// Reports a possibly-`undefined` operand, the way tsc's `checkNonNullType`
@@ -142,9 +142,7 @@ pub(crate) fn maybe_emit_possibly_undefined_receiver(
     // `undefined`, which is not the receiver's own: `b?.value.x` is fine, while
     // `b?.inner.x` with an optional `inner` is still an error. tsc keeps the
     // two apart with a marker; surge re-derives the link without it.
-    // A `null` keyword is the same TS18050 as `undefined`, but surge types it
-    // as `Any` (infer/expression/mod.rs) rather than a null type, so the
-    // nullability gate below would never see it.
+    // A `null` keyword names a value, like `undefined` below: TS18050.
     if matches!(object, ParsedExpression::NullLiteral) {
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts18050("null", ctx.file_name.clone()),
@@ -160,17 +158,24 @@ pub(crate) fn maybe_emit_possibly_undefined_receiver(
     } else {
         object_type.clone()
     };
-    if !receiver_can_be_undefined(&receiver_type) {
+    let Some((null, undefined)) = receiver_nullability(&receiver_type) else {
         return false;
-    }
+    };
     // `undefined` names a value rather than a possibly-`undefined` place, so
     // tsc answers it with TS18050 before the possibly-`undefined` wording.
+    // Otherwise `reportObjectPossiblyNullOrUndefinedError` picks the code by
+    // which nullish values the receiver admits and whether it has a name.
+    let file_name = ctx.file_name.clone();
     let diagnostic = if matches!(object, ParsedExpression::UndefinedLiteral) {
-        Diagnostic::ts18050("undefined", ctx.file_name.clone())
+        Diagnostic::ts18050("undefined", file_name)
     } else {
-        match nameable_receiver(object) {
-            Some(name) => Diagnostic::ts18048(name, ctx.file_name.clone()),
-            None => Diagnostic::ts2532(ctx.file_name.clone()),
+        match (nameable_receiver(object), null, undefined) {
+            (Some(name), true, true) => Diagnostic::ts18049(name, file_name),
+            (Some(name), true, false) => Diagnostic::ts18047(name, file_name),
+            (Some(name), _, _) => Diagnostic::ts18048(name, file_name),
+            (None, true, true) => Diagnostic::ts2533(file_name),
+            (None, true, false) => Diagnostic::ts2531(file_name),
+            (None, _, _) => Diagnostic::ts2532(file_name),
         }
     };
     ctx.push(diagnostic_with_syntax_span(
@@ -198,7 +203,7 @@ fn chain_link_type_without_marker(
             let InferredExpression::Known(base) = infer_expression(object, symbols, ctx) else {
                 return None;
             };
-            property_type_on(&surge_ts_types::remove_undefined(&base), property_name)
+            property_type_on(&surge_ts_types::remove_nullish(&base), property_name)
         }
         ParsedExpression::PropertyAccess {
             object,
@@ -206,11 +211,11 @@ fn chain_link_type_without_marker(
             ..
         } => {
             let base = chain_link_type_without_marker(object, symbols, ctx)?;
-            property_type_on(&surge_ts_types::remove_undefined(&base), property_name)
+            property_type_on(&surge_ts_types::remove_nullish(&base), property_name)
         }
         ParsedExpression::NonNullAssertion { expression, .. } => {
             chain_link_type_without_marker(expression, symbols, ctx)
-                .map(|ty| surge_ts_types::remove_undefined(&ty))
+                .map(|ty| surge_ts_types::remove_nullish(&ty))
         }
         _ => None,
     }
@@ -242,16 +247,25 @@ fn property_type_on(base: &Type, name: &str) -> Option<Type> {
 /// sentinel is left alone: part of it is unmodelled, so the `undefined` member
 /// may be surge's, not the source's. `void` is not nullable to tsc — a member
 /// read on it is a missing property, reported elsewhere.
-pub(crate) fn receiver_can_be_undefined(ty: &Type) -> bool {
-    match ty.peeled() {
-        Type::Undefined => true,
+/// Which nullish values a receiver admits, as `(null, undefined)`; `None` when
+/// it admits neither, or when part of it is unmodelled.
+fn receiver_nullability(ty: &Type) -> Option<(bool, bool)> {
+    let (null, undefined) = match ty.peeled() {
+        Type::Undefined => (false, true),
+        Type::Null => (true, false),
         Type::Union(union) => {
             let members = union.types();
-            !members.iter().any(Type::is_unknown)
-                && members.iter().any(|member| *member == Type::Undefined)
+            if members.iter().any(Type::is_unknown) {
+                return None;
+            }
+            (
+                members.iter().any(|member| *member == Type::Null),
+                members.iter().any(|member| *member == Type::Undefined),
+            )
         }
-        _ => false,
-    }
+        _ => return None,
+    };
+    (null || undefined).then_some((null, undefined))
 }
 
 /// The receiver name tsc is willing to render. `reportObjectPossiblyNullOrUndefinedError`

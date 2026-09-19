@@ -594,11 +594,12 @@ fn check_assigned_value(
         return Some(value_type);
     }
 
+    let reported_target = crate::checks::expr::reported_relation_target(&value_type, &target_type);
     let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
         &value_type,
-        target_type,
-        &crate::checks::expr::source_display_name(&value_type, target_type),
-        &target_type.name(),
+        &reported_target,
+        &crate::checks::expr::source_display_name(&value_type, &reported_target),
+        &reported_target.name(),
         ctx.file_name.clone(),
     );
     // tsc anchors the assignment's type error on the whole assignment, which
@@ -891,11 +892,12 @@ pub(crate) fn check_member_assignment(
     }
 
     if !is_assignable_to(&value_type, &target_type) {
+        let reported_target = crate::checks::expr::reported_relation_target(&value_type, &target_type);
         let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
             &value_type,
-            &target_type,
-            &crate::checks::expr::source_display_name(&value_type, &target_type),
-            &target_type.name(),
+            &reported_target,
+            &crate::checks::expr::source_display_name(&value_type, &reported_target),
+            &reported_target.name(),
             ctx.file_name.clone(),
         );
         let diagnostic = match assignment.target_span {
@@ -998,11 +1000,12 @@ pub(crate) fn check_this_property_assignment(
     }
 
     if !is_assignable_to(&value_type, &property_type) {
+        let reported_target = crate::checks::expr::reported_relation_target(&value_type, &property_type);
         let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
             &value_type,
-            &property_type,
-            &crate::checks::expr::source_display_name(&value_type, &property_type),
-            &property_type.name(),
+            &reported_target,
+            &crate::checks::expr::source_display_name(&value_type, &reported_target),
+            &reported_target.name(),
             ctx.file_name.clone(),
         );
         let diagnostic = match assignment.target_span.or(assignment.value_span) {

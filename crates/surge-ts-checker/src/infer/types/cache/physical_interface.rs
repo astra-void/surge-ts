@@ -420,6 +420,7 @@ pub(super) fn canonical_type_identity(
         Type::BigInt => Some(CanonicalTypeIdentity::BigInt),
         Type::Symbol => Some(CanonicalTypeIdentity::Symbol),
         Type::Undefined => Some(CanonicalTypeIdentity::Undefined),
+        Type::Null => Some(CanonicalTypeIdentity::Null),
         Type::Void => Some(CanonicalTypeIdentity::Void),
         Type::Any => Some(CanonicalTypeIdentity::Any),
         Type::Never => Some(CanonicalTypeIdentity::Never),

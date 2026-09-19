@@ -21,7 +21,7 @@ pub(super) fn evaluate_optional_index_access(
         }
     };
 
-    let base_type = surge_ts_types::remove_undefined(&object_type);
+    let base_type = surge_ts_types::remove_nullish(&object_type);
 
     match base_type {
         Type::Any => InferredExpression::Known(Type::Any),
@@ -272,6 +272,7 @@ pub(super) fn evaluate_index_access(
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
         | Type::Undefined
+        | Type::Null
         | Type::Reference(_)
         | Type::Union(_) => {
             let index_result =

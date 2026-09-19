@@ -27,7 +27,7 @@ pub(crate) fn narrow_optional_chain_base(
     if !optional_access || !keep_matching || *literal == Type::Undefined {
         return None;
     }
-    let narrowed = surge_ts_types::remove_undefined(subject_ty);
+    let narrowed = surge_ts_types::remove_nullish(subject_ty);
     (narrowed != *subject_ty && !narrowed.is_unknown()).then_some(narrowed)
 }
 

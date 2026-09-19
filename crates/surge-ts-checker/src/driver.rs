@@ -29,6 +29,7 @@ pub fn check_source_with_options(
     file_name: &str,
     options: crate::context::CheckerOptions,
 ) -> Vec<Diagnostic> {
+    surge_ts_types::set_strict_null_checks(options.strict_null_checks);
     let parsed = parse_source(source_text, file_name);
     let suppressed_ranges = parsed.suppressed_ranges.clone();
     let file_name = parsed.file_name;
@@ -1709,6 +1710,7 @@ pub(crate) fn parsed_type_display(ty: &ParsedType) -> Option<String> {
         ParsedType::Number => "number".to_string(),
         ParsedType::Boolean => "boolean".to_string(),
         ParsedType::Undefined => "undefined".to_string(),
+        ParsedType::Null => "null".to_string(),
         ParsedType::Void => "void".to_string(),
         ParsedType::Any => "any".to_string(),
         ParsedType::Unknown | ParsedType::UnknownKeyword => "unknown".to_string(),

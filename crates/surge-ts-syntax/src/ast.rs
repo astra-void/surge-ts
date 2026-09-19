@@ -244,6 +244,7 @@ pub enum ParsedType {
     BigInt,
     Symbol,
     Undefined,
+    Null,
     Void,
     Any,
     /// A type the source itself does not resolve (an unresolved name, or a
@@ -322,6 +323,7 @@ impl Clone for ParsedType {
             Self::BigInt => Self::BigInt,
             Self::Symbol => Self::Symbol,
             Self::Undefined => Self::Undefined,
+            Self::Null => Self::Null,
             Self::Void => Self::Void,
             Self::Any => Self::Any,
             Self::Unknown => Self::Unknown,
@@ -361,6 +363,7 @@ impl ParsedType {
             | Self::BigInt
             | Self::Symbol
             | Self::Undefined
+            | Self::Null
             | Self::Void
             | Self::Any
             | Self::ErrorType

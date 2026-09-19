@@ -50,8 +50,8 @@ pub(crate) fn infer_index_access(
         Type::Union(union_type) => {
             let mut result_types = vec![];
             for ty in union_type.types() {
-                if *ty == Type::Undefined {
-                    result_types.push(ty.clone());
+                if matches!(ty, Type::Undefined | Type::Null) {
+                    result_types.push(Type::Undefined);
                     continue;
                 }
                 match ty {
@@ -121,7 +121,8 @@ pub(crate) fn infer_index_access(
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
         | Type::Reference(_)
-        | Type::Undefined => InferredExpression::Unknown,
+        | Type::Undefined
+        | Type::Null => InferredExpression::Unknown,
     }
 }
 
@@ -182,7 +183,7 @@ pub(crate) fn infer_property_access(
             Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
             // The check pass reports the receiver; the access itself has no
             // type tsc would continue with.
-            Type::Undefined => InferredExpression::Unknown,
+            Type::Undefined | Type::Null => InferredExpression::Unknown,
             Type::Union(union_type) => {
                 // A sentinel member means part of the receiver is unmodelled, so
                 // a miss on any *other* member says nothing about the source —
@@ -200,9 +201,11 @@ pub(crate) fn infer_property_access(
                 let keeps_undefined = object.continues_optional_chain();
                 let mut result_types = vec![];
                 for ty in union_type.types() {
-                    if *ty == Type::Undefined {
+                    // An optional chain short-circuits a `null` receiver to
+                    // `undefined` too.
+                    if matches!(ty, Type::Undefined | Type::Null) {
                         if keeps_undefined {
-                            result_types.push(ty.clone());
+                            result_types.push(Type::Undefined);
                         }
                         continue;
                     }
@@ -640,7 +643,7 @@ pub(crate) fn infer_optional_index_access(
         }
     };
 
-    let base_type = surge_ts_types::remove_undefined(&object_type);
+    let base_type = surge_ts_types::remove_nullish(&object_type);
 
     match &base_type {
         Type::Any => InferredExpression::Known(Type::Any),
@@ -702,7 +705,7 @@ pub(crate) fn infer_optional_property_access(
     // tsc types the access exactly as `a.b`, so an unconditional widen turned
     // guarded arithmetic into TS2362/TS2363.
     let object_is_nullish = optional_chain_can_short_circuit(&object_type);
-    let base_type = surge_ts_types::remove_undefined(&object_type);
+    let base_type = surge_ts_types::remove_nullish(&object_type);
 
     let result_type = match base_type {
         Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Any => {
@@ -818,11 +821,11 @@ pub(crate) fn infer_new_expression(
 /// `any` are left alone: their result is already the sentinel/`any`.
 fn optional_chain_can_short_circuit(object_type: &Type) -> bool {
     match object_type {
-        Type::Undefined | Type::Void | Type::GenuineUnknown => true,
+        Type::Undefined | Type::Null | Type::Void | Type::GenuineUnknown => true,
         Type::Union(union) => union
             .types()
             .iter()
-            .any(|member| matches!(member, Type::Undefined | Type::Void)),
+            .any(|member| matches!(member, Type::Undefined | Type::Null | Type::Void)),
         _ => false,
     }
 }

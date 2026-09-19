@@ -25,6 +25,8 @@ pub struct NormalizedCompilerOptions {
     pub no_implicit_any: bool,
     /// `compilerOptions.strictPropertyInitialization`. Defaults to `strict`.
     pub strict_property_initialization: bool,
+    /// `compilerOptions.strictNullChecks`. Defaults to `strict`.
+    pub strict_null_checks: bool,
     pub use_unknown_in_catch_variables: bool,
     /// `compilerOptions.noImplicitReturns`. Independent of `strict`; defaults off.
     pub no_implicit_returns: bool,
@@ -92,6 +94,7 @@ impl Default for NormalizedCompilerOptions {
             strict: true,
             no_implicit_any: true,
             strict_property_initialization: true,
+            strict_null_checks: true,
             use_unknown_in_catch_variables: true,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,

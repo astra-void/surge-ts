@@ -169,6 +169,10 @@ pub(crate) fn resolve_parsed_type(
             ty: Type::Undefined,
             had_error: false,
         },
+        ParsedType::Null => ResolvedType {
+            ty: Type::Null,
+            had_error: false,
+        },
         ParsedType::Any => ResolvedType {
             ty: Type::Any,
             had_error: false,

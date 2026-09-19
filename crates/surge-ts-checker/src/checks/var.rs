@@ -84,6 +84,10 @@ pub(crate) fn report_initializer_mismatch(
     {
         return;
     }
+    let declared_type = &crate::checks::expr::reported_relation_target(
+        inferred_initializer_type,
+        declared_type,
+    );
     let inferred_type_name = source_display_name(inferred_initializer_type, declared_type);
     let declared_type_name = declared_type.name();
     let (inferred_type_name, declared_type_name) = crate::checks::expr::disambiguated_pair(
@@ -405,6 +409,14 @@ pub(crate) fn widen_implicit_variable_initializer_type(
         initializer,
         ParsedExpression::ConstAssertion { .. } | ParsedExpression::TypeAssertion { .. }
     );
+    // A mutable binding initialized to `null`/`undefined` is auto-typed: it
+    // evolves with its assignments, which surge approximates as `any`.
+    if matches!(symbol_kind, SymbolKind::Let | SymbolKind::Var)
+        && matches!(ty, Type::Null | Type::Undefined)
+    {
+        return Type::Any;
+    }
+    let ty = &widen_nullable_type(ty);
     if matches!(symbol_kind, SymbolKind::Let | SymbolKind::Var) && !is_assertion {
         // tsc deep-widens `let`/`var` initializers, so object properties and
         // array/union members widen too (e.g. `let o = { a: 1 }` -> `{ a: number }`),
@@ -414,6 +426,46 @@ pub(crate) fn widen_implicit_variable_initializer_type(
         widen_object_literal_members(initializer, ty)
     } else {
         ty.clone()
+    }
+}
+
+/// tsc's `getWidenedType` without `strictNullChecks`: `null` and `undefined`
+/// widen to `any` wherever a declaration's type is inferred, members included.
+pub(crate) fn widen_nullable_type(ty: &Type) -> Type {
+    if surge_ts_types::strict_null_checks() {
+        return ty.clone();
+    }
+    match ty {
+        Type::Null | Type::Undefined => Type::Any,
+        Type::Array(element) => Type::Array(Box::new(widen_nullable_type(element))),
+        Type::Tuple(elements) => Type::Tuple(elements.iter().map(widen_nullable_type).collect()),
+        Type::Object(object)
+            if object.alias_name.is_none()
+                && object
+                    .properties
+                    .values()
+                    .any(|property| matches!(property.ty, Type::Null | Type::Undefined)) =>
+        {
+            let mut properties = (*object.properties).clone();
+            for property in properties.values_mut() {
+                property.ty = widen_nullable_type(&property.ty);
+            }
+            let mut widened = crate::metrics::alloc_object_type(
+                properties,
+                object.string_index_type.as_deref().cloned(),
+            );
+            if object.synthetic_open_index {
+                widened = widened.with_open_index_marker();
+            }
+            if let Some(call_signature) = object.call_signature() {
+                widened = widened.with_call_signature(call_signature.clone());
+            }
+            if let Some(construct_signature) = object.construct_signature() {
+                widened = widened.with_construct_signature(construct_signature.clone());
+            }
+            Type::Object(widened)
+        }
+        _ => ty.clone(),
     }
 }
 

@@ -976,7 +976,7 @@ fn members_are_all_objects(members: &[Type]) -> bool {
     for member in members {
         // An optional parameter contributes `undefined`; it is not a shape the
         // literal could be typed by, so it does not disqualify the union.
-        if matches!(member, Type::Undefined | Type::Void) {
+        if matches!(member, Type::Undefined | Type::Null | Type::Void) {
             continue;
         }
         if !matches!(member.peeled(), Type::Object(_)) {
@@ -998,7 +998,7 @@ fn join_nullish_coalescing(
         (InferredExpression::Known(left_type), InferredExpression::Known(right_type)) => {
             if left_type == Type::Any || left_type.is_unknown() {
                 InferredExpression::Known(left_type)
-            } else if left_type == Type::Undefined {
+            } else if matches!(left_type, Type::Undefined | Type::Null) {
                 InferredExpression::Known(right_type)
             } else {
                 InferredExpression::Known(surge_ts_types::union_type(vec![
@@ -1061,6 +1061,7 @@ fn evaluate_array_literal_with_expected_type(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    let mut reported_element = false;
     for element in elements {
         // `[...xs]` writes the *elements* of `xs` into the literal, so the
         // expected element type belongs to what `xs` yields, not to `xs`. The
@@ -1093,11 +1094,16 @@ fn evaluate_array_literal_with_expected_type(
                 }
 
                 if !is_assignable_to(&actual_type, expected_element_type) {
-                    let actual_type_name = actual_type.name();
-                    let expected_type_name = expected_element_type.name();
-                    let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                    let reported_target = crate::checks::expr::reported_relation_target(
                         &actual_type,
                         expected_element_type,
+                    );
+                    let actual_type_name =
+                        crate::checks::expr::source_display_name(&actual_type, &reported_target);
+                    let expected_type_name = reported_target.name();
+                    let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                        &actual_type,
+                        &reported_target,
                         &actual_type_name,
                         &expected_type_name,
                         ctx.file_name.clone(),
@@ -1107,7 +1113,9 @@ fn evaluate_array_literal_with_expected_type(
                         diagnostic,
                         choose_span(element.span, fallback_span),
                     ));
-                    return InferredExpression::Unknown;
+                    // `elaborateElementwise` reports every failing element.
+                    reported_element = true;
+                    continue;
                 }
             }
             InferredExpression::UnresolvedIdentifier { .. }
@@ -1116,6 +1124,9 @@ fn evaluate_array_literal_with_expected_type(
                 return InferredExpression::Unknown;
             }
         }
+    }
+    if reported_element {
+        return InferredExpression::Unknown;
     }
 
     InferredExpression::Known(Type::Array(Box::new(with_type_copy_reason(
@@ -1288,6 +1299,7 @@ fn evaluate_tuple_literal_with_expected_type(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    let mut reported_element = false;
     for (index, element) in elements.iter().enumerate() {
         if index >= expected_elements.len() {
             // The literal is longer than the tuple allows. tsc names the source by
@@ -1326,11 +1338,16 @@ fn evaluate_tuple_literal_with_expected_type(
                 }
 
                 if !is_assignable_to(&actual_type, expected_element_type) {
-                    let actual_type_name = actual_type.name();
-                    let expected_type_name = expected_element_type.name();
-                    let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                    let reported_target = crate::checks::expr::reported_relation_target(
                         &actual_type,
                         expected_element_type,
+                    );
+                    let actual_type_name =
+                        crate::checks::expr::source_display_name(&actual_type, &reported_target);
+                    let expected_type_name = reported_target.name();
+                    let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                        &actual_type,
+                        &reported_target,
                         &actual_type_name,
                         &expected_type_name,
                         ctx.file_name.clone(),
@@ -1340,7 +1357,9 @@ fn evaluate_tuple_literal_with_expected_type(
                         diagnostic,
                         choose_span(element.span, fallback_span),
                     ));
-                    return InferredExpression::Unknown;
+                    // `elaborateElementwise` reports every failing element.
+                    reported_element = true;
+                    continue;
                 }
             }
             InferredExpression::UnresolvedIdentifier { .. }
@@ -1349,6 +1368,9 @@ fn evaluate_tuple_literal_with_expected_type(
                 return InferredExpression::Unknown;
             }
         }
+    }
+    if reported_element {
+        return InferredExpression::Unknown;
     }
 
     // A literal may stop short of trailing slots that accept `undefined` —
@@ -1550,9 +1572,12 @@ fn evaluate_object_literal_with_expected_type(
         if property.is_shorthand {
             ctx.shorthand_property_depth += 1;
         }
-        let inferred_property = evaluate_expression_with_expected_type(
+        // A contextually-typed arrow whose returns do not fit is one
+        // whole-signature mismatch anchored on the property name.
+        let inferred_property = evaluate_expression_with_expected_type_anchored(
             &property.value,
             property.value_span.or(property.span),
+            (!property.is_accessor).then_some(property.name_span).flatten(),
             Some(
                 accessor_contextual_type
                     .as_ref()
@@ -2060,11 +2085,12 @@ fn push_expected_type_mismatch(
     if crate::checks::call::is_open_instantiation(source_type) {
         return;
     }
+    let reported_target = crate::checks::expr::reported_relation_target(source_type, expected_type);
     let (source_type_name, expected_type_name) = crate::checks::expr::disambiguated_pair(
         source_type,
-        source_display_name(source_type, expected_type),
-        expected_type,
-        expected_type.name(),
+        source_display_name(source_type, &reported_target),
+        &reported_target,
+        reported_target.name(),
         &ctx.file_name,
     );
     let diagnostic = match diagnostic_kind {

@@ -174,7 +174,7 @@ pub(super) fn narrow_nullish_equality_in_scope(
     scopes: &mut ScopeStack,
     branch_is_true: bool,
 ) -> bool {
-    let Some((subject, eq)) = parse_nullish_equality_condition(condition) else {
+    let Some((subject, eq, test)) = parse_nullish_equality_condition(condition) else {
         return false;
     };
     let Some((base, path)) = reference_path(subject) else {
@@ -185,6 +185,7 @@ pub(super) fn narrow_nullish_equality_in_scope(
         &path,
         ReferenceGuard::Nullish {
             keep_matching: branch_is_true == eq,
+            test,
         },
         scopes,
     );
@@ -407,7 +408,7 @@ pub(super) fn collect_equality_guard_subjects(
             }) {
                 Some((ParsedExpression::Identifier { name, .. }, _, _, _)) => Some(name.as_str()),
                 _ => match parse_nullish_equality_condition(condition) {
-                    Some((ParsedExpression::Identifier { name, .. }, _)) => Some(name.as_str()),
+                    Some((ParsedExpression::Identifier { name, .. }, _, _)) => Some(name.as_str()),
                     _ => parse_identifier_literal_equality(condition).map(|(name, _, _)| name),
                 },
             };

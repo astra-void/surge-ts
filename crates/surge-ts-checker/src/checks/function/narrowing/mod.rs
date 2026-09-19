@@ -190,11 +190,11 @@ fn narrow_single_guard_for_identifier(
             keep_matching,
         );
     }
-    if let Some((ParsedExpression::Identifier { name, .. }, eq)) =
+    if let Some((ParsedExpression::Identifier { name, .. }, eq, test)) =
         parse_nullish_equality_condition(condition)
         && name == var_name
     {
-        return narrow_union_by_nullish(ty, branch_is_true == eq);
+        return narrow_union_by_nullish(ty, branch_is_true == eq, test);
     }
     if let Some((name, literal, eq)) = parse_identifier_literal_equality(condition)
         && name == var_name
@@ -572,6 +572,10 @@ pub(crate) fn narrow_reference_non_null_in_scope(
         &path,
         ReferenceGuard::Nullish {
             keep_matching: false,
+            test: guards::NullishTest {
+                null: true,
+                undefined: true,
+            },
         },
         scopes,
     );

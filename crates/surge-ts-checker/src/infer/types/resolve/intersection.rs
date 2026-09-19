@@ -688,7 +688,7 @@ fn merge_intersection_members_now(
     // unmodelled: the surviving object may not be the whole story.
     if !dropped_unmodelled_operand
         && !object_members.is_empty()
-        && members.iter().any(|ty| matches!(ty, Type::Undefined))
+        && members.iter().any(|ty| matches!(ty, Type::Undefined | Type::Null))
     {
         return Type::Never;
     }

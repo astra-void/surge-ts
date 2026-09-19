@@ -642,6 +642,7 @@ fn defer_dependency_signature_annotation(annotation: &ParsedType) -> bool {
         | ParsedType::BigInt
         | ParsedType::Symbol
         | ParsedType::Undefined
+        | ParsedType::Null
         | ParsedType::Void
         | ParsedType::Any
         | ParsedType::ErrorType

@@ -584,18 +584,26 @@ fn check_callable_union_call(
     }
 
     // tsc's `resolveCallExpression` reads the callee through
-    // `checkNonNullExpression`: a possibly-`undefined` callee is TS2722 on the
-    // whole callee, and the call proceeds on the rest.
-    if union.types().iter().any(|ty| matches!(ty, Type::Undefined)) {
+    // `checkNonNullExpression`: a possibly-nullish callee is TS2721/2722/2723
+    // on the whole callee, and the call proceeds on the rest.
+    let null = union.types().iter().any(|ty| matches!(ty, Type::Null));
+    let undefined = union.types().iter().any(|ty| matches!(ty, Type::Undefined));
+    if null || undefined {
+        let file_name = ctx.file_name.clone();
+        let diagnostic = match (null, undefined) {
+            (true, true) => Diagnostic::ts2723(file_name),
+            (true, false) => Diagnostic::ts2721(file_name),
+            _ => Diagnostic::ts2722(file_name),
+        };
         ctx.push(diagnostic_with_syntax_span(
-            Diagnostic::ts2722(ctx.file_name.clone()),
+            diagnostic,
             callee_expression_span.or(callee_span),
         ));
         let defined = union_type(
             union
                 .types()
                 .iter()
-                .filter(|ty| !matches!(ty, Type::Undefined))
+                .filter(|ty| !matches!(ty, Type::Undefined | Type::Null))
                 .cloned()
                 .collect(),
         );
@@ -1411,7 +1419,7 @@ pub(crate) fn check_optional_call_like(
     };
 
 
-    let base_type = surge_ts_types::remove_undefined(&callee_type);
+    let base_type = surge_ts_types::remove_nullish(&callee_type);
 
     // A callee typed by an interface or type literal with a call signature
     // (`declare const expectTypeOf: _ExpectTypeOf`) is as callable as a plain
@@ -1765,8 +1773,12 @@ pub(crate) fn check_function_type_call(
                     && !is_open_instantiation(&argument_type)
                     && !is_assignable_to(&argument_type, &parameter_type)
                 {
-                    let argument_type_name = source_display_name(&argument_type, &parameter_type);
-                    let parameter_type_name = parameter_type.name();
+                    let reported_parameter = crate::checks::expr::reported_relation_target(
+                        &argument_type,
+                        &parameter_type,
+                    );
+                    let argument_type_name = source_display_name(&argument_type, &reported_parameter);
+                    let parameter_type_name = reported_parameter.name();
                     // Every fitting candidate's parameter at this position is a
                     // member of the fold's, so none of them accepts it either.
                     let diagnostic = if arity_candidates > 1 {

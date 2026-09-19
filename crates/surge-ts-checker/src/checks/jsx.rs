@@ -467,6 +467,20 @@ fn optional_aware_property_type(property: &ObjectProperty) -> Type {
 
 /// Reports TS2322 when a known prop's value is not assignable to its declared
 /// type, pointing at the attribute name (tsc's span for JSX prop mismatches).
+/// tsc's `isLiteralOfContextualType` for a non-generic contextual type.
+fn literal_of_contextual_type(literal: &Type, contextual: &Type) -> bool {
+    let matches_kind = |member: &Type| match literal {
+        Type::StringLiteral(_) => matches!(member, Type::StringLiteral(_)),
+        Type::NumberLiteral(_) => matches!(member, Type::NumberLiteral(_)),
+        Type::BooleanLiteral(_) => matches!(member, Type::BooleanLiteral(_) | Type::Boolean),
+        _ => true,
+    };
+    match contextual {
+        Type::Union(union) => union.types().iter().any(matches_kind),
+        other => matches_kind(other),
+    }
+}
+
 fn check_known_prop(
     attribute: &ParsedJsxAttribute,
     attribute_type: &Type,
@@ -484,9 +498,16 @@ fn check_known_prop(
         return;
     }
 
+    // tsc checks an attribute initializer for a mutable location, which widens
+    // a literal the contextual type has no literal of the same kind for.
+    let source_name = if literal_of_contextual_type(attribute_type, &expected_type) {
+        source_display_name(attribute_type, &expected_type)
+    } else {
+        crate::checks::expr::widen_type(attribute_type).name()
+    };
     let (source, target) = crate::checks::expr::disambiguated_pair(
         attribute_type,
-        source_display_name(attribute_type, &expected_type),
+        source_name,
         &expected_type,
         expected_type.name(),
         &ctx.file_name,

@@ -1093,7 +1093,7 @@ fn evaluate_non_null_assertion(
 
     match inferred {
         InferredExpression::Known(ty) => {
-            let filtered = surge_ts_types::remove_undefined(&ty);
+            let filtered = surge_ts_types::remove_nullish(&ty);
             if *in_optional_chain {
                 InferredExpression::Known(surge_ts_types::union_type(vec![
                     filtered,
@@ -1496,6 +1496,7 @@ fn check_tagged_template_argument(
     if argument.is_unknown() || surge_ts_types::is_assignable_to(argument, &parameter) {
         return;
     }
+    let parameter = super::reported_relation_target(argument, &parameter);
     let source_name = super::source_display_name(argument, &parameter);
     ctx.push(diagnostic_with_syntax_span(
         Diagnostic::ts2345(&source_name, &parameter.name(), ctx.file_name.clone()),

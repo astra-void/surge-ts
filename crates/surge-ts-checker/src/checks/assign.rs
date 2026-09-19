@@ -85,11 +85,16 @@ pub(crate) fn check_assignment_with_symbols(
                     is_assignable_to(&inferred_value_type, &target_type)
                 })
             {
-                let inferred_type_name = inferred_value_type.name();
-                let target_type_name = target_type.name();
-                let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                let reported_target = crate::checks::expr::reported_relation_target(
                     &inferred_value_type,
                     &target_type,
+                );
+                let inferred_type_name =
+                    crate::checks::expr::source_display_name(&inferred_value_type, &reported_target);
+                let target_type_name = reported_target.name();
+                let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                    &inferred_value_type,
+                    &reported_target,
                     &inferred_type_name,
                     &target_type_name,
                     ctx.file_name.clone(),

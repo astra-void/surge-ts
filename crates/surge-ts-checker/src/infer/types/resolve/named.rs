@@ -61,6 +61,7 @@ fn signature_cache_safe_argument(ty: &Type, depth: usize, budget: &mut usize) ->
         | Type::BigInt
         | Type::Symbol
         | Type::Undefined
+        | Type::Null
         | Type::Void
         | Type::Any
         | Type::GenuineUnknown

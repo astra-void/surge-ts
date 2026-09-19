@@ -741,6 +741,7 @@ fn fingerprint_type(ty: &Type, budget: &mut FingerprintBudget) -> Option<u64> {
         | Type::BigInt
         | Type::Symbol
         | Type::Undefined
+        | Type::Null
         | Type::Void
         | Type::Any
         | Type::GenuineUnknown
@@ -851,6 +852,7 @@ fn fingerprint_property_type(ty: &Type, budget: &mut FingerprintBudget) -> Optio
         | Type::BigInt
         | Type::Symbol
         | Type::Undefined
+        | Type::Null
         | Type::Void
         | Type::Any
         | Type::GenuineUnknown

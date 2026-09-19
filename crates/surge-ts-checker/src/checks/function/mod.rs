@@ -697,11 +697,13 @@ fn report_contextual_body_mismatch(
     {
         return false;
     }
-    let source_name = crate::checks::expr::source_display_name(body_type, contextual_return_type);
-    let target_name = contextual_return_type.name();
+    let reported_target =
+        crate::checks::expr::reported_relation_target(body_type, contextual_return_type);
+    let source_name = crate::checks::expr::source_display_name(body_type, &reported_target);
+    let target_name = reported_target.name();
     let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
         body_type,
-        contextual_return_type,
+        &reported_target,
         &source_name,
         &target_name,
         ctx.file_name.clone(),
@@ -890,13 +892,17 @@ pub(crate) fn check_arrow_function_expression_anchored(
                             && !type_contains_unknown(body_type)
                             && !type_contains_unknown(return_type_for_body)
                         {
-                            let source_name =
-                                crate::checks::expr::source_display_name(body_type, return_type_for_body);
-                            let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                            let reported_target = crate::checks::expr::reported_relation_target(
                                 body_type,
                                 return_type_for_body,
+                            );
+                            let source_name =
+                                crate::checks::expr::source_display_name(body_type, &reported_target);
+                            let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                                body_type,
+                                &reported_target,
                                 &source_name,
-                                &return_type_for_body.name(),
+                                &reported_target.name(),
                                 ctx.file_name.clone(),
                             );
                             ctx.push(crate::spans::diagnostic_with_syntax_span(diagnostic, body_span));

@@ -205,6 +205,7 @@ pub fn check_program_with_prescanned_sources(
     options: CheckerOptions,
     jobs: usize,
 ) -> ProgramCheckResult {
+    surge_ts_types::set_strict_null_checks(options.strict_null_checks);
     let store = ProgramTypeStore::new();
     with_program_type_store(store.clone(), || {
         check_program_with_stats_and_jobs_inner(files, prescanned, options, jobs, store)

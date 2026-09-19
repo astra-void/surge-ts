@@ -162,6 +162,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             strict_property_initialization: loaded
                 .compiler_options
                 .strict_property_initialization,
+            strict_null_checks: loaded.compiler_options.strict_null_checks,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
