@@ -535,6 +535,7 @@ fn collect_body_local_type_declarations(
                     interface.string_index_type.clone(),
                     interface.number_index_type.clone(),
                     interface.call_signature.clone(),
+                    interface.call_signature_overloads.clone(),
                     interface.construct_signatures.clone(),
                     None,
                 );

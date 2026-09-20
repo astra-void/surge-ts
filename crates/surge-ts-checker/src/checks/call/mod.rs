@@ -1564,15 +1564,15 @@ pub(crate) fn check_function_type_call(
             .filter(|member| overload_arity_fits(member, arguments.len()))
             .collect();
         arity_candidates = fitting.len();
-        if let [sole] = fitting.as_slice()
-            && sole.overloads().is_none()
-            && !sole
+        if let [chosen] = fitting.as_slice()
+            && chosen.overloads().is_none()
+            && !chosen
                 .parameters()
                 .iter()
                 .any(|parameter| type_contains_unknown(parameter) || matches!(parameter, Type::Never))
         {
             return check_function_type_call(
-                sole,
+                chosen,
                 callee_span,
                 call_span,
                 _type_arguments,

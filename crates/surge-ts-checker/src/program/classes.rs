@@ -48,6 +48,7 @@ pub(crate) fn class_instance_interface_info(
         class.number_index_type.clone(),
         None,
         Vec::new(),
+        Vec::new(),
         None,
     );
     info.is_abstract_class = class.is_abstract;

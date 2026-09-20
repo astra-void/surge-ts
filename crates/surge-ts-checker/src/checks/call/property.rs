@@ -177,7 +177,7 @@ fn filtered_element_type(
         // written return type.
         ParsedExpression::ArrowFunction(arrow) => {
             let Some(ParsedType::Predicate(predicate)) = &arrow.return_type else {
-                return inferred_predicate_target(arrow, element, symbols, ctx);
+                return inferred_predicate_target(arrow, element, symbols);
             };
             if predicate.asserts || !arrow.type_parameters.is_empty() {
                 return None;
@@ -205,7 +205,6 @@ fn inferred_predicate_target(
     arrow: &surge_ts_syntax::ParsedArrowFunction,
     element: &Type,
     symbols: &SymbolTable,
-    ctx: &mut CheckerContext,
 ) -> Option<Type> {
     if arrow.return_type.is_some()
         || arrow.is_async

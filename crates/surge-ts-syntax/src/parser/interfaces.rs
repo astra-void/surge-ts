@@ -52,7 +52,7 @@ pub(crate) fn parse_interface_declaration(
     // way a type literal's do — keeping only the first made every call matching
     // a *later* overload a false TS2554 (execa's `(file, args?, options?)`
     // behind its template-tag signature).
-    let call_signature = declaration
+    let call_signature_overloads: Vec<crate::ParsedFunctionType> = declaration
         .body
         .body
         .iter()
@@ -60,6 +60,10 @@ pub(crate) fn parse_interface_declaration(
             TSSignature::TSCallSignatureDeclaration(signature) => parse_call_signature(signature),
             _ => None,
         })
+        .collect();
+    let call_signature = call_signature_overloads
+        .iter()
+        .cloned()
         .reduce(|merged, signature| {
             super::types::merge_parsed_call_signatures(&merged, &signature)
         });
@@ -93,6 +97,11 @@ pub(crate) fn parse_interface_declaration(
         string_index_type,
         number_index_type,
         call_signature,
+        call_signature_overloads: if call_signature_overloads.len() > 1 {
+            call_signature_overloads
+        } else {
+            Vec::new()
+        },
         construct_signatures,
     })
 }

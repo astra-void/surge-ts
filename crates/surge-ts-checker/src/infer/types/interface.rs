@@ -652,6 +652,7 @@ pub(crate) fn resolve_interface(
                     interface.body.string_index_type.as_ref(),
                     interface.body.number_index_type.as_ref(),
                     interface.body.call_signature.as_ref(),
+                    &interface.body.call_signature_overloads,
                     &interface.body.construct_signatures,
                     ctx,
                     resolving,
@@ -838,6 +839,7 @@ pub(crate) fn resolve_interface_declaration(
     string_index_type: Option<&ParsedType>,
     number_index_type: Option<&ParsedType>,
     call_signature: Option<&ParsedFunctionType>,
+    call_signature_overloads: &[ParsedFunctionType],
     construct_signatures: &[ParsedFunctionType],
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
@@ -1425,6 +1427,32 @@ pub(crate) fn resolve_interface_declaration(
         );
         had_error |= resolved.had_error;
         if let Type::Function(function_type) = resolved.ty {
+            // The fold answers every consumer that wants one signature; the
+            // overloads ride along so a call resolves against the candidate
+            // whose arity and arguments fit, as tsc's `chooseOverload` does.
+            let mut resolved_overloads: Vec<FunctionType> = Vec::new();
+            for overload in call_signature_overloads {
+                let resolved = crate::program::with_dts_expansion_reason(
+                    crate::program::DtsExpansionReason::InterfaceCallSignatureMapping,
+                    || {
+                        resolve_parsed_type(
+                            ParsedType::Function(std::sync::Arc::new(overload.clone())),
+                            ctx,
+                            resolving,
+                            substitution,
+                        )
+                    },
+                );
+                had_error |= resolved.had_error;
+                if let Type::Function(overload) = resolved.ty {
+                    resolved_overloads.push(overload);
+                }
+            }
+            let function_type = if resolved_overloads.len() > 1 {
+                function_type.with_overloads(resolved_overloads)
+            } else {
+                function_type
+            };
             object_type = object_type.with_call_signature(function_type);
         }
     } else if let Some(inherited) = inherited_call_signature {

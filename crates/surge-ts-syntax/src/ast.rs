@@ -585,6 +585,11 @@ pub struct ParsedInterfaceDeclaration {
     /// A bare call signature (`(value?: any): number`) on the interface, making
     /// values of this type callable without `new` (e.g. `NumberConstructor`).
     pub call_signature: Option<ParsedFunctionType>,
+    /// Every call signature as written, in source order, kept only when the
+    /// interface declares more than one. `call_signature` above stays the
+    /// permissive fold; this list is what overload resolution picks a candidate
+    /// from, the way a function declaration's overload group does.
+    pub call_signature_overloads: Vec<ParsedFunctionType>,
     /// Construct signatures (`new <T>(executor): Promise<T>`) on the interface,
     /// making values of this type usable with `new` (e.g. `PromiseConstructor`,
     /// `SetConstructor`). One entry per overload; the resolver merges them into a

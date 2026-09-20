@@ -972,6 +972,7 @@ fn register_merged_namespace_interfaces(
                 interface.string_index_type.clone(),
                 interface.number_index_type.clone(),
                 interface.call_signature.clone(),
+                interface.call_signature_overloads.clone(),
                 interface.construct_signatures.clone(),
                 None,
             ),
@@ -1031,6 +1032,7 @@ fn collect_namespace_type_declarations_prefixed(
                         interface.string_index_type.clone(),
                         interface.number_index_type.clone(),
                         interface.call_signature.clone(),
+                        interface.call_signature_overloads.clone(),
                         interface.construct_signatures.clone(),
                         None,
                     );
@@ -1576,6 +1578,7 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
         interface.string_index_type.clone(),
         interface.number_index_type.clone(),
         interface.call_signature.clone(),
+        interface.call_signature_overloads.clone(),
         interface.construct_signatures.clone(),
         None,
     );
