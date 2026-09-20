@@ -36,9 +36,11 @@ pub(crate) fn infer_index_access(
             peeled @ (Type::Array(_) | Type::Tuple(_)) => peeled,
             _ => symbol.ty.clone(),
         },
-        Type::OpenTuple(tuple) => Type::Array(Box::new(tuple.element_union())),
         other => other.clone(),
     };
+    if let Type::OpenTuple(tuple) = &receiver_type {
+        return infer_open_tuple_index_access(tuple, index, index_span, symbols, ctx);
+    }
     match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::Unknown
@@ -124,6 +126,46 @@ pub(crate) fn infer_index_access(
         | Type::Undefined
         | Type::Null => InferredExpression::Unknown,
     }
+}
+
+/// An open tuple (`[number, string, ...boolean[]]`) has fixed positions in
+/// front of its rest: `t[0]` is `number`, and anything at or past the rest
+/// reads as what the rest and the trailing elements hold.
+pub(crate) fn infer_open_tuple_index_access(
+    tuple: &surge_ts_types::OpenTupleType,
+    index: &ParsedExpression,
+    index_span: &Option<TextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let index_type = match infer_expression(index, symbols, ctx) {
+        InferredExpression::Known(ty) => ty,
+        InferredExpression::UnresolvedIdentifier { .. }
+        | InferredExpression::MissingProperty { .. }
+        | InferredExpression::Unknown => return InferredExpression::Unknown,
+    };
+
+    let past_fixed = || {
+        let mut members = vec![tuple.rest.as_ref().clone()];
+        members.extend(tuple.trailing.iter().cloned());
+        union_type(members)
+    };
+    if let Some(index_value) = tuple_index_value(&index_type) {
+        return InferredExpression::Known(
+            tuple
+                .leading
+                .get(index_value)
+                .cloned()
+                .unwrap_or_else(past_fixed),
+        );
+    }
+
+    if is_assignable_to(&index_type, &Type::Number) {
+        return InferredExpression::Known(unchecked_index_read(tuple.element_union(), ctx));
+    }
+
+    let _ = index_span;
+    InferredExpression::Unknown
 }
 
 pub(crate) fn infer_tuple_index_access(

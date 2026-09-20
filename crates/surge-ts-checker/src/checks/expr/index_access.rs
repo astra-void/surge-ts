@@ -172,11 +172,18 @@ pub(super) fn evaluate_index_access(
             Type::OpenTuple(tuple) => Type::Array(Box::new(tuple.element_union())),
             _ => receiver_type,
         },
-        // An open tuple has no fixed length to index by, so a read off it is a
-        // read off the array of everything it can hold.
-        Type::OpenTuple(tuple) => Type::Array(Box::new(tuple.element_union())),
         _ => receiver_type,
     };
+
+    if let Type::OpenTuple(tuple) = &receiver_type {
+        return crate::infer::expression::infer_open_tuple_index_access(
+            tuple,
+            index,
+            &index_span,
+            symbols,
+            ctx,
+        );
+    }
 
     match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),

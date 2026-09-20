@@ -1520,6 +1520,15 @@ fn rest_parameter_element_type(parameter_type: &Type, rest_offset: usize) -> Typ
             .or_else(|| elements.last())
             .cloned()
             .unwrap_or(Type::Any),
+        // `...x: [number, string, ...boolean[]]` expands to the positional
+        // parameters the tuple spells out, then to what its own rest holds —
+        // a trailing element cannot be placed without knowing the argument
+        // count, so it joins the rest.
+        Type::OpenTuple(tuple) => tuple.leading.get(rest_offset).cloned().unwrap_or_else(|| {
+            let mut members = vec![tuple.rest.as_ref().clone()];
+            members.extend(tuple.trailing.iter().cloned());
+            union_type(members)
+        }),
         Type::Union(union) => union_type(
             union
                 .types()
