@@ -508,7 +508,26 @@ fn object_structural_name(object: &crate::ObjectType) -> String {
                 if properties.is_empty() {
                     "{}".to_string()
                 } else {
-                    format!("{{ {}; }}", properties)
+                    // tsc prints an object type's signatures ahead of its
+                    // properties.
+                    let signatures = |signature: &FunctionType, prefix: &str| -> Vec<String> {
+                        match signature.overloads() {
+                            Some(overloads) => overloads
+                                .iter()
+                                .map(|overload| format!("{prefix}{}", overload.member_name()))
+                                .collect(),
+                            None => vec![format!("{prefix}{}", signature.member_name())],
+                        }
+                    };
+                    let mut members = Vec::new();
+                    if let Some(call) = object.call_signature() {
+                        members.extend(signatures(call, ""));
+                    }
+                    if let Some(construct) = object.construct_signature() {
+                        members.extend(signatures(construct, "new "));
+                    }
+                    members.push(properties);
+                    format!("{{ {}; }}", members.join("; "))
                 }
     }
 }

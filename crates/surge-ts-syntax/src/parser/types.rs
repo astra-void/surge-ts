@@ -1209,10 +1209,13 @@ pub(crate) fn parse_type_property_signature(
         _ => return None,
     };
 
-    let type_annotation = property_signature
-        .type_annotation
-        .as_ref()
-        .and_then(|annotation| parse_type_annotation(annotation))?;
+    // A member written without a type (`k;`) is an implicit `any` (TS7008), not
+    // an absent member: dropping it reported every read of it as TS2339 and
+    // left the interface requiring nothing.
+    let type_annotation = match property_signature.type_annotation.as_ref() {
+        Some(annotation) => parse_type_annotation(annotation)?,
+        None => ParsedType::Any,
+    };
 
     Some(ParsedObjectTypeProperty {
         name,

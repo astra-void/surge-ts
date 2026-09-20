@@ -328,6 +328,16 @@ impl FunctionType {
     }
 
     fn render_name(&self) -> String {
+        self.render_with_return_separator(" => ")
+    }
+
+    /// The signature as a member of an object type, which tsc prints with a
+    /// colon: `{ (s: string): number; label: any; }`.
+    pub fn member_name(&self) -> String {
+        self.render_with_return_separator(": ")
+    }
+
+    fn render_with_return_separator(&self, separator: &str) -> String {
         let names = self.parameter_names();
         let mut parameters = self
             .parameters()
@@ -352,7 +362,7 @@ impl FunctionType {
             None => String::new(),
         };
         format!(
-            "{head}({}) => {}",
+            "{head}({}){separator}{}",
             parameters.join(", "),
             self.return_type().name()
         )

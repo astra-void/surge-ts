@@ -584,6 +584,7 @@ export const fixturePresets: Record<string, string> = {
   'element-read-dependent-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/element-read-dependent-narrowing-basic/tsconfig.json'),
   'unknown-guard-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/unknown-guard-narrowing-basic/tsconfig.json'),
   'comma-expression-value-basic': path.join(workspaceRoot, 'tests/compat-projects/comma-expression-value-basic/tsconfig.json'),
+  'property-signature-implicit-any-basic': path.join(workspaceRoot, 'tests/compat-projects/property-signature-implicit-any-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
