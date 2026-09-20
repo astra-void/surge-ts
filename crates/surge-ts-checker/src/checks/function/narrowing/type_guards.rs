@@ -46,7 +46,8 @@ pub(super) fn narrow_instanceof_in_scope(
     let Some((base, path)) = reference_path(operand) else {
         return false;
     };
-    let instance = resolve_constructor_instance_type(ctor_name, ctx);
+    let constructor_value = scopes.resolve(ctor_name).map(|symbol| symbol.ty.clone());
+    let instance = resolve_constructor_instance_type(ctor_name, constructor_value.as_ref(), ctx);
     narrow_reference_in_scope(
         &base,
         &path,
@@ -64,6 +65,34 @@ pub(super) fn narrow_instanceof_in_scope(
 /// when the name does not resolve to a type — the guard then falls back to
 /// nominal union filtering.
 pub(super) fn resolve_constructor_instance_type(
+    ctor_name: &str,
+    constructor_value: Option<&Type>,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    resolve_named_constructor_instance_type(ctor_name, ctx)
+        .or_else(|| constructor_value.and_then(instance_type_of_constructor_value))
+}
+
+/// tsc's `getInstanceType`, for a right operand that is a value rather than a
+/// class name: the type of its `prototype` member unless that is `any`, else
+/// what its construct signature returns.
+fn instance_type_of_constructor_value(constructor: &Type) -> Option<Type> {
+    let Type::Object(object) = constructor.peeled() else {
+        return None;
+    };
+    let usable = |ty: &Type| !matches!(ty, Type::Any) && !ty.is_unknown();
+    if let Some(prototype) = object.properties.get("prototype")
+        && usable(&prototype.ty)
+    {
+        return Some(prototype.ty.clone());
+    }
+    object
+        .construct_signature()
+        .map(|signature| signature.return_type().clone())
+        .filter(usable)
+}
+
+fn resolve_named_constructor_instance_type(
     ctor_name: &str,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
@@ -282,7 +311,8 @@ pub(super) fn narrow_instanceof_heritage_symbol_table(
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
 
-    let instance = resolve_constructor_instance_type(ctor_name, ctx)?;
+    let constructor_value = symbols.get(ctor_name).map(|symbol| symbol.ty.clone());
+    let instance = resolve_constructor_instance_type(ctor_name, constructor_value.as_ref(), ctx)?;
     let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
         if path.is_empty() {
             // A non-union subject narrows down its subtype edge instead, the

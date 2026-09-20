@@ -122,7 +122,9 @@ fn narrow_single_guard_for_identifier(
         parse_instanceof_condition(condition).map(|(operand, ctor)| (operand, ctor))
         && name == var_name
     {
-        let instance = resolve_constructor_instance_type(ctor_name, ctx);
+        let constructor_value = scopes.resolve(ctor_name).map(|symbol| symbol.ty.clone());
+        let instance =
+            resolve_constructor_instance_type(ctor_name, constructor_value.as_ref(), ctx);
         if let Some(narrowed) =
             narrow_union_by_instanceof(ty, ctor_name, instance.as_ref(), branch_is_true)
         {

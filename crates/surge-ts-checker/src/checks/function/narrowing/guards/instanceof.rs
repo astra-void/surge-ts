@@ -66,6 +66,11 @@ pub(super) fn instanceof_matches_with_heritage(
             if instance.is_unknown() || member.is_unknown() {
                 return Some(false);
             }
+            // The member *is* the instance type: a constructor-like value
+            // whose `prototype` names it, where no class name can match.
+            if member == instance {
+                return Some(true);
+            }
             if !surge_ts_types::is_assignable_to(member, instance) {
                 return Some(false);
             }
@@ -142,6 +147,24 @@ pub(crate) fn narrow_union_by_instanceof(
         )
         .cloned()
         .collect();
+
+    // tsc's `getNarrowedType`: with no member derived from the candidate, a
+    // candidate that is itself a subtype of the subject is what the value is.
+    if kept.is_empty()
+        && keep_matching
+        && let Some(instance) = instance
+        && !instance.is_unknown()
+        && union
+            .types()
+            .iter()
+            .any(|member| !member.is_unknown() && surge_ts_types::is_assignable_to(instance, member))
+        && !union
+            .types()
+            .iter()
+            .any(|member| surge_ts_types::is_assignable_to(member, instance))
+    {
+        return Some(instance.clone());
+    }
 
     if kept.is_empty() && keep_matching {
         // No member *names* the constructor, but `x instanceof C` still proves
