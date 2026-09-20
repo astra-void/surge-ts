@@ -371,15 +371,20 @@ pub(super) fn evaluate_index_access(
                 // A `string` answers a numeric index and its own members and
                 // nothing else, so any other key is the implicit `any` an
                 // array's non-numeric index already is.
-                if matches!(receiver_type, Type::String | Type::StringLiteral(_))
-                    && !index_is_numeric
-                    && index_key_is_concrete(&index_type)
-                {
-                    report_non_numeric_index(
-                        &index_type,
-                        choose_span(index_span, choose_span(object_span, fallback_span)),
-                        ctx,
-                    );
+                if reads_string_by_number(&receiver_type) {
+                    if index_is_numeric {
+                        return InferredExpression::Known(crate::infer::unchecked_index_read(
+                            Type::String,
+                            ctx,
+                        ));
+                    }
+                    if index_key_is_concrete(&index_type) {
+                        report_non_numeric_index(
+                            &index_type,
+                            choose_span(index_span, choose_span(object_span, fallback_span)),
+                            ctx,
+                        );
+                    }
                 }
                 return InferredExpression::Unknown;
             };
@@ -419,6 +424,15 @@ pub(super) fn evaluate_index_access(
                 }
             }
 
+            // Same numeric index signature `String` declares, reached with a
+            // literal key (`text[0]`).
+            if reads_string_by_number(&receiver_type) && index_is_numeric {
+                return InferredExpression::Known(crate::infer::unchecked_index_read(
+                    Type::String,
+                    ctx,
+                ));
+            }
+
             if receiver_is_object_like {
                 report_missing_element(
                     &key,
@@ -449,6 +463,21 @@ fn tuple_literal_index_value(index_type: &Type) -> Option<i64> {
             value.parse::<i64>().ok()
         }
         _ => None,
+    }
+}
+
+/// A receiver that answers a numeric index with a `string`: `String` declares
+/// `readonly [index: number]: string`, and a union of string literals answers
+/// from every member (`('all' | 'active')[0]`).
+fn reads_string_by_number(receiver_type: &Type) -> bool {
+    match receiver_type {
+        Type::String | Type::StringLiteral(_) => true,
+        Type::Union(union) => union.types().iter().all(reads_string_by_number),
+        Type::Reference(_) => matches!(
+            receiver_type.peeled(),
+            Type::String | Type::StringLiteral(_)
+        ),
+        _ => false,
     }
 }
 

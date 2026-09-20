@@ -86,6 +86,19 @@ pub(crate) fn infer_index_access(
                         }
                         result_types.push(unchecked_index_read(element_type.clone(), ctx));
                     }
+                    // Same numeric index signature `String` declares, per
+                    // member: `('all' | 'active')[0]` reads a `string` from
+                    // either side.
+                    Type::String | Type::StringLiteral(_) => {
+                        let index_type = match infer_expression(index, symbols, ctx) {
+                            InferredExpression::Known(ty) => ty,
+                            _ => return InferredExpression::Unknown,
+                        };
+                        if !is_assignable_to(&index_type, &Type::Number) {
+                            return InferredExpression::Unknown;
+                        }
+                        result_types.push(unchecked_index_read(Type::String, ctx));
+                    }
                     _ => return InferredExpression::Unknown,
                 }
             }
@@ -114,16 +127,27 @@ pub(crate) fn infer_index_access(
 
             InferredExpression::Known(unchecked_index_read(element_type.clone(), ctx))
         }
+        // `String` declares `readonly [index: number]: string`, so a numeric
+        // index reads a `string` — and under `noUncheckedIndexedAccess` that is
+        // `string | undefined` like any other index-signature read.
+        Type::String | Type::StringLiteral(_) => {
+            let index_type = match infer_expression(index, symbols, ctx) {
+                InferredExpression::Known(ty) => ty,
+                _ => return InferredExpression::Unknown,
+            };
+            if !is_assignable_to(&index_type, &Type::Number) {
+                return InferredExpression::Unknown;
+            }
+            InferredExpression::Known(unchecked_index_read(Type::String, ctx))
+        }
         Type::Object(_)
         | Type::Function(_)
-        | Type::String
         | Type::Number
         | Type::Boolean
         | Type::BigInt
         | Type::Symbol
         | Type::Void
         | Type::Never
-        | Type::StringLiteral(_)
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
         | Type::Reference(_)
