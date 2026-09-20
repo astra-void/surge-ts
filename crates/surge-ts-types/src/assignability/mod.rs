@@ -546,6 +546,18 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             if arguments_compatible {
                 return true;
             }
+            // tsc relates two instantiations of one alias by the measured
+            // variance of its parameters, and `Record<K, T>`'s `K` — a mapped
+            // type's key — measures contravariant: `Record<string, X>` is
+            // assignable to `Record<"a", X>` although no `a` is declared.
+            if from_ref.id.split('\u{0}').next_back() == Some("Record")
+                && let ([from_key, from_value], [to_key, to_value]) =
+                    (&*from_ref.arguments, &*to_ref.arguments)
+                && is_assignable_to(to_key, from_key)
+                && (matches!(from_value, Type::Any) || is_assignable_to(from_value, to_value))
+            {
+                return true;
+            }
         }
     }
 
@@ -1377,11 +1389,57 @@ fn object_assignable(from_obj: &ObjectType, to_obj: &ObjectType, from: &Type, to
     }
 
     let result = object_assignability_failure(from, to).is_none()
-        && object_signatures_related(from_obj, to_obj);
+        && object_signatures_related(from_obj, to_obj)
+        && index_signatures_related(from_obj, to_obj);
     OBJECT_ASSIGNABILITY_IN_PROGRESS.with(|set| {
         set.borrow_mut().remove(&key);
     });
     result
+}
+
+/// tsc's `indexSignaturesRelatedTo`. A target index signature is satisfied by
+/// the source's applicable one, or — the source having none — by every source
+/// member it would cover (the implicit index signature of an object type).
+/// An `any`-valued signature asks for nothing once the target has a string
+/// index at all. surge does not record whether an object came from an
+/// interface, which tsc denies the implicit signature to, so members are what
+/// every index-less source is judged by.
+fn index_signatures_related(source: &ObjectType, target: &ObjectType) -> bool {
+    if target.synthetic_open_index || source.synthetic_open_index {
+        return true;
+    }
+    let target_has_string_index = target.string_index_type.is_some();
+    let exempt = |value: &Type| target_has_string_index && matches!(value, Type::Any);
+    let related = |value: &Type, numeric_only: bool| {
+        if exempt(value) || value.is_unknown() {
+            return true;
+        }
+        if let Some(source_index) = source.applicable_index_type(numeric_only) {
+            return source_index.is_unknown() || is_assignable_to(source_index, value);
+        }
+        // With no signature of the target's own kind, a numeric one still
+        // covers keys a string signature answers (`membersRelatedToIndexer`).
+        if !numeric_only
+            && let Some(number_index) = source.number_index_type.as_deref()
+            && !number_index.is_unknown()
+            && !is_assignable_to(number_index, value)
+        {
+            return false;
+        }
+        source
+            .properties
+            .iter()
+            .filter(|(name, _)| !numeric_only || crate::object::is_numeric_key(name.as_ref()))
+            .all(|(_, property)| property.ty.is_unknown() || is_assignable_to(&property.ty, value))
+    };
+    target
+        .string_index_type
+        .as_deref()
+        .is_none_or(|value| related(value, false))
+        && target
+            .number_index_type
+            .as_deref()
+            .is_none_or(|value| related(value, true))
 }
 
 /// tsc's `signaturesRelatedTo`, for both kinds: every call (construct)
@@ -1516,8 +1574,21 @@ pub fn object_assignability_failure(
 
     for (property_name, target_property) in target.properties.iter() {
         let source_property = source.properties.get(property_name.as_ref());
+        // A declared index signature does not supply a *required* property
+        // (tsc's `propertiesRelatedTo` reads `getPropertyOfType` only):
+        // `{ [k: string]: any }` is missing `hello` from `{ hello: string }`.
+        // Checker-injected openness still answers, since it stands for members
+        // surge could not enumerate — and so does an `any`-valued signature,
+        // which is also how surge spells an object it could not model (the
+        // stand-in a generic body's own type parameter is evaluated with).
         let source_property_ty = source_property.map(|property| &property.ty).or_else(|| {
-            source.applicable_index_type(crate::object::is_numeric_key(property_name.as_ref()))
+            let index = source
+                .applicable_index_type(crate::object::is_numeric_key(property_name.as_ref()))?;
+            (target_property.is_optional()
+                || source.synthetic_open_index
+                || index.is_unknown()
+                || matches!(index, Type::Any))
+            .then_some(index)
         });
 
         let source_property_ty = source_property_ty
