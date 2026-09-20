@@ -1012,6 +1012,12 @@ pub enum ParsedExpression {
         operand: Box<ParsedExpression>,
         operand_span: Option<TextSpan>,
     },
+    /// A comma expression (`a, b, c`): every operand is evaluated and the value
+    /// is the last one's.
+    Sequence {
+        expressions: Vec<ParsedExpression>,
+        expression_spans: Vec<Option<TextSpan>>,
+    },
     Binary {
         left: Box<ParsedExpression>,
         left_span: Option<TextSpan>,

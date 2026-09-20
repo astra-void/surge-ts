@@ -218,6 +218,9 @@ pub(super) fn reference_path(expression: &ParsedExpression) -> Option<(String, V
             Some((base, path))
         }
         ParsedExpression::NonNullAssertion { expression, .. } => reference_path(expression),
+        // tsc's `isMatchingReference`: a comma expression is the reference its
+        // right operand is.
+        ParsedExpression::Sequence { expressions, .. } => reference_path(expressions.last()?),
         _ => None,
     }
 }

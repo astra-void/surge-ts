@@ -360,6 +360,17 @@ pub(crate) fn evaluate_expression(
 
             super::update_result_type(&operand_result)
         }
+        ParsedExpression::Sequence {
+            expressions,
+            expression_spans,
+        } => {
+            let mut result = InferredExpression::Unknown;
+            for (index, operand) in expressions.iter().enumerate() {
+                let operand_span = expression_spans.get(index).copied().flatten().or(fallback_span);
+                result = evaluate_expression(operand, operand_span, symbols, ctx);
+            }
+            result
+        }
         ParsedExpression::Await {
             operand,
             operand_span,

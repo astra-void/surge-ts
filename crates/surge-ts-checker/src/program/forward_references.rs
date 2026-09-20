@@ -195,7 +195,8 @@ fn for_each_child_expression(
                 }
             }
         }
-        ParsedExpression::TemplateLiteral { expressions, .. } => {
+        ParsedExpression::TemplateLiteral { expressions, .. }
+        | ParsedExpression::Sequence { expressions, .. } => {
             for interpolation in expressions {
                 visit(interpolation);
             }

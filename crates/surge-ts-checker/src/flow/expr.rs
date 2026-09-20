@@ -471,7 +471,8 @@ pub(crate) fn check_expression_flow_impl(
             FlowCheck::Clear
         }
         ParsedExpression::ArrowFunction(_) => FlowCheck::Clear,
-        ParsedExpression::TemplateLiteral { expressions, .. } => {
+        ParsedExpression::TemplateLiteral { expressions, .. }
+        | ParsedExpression::Sequence { expressions, .. } => {
             for expression in expressions {
                 if check_expression_flow_impl(
                     expression,

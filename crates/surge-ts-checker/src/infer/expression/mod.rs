@@ -208,6 +208,15 @@ pub(crate) fn infer_expression(
         ParsedExpression::Update { operand, .. } => {
             crate::checks::expr::update_result_type(&infer_expression(operand, symbols, ctx))
         }
+        // tsc's comma operator: every operand is evaluated, the value is the
+        // last one's.
+        ParsedExpression::Sequence { expressions, .. } => {
+            let mut result = InferredExpression::Unknown;
+            for expression in expressions {
+                result = infer_expression(expression, symbols, ctx);
+            }
+            result
+        }
         ParsedExpression::Await { operand, .. } => {
             match infer_expression(operand, symbols, ctx) {
                 InferredExpression::Known(ty) => {

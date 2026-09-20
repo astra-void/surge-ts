@@ -96,6 +96,18 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         Expression::ParenthesizedExpression(parenthesized_expression) => {
             return parse_expression(&parenthesized_expression.expression);
         }
+        Expression::SequenceExpression(sequence) => ParsedExpression::Sequence {
+            expressions: sequence
+                .expressions
+                .iter()
+                .map(|expression| parse_expression(expression).0)
+                .collect(),
+            expression_spans: sequence
+                .expressions
+                .iter()
+                .map(|expression| Some(text_span_from_oxc_span(expression.span())))
+                .collect(),
+        },
         Expression::AwaitExpression(await_expression) => {
             let (operand, operand_span) = parse_expression(&await_expression.argument);
             return (
@@ -764,8 +776,24 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
             parse_unary_expression(unary_expression).unwrap_or(ParsedExpression::Unknown),
             argument.span(),
         ),
-        Argument::ParenthesizedExpression(parenthesized_expression) => (
-            parse_expression(&parenthesized_expression.expression).0,
+        // tsc reports an argument on its effective check node, which skips the
+        // parentheses around it.
+        Argument::ParenthesizedExpression(parenthesized_expression) => {
+            parse_expression(&parenthesized_expression.expression)
+        }
+        Argument::SequenceExpression(sequence) => (
+            ParsedExpression::Sequence {
+                expressions: sequence
+                    .expressions
+                    .iter()
+                    .map(|expression| parse_expression(expression).0)
+                    .collect(),
+                expression_spans: sequence
+                    .expressions
+                    .iter()
+                    .map(|expression| Some(text_span_from_oxc_span(expression.span())))
+                    .collect(),
+            },
             argument.span(),
         ),
         Argument::AwaitExpression(await_expression) => {

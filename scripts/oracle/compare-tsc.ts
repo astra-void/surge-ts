@@ -583,6 +583,7 @@ export const fixturePresets: Record<string, string> = {
   'promise-relation-basic': path.join(workspaceRoot, 'tests/compat-projects/promise-relation-basic/tsconfig.json'),
   'element-read-dependent-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/element-read-dependent-narrowing-basic/tsconfig.json'),
   'unknown-guard-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/unknown-guard-narrowing-basic/tsconfig.json'),
+  'comma-expression-value-basic': path.join(workspaceRoot, 'tests/compat-projects/comma-expression-value-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
