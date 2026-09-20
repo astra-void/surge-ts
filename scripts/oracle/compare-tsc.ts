@@ -594,6 +594,7 @@ export const fixturePresets: Record<string, string> = {
   'class-method-own-instantiation-return-basic': path.join(workspaceRoot, 'tests/compat-projects/class-method-own-instantiation-return-basic/tsconfig.json'),
   'function-literal-alias-return-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/function-literal-alias-return-inference-basic/tsconfig.json'),
   'string-numeric-index-basic': path.join(workspaceRoot, 'tests/compat-projects/string-numeric-index-basic/tsconfig.json'),
+  'ambient-module-precedes-package-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-module-precedes-package-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
