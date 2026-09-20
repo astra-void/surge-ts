@@ -569,6 +569,7 @@ export const fixturePresets: Record<string, string> = {
   'typeof-narrow-subtype-basic': path.join(workspaceRoot, 'tests/compat-projects/typeof-narrow-subtype-basic/tsconfig.json'),
   'discriminated-literal-report-basic': path.join(workspaceRoot, 'tests/compat-projects/discriminated-literal-report-basic/tsconfig.json'),
   'inferred-type-predicate-basic': path.join(workspaceRoot, 'tests/compat-projects/inferred-type-predicate-basic/tsconfig.json'),
+  'typeof-unmatched-tag-basic': path.join(workspaceRoot, 'tests/compat-projects/typeof-unmatched-tag-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

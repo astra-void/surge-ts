@@ -110,7 +110,39 @@ fn narrow_non_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Opti
     ruled_out().or(Some(Type::Never))
 }
 
+/// A tag no value reports (`typeof x === "Object"`, already TS2367): tsc still
+/// narrows by it, and the two branches split the subject by primitiveness —
+/// nothing primitive can be hiding behind an unrecognized tag, and nothing
+/// else can be ruled out by one.
+fn narrow_by_unmatched_typeof_tag(ty: &Type, keep_matching: bool) -> Option<Type> {
+    let members: Vec<Type> = match ty {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other.clone()],
+    };
+    let primitive = |member: &Type| {
+        matches!(
+            typeof_tag_of(member),
+            Some("string" | "number" | "boolean" | "bigint" | "symbol" | "undefined")
+        )
+    };
+    let kept: Vec<Type> = members
+        .iter()
+        .filter(|member| primitive(member) != keep_matching)
+        .cloned()
+        .collect();
+    if kept.is_empty() {
+        return Some(Type::Never);
+    }
+    if kept.len() == members.len() {
+        return None;
+    }
+    Some(union_type(kept))
+}
+
 pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Option<Type> {
+    if type_for_typeof_tag(tag).is_none() && !matches!(tag, "object" | "function") {
+        return narrow_by_unmatched_typeof_tag(ty, keep_matching);
+    }
     let Type::Union(union) = ty else {
         return narrow_non_union_by_typeof(ty, tag, keep_matching);
     };
