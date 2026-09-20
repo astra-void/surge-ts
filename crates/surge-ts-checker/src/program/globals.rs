@@ -81,6 +81,7 @@ pub(crate) fn collect_function_signatures_from_statements(
     for statement in statements {
         count_function_declarations(statement, &mut declaration_counts);
     }
+    let outer_collecting_signatures = std::mem::replace(&mut ctx.collecting_signatures, true);
     for (statement_index, statement) in statements.iter().enumerate() {
         collect_function_signature_from_statement(
             statement,
@@ -92,6 +93,7 @@ pub(crate) fn collect_function_signatures_from_statements(
             &declaration_counts,
         );
     }
+    ctx.collecting_signatures = outer_collecting_signatures;
 }
 
 fn count_function_declarations(
@@ -324,6 +326,7 @@ pub(crate) fn collect_local_value_symbols_from_statement(
                             symbol_kind,
                             initializer,
                             &inferred_ty,
+                            var::is_auto_array_candidate(var, ctx),
                         )
                     }
                     _ => surge_ts_types::Type::Unknown,

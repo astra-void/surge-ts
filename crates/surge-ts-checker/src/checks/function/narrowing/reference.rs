@@ -60,7 +60,7 @@ impl ReferenceGuard<'_> {
     pub(super) fn narrow_leaf(&self, ty: &Type, optional: bool) -> Option<(Type, bool)> {
         match self {
             Self::Truthy => {
-                let narrowed = surge_ts_types::remove_nullish(ty);
+                let narrowed = surge_ts_types::remove_definitely_falsy(ty);
                 (optional || narrowed != *ty).then_some((narrowed, false))
             }
             // An optional property carries its `undefined` in the `optional` flag
@@ -126,10 +126,14 @@ impl ReferenceGuard<'_> {
                 let effective = Self::effective_leaf_type(ty, optional);
                 let narrowed = narrow_by_literal_equality(&effective, &literal, *keep_matching)?;
                 let still_optional = optional && type_includes_undefined_member(&narrowed);
-                let narrowed = if still_optional {
-                    surge_ts_types::remove_undefined(&narrowed)
-                } else {
-                    narrowed
+                let narrowed = match narrowed {
+                    // Nothing but the absent case is left: `tag?: never`.
+                    // `remove_undefined` answers the degradation sentinel for a
+                    // bare `undefined`, which would make the whole object read
+                    // as unresolved and silence every later check on it.
+                    Type::Undefined if still_optional => Type::Never,
+                    narrowed if still_optional => surge_ts_types::remove_undefined(&narrowed),
+                    narrowed => narrowed,
                 };
                 (narrowed != *ty || still_optional != optional).then_some((narrowed, still_optional))
             }

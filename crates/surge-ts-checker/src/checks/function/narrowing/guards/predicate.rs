@@ -139,7 +139,12 @@ pub(crate) fn parse_type_predicate_condition(
         .parameter_names
         .iter()
         .position(|name| name.as_deref() == Some(predicate.parameter_name.as_str()))?;
-    let (subject, path) = super::super::reference_path(&arguments.get(index)?.expression)?;
+    let tested = &arguments.get(index)?.expression;
+    // An element access (`node.arguments[0]`) is a reference tsc narrows too;
+    // it is keyed the way the element-reference narrowing records reads.
+    let (subject, path) = super::super::reference_path(tested).or_else(|| {
+        super::super::element_access_parts(tested).map(|key| (key, Vec::new()))
+    })?;
     let other_arguments = if signature.type_parameters.is_empty() || !type_arguments.is_empty() {
         Vec::new()
     } else {

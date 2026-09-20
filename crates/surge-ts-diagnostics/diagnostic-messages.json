@@ -56,6 +56,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2302",
+    "category": "Error",
+    "message": "Static members cannot reference class type parameters.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2304",
     "category": "Error",
     "message": "Cannot find name '{0}'.",
@@ -629,7 +637,7 @@
     "message": "'{0}' refers to a value, but is being used as a type here. Did you mean 'typeof {0}'?",
     "source": "typescript",
     "arity": 1,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2869",
@@ -877,7 +885,7 @@
     "message": "Variable '{0}' implicitly has type '{1}' in some locations where its type cannot be determined.",
     "source": "typescript",
     "arity": 2,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS7051",
@@ -1448,6 +1456,46 @@
     "support": "emitted"
   },
   {
+    "code": "TS7009",
+    "category": "Error",
+    "message": "'new' expression, whose target lacks a construct signature, implicitly has an 'any' type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2350",
+    "category": "Error",
+    "message": "Only a void function can be called with the 'new' keyword.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2721",
+    "category": "Error",
+    "message": "Cannot invoke an object which is possibly 'null'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2531",
+    "category": "Error",
+    "message": "Object is possibly 'null'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2407",
+    "category": "Error",
+    "message": "The right-hand side of a 'for...in' statement must be of type 'any', an object type or a type parameter, but here has type '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2724",
     "category": "Error",
     "message": "'{0}' has no exported member named '{1}'. Did you mean '{2}'?",
@@ -1950,5 +1998,197 @@
     "source": "typescript",
     "arity": 0,
     "support": "catalog-only"
+  },
+  {
+    "code": "TS2311",
+    "category": "Error",
+    "message": "Cannot find name '{0}'. Did you mean to write this in an async function?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2503",
+    "category": "Error",
+    "message": "Cannot find namespace '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2581",
+    "category": "Error",
+    "message": "Cannot find name '{0}'. Do you need to install type definitions for jQuery? Try `npm i --save-dev @types/jquery`.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2582",
+    "category": "Error",
+    "message": "Cannot find name '{0}'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha`.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2583",
+    "category": "Error",
+    "message": "Cannot find name '{0}'. Do you need to change your target library? Try changing the 'lib' compiler option to '{1}' or later.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2584",
+    "category": "Error",
+    "message": "Cannot find name '{0}'. Do you need to change your target library? Try changing the 'lib' compiler option to include 'dom'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2585",
+    "category": "Error",
+    "message": "'{0}' only refers to a type, but is being used as a value here. Do you need to change your target library? Try changing the 'lib' compiler option to es2015 or later.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2592",
+    "category": "Error",
+    "message": "Cannot find name '{0}'. Do you need to install type definitions for jQuery? Try `npm i --save-dev @types/jquery` and then add 'jquery' to the types field in your tsconfig.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2593",
+    "category": "Error",
+    "message": "Cannot find name '{0}'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2662",
+    "category": "Error",
+    "message": "Cannot find name '{0}'. Did you mean the static member '{1}.{0}'?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2663",
+    "category": "Error",
+    "message": "Cannot find name '{0}'. Did you mean the instance member 'this.{0}'?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2708",
+    "category": "Error",
+    "message": "Cannot use namespace '{0}' as a value.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2713",
+    "category": "Error",
+    "message": "Cannot access '{0}.{1}' because '{0}' is a type, but not a namespace. Did you mean to retrieve the type of the property '{1}' in '{0}' with '{0}[\"{1}\"]'?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2867",
+    "category": "Error",
+    "message": "Cannot find name '{0}'. Do you need to install type definitions for Bun? Try `npm i --save-dev @types/bun`.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2868",
+    "category": "Error",
+    "message": "Cannot find name '{0}'. Do you need to install type definitions for Bun? Try `npm i --save-dev @types/bun` and then add 'bun' to the types field in your tsconfig.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2709",
+    "category": "Error",
+    "message": "Cannot use namespace '{0}' as a type.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2702",
+    "category": "Error",
+    "message": "'{0}' only refers to a type, but is being used as a namespace here.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2833",
+    "category": "Error",
+    "message": "Cannot find namespace '{0}'. Did you mean '{1}'?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1194",
+    "category": "Error",
+    "message": "Export declarations are not permitted in a namespace.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2694",
+    "category": "Error",
+    "message": "Namespace '{0}' has no exported member '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2689",
+    "category": "Error",
+    "message": "Cannot extend an interface '{0}'. Did you mean 'implements'?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1308",
+    "category": "Error",
+    "message": "'await' expressions are only allowed within async functions and at the top levels of modules.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS7026",
+    "category": "Error",
+    "message": "JSX element implicitly has type 'any' because no interface 'JSX.{0}' exists.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS7017",
+    "category": "Error",
+    "message": "Element implicitly has an 'any' type because type '{0}' has no index signature.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
   }
 ]

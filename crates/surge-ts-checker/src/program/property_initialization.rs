@@ -89,13 +89,28 @@ fn constructor_body(class: &ParsedClassDeclaration) -> Option<&[ParsedFunctionBo
 /// model is exempt too — an unresolved annotation is not evidence of a missing
 /// initializer.
 fn type_exempts_initialization(declared: &ParsedType, ctx: &mut CheckerContext) -> bool {
+    // A type parameter is a real declared type, not a gap: tsc reports the
+    // uninitialized `p: T` like any other. Surge resolves one to `Unknown`
+    // inside the class's scope, which the wide-type exemption below would
+    // otherwise swallow.
+    if let ParsedType::Named(named) = declared
+        && named.type_arguments.is_empty()
+        && ctx.type_parameter_in_scope(&named.name)
+    {
+        return false;
+    }
     let ty = map_parsed_type(declared.clone(), ctx);
     contains_undefined_or_wide(&ty)
 }
 
 fn contains_undefined_or_wide(ty: &Type) -> bool {
     match ty {
-        Type::Any | Type::GenuineUnknown | Type::Unknown | Type::Undefined | Type::Void => true,
+        Type::Any
+        | Type::GenuineUnknown
+        | Type::Unknown
+        | Type::ErrorType
+        | Type::Undefined
+        | Type::Void => true,
         Type::Union(union) => union.types().iter().any(contains_undefined_or_wide),
         _ => false,
     }
@@ -105,7 +120,11 @@ pub(crate) fn check_property_initialization(
     class: &ParsedClassDeclaration,
     ctx: &mut CheckerContext,
 ) {
-    if !ctx.options.strict_property_initialization || class.is_declare {
+    // tsc checks property initialization only together with `strictNullChecks`.
+    if !ctx.options.strict_property_initialization
+        || !ctx.options.strict_null_checks
+        || class.is_declare
+    {
         return;
     }
 

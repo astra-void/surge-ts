@@ -211,51 +211,64 @@ fn evaluate_add_binary(
     let left_type = left_type.peeled();
     let right_type = right_type.peeled();
 
-    if left_type.is_unknown() || right_type.is_unknown() {
+    if is_unmodelled(&left_type) || is_unmodelled(&right_type) {
         return InferredExpression::Unknown;
     }
 
-    // A string operand makes `+` a concatenation, which a symbol cannot join
-    // (`checkForDisallowedESSymbolOperand`); without one the operands are
-    // judged as a whole below.
-    if (is_string_like_for_add(&left_type) || is_string_like_for_add(&right_type))
-        && report_symbol_operand("+", &left_type, &right_type, left_span, right_span, ctx)
+    // tsc's `+` arm of `checkBinaryLikeExpression`: the result kind is decided
+    // first, and only an operand pair with no result kind is an error. A
+    // symbol cannot join even a well-typed `+` (`checkForDisallowedESSymbolOperand`).
+    let both = |target: &Type| {
+        is_strictly_assignable_to(&left_type, target) && is_strictly_assignable_to(&right_type, target)
+    };
+    let result = if both(&Type::Number) {
+        Some(Type::Number)
+    } else if both(&Type::BigInt) {
+        Some(Type::BigInt)
+    } else if is_strictly_assignable_to(&left_type, &Type::String)
+        || is_strictly_assignable_to(&right_type, &Type::String)
     {
-        return InferredExpression::Known(Type::String);
+        Some(Type::String)
+    } else if matches!(left_type, Type::Any) || matches!(right_type, Type::Any) {
+        Some(Type::Any)
+    } else {
+        None
+    };
+    if let Some(result) = result {
+        report_symbol_operand("+", &left_type, &right_type, left_span, right_span, ctx);
+        return InferredExpression::Known(result);
     }
 
-    if matches!(left_type, Type::Any) || matches!(right_type, Type::Any) {
-        return InferredExpression::Known(Type::Any);
-    }
-
-    if is_string_like_for_add(&left_type) && is_string_like_for_add(&right_type) {
-        return InferredExpression::Known(Type::String);
-    }
-
-    if is_string_like_for_add(&left_type) && is_numeric_like_for_add(&right_type) {
-        return InferredExpression::Known(Type::String);
-    }
-
-    if is_numeric_like_for_add(&left_type) && is_string_like_for_add(&right_type) {
-        return InferredExpression::Known(Type::String);
-    }
-
-    if is_number_like_for_add(&left_type) && is_number_like_for_add(&right_type) {
-        return InferredExpression::Known(Type::Number);
-    }
-
+    // `getBaseTypesIfUnrelated`: the operands keep their literal names when
+    // their base types are both ones `+` could plausibly have meant.
+    let close_enough = |ty: &Type| {
+        *ty == Type::GenuineUnknown
+            || [Type::Number, Type::BigInt, Type::String]
+            .iter()
+            .any(|target| surge_ts_types::is_assignable_to(ty, target))
+    };
+    let (left_base, right_base) = (widen_type(&left_type), widen_type(&right_type));
+    let (left_name, right_name) = if close_enough(&left_base) && close_enough(&right_base) {
+        (left_type.name(), right_type.name())
+    } else {
+        (left_base.name(), right_base.name())
+    };
     let file_name = ctx.file_name.clone();
     push_diagnostic(
         ctx,
-        Diagnostic::ts2365(
-            "+",
-            &operand_display_name(&left_type),
-            &operand_display_name(&right_type),
-            file_name,
-        ),
+        Diagnostic::ts2365("+", &left_name, &right_name, file_name),
         fallback_span,
     );
     InferredExpression::Unknown
+}
+
+/// `isTypeAssignableToKindEx(ty, kind, strict = true)`: the operand relates to
+/// the kind's primitive, where `any`, `unknown`, `void` and `undefined` do not
+/// count on their own.
+fn is_strictly_assignable_to(ty: &Type, target: &Type) -> bool {
+    !matches!(ty, Type::Any | Type::Void | Type::Undefined)
+        && !ty.is_unknown()
+        && surge_ts_types::is_assignable_to(ty, target)
 }
 
 /// TS2469 on the first operand that may be a symbol. Returns whether one was.
@@ -286,33 +299,6 @@ fn report_symbol_operand(
     true
 }
 
-fn is_string_like_for_add(ty: &Type) -> bool {
-    match ty {
-        Type::String | Type::StringLiteral(_) => true,
-        Type::Union(union) => union.types().iter().all(is_string_like_for_add),
-        _ => false,
-    }
-}
-
-fn is_number_like_for_add(ty: &Type) -> bool {
-    match ty {
-        Type::Number | Type::NumberLiteral(_) => true,
-        Type::Union(union) => union.types().iter().all(is_number_like_for_add),
-        _ => false,
-    }
-}
-
-/// Concatenation-side numerics: `bigint` joins `number` here but deliberately not
-/// in [`is_number_like_for_add`], because tsc concatenates `"Min: " + bigint` (and
-/// `+ (number | bigint)`) while still rejecting the arithmetic `number + bigint`.
-fn is_numeric_like_for_add(ty: &Type) -> bool {
-    match ty {
-        Type::BigInt => true,
-        Type::Union(union) => union.types().iter().all(is_numeric_like_for_add),
-        other => is_number_like_for_add(other),
-    }
-}
-
 /// tsc's arithmetic and bitwise arm of `checkBinaryLikeExpression`: two
 /// boolean operands of `&`/`|`/`^` are TS2447 on the operator; otherwise each
 /// operand must be `any`, number-like or bigint-like (TS2362/TS2363), and
@@ -336,7 +322,7 @@ fn evaluate_arithmetic_binary(
         return InferredExpression::Unknown;
     };
 
-    if left_type.is_unknown() || right_type.is_unknown() {
+    if is_unmodelled(&left_type) || is_unmodelled(&right_type) {
         return InferredExpression::Unknown;
     }
 
@@ -364,11 +350,10 @@ fn evaluate_arithmetic_binary(
         push_diagnostic(ctx, Diagnostic::ts2363(file_name), right_span);
     }
 
-    let either_any = matches!(left_type, Type::Any) || matches!(right_type, Type::Any);
-    let maybe_bigint = maybe_bigint_like(left_type) || maybe_bigint_like(right_type);
-    if either_any && !maybe_bigint || !maybe_bigint {
+    // Without a bigint in play the result is `number`, `any` operands included.
+    if !maybe_bigint_like(left_type) && !maybe_bigint_like(right_type) {
         return if left_valid && right_valid {
-            InferredExpression::Known(if either_any { Type::Any } else { Type::Number })
+            InferredExpression::Known(Type::Number)
         } else {
             InferredExpression::Unknown
         };
@@ -463,7 +448,7 @@ fn evaluate_comparison_binary(
         return InferredExpression::Unknown;
     };
 
-    if left_type.is_unknown() || right_type.is_unknown() {
+    if is_unmodelled(&left_type) || is_unmodelled(&right_type) {
         return InferredExpression::Unknown;
     }
 
@@ -745,4 +730,11 @@ fn binary_operator_text(operator: ParsedBinaryOperator) -> &'static str {
         ParsedBinaryOperator::In => "in",
         ParsedBinaryOperator::Instanceof => "instanceof",
     }
+}
+
+/// A type surge could not model, as opposed to the written `unknown`, which an
+/// operator judges like any other operand (under `strictNullChecks` it is
+/// reported before it gets here).
+fn is_unmodelled(ty: &Type) -> bool {
+    ty.is_unknown() && *ty != Type::GenuineUnknown
 }

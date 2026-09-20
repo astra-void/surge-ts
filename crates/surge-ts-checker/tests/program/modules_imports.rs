@@ -95,51 +95,47 @@ fn program_empty_export_does_not_emit_diagnostic() {
 }
 
 #[test]
-fn program_module_file_does_not_see_script_global_current_policy() {
+fn program_module_file_sees_script_global() {
     let diagnostics = program(&[
         ("a.ts", "interface User { name: string; }"),
         ("b.ts", "export {};\nlet user: User = { name: \"Ada\" };"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
 #[test]
-fn program_module_file_does_not_see_script_type_alias_current_policy() {
+fn program_module_file_sees_script_type_alias() {
     let diagnostics = program(&[
         ("a.ts", "type Name = string;"),
         ("b.ts", "export {};\nlet value: Name = \"Ada\";"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
 #[test]
-fn program_module_file_does_not_see_script_function_current_policy() {
+fn program_module_file_sees_script_function() {
     let diagnostics = program(&[
         ("a.ts", "function getName(): string { return \"Ada\"; }"),
         ("b.ts", "export {};\nlet value: string = getName();"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
 #[test]
-fn program_empty_export_isolates_file_from_script_globals() {
+fn program_empty_export_module_still_sees_script_globals() {
     let diagnostics = program(&[
         ("a.ts", "interface User { name: string; }"),
         ("b.ts", "export {};\nlet user: User = { name: \"Ada\" };"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
 #[test]
-fn program_side_effect_import_isolates_file_from_script_globals() {
+fn program_side_effect_import_module_still_sees_script_globals() {
     let diagnostics = program(&[
         ("a.ts", "interface User { name: string; }"),
         ("setup.ts", "export {};"),
@@ -149,8 +145,7 @@ fn program_side_effect_import_isolates_file_from_script_globals() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
 #[test]
@@ -434,6 +429,7 @@ fn program_module_export_function_parameter_no_implicit_any() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            strict_null_checks: true,
             strict_property_initialization: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -471,6 +467,7 @@ fn program_module_export_function_binding_pattern_no_implicit_any() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            strict_null_checks: true,
             strict_property_initialization: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -505,6 +502,7 @@ fn program_module_arrow_function_binding_pattern_no_implicit_any() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
+            strict_null_checks: true,
             strict_property_initialization: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -679,7 +677,7 @@ fn program_module_import_regular_const_export_assignment_rejected() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2588"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2632"]);
     assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
 }
 
@@ -749,7 +747,7 @@ fn program_module_import_regular_alias_value_export_type_usage_unresolved() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2749"]);
     assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
 }
 
@@ -763,7 +761,7 @@ fn program_module_import_regular_value_export_type_usage_unresolved() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2749"]);
     assert_eq!(file_names(&diagnostics), vec!["index.ts"]);
 }
 
@@ -925,8 +923,11 @@ fn program_module_duplicate_export_function_same_module_file_ts2393() {
         "export function getValue(): string { return \"Ada\"; }\nexport function getValue(): number { return 1; }",
     )]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2393", "TS2393"]);
-    assert_eq!(file_names(&diagnostics), vec!["a.ts", "a.ts"]);
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["TS2323", "TS2393", "TS2323", "TS2393"]
+    );
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "a.ts", "a.ts", "a.ts"]);
 }
 
 #[test]
@@ -936,8 +937,8 @@ fn program_module_duplicate_type_alias_same_module_file_ts2300() {
         "export {};\ntype Name = string;\ntype Name = number;\nlet value: Name = \"Ada\";",
     )]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2300"]);
-    assert_eq!(file_names(&diagnostics), vec!["a.ts"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2300", "TS2300"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "a.ts"]);
 }
 
 #[test]
@@ -1225,7 +1226,7 @@ fn module_default_import_does_not_bind_type() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2749"]);
 }
 
 #[test]
@@ -1255,7 +1256,7 @@ fn module_default_import_single_file_still_unresolved_or_unsupported() {
         "index.ts",
     );
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2307"]);
 }
 
 #[test]

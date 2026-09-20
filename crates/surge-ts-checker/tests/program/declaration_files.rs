@@ -7,8 +7,9 @@ fn declaration_file_does_not_run_statement_body_checks() {
         ("src/index.ts", "let x: number = 1;"),
         ("types/globals.d.ts", "const missingInit: number;"),
     ]);
-    println!("{:?}", diagnostics);
-    assert_eq!(diagnostics.len(), 0);
+    // Only the grammar error for a non-`declare` top-level statement; no
+    // TS1155 for the missing initializer.
+    assert_eq!(codes(&diagnostics), vec!["TS1046"]);
 }
 
 #[test]

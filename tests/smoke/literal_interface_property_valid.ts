@@ -2,4 +2,4 @@ interface ClickEvent {
   kind: "click";
 }
 
-let event: ClickEvent = { kind: "click" };
+let clickEvent: ClickEvent = { kind: "click" };

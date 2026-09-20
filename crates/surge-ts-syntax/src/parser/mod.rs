@@ -27,6 +27,8 @@ mod reference_directives;
 mod spans;
 mod suppressions;
 mod types;
+mod let_assignments;
+mod writes;
 
 use self::classes::parse_class_declaration;
 use self::exports::parse_export_named_declaration;
@@ -38,7 +40,7 @@ use self::expressions::{
     parse_static_member_expression, parse_unary_expression,
 };
 use self::functions::parse_function_declaration;
-use self::imports::{parse_import_declaration, parse_import_equals_declaration};
+use self::imports::{parse_import_declarations, parse_import_equals_declaration};
 use self::interfaces::parse_interface_declaration;
 pub use self::reference_directives::{
     extract_reference_path_directives, extract_reference_type_directives,
@@ -80,6 +82,7 @@ fn parse_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {
         | Statement::DoWhileStatement(_)
         | Statement::SwitchStatement(_)
         | Statement::TryStatement(_)
+        | Statement::ThrowStatement(_)
         | Statement::LabeledStatement(_) => functions::parse_function_body_statement(statement)
             .map(|statements| vec![ParsedStatement::Block(statements)]),
         _ => None,
@@ -90,8 +93,12 @@ fn parse_module_declaration(
     module_declaration: &ModuleDeclaration<'_>,
 ) -> Option<Vec<ParsedStatement>> {
     match module_declaration {
-        ModuleDeclaration::ImportDeclaration(import) => parse_import_declaration(import)
-            .map(|import| vec![ParsedStatement::ImportDeclaration(Box::new(import))]),
+        ModuleDeclaration::ImportDeclaration(import) => parse_import_declarations(import).map(|imports| {
+            imports
+                .into_iter()
+                .map(|import| ParsedStatement::ImportDeclaration(Box::new(import)))
+                .collect()
+        }),
         ModuleDeclaration::ExportNamedDeclaration(export) => parse_export_named_declaration(export),
         ModuleDeclaration::ExportDefaultDeclaration(export) => {
             parse_export_default_declaration(export)
@@ -342,6 +349,14 @@ pub(crate) fn parse_destructuring_assignment(expression: &Expression<'_>) -> Vec
     let source_span = Some(text_span_from_oxc_span(source_span));
 
     let element_read = |index: usize, target_span: Option<crate::TextSpan>| match &source {
+        // An array literal source is contextually a tuple: each target takes
+        // its own element, not the union of all of them.
+        ParsedExpression::ArrayLiteral { elements, .. }
+            if elements.iter().take(index + 1).all(|element| !element.spread)
+                && index < elements.len() =>
+        {
+            elements[index].expression.clone()
+        }
         ParsedExpression::Identifier { name, .. } => ParsedExpression::IndexAccess {
             object_name: name.clone(),
             object_span: source_span,
@@ -820,7 +835,16 @@ fn parse_ts_namespace_declaration(
                 TSModuleDeclarationName::Identifier(identifier) => identifier.name.to_string(),
                 TSModuleDeclarationName::StringLiteral(literal) => literal.value.to_string(),
             };
-            parse_ts_namespace_declaration(format!("{name}.{inner_name}"), name_span, inner)
+            let mut nested =
+                parse_ts_namespace_declaration(format!("{name}.{inner_name}"), name_span, inner);
+            if module.declare {
+                for statement in &mut nested {
+                    if let ParsedStatement::NamespaceDeclaration(namespace) = statement {
+                        namespace.is_declare = true;
+                    }
+                }
+            }
+            nested
         }
         None => Vec::new(),
     };
@@ -828,6 +852,7 @@ fn parse_ts_namespace_declaration(
     vec![ParsedStatement::NamespaceDeclaration(Box::new(
         ParsedNamespaceDeclaration {
             name,
+            is_declare: module.declare,
             name_span,
             statements,
             span: Some(text_span_from_oxc_span(module.span)),

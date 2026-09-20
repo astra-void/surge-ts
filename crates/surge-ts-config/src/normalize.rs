@@ -22,6 +22,7 @@ pub(crate) fn normalize_compiler_options(
     };
 
     let mut explicit_no_implicit_any = None;
+    let mut explicit_strict_null_checks = None;
     let mut explicit_strict_property_initialization = None;
     let mut explicit_use_unknown_in_catch_variables = None;
     let mut explicit_resolve_json_module = None;
@@ -38,6 +39,9 @@ pub(crate) fn normalize_compiler_options(
                 if let Some(no_implicit_any) = explicit_no_implicit_any {
                     normalized.no_implicit_any = no_implicit_any;
                 }
+            }
+            "strictNullChecks" => {
+                explicit_strict_null_checks = parse_bool_option(key, value, config_dir, diagnostics);
             }
             "strictPropertyInitialization" => {
                 explicit_strict_property_initialization =
@@ -202,6 +206,7 @@ pub(crate) fn normalize_compiler_options(
     }
 
     normalized.no_implicit_any = explicit_no_implicit_any.unwrap_or(normalized.strict);
+    normalized.strict_null_checks = explicit_strict_null_checks.unwrap_or(normalized.strict);
     normalized.strict_property_initialization =
         explicit_strict_property_initialization.unwrap_or(normalized.strict);
     normalized.use_unknown_in_catch_variables =

@@ -643,6 +643,8 @@ pub(crate) fn resolve_interface(
             interface.name_span.map_or(0, |span| span.start),
         )
     });
+    let outer_class_heritage =
+        std::mem::replace(&mut ctx.resolving_class_heritage, interface.is_class_instance);
     let resolved = crate::program::with_dts_expansion_reason(expansion_reason, || {
         with_type_declaration_scope(&declaration_effective_scope, ctx, |ctx| {
             with_file_name(ctx, &interface.file_name, |ctx| {
@@ -665,6 +667,7 @@ pub(crate) fn resolve_interface(
             })
         })
     });
+    ctx.resolving_class_heritage = outer_class_heritage;
     ctx.pop_type_parameter_scope();
     ctx.structural_resolution_frames.pop();
     let subtree_lowest_cycle = ctx.lowest_cycle_target_index;

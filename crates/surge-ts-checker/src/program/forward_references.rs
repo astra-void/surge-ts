@@ -166,6 +166,11 @@ fn for_each_child_expression(
         ParsedExpression::Unary { operand, .. }
         | ParsedExpression::Update { operand, .. }
         | ParsedExpression::Await { operand, .. } => visit(operand),
+        ParsedExpression::Sequence { expressions } => {
+            for (expression, _) in expressions {
+                visit(expression);
+            }
+        }
         ParsedExpression::Binary { left, right, .. }
         | ParsedExpression::Logical { left, right, .. }
         | ParsedExpression::NullishCoalescing { left, right, .. } => {

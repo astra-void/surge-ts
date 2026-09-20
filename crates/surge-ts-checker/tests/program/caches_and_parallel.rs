@@ -559,7 +559,7 @@ fn distributive_conditional_concrete_map_member_binds_infer_captures() {
 /// syntactic sentinel: no branch is selected, no capture goes unbound, and the
 /// open result stays diagnostic-free.
 #[test]
-fn distributive_conditional_sentinel_member_stays_undecided() {
+fn distributive_conditional_over_keyof_number_resolves() {
     let files = vec![
         SourceFileInput {
             file_name: "util.ts".to_string(),
@@ -575,9 +575,12 @@ fn distributive_conditional_sentinel_member_stays_undecided() {
         },
     ];
     let diagnostics = check_program(files);
-    assert!(
-        diagnostics.is_empty(),
-        "a sentinel member must stay undecided and open: {:?}",
+    // `keyof 5` is `keyof Number`, a union of method names, so `MakeRO`
+    // resolves to string literals that are not assignable to `number`.
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["TS2322"],
+        "{:?}",
         rendered_sorted(&diagnostics)
     );
 }

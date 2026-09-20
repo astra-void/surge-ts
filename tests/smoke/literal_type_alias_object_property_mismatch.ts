@@ -1,3 +1,3 @@
 type ClickEvent = { kind: "click" };
 
-let event: ClickEvent = { kind: "hover" };
+let clickEvent: ClickEvent = { kind: "hover" };

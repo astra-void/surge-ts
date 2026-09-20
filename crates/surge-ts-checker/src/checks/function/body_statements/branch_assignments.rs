@@ -27,6 +27,28 @@ fn reference_root_name(expression: &ParsedExpression) -> Option<&str> {
 
 pub(crate) fn branch_assigned_names(body: &[ParsedFunctionBodyStatement], names: &mut Vec<String>) {
     for statement in body {
+        // An assignment used as a value (`if ((m = f()))`) assigns too.
+        let values: Vec<&surge_ts_syntax::ParsedExpression> = match statement {
+            ParsedFunctionBodyStatement::Expression(expression) => vec![expression],
+            ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
+                variable.initializer.iter().collect()
+            }
+            ParsedFunctionBodyStatement::Return(statement) => statement.expression.iter().collect(),
+            ParsedFunctionBodyStatement::Assignment(assignment) => vec![&assignment.value],
+            ParsedFunctionBodyStatement::MemberAssignment(assignment) => vec![&assignment.value],
+            ParsedFunctionBodyStatement::If(statement) => vec![&statement.condition],
+            ParsedFunctionBodyStatement::While(statement) => vec![&statement.condition],
+            _ => Vec::new(),
+        };
+        for value in values {
+            for (assignment, _) in crate::flow::expression_assignments(value) {
+                if let surge_ts_syntax::ParsedExpression::Assignment { target_name, .. } = assignment
+                    && !names.iter().any(|name| name == target_name)
+                {
+                    names.push(target_name.clone());
+                }
+            }
+        }
         match statement {
             ParsedFunctionBodyStatement::Assignment(assignment) => {
                 if !names.iter().any(|name| *name == assignment.target_name) {
@@ -179,6 +201,49 @@ pub(super) fn adopt_branch_assignments(branch_types: &[(String, Type)], scopes: 
             name,
             SymbolInfo {
                 ty: branch_ty.clone(),
+                kind,
+                function_signature,
+            },
+        );
+    }
+}
+
+/// Joins every edge reaching the code after a statement with more than two
+/// (`switch` cases, a `try` and its `catch`): each binding an edge assigned
+/// becomes the union of what the edges left it as, bounded by its declaration
+/// like [`join_branch_pair`].
+pub(super) fn join_branch_edges(edges: &[Vec<(String, Type)>], scopes: &mut ScopeStack) {
+    let Some(first) = edges.first() else {
+        return;
+    };
+    for (name, _) in first {
+        let types: Vec<Type> = edges
+            .iter()
+            .filter_map(|edge| edge.iter().find(|(other, _)| other == name))
+            .map(|(_, ty)| ty.clone())
+            .collect();
+        if types.len() != edges.len() {
+            continue;
+        }
+        let joined = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || union_type(types));
+        let Some(symbol) = scopes.resolve(name) else {
+            continue;
+        };
+        let current = symbol.ty.clone();
+        let kind = symbol.kind;
+        let function_signature = symbol.function_signature.clone();
+        let bound = scopes
+            .visible_symbols()
+            .declared_type(name)
+            .cloned()
+            .unwrap_or_else(|| current.clone());
+        if joined == current || !is_assignable_to(&joined, &bound) {
+            continue;
+        }
+        let _ = scopes.update_visible(
+            name,
+            SymbolInfo {
+                ty: joined,
                 kind,
                 function_signature,
             },

@@ -49,6 +49,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                 call_signature_overloads: Vec::new(),
                 construct_signature: None,
                 non_primitive: true,
+                display_name: None,
             },
         ))),
         // `symbol` and `bigint` have no modelled representation; degrade to
@@ -87,6 +88,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                     call_signature_overloads: Vec::new(),
                     construct_signature: Some(Box::new(function)),
                     non_primitive: false,
+                    display_name: None,
                 }))
             })
         }
@@ -226,6 +228,7 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 name_span: Some(text_span_from_oxc_span(identifier.span)),
                 members: Vec::new(),
                 import_specifier: None,
+                member_spans: Vec::new(),
                 type_arguments: parse_type_query_arguments(type_query),
             })))
         }
@@ -237,6 +240,7 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 name_span: Some(text_span_from_oxc_span(base_span)),
                 members,
                 import_specifier: None,
+                member_spans: Vec::new(),
                 type_arguments: parse_type_query_arguments(type_query),
             })))
         }
@@ -244,8 +248,9 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
         // a qualifier after the call (`typeof import("m").ns.x`) walks it.
         TSTypeQueryExprName::TSImportType(import_type) => {
             let mut members = Vec::new();
+            let mut member_spans = Vec::new();
             if let Some(qualifier) = &import_type.qualifier {
-                flatten_import_type_qualifier(qualifier, &mut members);
+                flatten_import_type_qualifier(qualifier, &mut members, &mut member_spans);
             }
             let specifier = import_type.source.value.to_string();
             Some(ParsedType::TypeOf(std::sync::Arc::new(ParsedTypeOfType {
@@ -253,6 +258,7 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 name_span: Some(text_span_from_oxc_span(import_type.source.span)),
                 members,
                 import_specifier: Some(specifier),
+                member_spans,
                 type_arguments: parse_type_query_arguments(type_query),
             })))
         }
@@ -264,14 +270,17 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
 fn flatten_import_type_qualifier(
     qualifier: &oxc_ast::ast::TSImportTypeQualifier<'_>,
     members: &mut Vec<String>,
+    spans: &mut Vec<crate::TextSpan>,
 ) {
     match qualifier {
         oxc_ast::ast::TSImportTypeQualifier::Identifier(identifier) => {
             members.push(identifier.name.to_string());
+            spans.push(text_span_from_oxc_span(identifier.span));
         }
         oxc_ast::ast::TSImportTypeQualifier::QualifiedName(qualified) => {
-            flatten_import_type_qualifier(&qualified.left, members);
+            flatten_import_type_qualifier(&qualified.left, members, spans);
             members.push(qualified.right.name.to_string());
+            spans.push(text_span_from_oxc_span(qualified.right.span));
         }
     }
 }
@@ -303,7 +312,8 @@ fn parse_type_operator(type_operator: &TSTypeOperator<'_>) -> Option<ParsedType>
         // else with TS1354); an operand that lowered to something else stays as
         // it is so the annotation is kept rather than dropped (which would
         // cascade into `TS7006`/`TS7031` on the annotated binding). `unique
-        // symbol` has no modelled representation, so it degrades to `Unknown`.
+        // symbol` is modelled as `symbol`; an equality test against the `const`
+        // holding it still removes it (see `const_member_literal_value`).
         TSTypeOperatorOperator::Readonly => {
             let inner = parse_type(&type_operator.type_annotation)?;
             Some(match inner {
@@ -315,7 +325,7 @@ fn parse_type_operator(type_operator: &TSTypeOperator<'_>) -> Option<ParsedType>
                 other => other,
             })
         }
-        TSTypeOperatorOperator::Unique => Some(ParsedType::Unknown),
+        TSTypeOperatorOperator::Unique => Some(ParsedType::Symbol),
     }
 }
 
@@ -776,6 +786,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
         },
         construct_signature,
         non_primitive: false,
+        display_name: None,
     }))
 }
 

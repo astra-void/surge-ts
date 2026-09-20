@@ -1,2 +1,2 @@
-let event: { kind?: "click" } = {};
-let kind: "no" = event.kind;
+let clickEvent: { kind?: "click" } = {};
+let kind: "no" = clickEvent.kind;

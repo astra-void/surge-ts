@@ -5,6 +5,7 @@ pub(crate) mod expr;
 pub(crate) mod function;
 pub(crate) mod jsx;
 pub(crate) mod ops;
+mod structural_walk;
 pub(crate) mod var;
 
 use surge_ts_diagnostics::Diagnostic;
@@ -122,21 +123,3 @@ pub(crate) fn check_umd_global_value_reference(
     emit_value_position_reference_diagnostic(&name, span.or(fallback_span), ctx);
 }
 
-pub(crate) fn emit_type_only_as_value_diagnostic(
-    name: &str,
-    span: Option<TextSpan>,
-    ctx: &mut CheckerContext,
-) -> bool {
-    if ctx.lookup_type_declaration(name).is_none() {
-        return false;
-    }
-
-    let mut diagnostic = Diagnostic::ts2693(name, ctx.file_name.clone());
-
-    if let Some(span) = span {
-        diagnostic = diagnostic.with_span(convert_span(span));
-    }
-
-    ctx.push(diagnostic);
-    true
-}

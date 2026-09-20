@@ -249,6 +249,7 @@ pub(crate) fn statement_has_unsupported_declaration_surface(statement: &ParsedSt
         ParsedStatement::ExportDeclaration(export) => matches!(
             export.as_ref(),
             ParsedExportDeclaration::Unsupported { .. }
+                | ParsedExportDeclaration::EqualsExpression { .. }
                 | ParsedExportDeclaration::Default {
                     declaration: ParsedDefaultExportDeclaration::Unsupported { .. },
                     ..
@@ -283,16 +284,9 @@ pub(crate) fn emit_missing_export_diagnostic(
 ) {
     // tsc renders the module specifier from its source text, which keeps the
     // surrounding quotes (e.g. Module '"./user"'). The checker stores it
-    // unquoted, so re-wrap it here for both TS2305 and TS2614.
+    // unquoted, so re-wrap it here.
     let specifier = quoted_module_specifier(module_specifier);
-    let mut diagnostic = if module_specifier == "pkg"
-        && export_name != "default"
-        && ctx.file_name.contains("package-declarations")
-    {
-        Diagnostic::ts2614(specifier, export_name, ctx.file_name.clone())
-    } else {
-        Diagnostic::ts2305(specifier, export_name, ctx.file_name.clone())
-    };
+    let mut diagnostic = Diagnostic::ts2305(specifier, export_name, ctx.file_name.clone());
 
     if let Some(span) = name_span {
         diagnostic = diagnostic.with_span(convert_span(span));
@@ -363,6 +357,7 @@ pub(crate) fn syntactic_export_names(
             ParsedExportDeclaration::All { .. }
             | ParsedExportDeclaration::NamespaceExport { .. }
             | ParsedExportDeclaration::Equals { .. }
+            | ParsedExportDeclaration::EqualsExpression { .. }
             | ParsedExportDeclaration::Unsupported { .. } => return None,
         }
     }
@@ -478,7 +473,7 @@ pub(crate) fn emit_missing_named_import_diagnostic(
 ) {
     // See emit_missing_export_diagnostic: tsc keeps the specifier's quotes.
     let specifier = quoted_module_specifier(module_specifier);
-    let mut diagnostic = if has_explicit_default_export || module_specifier == "pkg" {
+    let mut diagnostic = if has_explicit_default_export {
         Diagnostic::ts2614(specifier, export_name, ctx.file_name.clone())
     } else {
         Diagnostic::ts2305(specifier, export_name, ctx.file_name.clone())
@@ -497,10 +492,6 @@ pub(crate) fn module_has_explicit_default_export(
     program_files: &[ParsedProgramFile],
     ctx: &CheckerContext,
 ) -> bool {
-    if module_specifier == "pkg" && ctx.file_name.contains("package-declarations") {
-        return true;
-    }
-
     if program_files.iter().any(|file| {
         file.file_kind == FileKind::DependencyDeclaration
             && file.file_name.contains(module_specifier)

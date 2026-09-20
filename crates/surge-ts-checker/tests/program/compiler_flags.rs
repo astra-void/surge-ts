@@ -370,9 +370,17 @@ fn no_unused_locals_reports_unused_function() {
 
 #[test]
 fn no_unused_locals_exempts_unused_class() {
-    // tsc does not report unused top-level classes under noUnusedLocals.
+    // An unused class is TS6196 ("declared but never used"), not TS6133.
     let source = "export {};\nclass Unused {}\n";
     assert!(ts6133_program_codes(source, true).is_empty());
+    let options = CheckerOptions {
+        no_unused_locals: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        codes(&program_with_options(&[("a.ts", source)], options)),
+        vec!["TS6196"]
+    );
 }
 
 #[test]

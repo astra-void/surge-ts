@@ -15,7 +15,7 @@ use crate::program::record_program_timing;
 use crate::symbols::{ScopeStack, SymbolTable};
 
 mod body;
-mod body_statements;
+pub(crate) mod body_statements;
 mod narrowing;
 mod signature;
 
@@ -242,6 +242,9 @@ pub(crate) fn collect_function_declaration_signature(
         symbols,
         false,
         function.has_body,
+        // `allow_lazy_dependency_signature` is "the file declares this name
+        // once"; a body beside other declarations is their implementation.
+        function.has_body && !allow_lazy_dependency_signature,
     );
 
     if duplicate {
@@ -284,6 +287,7 @@ pub(crate) fn check_function_declaration(
         is_generator,
         ..
     } = function;
+    check_type_parameter_declarations(&type_parameters, ctx);
 
     with_type_parameter_scope(&type_parameters, ctx, |ctx| {
         let signature_info = function_signature_info(
@@ -319,6 +323,7 @@ pub(crate) fn check_function_declaration(
                 symbols,
                 first_registration,
                 has_body,
+                has_body && !first_registration,
             )
         };
 
@@ -368,6 +373,99 @@ pub(crate) fn check_function_declaration(
     record_program_timing(ctx.timings.as_ref(), |timings| {
         timings.function_declaration_checking += start.elapsed()
     });
+}
+
+/// Every non-arrow function body binds `arguments` (tsc's `argumentsSymbol`,
+/// typed by the global `IArguments`); an arrow sees its enclosing one.
+pub(crate) fn bind_arguments_object(scopes: &mut ScopeStack, ctx: &mut CheckerContext) {
+    let ty = crate::infer::map_parsed_type(
+        surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            name: "IArguments".to_string(),
+            span: None,
+            type_arguments: Vec::new(),
+        })),
+        ctx,
+    );
+    scopes.insert_current(
+        "arguments",
+        crate::symbols::SymbolInfo {
+            ty,
+            kind: crate::symbols::SymbolKind::Const,
+            function_signature: None,
+        },
+    );
+}
+
+/// A `function` declared inside another function's body, checked the way a
+/// module-level one is but over the scope that encloses it. It binds its own
+/// `this`, so the enclosing method's does not leak in.
+pub(crate) fn check_nested_function_declaration(
+    function: ParsedFunctionDeclaration,
+    enclosing: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    if function.is_declare || !function.has_body {
+        return;
+    }
+    let mut symbols = enclosing.clone_with_reason(TypeCopyReason::FunctionBodySetup);
+    if !function.has_this_parameter {
+        let _ = symbols.insert(
+            "this",
+            crate::symbols::SymbolInfo {
+                ty: Type::Any,
+                kind: crate::symbols::SymbolKind::Const,
+                function_signature: None,
+            },
+        );
+    }
+    let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+    let ParsedFunctionDeclaration {
+        has_this_parameter,
+        this_parameter_type,
+        name,
+        name_span,
+        type_parameters,
+        parameters,
+        return_type,
+        return_type_span,
+        body,
+        body_reads,
+        is_generator,
+        ..
+    } = function;
+    check_type_parameter_declarations(&type_parameters, ctx);
+    with_type_parameter_scope(&type_parameters, ctx, |ctx| {
+        let signature_info = function_signature_info(
+            &type_parameters,
+            &parameters,
+            return_type.as_ref(),
+            &ctx.file_name,
+        );
+        let function_type = map_function_signature(
+            &parameters,
+            return_type.as_ref(),
+            &type_parameters,
+            None,
+            ctx,
+        );
+        ctx.nested_function_scope = Some(std::sync::Arc::new(symbols));
+        check_function_body_with_signature(
+            name,
+            parameters,
+            body,
+            &function_type,
+            &type_parameters,
+            Some(signature_info),
+            return_type.is_some(),
+            return_type_span.or(name_span),
+            Some(body_reads.as_slice()),
+            is_generator,
+            has_this_parameter,
+            this_parameter_type,
+            ctx,
+        );
+    });
+    ctx.symbols = saved_symbols;
 }
 
 pub(crate) fn check_function_declaration_body(
@@ -648,7 +746,7 @@ fn infer_block_body_return_types() -> bool {
 /// contextual return type is literal-like for it (`isLiteralOfContextualType`),
 /// so `() => 1` returns `number` while `(): 1 => 1` and `c ? "a" : "b"` keep
 /// their literals. A contextual type surge could not settle keeps the literal.
-fn widen_unit_return_type(body_type: Type, contextual_return_type: Option<&Type>) -> Type {
+pub(crate) fn widen_unit_return_type(body_type: Type, contextual_return_type: Option<&Type>) -> Type {
     if !matches!(
         body_type,
         Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
@@ -731,11 +829,13 @@ pub(crate) fn check_arrow_function_expression_anchored(
         body_span,
         span: arrow_span,
     } = arrow;
+    check_type_parameter_declarations(&type_parameters, ctx);
 
     // An arrow does not bind `this`, so it keeps whatever the enclosing function
     // established; a `function` expression and an object-literal method both
     // lower to this shape but bind their own.
     let outer_this_is_implicitly_any = ctx.this_is_implicitly_any;
+    let outer_constructor_writable_members = ctx.constructor_writable_members.take();
     match this_binding {
         surge_ts_syntax::ParsedThisBinding::Inherited => {}
         surge_ts_syntax::ParsedThisBinding::Own => ctx.this_is_implicitly_any = false,
@@ -811,7 +911,11 @@ pub(crate) fn check_arrow_function_expression_anchored(
 
         let mut scopes =
             ScopeStack::from_root(symbols.clone_with_reason(TypeCopyReason::FunctionBodySetup));
+        scopes.mark_function_boundary();
         scopes.push_function_scope();
+        if !matches!(this_binding, surge_ts_syntax::ParsedThisBinding::Inherited) {
+            bind_arguments_object(&mut scopes, ctx);
+        }
         // A `function` expression binds its own `this`; without a `this`
         // parameter it has no type, so the enclosing scope's `this` must not
         // leak in. tsc takes `this` from the contextual signature here — surge
@@ -840,20 +944,41 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 .unwrap_or_else(|| parameter_types.get(index).unwrap_or(&Type::Any));
             insert_parameter_bindings(parameter, parameter_type, &mut scopes);
         }
+        crate::checks::function::with_type_parameter_scope(&type_parameters, ctx, |ctx| {
+            for (index, parameter) in parameters.iter().enumerate() {
+                check_binding_pattern_defaults(
+                    &parameter.binding_name,
+                    parameter_types.get(index),
+                    &scopes,
+                    ctx,
+                );
+            }
+        });
 
         if should_track_unused_parameters(ctx) {
             emit_unused_parameters(&parameters, &body_reads, ctx);
         }
 
         let visible_symbols = visible_symbols(&scopes);
+        let saved_never_initialized = ctx.inherited_never_initialized.clone();
         match body {
             ParsedArrowFunctionBody::Expression(expression) => {
+                // An expression body is a flow container of its own; only a
+                // never-initialized outer `let` can be unassigned in it.
+                if let Some(own_flow) = crate::flow::expression_container_flow(&parameters, ctx) {
+                    crate::flow::check_parameter_default_flow(&parameters, &own_flow, ctx);
+                    let _ = crate::flow::check_expression_flow(&expression, None, &own_flow, 0, ctx);
+                }
+                ctx.inherited_never_initialized
+                    .retain(|name| !crate::flow::binds_parameter(&parameters, name));
                 let return_type_for_body = match &return_type {
-                    Type::Any
-                    | Type::Unknown
-                    | Type::GenuineUnknown
-                    | Type::TypeParameter(_)
-                    | Type::Void => None,
+                    Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+                        None
+                    }
+                    // A *contextual* `void` accepts any return (`cb: () => void`
+                    // takes `() => 1`); a written `: void` is an annotation like
+                    // any other and tsc checks the returned value against it.
+                    Type::Void if !has_explicit_return_type => None,
                     ty => Some(ty),
                 };
                 let inferred_body = match return_type_for_body {
@@ -906,8 +1031,10 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 };
 
                 if !has_explicit_return_type {
-                    if let InferredExpression::Known(body_type) = inferred_body {
-                        if !body_type.is_unknown() {
+                    if let Some(body_type) = inferred_body.flowing_type() {
+                        if matches!(body_type, Type::ErrorType) {
+                            return_type = Type::ErrorType;
+                        } else if !body_type.is_unknown() {
                             if expected_type.is_some()
                                 && !is_async
                                 && parameters.iter().all(|parameter| parameter.declared_type.is_none())
@@ -937,13 +1064,29 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 let mut flow_state = FunctionFlowState::new(
                     flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
                 );
+                let _ = crate::flow::enter_container(&type_parameters, &parameters, &statements, &mut flow_state, ctx);
+                crate::flow::check_parameter_default_flow(&parameters, &flow_state, ctx);
+                flow_state.hoist_vars(
+                    crate::flow::collect_hoisted_vars(&statements)
+                        .into_iter()
+                        .filter(|name| !crate::flow::binds_parameter(&parameters, name))
+                        .collect(),
+                );
                 let body_flow = analyze_function_body_flow(&statements);
+                // Whether a `default`-less switch covers its discriminant is only
+                // known once the body is checked.
+                let recheck_body = (body_flow.guarantees_value_return || body_flow.guarantees_exit)
+                    .then(|| body_has_defaultless_switch(&statements).then(|| statements.clone()))
+                    .flatten();
+                let tail_call = crate::checks::expr::tail_call_key(&statements);
                 let return_type_for_body = match &return_type {
-                    Type::Any
-                    | Type::Unknown
-                    | Type::GenuineUnknown
-                    | Type::TypeParameter(_)
-                    | Type::Void => None,
+                    Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+                        None
+                    }
+                    // A *contextual* `void` accepts any return (`cb: () => void`
+                    // takes `() => 1`); a written `: void` is an annotation like
+                    // any other and tsc checks the returned value against it.
+                    Type::Void if !has_explicit_return_type => None,
                     ty => Some(ty),
                 };
                 // A contextual return type this arrow did not annotate is not a
@@ -963,6 +1106,20 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     &mut flow_state,
                     ctx,
                 );
+                let body_flow = match recheck_body {
+                    Some(body)
+                        if !ctx.non_exhaustive_switches.is_empty()
+                            || !ctx.exhaustive_switches.is_empty() =>
+                    {
+                        crate::flow::with_non_exhaustive_switches(
+                            &ctx.non_exhaustive_switches,
+                            &ctx.exhaustive_switches,
+                            || {
+                            analyze_function_body_flow(&body)
+                        })
+                    }
+                    _ => body_flow,
+                };
                 // The flow verdict is checked first: the return-type gate walks
                 // the whole type, which on a large annotation is far costlier
                 // than the body it guards.
@@ -970,6 +1127,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     && !is_generator
                     && !body_flow.guarantees_exit
                     && !body_flow.guarantees_value_return
+                    && !tail_call.is_some_and(|key| ctx.never_returning_calls.contains(&key))
                     && should_check_missing_return(&return_type)
                 {
                     emit_missing_return_diagnostic(
@@ -1011,7 +1169,11 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     && expected_type.is_none()
                 {
                     let returned = ctx.body_return_types().to_vec();
-                    if !returned.is_empty() && returned.iter().all(|ty| !ty.is_unknown()) {
+                    if !returned.is_empty()
+                        && returned
+                            .iter()
+                            .all(|ty| !ty.is_unknown() || matches!(ty, Type::ErrorType))
+                    {
                         let mut members = returned;
                         if !body_flow.guarantees_exit {
                             members.push(Type::Undefined);
@@ -1024,6 +1186,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 let contextually_void = expected_type
                     .is_some_and(|expected_type| matches!(expected_type.return_type(), Type::Void));
                 if !has_explicit_return_type
+                    && !is_generator
                     && !contextually_void
                     && !returned_void_like
                     && ctx.options.no_implicit_returns
@@ -1034,6 +1197,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 }
             }
         }
+        ctx.inherited_never_initialized = saved_never_initialized;
 
         if expected_type
             .is_some_and(|expected_type| matches!(expected_type.return_type(), Type::Void))
@@ -1052,5 +1216,6 @@ pub(crate) fn check_arrow_function_expression_anchored(
     });
 
     ctx.this_is_implicitly_any = outer_this_is_implicitly_any;
+    ctx.constructor_writable_members = outer_constructor_writable_members;
     result
 }

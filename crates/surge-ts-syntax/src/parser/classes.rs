@@ -175,7 +175,11 @@ fn parse_class_heritage(class: &Class<'_>) -> Vec<ParsedNamedType> {
         return Vec::new();
     };
     let Some((name, span)) = super::types::flatten_heritage_expression(super_class) else {
-        return Vec::new();
+        return vec![ParsedNamedType {
+            name: crate::EXPRESSION_HERITAGE_BASE.to_string(),
+            span: Some(text_span_from_oxc_span(super_class.span())),
+            type_arguments: Vec::new(),
+        }];
     };
 
     let type_arguments = class
@@ -293,6 +297,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                     });
 
                     Some(ParsedClassMember::Method(ParsedClassMethod {
+                        span: Some(text_span_from_oxc_span(method.span)),
                         name,
                         name_span: Some(text_span_from_oxc_span(name_span)),
                         is_static: method.r#static,
@@ -347,6 +352,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                     };
 
                     Some(ParsedClassMember::Accessor(ParsedClassAccessor {
+                        span: Some(text_span_from_oxc_span(method.span)),
                         name,
                         name_span: Some(text_span_from_oxc_span(name_span)),
                         is_static: method.r#static,
@@ -396,6 +402,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             };
 
             Some(ParsedClassMember::Property(ParsedClassProperty {
+                span: Some(text_span_from_oxc_span(property.span)),
                 name,
                 name_span: Some(text_span_from_oxc_span(name_span)),
                 is_static: property.r#static,
@@ -415,6 +422,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
         }
         ClassElement::StaticBlock(block) => {
             Some(ParsedClassMember::StaticBlock(crate::ParsedClassStaticBlock {
+                span: Some(text_span_from_oxc_span(block.span)),
                 body: parse_statement_list_as_function_body(&block.body),
                 body_reads: super::reads::collect_statement_reads(&block.body),
             }))

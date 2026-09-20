@@ -63,5 +63,5 @@ fn a_block_comment_line_stops_the_walk() {
          \x20 return a;\n\
          }\n",
     );
-    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2578", "TS2322"]);
 }

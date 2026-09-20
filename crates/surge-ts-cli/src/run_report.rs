@@ -130,9 +130,9 @@ fn is_default_lib_file_name(file_name: &str) -> bool {
 
 fn sample_memory() -> MemorySample {
     MemorySample {
-        peak_physical: probe::peak_footprint_bytes(),
-        finish_physical: probe::current_footprint_bytes(),
-        peak_rss: probe::peak_rss_bytes(),
+        peak_physical: crate::probe::peak_footprint_bytes(),
+        finish_physical: crate::probe::current_footprint_bytes(),
+        peak_rss: crate::probe::peak_rss_bytes(),
     }
 }
 
@@ -339,152 +339,6 @@ fn build_report_json(
     root.insert("phases".to_string(), Value::Object(phases));
     root.insert("memory".to_string(), Value::Object(memory_json));
     Value::Object(root)
-}
-
-// Process-memory probes, sampled once after checking completes. All probes
-// return `None` on unsupported platforms or syscall failure — the report must
-// state `unavailable`/`null` rather than fabricate a number. macOS reports
-// `phys_footprint` (the Activity Monitor / jetsam figure, which keeps counting
-// compressed pages that leave the resident set) plus the getrusage peak RSS;
-// Linux exposes only the RSS high-water mark, so the footprint fields are
-// `None` there.
-#[cfg(target_os = "macos")]
-mod probe {
-    use std::ffi::c_void;
-    use std::mem::MaybeUninit;
-
-    // Mirrors <mach/task_info.h> `struct task_vm_info` through the rev3
-    // fields. The kernel fills fields up to the boundary implied by the
-    // caller's count, so requesting through rev3 yields `phys_footprint`
-    // (rev1) and `ledger_phys_footprint_peak` (rev3); older kernels report a
-    // smaller filled count, which the per-field offset checks turn into `None`.
-    #[repr(C)]
-    struct TaskVmInfo {
-        virtual_size: u64,
-        region_count: i32,
-        page_size: i32,
-        resident_size: u64,
-        resident_size_peak: u64,
-        device: u64,
-        device_peak: u64,
-        internal: u64,
-        internal_peak: u64,
-        external: u64,
-        external_peak: u64,
-        reusable: u64,
-        reusable_peak: u64,
-        purgeable_volatile_pmap: u64,
-        purgeable_volatile_resident: u64,
-        purgeable_volatile_virtual: u64,
-        compressed: u64,
-        compressed_peak: u64,
-        compressed_lifetime: u64,
-        phys_footprint: u64,
-        min_address: u64,
-        max_address: u64,
-        ledger_phys_footprint_peak: i64,
-        ledger_tail: [i64; 20],
-    }
-
-    #[repr(C)]
-    struct Timeval {
-        tv_sec: i64,
-        tv_usec: i32,
-    }
-
-    #[repr(C)]
-    struct Rusage {
-        ru_utime: Timeval,
-        ru_stime: Timeval,
-        ru_maxrss: i64,
-        ru_tail: [i64; 13],
-    }
-
-    const RUSAGE_SELF: i32 = 0;
-    const TASK_VM_INFO: u32 = 22;
-    const KERN_SUCCESS: i32 = 0;
-
-    unsafe extern "C" {
-        fn getrusage(who: i32, usage: *mut Rusage) -> i32;
-        static mach_task_self_: u32;
-        fn task_info(task: u32, flavor: u32, info: *mut c_void, count: *mut u32) -> i32;
-    }
-
-    fn task_vm_info() -> Option<(TaskVmInfo, usize)> {
-        let mut info = MaybeUninit::<TaskVmInfo>::zeroed();
-        let mut count = (std::mem::size_of::<TaskVmInfo>() / 4) as u32;
-        let kr = unsafe {
-            task_info(
-                mach_task_self_,
-                TASK_VM_INFO,
-                info.as_mut_ptr().cast(),
-                &mut count,
-            )
-        };
-        if kr != KERN_SUCCESS {
-            return None;
-        }
-        Some((unsafe { info.assume_init() }, count as usize * 4))
-    }
-
-    pub(super) fn current_footprint_bytes() -> Option<u64> {
-        let (info, filled) = task_vm_info()?;
-        let end = std::mem::offset_of!(TaskVmInfo, phys_footprint) + 8;
-        (filled >= end).then_some(info.phys_footprint)
-    }
-
-    pub(super) fn peak_footprint_bytes() -> Option<u64> {
-        let (info, filled) = task_vm_info()?;
-        let end = std::mem::offset_of!(TaskVmInfo, ledger_phys_footprint_peak) + 8;
-        if filled < end {
-            return None;
-        }
-        u64::try_from(info.ledger_phys_footprint_peak).ok()
-    }
-
-    pub(super) fn peak_rss_bytes() -> Option<u64> {
-        let mut usage = MaybeUninit::<Rusage>::zeroed();
-        if unsafe { getrusage(RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
-            return None;
-        }
-        // BSD getrusage reports ru_maxrss in bytes (Linux reports kilobytes).
-        u64::try_from(unsafe { usage.assume_init() }.ru_maxrss).ok()
-    }
-}
-
-#[cfg(target_os = "linux")]
-mod probe {
-    pub(super) fn current_footprint_bytes() -> Option<u64> {
-        None
-    }
-
-    pub(super) fn peak_footprint_bytes() -> Option<u64> {
-        None
-    }
-
-    pub(super) fn peak_rss_bytes() -> Option<u64> {
-        let status = std::fs::read_to_string("/proc/self/status").ok()?;
-        let line = status
-            .lines()
-            .find_map(|line| line.strip_prefix("VmHWM:"))?;
-        let kb: u64 = line.trim().trim_end_matches("kB").trim().parse().ok()?;
-        Some(kb * 1024)
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-mod probe {
-    pub(super) fn current_footprint_bytes() -> Option<u64> {
-        None
-    }
-
-    pub(super) fn peak_footprint_bytes() -> Option<u64> {
-        None
-    }
-
-    pub(super) fn peak_rss_bytes() -> Option<u64> {
-        None
-    }
 }
 
 #[cfg(test)]

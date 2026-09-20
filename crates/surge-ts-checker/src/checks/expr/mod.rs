@@ -11,6 +11,7 @@ mod index_access;
 mod inferred;
 mod operand_types;
 mod operand_writes;
+mod unresolved;
 
 pub(crate) use accessibility::{ClassIdentity, check_member_accessibility, enclosing_class_lineage};
 pub(crate) use diagnostics::*;
@@ -24,6 +25,11 @@ pub(crate) use operand_types::{
     is_definitely_not_iterable,
 };
 pub(crate) use operand_writes::{check_delete_operand, check_update_operand, update_result_type};
+pub(crate) use unresolved::{
+    EnclosingClassMembers, UnresolvedNameSite, cannot_find_name_message,
+    export_assignment_target_is_exempt, report_unresolved_value_name,
+    suggested_lib_for_nonexistent_name, unresolved_type_query_diagnostic,
+};
 
 use std::time::Instant;
 use surge_ts_diagnostics::Diagnostic;
@@ -34,7 +40,6 @@ use super::call::{
     check_call_like, check_new_like, check_optional_call_like, check_optional_property_call,
     check_property_call_like,
 };
-use super::emit_type_only_as_value_diagnostic;
 use super::function::check_arrow_function_expression;
 use super::ops;
 use crate::context::CheckerContext;

@@ -512,7 +512,7 @@ fn ambient_module_duplicate_declarations_merge_policy() {
 }
 
 #[test]
-fn ambient_module_duplicate_default_export_policy_pinned() {
+fn ambient_module_duplicate_default_export_reports_both() {
     let diagnostics = program(&[
         (
             "src/index.ts",
@@ -532,14 +532,16 @@ fn ambient_module_duplicate_default_export_policy_pinned() {
         ),
     ]);
 
-    assert!(diagnostics.is_empty());
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["TS2528", "TS2714", "TS2528", "TS2714"]
+    );
 }
 
 #[test]
-fn ambient_module_duplicate_type_export_policy_pinned() {
-    // Reopened ambient module blocks merge their exported interfaces; on a
-    // conflicting property the first declaration wins and no diagnostic is
-    // surfaced for the ambient declaration file (pinned, low-cascade policy).
+fn ambient_module_duplicate_type_export_conflict_reports_ts2717() {
+    // Reopened ambient module blocks merge their exported interfaces; the
+    // conflicting redeclaration of `name` is TS2717.
     let diagnostics = program(&[
         (
             "src/index.ts",
@@ -559,18 +561,19 @@ fn ambient_module_duplicate_type_export_policy_pinned() {
         ),
     ]);
 
-    assert!(diagnostics.is_empty());
+    assert_eq!(codes(&diagnostics), vec!["TS2717"]);
 }
 
 #[test]
-fn ambient_global_duplicate_const_policy_pinned() {
+fn ambient_global_duplicate_const_reports_both() {
     let diagnostics = program(&[
         ("src/index.ts", "let ok: string = value;"),
         ("types/a.d.ts", "declare const value: string;"),
         ("types/b.d.ts", "declare const value: number;"),
     ]);
 
-    assert!(diagnostics.is_empty());
+    assert_eq!(codes(&diagnostics), vec!["TS2451", "TS2451"]);
+    assert_eq!(file_names(&diagnostics), vec!["types/a.d.ts", "types/b.d.ts"]);
 }
 
 #[test]

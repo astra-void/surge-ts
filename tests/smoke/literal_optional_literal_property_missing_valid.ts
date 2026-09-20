@@ -1,1 +1,1 @@
-let event: { kind?: "click" } = {};
+let clickEvent: { kind?: "click" } = {};

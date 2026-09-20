@@ -84,6 +84,22 @@ pub(super) fn evaluate_arguments_context_free(
     ctx.degraded_expected_type_depth = saved_depth;
 }
 
+/// Arguments of a call on tsc's error type. `resolveErrorCall` checks each one
+/// with no contextual type, so a callback's parameters are implicit `any`
+/// whatever suppression an enclosing expression set up.
+pub(super) fn evaluate_arguments_on_error_type(
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let saved_depth = ctx.degraded_expected_type_depth;
+    ctx.degraded_expected_type_depth = 0;
+    for argument in arguments {
+        let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+    }
+    ctx.degraded_expected_type_depth = saved_depth;
+}
+
 /// Whether an `any`-typed receiver is `any` because the *source* says so, rather
 /// than because surge gave up partway along the chain.
 ///
@@ -208,6 +224,9 @@ pub(crate) fn check_property_call_like(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    if matches!(property_name, "push" | "unshift") {
+        crate::checks::expr::mark_evolving_array_operation(object, ctx);
+    }
     let object_ty =
         match crate::checks::expr::evaluate_expression(object, object_span, symbols, ctx) {
             // `Promise<T>` is modelled as its awaited `T` (see the `.then`
@@ -236,6 +255,11 @@ pub(crate) fn check_property_call_like(
             // decides *implicit-any* by receiver provenance, so a chain that
             // merely collapsed to `any` does not start reporting parameters tsc
             // contextually types.
+            failed @ (crate::infer::InferredExpression::MissingProperty { .. }
+            | crate::infer::InferredExpression::UnresolvedIdentifier { .. }) => {
+                evaluate_arguments_on_error_type(arguments, symbols, ctx);
+                return failed.flowing_type();
+            }
             _ => {
                 evaluate_arguments_context_free(object, arguments, symbols, ctx);
                 return None;
@@ -301,6 +325,10 @@ pub(crate) fn check_property_call_like(
     }
 
     match object_ty {
+        Type::ErrorType => {
+            evaluate_arguments_on_error_type(arguments, symbols, ctx);
+            Some(Type::ErrorType)
+        }
         Type::Any => {
             evaluate_arguments_context_free(object, arguments, symbols, ctx);
             Some(Type::Any)
@@ -517,6 +545,17 @@ pub(crate) fn check_property_call_like(
                 {
                     return None;
                 }
+                if let Some(diagnostic) =
+                    crate::checks::expr::global_this_missing_member(property_name, &object_ty, ctx)
+                {
+                    if let Some(diagnostic) = diagnostic {
+                        ctx.push(diagnostic_with_syntax_span(
+                            diagnostic,
+                            crate::spans::choose_span(property_span, object_span),
+                        ));
+                    }
+                    return Some(Type::Any);
+                }
                 let diagnostic = match crate::checks::expr::property_spelling_suggestion(
                     property_name,
                     &object_ty,
@@ -583,6 +622,10 @@ pub(crate) fn check_property_call_like(
                         symbols,
                         ctx,
                     )
+                }
+                Type::ErrorType => {
+                    evaluate_arguments_on_error_type(arguments, symbols, ctx);
+                    Some(Type::ErrorType)
                 }
                 Type::Any => {
                     evaluate_arguments_context_free(object, arguments, symbols, ctx);
@@ -769,11 +812,19 @@ pub(crate) fn check_optional_property_call(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    if matches!(property_name, "push" | "unshift") {
+        crate::checks::expr::mark_evolving_array_operation(object, ctx);
+    }
     let object_result = evaluate_expression(object, object_span, symbols, ctx);
 
     let object_type = match object_result {
         InferredExpression::Known(ty) => ty,
-        _ => return None, // already reported by evaluate_expression
+        InferredExpression::MissingProperty { .. }
+        | InferredExpression::UnresolvedIdentifier { .. } => {
+            evaluate_arguments_on_error_type(arguments, symbols, ctx);
+            return Some(Type::ErrorType);
+        }
+        InferredExpression::Unknown => return None,
     };
 
     // No early return for a degraded receiver: the `Unknown` arm below walks the
@@ -808,6 +859,10 @@ pub(crate) fn check_optional_property_call(
     }
 
     match base_type {
+        Type::ErrorType => {
+            evaluate_arguments_on_error_type(arguments, symbols, ctx);
+            Some(Type::ErrorType)
+        }
         Type::Any => {
             evaluate_arguments_context_free(object, arguments, symbols, ctx);
             Some(Type::Any)
@@ -965,6 +1020,17 @@ pub(crate) fn check_optional_property_call(
                 {
                     return None;
                 }
+                if let Some(diagnostic) =
+                    crate::checks::expr::global_this_missing_member(property_name, &base_type, ctx)
+                {
+                    if let Some(diagnostic) = diagnostic {
+                        ctx.push(diagnostic_with_syntax_span(
+                            diagnostic,
+                            crate::spans::choose_span(property_span, object_span),
+                        ));
+                    }
+                    return Some(Type::Any);
+                }
                 let diagnostic = match crate::checks::expr::property_spelling_suggestion(
                     property_name,
                     &base_type,
@@ -1009,6 +1075,10 @@ pub(crate) fn check_optional_property_call(
                         ctx,
                     )
                     .map(|ret| union_type(vec![ret, Type::Undefined]))
+                }
+                Type::ErrorType => {
+                    evaluate_arguments_on_error_type(arguments, symbols, ctx);
+                    Some(Type::ErrorType)
                 }
                 Type::Any => {
                     evaluate_arguments_context_free(object, arguments, symbols, ctx);

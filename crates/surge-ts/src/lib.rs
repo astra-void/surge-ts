@@ -525,6 +525,7 @@ impl Project {
         surge_ts_checker::set_fast_process_exit(options.fast_process_exit);
         let checker_options = CheckerOptions {
             no_implicit_any: loaded.compiler_options.no_implicit_any,
+            strict_null_checks: loaded.compiler_options.strict_null_checks,
             strict_property_initialization: loaded
                 .compiler_options
                 .strict_property_initialization,

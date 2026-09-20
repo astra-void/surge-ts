@@ -56,7 +56,9 @@ fn collect_exportable_value_symbols_thin(
                 }
             }
             ParsedStatement::NamespaceDeclaration(namespace) => {
-                if exportable_values.get_own(&namespace.name).is_none() {
+                if exportable_values.get_own(&namespace.name).is_none()
+                    && crate::program::is_instantiated_namespace(namespace)
+                {
                     let _ = exportable_values.insert(
                         namespace.name.clone(),
                         SymbolInfo {
@@ -873,9 +875,12 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
             let existing = exportable_values
                 .get_own(&namespace.name)
                 .map(|symbol| symbol.ty.clone());
-            let merges = existing
-                .as_ref()
-                .is_none_or(|ty| matches!(ty, Type::Object(_)));
+            // A namespace of types alone has no value side (tsc's
+            // `NamespaceModule`); a reference to it as a value is TS2708.
+            let merges = crate::program::is_instantiated_namespace(namespace)
+                && existing
+                    .as_ref()
+                    .is_none_or(|ty| matches!(ty, Type::Object(_)));
             if merges {
                 let ty = namespace_value_object_type_resolved(namespace, ctx);
                 let ty = match (existing, &ty) {
@@ -932,6 +937,10 @@ fn publishable_member_signature<'a>(
     // The second exception is a callback parameter (`ts.findConfigFile(dir,
     // (fileName) => …)`): the permissive member types every argument as
     // `any`, so the callback's own parameters become a false implicit-any.
+    // The third exception is a `never` return (`util.assertNever(x)`): the
+    // permissive member returns `any`, so the call no longer ends the flow and
+    // the function it closes reports a missing return.
+    let returns_never = matches!(return_type, Some(surge_ts_syntax::ParsedType::Never));
     let is_type_predicate = matches!(return_type, Some(surge_ts_syntax::ParsedType::Predicate(_)));
     let mut scan = SignatureNameScan::default();
     let mut takes_callback = false;
@@ -939,7 +948,7 @@ fn publishable_member_signature<'a>(
         takes_callback |= parameter_type_is_callback(parameter_type);
         collect_signature_type_names(parameter_type, &mut scan);
     }
-    if type_parameters.is_empty() && !is_type_predicate && !takes_callback {
+    if type_parameters.is_empty() && !is_type_predicate && !takes_callback && !returns_never {
         return false;
     }
     if let Some(return_type) = return_type {

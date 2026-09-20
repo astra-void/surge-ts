@@ -1,1 +1,1 @@
-let event: { kind: "click" } = { kind: missing };
+let clickEvent: { kind: "click" } = { kind: missing };

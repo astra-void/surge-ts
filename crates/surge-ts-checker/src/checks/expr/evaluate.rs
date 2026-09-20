@@ -1,6 +1,61 @@
 use super::*;
 use surge_ts_syntax::{ParsedLogicalOperator, ParsedType, ParsedUnaryOperator};
 
+/// A computed key is an expression like any other (tsc's
+/// `checkComputedPropertyName`); inference only reads its type.
+pub(crate) fn check_computed_property_keys(
+    properties: &[surge_ts_syntax::ParsedObjectProperty],
+    fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    for property in properties {
+        if let Some(key) = property.computed_key.as_deref() {
+            let _ = evaluate_expression(
+                key,
+                property.name_span.or(property.span).or(fallback_span),
+                symbols,
+                ctx,
+            );
+        }
+        if let Some(value) = property.unnamed_key_value.as_deref() {
+            let _ = evaluate_expression(value, property.span.or(fallback_span), symbols, ctx);
+        }
+    }
+}
+
+/// tsc ends the flow after a call whose return type is `never`
+/// (`util.assertNever(x)`), so a body whose last statement is one has no
+/// reachable end point. The verdict is recorded as the call is checked; the
+/// flow pass itself sees no types.
+fn record_never_returning_call(
+    return_type: &surge_ts_types::Type,
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if let Some(span) = span
+        && matches!(return_type.peeled(), surge_ts_types::Type::Never)
+    {
+        ctx.never_returning_calls.insert((span.start, span.end));
+    }
+}
+
+/// The key [`record_never_returning_call`] would record for the call `body`
+/// ends with, read before the body is checked.
+pub(crate) fn tail_call_key(
+    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+) -> Option<(usize, usize)> {
+    let surge_ts_syntax::ParsedFunctionBodyStatement::Expression(expression) = body.last()? else {
+        return None;
+    };
+    let span = match expression.as_ref() {
+        ParsedExpression::Call { callee_span, .. } => *callee_span,
+        ParsedExpression::PropertyCall { property_span, .. } => *property_span,
+        _ => None,
+    }?;
+    Some((span.start, span.end))
+}
+
 pub(crate) fn evaluate_expression(
     expression: &ParsedExpression,
     fallback_span: Option<SyntaxTextSpan>,
@@ -17,6 +72,7 @@ pub(crate) fn evaluate_expression(
         ParsedExpression::ObjectLiteral { properties, .. } => {
             let inferred_expression = infer_expression(expression, symbols, ctx);
 
+            check_computed_property_keys(properties, fallback_span, symbols, ctx);
             for property in properties {
                 // Method and accessor shorthand is checked by the inference pass
                 // itself, which must route it through the arrow-checking path to
@@ -128,7 +184,10 @@ pub(crate) fn evaluate_expression(
             symbols,
             ctx,
         ) {
-            Some(return_type) => InferredExpression::Known(return_type),
+            Some(return_type) => {
+                record_never_returning_call(&return_type, *callee_span, ctx);
+                InferredExpression::Known(return_type)
+            }
             None => InferredExpression::Unknown,
         },
         ParsedExpression::New {
@@ -171,7 +230,10 @@ pub(crate) fn evaluate_expression(
             symbols,
             ctx,
         ) {
-            Some(return_type) => InferredExpression::Known(return_type),
+            Some(return_type) => {
+                record_never_returning_call(&return_type, *property_span, ctx);
+                InferredExpression::Known(return_type)
+            }
             None => InferredExpression::Unknown,
         },
         ParsedExpression::OptionalPropertyCall {
@@ -270,9 +332,23 @@ pub(crate) fn evaluate_expression(
             right,
             right_span,
         } => {
-            let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
-            let right_result =
+            let mut left_result =
+                evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
+            let mut right_result =
                 evaluate_expression(right, right_span.or(fallback_span), symbols, ctx);
+            if binary_operands_must_be_non_null(*operator, left, &left_result, right, &right_result) {
+                for (operand, result, span) in [
+                    (&**left, &mut left_result, left_span.or(fallback_span)),
+                    (&**right, &mut right_result, right_span.or(fallback_span)),
+                ] {
+                    if let InferredExpression::Known(operand_type) = &*result
+                        && let Some(non_null) =
+                            super::check_non_null_operand(operand, operand_type, span, ctx)
+                    {
+                        *result = InferredExpression::Known(non_null);
+                    }
+                }
+            }
             let binary_span = match (left_span, right_span) {
                 (Some(left_span), Some(right_span)) => Some(SyntaxTextSpan {
                     start: left_span.start,
@@ -285,12 +361,10 @@ pub(crate) fn evaluate_expression(
             }
             if matches!(operator, surge_ts_syntax::ParsedBinaryOperator::In) {
                 check_in_operands(
-                    right,
                     &left_result,
                     &right_result,
                     left_span.or(fallback_span),
                     right_span.or(fallback_span),
-                    symbols,
                     ctx,
                 );
             }
@@ -325,7 +399,6 @@ pub(crate) fn evaluate_expression(
                     operand,
                     operand_type,
                     operand_span.or(fallback_span),
-                    symbols,
                     ctx,
                 );
             }
@@ -356,6 +429,13 @@ pub(crate) fn evaluate_expression(
             );
 
             super::update_result_type(&operand_result)
+        }
+        ParsedExpression::Sequence { expressions } => {
+            let mut result = InferredExpression::Unknown;
+            for (expression, span) in expressions {
+                result = evaluate_expression(expression, span.or(fallback_span), symbols, ctx);
+            }
+            result
         }
         ParsedExpression::Await {
             operand,
@@ -579,7 +659,35 @@ pub(crate) fn evaluate_expression(
             );
             inferred_expression
         }
+        // An assignment used as a value is checked like the statement form; its
+        // effect on the binding is applied by the enclosing statement.
+        ParsedExpression::Assignment {
+            target_name,
+            target_span,
+            value,
+            value_span,
+        } => {
+            let assignment = surge_ts_syntax::ParsedAssignment {
+                target_name: target_name.clone(),
+                target_span: *target_span,
+                value: value.as_ref().clone(),
+                value_span: *value_span,
+            };
+            let shadowed_locally = symbols.get_own(target_name).is_some();
+            crate::checks::assign::check_assignment_with_symbols(
+                assignment,
+                symbols,
+                shadowed_locally,
+                ctx,
+            );
+            infer_expression(value, symbols, ctx)
+        }
         _ => {
+            if let ParsedExpression::Identifier { name, span } = expression
+                && let Some(read) = super::check_auto_array_read(name, *span, symbols, ctx)
+            {
+                return InferredExpression::Known(read);
+            }
             let inferred_expression = infer_expression(expression, symbols, ctx);
             report_inferred_expression(
                 with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
@@ -655,6 +763,12 @@ fn evaluate_logical(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
+    // The right operand runs after the left's assignments, and is narrowed by
+    // what they assigned: `(next = it.next()) && !next.done`.
+    let after_assignments = symbols_after_assignments(left, symbols, ctx);
+    let symbols = after_assignments.as_ref().unwrap_or(symbols);
+    let tested = left.contains_assignment().then(|| left.with_assignments_as_reads());
+    let left: &ParsedExpression = tested.as_ref().unwrap_or(left);
     // `a && b` only evaluates `b` when `a` is truthy, so narrow `b` by the
     // `a` guard: a structured guard (`x.kind === "k" && x.k`, `"p" in x &&
     // x.p`) plus each identifier/property the `&&` chain proves non-nullish
@@ -814,7 +928,18 @@ fn evaluate_optional_property_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    if property_name == "length" && !is_bracketed {
+        super::mark_evolving_array_operation(object, ctx);
+    }
     let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
+    // An optional chain skips `checkNonNullType`; the member is looked up on
+    // `unknown` with `null` and `undefined` removed, which is `{}` — or on
+    // `unknown` itself when those are in every type's domain.
+    if !*is_bracketed && matches!(receiver, InferredExpression::Known(Type::GenuineUnknown)) {
+        let receiver_name = if surge_ts_types::strict_null_checks() { "{}" } else { "unknown" };
+        report_property_of_unknown(property_name, receiver_name, *property_span, ctx);
+        return InferredExpression::Unknown;
+    }
     if !*is_bracketed
         && let InferredExpression::Known(receiver_type) = &receiver
     {
@@ -849,12 +974,21 @@ fn evaluate_optional_property_access(
         span,
     } = &inferred_expression
     {
-        let diagnostic =
-            missing_property_diagnostic(property_name, object_type, symbols, ctx.file_name.clone());
-        ctx.push(diagnostic_with_syntax_span(
-            diagnostic,
-            choose_span(*span, fallback_span),
-        ));
+        let diagnostic = match global_this_missing_member(property_name, object_type, ctx) {
+            Some(diagnostic) => diagnostic,
+            None => Some(missing_property_diagnostic(
+                property_name,
+                object_type,
+                symbols,
+                ctx.file_name.clone(),
+            )),
+        };
+        if let Some(diagnostic) = diagnostic {
+            ctx.push(diagnostic_with_syntax_span(
+                diagnostic,
+                choose_span(*span, fallback_span),
+            ));
+        }
     }
     if !is_bracketed && matches!(inferred_expression, InferredExpression::Known(_)) {
         maybe_emit_index_signature_access(
@@ -1118,11 +1252,20 @@ fn evaluate_property_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    if property_name == "length" && !is_bracketed {
+        super::mark_evolving_array_operation(object, ctx);
+    }
     // The receiver is code too: a call's bad argument, a missing member
     // deeper in the chain, a possibly-`undefined` link — inferring it
     // types the access but reports none of that.
     let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
     check_property_receiver(object, &receiver, *object_span, fallback_span, symbols, ctx);
+    if !*is_bracketed && matches!(receiver, InferredExpression::Known(Type::GenuineUnknown)) {
+        if !surge_ts_types::strict_null_checks() {
+            report_property_of_unknown(property_name, "unknown", *property_span, ctx);
+        }
+        return InferredExpression::Unknown;
+    }
     // `c["x"]` is tsc's deliberate escape hatch: element access skips the
     // accessibility check that `c.x` gets.
     if !*is_bracketed
@@ -1315,16 +1458,59 @@ fn report_reference_and_nan_equality(
     }
 }
 
+/// Whether `checkBinaryLikeExpression` runs `checkNonNullType` on both operands:
+/// always for arithmetic, bitwise and `in`; for `+` only when neither side is
+/// string-like (concatenation takes `null`); for a relational comparison only
+/// when no operand is a symbol (that is TS2469 instead).
+fn binary_operands_must_be_non_null(
+    operator: surge_ts_syntax::ParsedBinaryOperator,
+    left: &ParsedExpression,
+    left_result: &InferredExpression,
+    right: &ParsedExpression,
+    right_result: &InferredExpression,
+) -> bool {
+    use surge_ts_syntax::ParsedBinaryOperator as Op;
+    // surge types the `null` keyword as `any`, which would read as string-like.
+    // An operand surge could not type is tsc's error type, an `any`.
+    let string_like = |operand: &ParsedExpression, result: &InferredExpression| {
+        !matches!(operand, ParsedExpression::NullLiteral)
+            && match result {
+                InferredExpression::Known(ty) => surge_ts_types::is_assignable_to(ty, &Type::String),
+                _ => true,
+            }
+    };
+    let symbol_like = |result: &InferredExpression| {
+        matches!(result, InferredExpression::Known(ty) if type_may_be_symbol(&ty.peeled()))
+    };
+    match operator {
+        Op::Subtract
+        | Op::Multiply
+        | Op::Divide
+        | Op::Remainder
+        | Op::Exponential
+        | Op::ShiftLeft
+        | Op::ShiftRight
+        | Op::ShiftRightZeroFill
+        | Op::BitwiseAnd
+        | Op::BitwiseOR
+        | Op::BitwiseXOR
+        | Op::In => true,
+        Op::Add => !string_like(left, left_result) && !string_like(right, right_result),
+        Op::LessThan | Op::LessThanEquals | Op::GreaterThan | Op::GreaterThanEquals => {
+            !symbol_like(left_result) && !symbol_like(right_result)
+        }
+        Op::StrictEquals | Op::StrictNotEquals | Op::Equals | Op::NotEquals | Op::Instanceof => false,
+    }
+}
+
 /// tsc's `checkInExpression`: the key must be assignable to
 /// `string | number | symbol`, and the right operand must be non-nullable and
 /// assignable to `object`. Operands surge could not settle are not judged.
 fn check_in_operands(
-    right: &ParsedExpression,
     left_result: &InferredExpression,
     right_result: &InferredExpression,
     left_span: Option<SyntaxTextSpan>,
     right_span: Option<SyntaxTextSpan>,
-    symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
     let judgeable = |ty: &Type| {
@@ -1352,14 +1538,6 @@ fn check_in_operands(
     if !judgeable(right_type) {
         return;
     }
-    let right_type = super::strip_reported_undefined_receiver(
-        right,
-        right_type.clone(),
-        right_span,
-        right_span,
-        symbols,
-        ctx,
-    );
     fn is_primitive(ty: &Type) -> bool {
         match ty {
             Type::String
@@ -1374,7 +1552,7 @@ fn check_in_operands(
             _ => false,
         }
     }
-    if is_primitive(&right_type) {
+    if is_primitive(right_type) {
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts2322(&right_type.name(), "object", ctx.file_name.clone()),
             right_span,
@@ -1390,9 +1568,12 @@ fn check_numeric_unary_operand(
     operand: &ParsedExpression,
     operand_type: &Type,
     operand_span: Option<SyntaxTextSpan>,
-    symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
+    if matches!(operand, ParsedExpression::NullLiteral) || *operand_type == Type::GenuineUnknown {
+        super::check_non_null_operand(operand, operand_type, operand_span, ctx);
+        return;
+    }
     if crate::checks::function::type_contains_unknown(operand_type)
         || matches!(operand_type, Type::Any | Type::GenuineUnknown | Type::ErrorType)
     {
@@ -1403,14 +1584,7 @@ fn check_numeric_unary_operand(
         ParsedUnaryOperator::Minus => "-",
         _ => "~",
     };
-    super::maybe_emit_possibly_undefined_receiver(
-        operand,
-        operand_type,
-        operand_span,
-        operand_span,
-        symbols,
-        ctx,
-    );
+    super::check_non_null_operand(operand, operand_type, operand_span, ctx);
     fn some_member(ty: &Type, test: &dyn Fn(&Type) -> bool) -> bool {
         match ty {
             Type::Union(union) => union.types().iter().any(|member| some_member(member, test)),
@@ -1501,4 +1675,55 @@ fn check_tagged_template_argument(
         Diagnostic::ts2345(&source_name, &parameter.name(), ctx.file_name.clone()),
         span,
     ));
+}
+
+fn report_property_of_unknown(
+    property_name: &str,
+    receiver_name: &str,
+    property_span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts2339(property_name, receiver_name, ctx.file_name.clone()),
+        property_span,
+    ));
+}
+
+/// `symbols` once `expression` has run the assignments it certainly performs:
+/// each target holds the type it was assigned. `None` when it assigns nothing.
+fn symbols_after_assignments(
+    expression: &ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<SymbolTable> {
+    if !expression.contains_assignment() {
+        return None;
+    }
+    let mut after = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    for (assignment, conditional) in crate::flow::expression_assignments(expression) {
+        let ParsedExpression::Assignment {
+            target_name, value, ..
+        } = assignment
+        else {
+            continue;
+        };
+        if conditional {
+            continue;
+        }
+        let (InferredExpression::Known(assigned), Some(symbol)) =
+            (infer_expression(value, &after, ctx), after.get(target_name))
+        else {
+            continue;
+        };
+        if assigned.is_unknown() {
+            continue;
+        }
+        let updated = crate::symbols::SymbolInfo {
+            ty: assigned,
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        };
+        let _ = after.insert(target_name.clone(), updated);
+    }
+    Some(after)
 }

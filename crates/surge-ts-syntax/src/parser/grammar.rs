@@ -21,20 +21,28 @@ use oxc_span::{GetSpan, Span};
 use oxc_syntax::operator::UnaryOperator;
 
 use super::spans::text_span_from_oxc_span;
-use crate::{ParsedGrammarDiagnostic, ParsedGrammarDiagnosticKind as Kind};
+use crate::{ParenthesizedExpressionSpan, ParsedGrammarDiagnostic, ParsedGrammarDiagnosticKind as Kind};
 
-pub(crate) fn collect_grammar_diagnostics(program: &Program<'_>) -> Vec<ParsedGrammarDiagnostic> {
+pub(crate) fn collect_grammar_diagnostics(
+    program: &Program<'_>,
+) -> (Vec<ParsedGrammarDiagnostic>, Vec<ParenthesizedExpressionSpan>) {
     let mut collector = GrammarCollector::default();
     collector.visit_program(program);
-    collector.diagnostics
+    let mut parenthesized = collector.parenthesized_expressions;
+    parenthesized.sort_unstable_by_key(|span| (span.inner.start, span.inner.end));
+    (collector.diagnostics, parenthesized)
 }
 
 #[derive(Default)]
 struct GrammarCollector {
     diagnostics: Vec<ParsedGrammarDiagnostic>,
+    parenthesized_expressions: Vec<ParenthesizedExpressionSpan>,
     /// Whether the file is strict-mode code, which a few rules are specific to.
     /// An ES module always is; a script only with an explicit `"use strict"`.
     strict_mode: bool,
+    /// Whether each enclosing function is `async`, innermost last. Empty at the
+    /// top level, where a module may `await`.
+    function_async: Vec<bool>,
     /// `declare namespace`/`declare module` nesting. An ambient container makes
     /// a bodyless declaration legal, so the implementation-missing checks stay
     /// quiet inside one.
@@ -570,6 +578,32 @@ impl GrammarCollector {
 
     fn is_ambient(&self) -> bool {
         self.ambient_depth > 0
+    }
+
+    /// tsc's `checkExportDeclaration` inside a namespace body: `export … from
+    /// "m"` is TS1194 on the module name in any namespace, and a local
+    /// `export { … }` is TS1194 on the declaration unless the namespace is
+    /// ambient.
+    fn check_namespace_export_declarations(&mut self, statements: &[Statement<'_>], ambient: bool) {
+        for statement in statements {
+            match statement {
+                Statement::ExportNamedDeclaration(export) if export.declaration.is_none() => {
+                    match export.source.as_ref() {
+                        Some(source) => {
+                            self.push(Kind::ExportDeclarationInNamespace, source.span, None)
+                        }
+                        None if !ambient => {
+                            self.push(Kind::ExportDeclarationInNamespace, export.span, None)
+                        }
+                        None => {}
+                    }
+                }
+                Statement::ExportAllDeclaration(export) => {
+                    self.push(Kind::ExportDeclarationInNamespace, export.source.span, None);
+                }
+                _ => {}
+            }
+        }
     }
 
     /// `export default` appearing more than once in the module: tsc reports
@@ -1645,6 +1679,10 @@ impl<'a> Visit<'a> for GrammarCollector {
         }
         if let Some(TSModuleDeclarationBody::TSModuleBlock(block)) = declaration.body.as_ref() {
             self.check_function_implementations(&block.body);
+            // An ambient external module (`declare module "x"`) may re-export.
+            if !matches!(declaration.id, oxc_ast::ast::TSModuleDeclarationName::StringLiteral(_)) {
+                self.check_namespace_export_declarations(&block.body, ambient);
+            }
         }
         oxc_ast_visit::walk::walk_ts_module_declaration(self, declaration);
         if ambient {
@@ -1737,14 +1775,28 @@ impl<'a> Visit<'a> for GrammarCollector {
         if function.body.is_none() {
             self.check_signature_parameters(&function.params, false);
         }
+        self.function_async.push(function.r#async);
         oxc_ast_visit::walk::walk_function(self, function, flags);
+        self.function_async.pop();
     }
 
     fn visit_arrow_function_expression(&mut self, arrow: &oxc_ast::ast::ArrowFunctionExpression<'a>) {
         if arrow.r#async {
             self.check_async_return_type(arrow.return_type.as_deref());
         }
+        self.function_async.push(arrow.r#async);
         oxc_ast_visit::walk::walk_arrow_function_expression(self, arrow);
+        self.function_async.pop();
+    }
+
+    /// tsc's `checkGrammarAwaitOrAwaitUsing`: `await` inside a function that
+    /// is not `async` — TS1308.
+    fn visit_await_expression(&mut self, expression: &oxc_ast::ast::AwaitExpression<'a>) {
+        if self.function_async.last() == Some(&false) {
+            let keyword = Span::new(expression.span.start, expression.span.start + 5);
+            self.push(Kind::AwaitOutsideAsyncFunction, keyword, None);
+        }
+        oxc_ast_visit::walk::walk_await_expression(self, expression);
     }
 
     fn visit_ts_type_parameter_declaration(
@@ -1835,6 +1887,23 @@ impl<'a> Visit<'a> for GrammarCollector {
     fn visit_for_in_statement(&mut self, statement: &ForInStatement<'a>) {
         self.visit_expression(&statement.right);
         self.visit_statement(&statement.body);
+    }
+
+    // Only the outermost of nested parentheses is recorded, keyed by the
+    // expression they wrap: that is the span the lowered tree keeps.
+    fn visit_parenthesized_expression(
+        &mut self,
+        parenthesized: &oxc_ast::ast::ParenthesizedExpression<'a>,
+    ) {
+        let mut inner = &parenthesized.expression;
+        while let Expression::ParenthesizedExpression(nested) = inner {
+            inner = &nested.expression;
+        }
+        self.parenthesized_expressions.push(ParenthesizedExpressionSpan {
+            inner: text_span_from_oxc_span(inner.span()),
+            outer: text_span_from_oxc_span(parenthesized.span),
+        });
+        self.visit_expression(inner);
     }
 }
 

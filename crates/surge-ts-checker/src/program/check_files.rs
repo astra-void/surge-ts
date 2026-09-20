@@ -827,118 +827,151 @@ pub(crate) fn emit_grammar_diagnostics(
     findings: &[surge_ts_syntax::ParsedGrammarDiagnostic],
     ctx: &mut CheckerContext,
 ) {
+    for finding in findings {
+        if let Some(diagnostic) = grammar_finding_diagnostic(finding, ctx) {
+            ctx.push(diagnostic);
+        }
+    }
+}
+
+/// The parse failures oxc classified that the grammar pass does not already
+/// report for this file. oxc numbers some of the same violations (TS1015,
+/// TS1049) at its own span; the grammar pass anchors them where tsc does, so
+/// a code it reports here is its to report and oxc's copy would be a second
+/// diagnostic for one error.
+pub(crate) fn unclaimed_parser_errors<'a>(
+    errors: &'a [surge_ts_syntax::ParserError],
+    findings: &[surge_ts_syntax::ParsedGrammarDiagnostic],
+    ctx: &CheckerContext,
+) -> impl Iterator<Item = &'a surge_ts_syntax::ParserError> {
+    let claimed: Vec<u32> = findings
+        .iter()
+        .filter_map(|finding| match grammar_finding_diagnostic(finding, ctx)?.code {
+            surge_ts_diagnostics::DiagnosticCode::TypeScript(number) => Some(number),
+            surge_ts_diagnostics::DiagnosticCode::Custom(_) => None,
+        })
+        .collect();
+    errors
+        .iter()
+        .filter(move |error| !error.code.is_some_and(|code| claimed.contains(&code)))
+}
+
+fn grammar_finding_diagnostic(
+    finding: &surge_ts_syntax::ParsedGrammarDiagnostic,
+    ctx: &CheckerContext,
+) -> Option<Diagnostic> {
     use surge_ts_syntax::ParsedGrammarDiagnosticKind as Kind;
 
-    for finding in findings {
-        let diagnostic = match finding.kind {
-            Kind::ConstNotInitialized => Diagnostic::ts1155(ctx.file_name.clone()),
-            Kind::DeleteOnIdentifierInStrictMode => Diagnostic::ts1102(ctx.file_name.clone()),
-            Kind::EnumForwardReference => Diagnostic::ts2651(ctx.file_name.clone()),
-            Kind::EnumMemberInitializerRequired => Diagnostic::ts1061(ctx.file_name.clone()),
-            Kind::ConstEnumInitializerNotConstant => Diagnostic::ts2474(ctx.file_name.clone()),
-            Kind::AmbientEnumInitializerNotConstant => Diagnostic::ts1066(ctx.file_name.clone()),
-            Kind::DuplicateObjectLiteralProperty => Diagnostic::ts1117(ctx.file_name.clone()),
-            Kind::FunctionImplementationMissing => Diagnostic::ts2391(ctx.file_name.clone()),
-            Kind::ConstructorImplementationMissing => Diagnostic::ts2390(ctx.file_name.clone()),
-            Kind::MultipleDefaultExports => Diagnostic::ts2528(ctx.file_name.clone()),
-            Kind::ImplicitAnyMember => {
-                if !ctx.options.no_implicit_any {
-                    continue;
-                }
-                let Some(name) = finding.name.as_deref() else {
-                    continue;
-                };
-                Diagnostic::ts7008(name, "any", ctx.file_name.clone())
+    let diagnostic = match finding.kind {
+        Kind::ConstNotInitialized => Diagnostic::ts1155(ctx.file_name.clone()),
+        Kind::AwaitOutsideAsyncFunction => Diagnostic::ts1308(ctx.file_name.clone()),
+        Kind::ExportDeclarationInNamespace => Diagnostic::ts1194(ctx.file_name.clone()),
+        Kind::DeleteOnIdentifierInStrictMode => Diagnostic::ts1102(ctx.file_name.clone()),
+        Kind::EnumForwardReference => Diagnostic::ts2651(ctx.file_name.clone()),
+        Kind::EnumMemberInitializerRequired => Diagnostic::ts1061(ctx.file_name.clone()),
+        Kind::ConstEnumInitializerNotConstant => Diagnostic::ts2474(ctx.file_name.clone()),
+        Kind::AmbientEnumInitializerNotConstant => Diagnostic::ts1066(ctx.file_name.clone()),
+        Kind::DuplicateObjectLiteralProperty => Diagnostic::ts1117(ctx.file_name.clone()),
+        Kind::FunctionImplementationMissing => Diagnostic::ts2391(ctx.file_name.clone()),
+        Kind::ConstructorImplementationMissing => Diagnostic::ts2390(ctx.file_name.clone()),
+        Kind::MultipleDefaultExports => Diagnostic::ts2528(ctx.file_name.clone()),
+        Kind::ImplicitAnyMember => {
+            if !ctx.options.no_implicit_any {
+                return None;
             }
-            Kind::ModifierMustPrecede => {
-                let Some((first, second)) =
-                    finding.name.as_deref().and_then(|pair| pair.split_once('\0'))
-                else {
-                    continue;
-                };
-                Diagnostic::ts1029(first, second, ctx.file_name.clone())
+            let Some(name) = finding.name.as_deref() else {
+                return None;
+            };
+            Diagnostic::ts7008(name, "any", ctx.file_name.clone())
+        }
+        Kind::ModifierMustPrecede => {
+            let Some((first, second)) =
+                finding.name.as_deref().and_then(|pair| pair.split_once('\0'))
+            else {
+                return None;
+            };
+            Diagnostic::ts1029(first, second, ctx.file_name.clone())
+        }
+        Kind::AsyncReturnTypeNotPromise => {
+            let Some(written) = finding.name.as_deref() else {
+                return None;
+            };
+            Diagnostic::ts1064(written, ctx.file_name.clone())
+        }
+        Kind::RequiredTypeParameterAfterOptional => Diagnostic::ts2706(ctx.file_name.clone()),
+        Kind::CircularTypeAlias => {
+            let Some(name) = finding.name.as_deref() else {
+                return None;
+            };
+            Diagnostic::ts2456(name, ctx.file_name.clone())
+        }
+        Kind::OptionalParameterWithInitializer => Diagnostic::ts1015(ctx.file_name.clone()),
+        Kind::RequiredParameterAfterOptional => Diagnostic::ts1016(ctx.file_name.clone()),
+        Kind::AmbientInitializer => Diagnostic::ts1039(ctx.file_name.clone()),
+        Kind::SetAccessorParameterCount => Diagnostic::ts1049(ctx.file_name.clone()),
+        Kind::GetAccessorWithoutReturn => Diagnostic::ts2378(ctx.file_name.clone()),
+        Kind::PropertyAccessorOverride
+        | Kind::AccessorPropertyOverride
+        | Kind::MethodAccessorOverride
+        | Kind::PropertyMethodOverride
+        | Kind::AccessorMethodOverride => {
+            let Some([member, base, derived]) = finding
+                .name
+                .as_deref()
+                .map(|names| names.split('\0').collect::<Vec<_>>())
+                .and_then(|names| <[&str; 3]>::try_from(names).ok())
+            else {
+                return None;
+            };
+            let file_name = ctx.file_name.clone();
+            match finding.kind {
+                Kind::PropertyAccessorOverride => Diagnostic::ts2610(member, base, derived, file_name),
+                Kind::AccessorPropertyOverride => Diagnostic::ts2611(member, base, derived, file_name),
+                Kind::MethodAccessorOverride => Diagnostic::ts2423(base, member, derived, file_name),
+                Kind::PropertyMethodOverride => Diagnostic::ts2425(base, member, derived, file_name),
+                _ => Diagnostic::ts2426(base, member, derived, file_name),
             }
-            Kind::AsyncReturnTypeNotPromise => {
-                let Some(written) = finding.name.as_deref() else {
-                    continue;
-                };
-                Diagnostic::ts1064(written, ctx.file_name.clone())
+        }
+        Kind::ThisBeforeSuperCall => Diagnostic::ts17009(ctx.file_name.clone()),
+        Kind::SuperPropertyBeforeSuperCall => Diagnostic::ts17011(ctx.file_name.clone()),
+        Kind::GetAccessorLessAccessible => Diagnostic::ts2808(ctx.file_name.clone()),
+        Kind::AccessorAbstractMismatch => Diagnostic::ts2676(ctx.file_name.clone()),
+        Kind::SetAccessorReturnType => Diagnostic::ts1095(ctx.file_name.clone()),
+        Kind::ObjectLiteralPropertyAndAccessor => Diagnostic::ts1119(ctx.file_name.clone()),
+        Kind::AbstractMethodOutsideAbstractClass => Diagnostic::ts1244(ctx.file_name.clone()),
+        Kind::AbstractPropertyOutsideAbstractClass => Diagnostic::ts1253(ctx.file_name.clone()),
+        Kind::ParameterPropertyOutsideImplementation => {
+            Diagnostic::ts2369(ctx.file_name.clone())
+        }
+        Kind::ParameterInitializerOutsideImplementation => {
+            Diagnostic::ts2371(ctx.file_name.clone())
+        }
+        Kind::DuplicateMember => {
+            let Some(name) = finding.name.as_deref() else {
+                return None;
+            };
+            Diagnostic::ts2300(name, ctx.file_name.clone())
+        }
+        Kind::DuplicateImplementation => Diagnostic::ts2393(ctx.file_name.clone()),
+        Kind::MultipleConstructorImplementations => Diagnostic::ts2392(ctx.file_name.clone()),
+        Kind::MissingSuperCall => Diagnostic::ts2377(ctx.file_name.clone()),
+        Kind::UnusedCommaOperand => Diagnostic::ts2695(ctx.file_name.clone()),
+        Kind::AlwaysTruthyExpression => Diagnostic::ts2872(ctx.file_name.clone()),
+        Kind::AlwaysFalsyExpression => Diagnostic::ts2873(ctx.file_name.clone()),
+        Kind::NeverNullishCoalesceOperand => Diagnostic::ts2869(ctx.file_name.clone()),
+        Kind::AlwaysNullishCoalesceOperand => Diagnostic::ts2871(ctx.file_name.clone()),
+        Kind::ImplicitAnyReturn => {
+            if !ctx.options.no_implicit_any {
+                return None;
             }
-            Kind::RequiredTypeParameterAfterOptional => Diagnostic::ts2706(ctx.file_name.clone()),
-            Kind::CircularTypeAlias => {
-                let Some(name) = finding.name.as_deref() else {
-                    continue;
-                };
-                Diagnostic::ts2456(name, ctx.file_name.clone())
-            }
-            Kind::OptionalParameterWithInitializer => Diagnostic::ts1015(ctx.file_name.clone()),
-            Kind::RequiredParameterAfterOptional => Diagnostic::ts1016(ctx.file_name.clone()),
-            Kind::AmbientInitializer => Diagnostic::ts1039(ctx.file_name.clone()),
-            Kind::SetAccessorParameterCount => Diagnostic::ts1049(ctx.file_name.clone()),
-            Kind::GetAccessorWithoutReturn => Diagnostic::ts2378(ctx.file_name.clone()),
-            Kind::PropertyAccessorOverride
-            | Kind::AccessorPropertyOverride
-            | Kind::MethodAccessorOverride
-            | Kind::PropertyMethodOverride
-            | Kind::AccessorMethodOverride => {
-                let Some([member, base, derived]) = finding
-                    .name
-                    .as_deref()
-                    .map(|names| names.split('\0').collect::<Vec<_>>())
-                    .and_then(|names| <[&str; 3]>::try_from(names).ok())
-                else {
-                    continue;
-                };
-                let file_name = ctx.file_name.clone();
-                match finding.kind {
-                    Kind::PropertyAccessorOverride => Diagnostic::ts2610(member, base, derived, file_name),
-                    Kind::AccessorPropertyOverride => Diagnostic::ts2611(member, base, derived, file_name),
-                    Kind::MethodAccessorOverride => Diagnostic::ts2423(base, member, derived, file_name),
-                    Kind::PropertyMethodOverride => Diagnostic::ts2425(base, member, derived, file_name),
-                    _ => Diagnostic::ts2426(base, member, derived, file_name),
-                }
-            }
-            Kind::ThisBeforeSuperCall => Diagnostic::ts17009(ctx.file_name.clone()),
-            Kind::SuperPropertyBeforeSuperCall => Diagnostic::ts17011(ctx.file_name.clone()),
-            Kind::GetAccessorLessAccessible => Diagnostic::ts2808(ctx.file_name.clone()),
-            Kind::AccessorAbstractMismatch => Diagnostic::ts2676(ctx.file_name.clone()),
-            Kind::SetAccessorReturnType => Diagnostic::ts1095(ctx.file_name.clone()),
-            Kind::ObjectLiteralPropertyAndAccessor => Diagnostic::ts1119(ctx.file_name.clone()),
-            Kind::AbstractMethodOutsideAbstractClass => Diagnostic::ts1244(ctx.file_name.clone()),
-            Kind::AbstractPropertyOutsideAbstractClass => Diagnostic::ts1253(ctx.file_name.clone()),
-            Kind::ParameterPropertyOutsideImplementation => {
-                Diagnostic::ts2369(ctx.file_name.clone())
-            }
-            Kind::ParameterInitializerOutsideImplementation => {
-                Diagnostic::ts2371(ctx.file_name.clone())
-            }
-            Kind::DuplicateMember => {
-                let Some(name) = finding.name.as_deref() else {
-                    continue;
-                };
-                Diagnostic::ts2300(name, ctx.file_name.clone())
-            }
-            Kind::DuplicateImplementation => Diagnostic::ts2393(ctx.file_name.clone()),
-            Kind::MultipleConstructorImplementations => Diagnostic::ts2392(ctx.file_name.clone()),
-            Kind::MissingSuperCall => Diagnostic::ts2377(ctx.file_name.clone()),
-            Kind::UnusedCommaOperand => Diagnostic::ts2695(ctx.file_name.clone()),
-            Kind::AlwaysTruthyExpression => Diagnostic::ts2872(ctx.file_name.clone()),
-            Kind::AlwaysFalsyExpression => Diagnostic::ts2873(ctx.file_name.clone()),
-            Kind::NeverNullishCoalesceOperand => Diagnostic::ts2869(ctx.file_name.clone()),
-            Kind::AlwaysNullishCoalesceOperand => Diagnostic::ts2871(ctx.file_name.clone()),
-            Kind::ImplicitAnyReturn => {
-                if !ctx.options.no_implicit_any {
-                    continue;
-                }
-                let Some(name) = finding.name.as_deref() else {
-                    continue;
-                };
-                Diagnostic::ts7010(name, "any", ctx.file_name.clone())
-            }
-        };
+            let Some(name) = finding.name.as_deref() else {
+                return None;
+            };
+            Diagnostic::ts7010(name, "any", ctx.file_name.clone())
+        }
+    };
 
-        ctx.push(diagnostic.with_span(crate::context::convert_span(finding.span)));
-    }
+    Some(diagnostic.with_span(crate::context::convert_span(finding.span)))
 }
 
 pub(super) fn check_program_file(
@@ -970,6 +1003,8 @@ pub(super) fn check_program_file(
     }
 
     emit_grammar_diagnostics(&parsed_file.grammar_diagnostics, ctx);
+    ctx.parenthesized_expressions = parsed_file.parenthesized_expressions.clone();
+    ctx.let_assignments = parsed_file.let_assignments.clone();
 
     if parsed_file.is_module {
         let Some(module_analysis) = shared_state.module_analyses[file_index].as_ref() else {
@@ -1128,6 +1163,12 @@ pub(super) fn check_program_file(
         ctx.module_value_fallback = Some(std::sync::Arc::new(validation_symbols));
 
         let statement_check_start = Instant::now();
+        crate::flow::begin_never_initialized_file(
+            &parsed_file.statements,
+            parsed_file.is_module,
+            &parsed_file.definite_writes,
+            ctx,
+        );
         check_program_file_statements(
             &parsed_file.statements,
             file_index,
@@ -1202,6 +1243,12 @@ pub(super) fn check_program_file(
         ctx.module_value_fallback = Some(std::sync::Arc::new(validation_symbols));
 
         let statement_check_start = Instant::now();
+        crate::flow::begin_never_initialized_file(
+            &parsed_file.statements,
+            parsed_file.is_module,
+            &parsed_file.definite_writes,
+            ctx,
+        );
         check_program_file_statements(
             &parsed_file.statements,
             file_index,

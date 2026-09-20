@@ -365,6 +365,10 @@ pub(crate) fn lower_ambient_global_values(
                     .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
                     .unwrap_or(surge_ts_types::Type::Unknown);
                 if ctx.ambient_global_symbols.get(&var.name).is_none() {
+                    if !matches!(var.kind, surge_ts_syntax::ParsedVariableKind::Var) {
+                        Arc::make_mut(&mut ctx.block_scoped_globals)
+                            .insert(Arc::from(var.name.as_str()));
+                    }
                     ctx.ambient_global_symbols.insert(
                         var.name.clone(),
                         crate::symbols::SymbolInfo {
@@ -504,7 +508,10 @@ fn lower_ambient_namespace_values(parsed_files: &[ParsedProgramFile], ctx: &mut 
                 _ => None,
             };
 
-            if let Some(namespace) = namespace {
+            // Only an instantiated block gives the namespace a value side.
+            if let Some(namespace) = namespace
+                && super::is_instantiated_namespace(namespace)
+            {
                 let entry = merged.entry(namespace.name.clone()).or_insert_with(|| {
                     order.push(namespace.name.clone());
                     PropertyMap::default()

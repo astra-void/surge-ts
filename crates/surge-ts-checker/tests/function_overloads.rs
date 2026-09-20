@@ -36,8 +36,6 @@ fn a_call_matching_an_earlier_overloads_parameter_is_accepted() {
     assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
-// An overload group merges permissively, so an argument matching *no* overload
-// still reports — surge names the merged parameter where tsc reports TS2769.
 #[test]
 fn an_argument_matching_no_overload_still_reports() {
     let diagnostics = check(
@@ -45,7 +43,7 @@ fn an_argument_matching_no_overload_still_reports() {
          declare function widen(v: number): number;\n\
          export const a = widen(true);\n",
     );
-    assert_eq!(codes(&diagnostics), vec!["TS2345"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2769"]);
 }
 
 // Overload signatures in front of an implementation are the same group.
@@ -144,7 +142,7 @@ fn a_property_matching_no_generic_overload_still_reports() {
          declare function pick<A>(o: { a: A }): 2;\n\
          export const a = pick({ a: 1, init: 2 });\n",
     );
-    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2769"]);
 }
 
 // The kept signature's return survives the fold itself. Widening it to the
@@ -242,8 +240,7 @@ fn a_callback_argument_is_a_wildcard() {
     assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
-// When no overload accepts the arguments the call keeps the fold's return, so
-// a no-match call reports exactly what it did before.
+// When no overload accepts the arguments the call keeps the fold's return.
 #[test]
 fn no_accepting_overload_keeps_the_fold() {
     let diagnostics = check(
@@ -251,5 +248,5 @@ fn no_accepting_overload_keeps_the_fold() {
          declare function widen(v: number): number;\n\
          export const a = widen(true);\n",
     );
-    assert_eq!(codes(&diagnostics), vec!["TS2345"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2769"]);
 }

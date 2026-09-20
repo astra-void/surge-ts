@@ -69,13 +69,23 @@ pub(crate) fn check_function_return_statement(
     };
 
     let flow_blocked = if flow_state.tracked_local_count() > 0 {
-        check_expression_flow(
-            expression,
-            return_statement.expression_span,
-            flow_state,
-            statement_index,
-            ctx,
-        )
+        if return_type.is_some_and(crate::flow::is_non_generic_contextual_type) {
+            crate::flow::check_substituting_read_flow(
+                expression,
+                return_statement.expression_span,
+                flow_state,
+                statement_index,
+                ctx,
+            )
+        } else {
+            check_expression_flow(
+                expression,
+                return_statement.expression_span,
+                flow_state,
+                statement_index,
+                ctx,
+            )
+        }
     } else {
         FlowCheck::Clear
     };
@@ -195,9 +205,12 @@ pub(crate) fn check_function_return_statement(
         // diagnostic-free path — it is what renders the whole signature tsc names
         // on the assignment. Only reached on a mismatch inside a contextually
         // typed body, so this costs nothing on a clean return.
-        InferredExpression::UnresolvedIdentifier { .. }
-        | InferredExpression::MissingProperty { .. }
-        | InferredExpression::Unknown => {
+        // A failed lookup returns tsc's error type.
+        failed @ (InferredExpression::UnresolvedIdentifier { .. }
+        | InferredExpression::MissingProperty { .. }) => {
+            ctx.note_contextual_return_type(&failed.flowing_type().unwrap_or(Type::Unknown));
+        }
+        InferredExpression::Unknown => {
             let mut noted = false;
             if ctx.in_contextual_return_body()
                 && let InferredExpression::Known(source_type) =

@@ -292,9 +292,18 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         return true;
     }
 
+    // `any` relates to everything but `never` (`isSimpleTypeRelatedTo`,
+    // relater.go:214). Only tsc's error type takes the rule: surge's own `Any`
+    // is also a modelling placeholder and stays permissive.
+    if matches!(from, Type::ErrorType) && matches!(to, Type::Never) {
+        return false;
+    }
+
     if from == to
         || matches!(from, Type::Any)
         || matches!(from, Type::Never)
+        // Without `strictNullChecks`, `undefined` (and `null`) inhabit every type.
+        || matches!(from, Type::Undefined) && !crate::strict_null_checks()
         || matches!(to, Type::Any)
         || to.is_unknown()
         // Sentinel `Unknown` (NOT the `unknown` keyword, which is

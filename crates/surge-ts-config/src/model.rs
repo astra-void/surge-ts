@@ -23,6 +23,8 @@ pub struct LoadedTsConfig {
 pub struct NormalizedCompilerOptions {
     pub strict: bool,
     pub no_implicit_any: bool,
+    /// `compilerOptions.strictNullChecks`. Defaults to `strict`.
+    pub strict_null_checks: bool,
     /// `compilerOptions.strictPropertyInitialization`. Defaults to `strict`.
     pub strict_property_initialization: bool,
     pub use_unknown_in_catch_variables: bool,
@@ -91,6 +93,7 @@ impl Default for NormalizedCompilerOptions {
         Self {
             strict: true,
             no_implicit_any: true,
+            strict_null_checks: true,
             strict_property_initialization: true,
             use_unknown_in_catch_variables: true,
             no_implicit_returns: false,

@@ -53,7 +53,8 @@ fn var_hoists_out_of_an_if_branch_and_a_loop() {
              return fromBranch + fromLoop;\n\
          }\n",
     );
-    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+    // Visible, but not definitely assigned on every path.
+    assert_eq!(codes(&diagnostics), vec!["TS2454", "TS2454"]);
 }
 
 // `let` and `const` stay block-scoped.

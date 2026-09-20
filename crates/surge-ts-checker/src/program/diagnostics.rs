@@ -38,8 +38,15 @@ pub(super) fn emit_parser_diagnostics(parsed_files: &[ParsedProgramFile], ctx: &
     for parsed_file in parsed_files {
         ctx.set_file_name(parsed_file.file_name.clone());
 
-        for error in &parsed_file.parser_errors {
-            ctx.push(parser_error_diagnostic(error, &parsed_file.file_name));
+        let diagnostics: Vec<Diagnostic> = super::check_files::unclaimed_parser_errors(
+            &parsed_file.parser_errors,
+            &parsed_file.grammar_diagnostics,
+            ctx,
+        )
+        .map(|error| parser_error_diagnostic(error, &parsed_file.file_name))
+        .collect();
+        for diagnostic in diagnostics {
+            ctx.push(diagnostic);
         }
     }
 }

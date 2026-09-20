@@ -13,10 +13,14 @@ use crate::program::{
 mod branch;
 mod expr;
 mod facts;
+mod module_scope;
+mod never_initialized;
 
 pub(crate) use branch::*;
 pub(crate) use expr::*;
 pub(crate) use facts::*;
+pub(crate) use module_scope::{check_class_member_flow, check_module_definite_assignment, walk_class};
+pub(crate) use never_initialized::{begin_file as begin_never_initialized_file, enter_container, expression_container_flow, is_plainly_defined};
 
 pub(crate) fn check_expression_flow(
     expression: &ParsedExpression,
@@ -95,6 +99,16 @@ pub(crate) struct FunctionFlowState {
     /// rules out union members and so retypes its siblings, which is what tsc's
     /// destructured-discriminated-union narrowing does.
     tuple_destructure_bindings: HashMap<String, (String, usize)>,
+    /// Bindings typed by a type parameter whose constraint is a union or
+    /// nullable. tsc substitutes that constraint for a read in a constraint
+    /// position or under a non-generic contextual type
+    /// (`getNarrowableTypeForReference`), where it may admit `undefined` and
+    /// so is not reported; any other read is.
+    pub(crate) constraint_exempt: std::collections::HashSet<Arc<str>>,
+    /// A body surge does not otherwise type-check (a generic class member, a
+    /// namespace function), walked for definite assignment alone: its own
+    /// annotated `let`s are tracked from their written types.
+    pub(crate) detached: bool,
 }
 
 impl Clone for FunctionFlowState {
@@ -115,6 +129,8 @@ impl Clone for FunctionFlowState {
             alias_guard_conditions: self.alias_guard_conditions.clone(),
             discriminant_aliases: self.discriminant_aliases.clone(),
             tuple_destructure_bindings: self.tuple_destructure_bindings.clone(),
+            constraint_exempt: self.constraint_exempt.clone(),
+            detached: self.detached,
         }
     }
 }
@@ -203,6 +219,47 @@ impl FunctionFlowState {
             alias_guard_conditions: HashMap::new(),
             discriminant_aliases: HashMap::new(),
             tuple_destructure_bindings: HashMap::new(),
+            constraint_exempt: std::collections::HashSet::new(),
+            detached: false,
+        }
+    }
+
+    /// Opens the container's own scope holding its hoisted `var`s as declared
+    /// but unassigned; their declarations later mark them assigned rather than
+    /// redeclaring them in whatever block they sit in.
+    pub(crate) fn hoist_vars(&mut self, names: Vec<Arc<str>>) {
+        if names.is_empty() {
+            return;
+        }
+        self.enabled = true;
+        self.push_scope(HashMap::new());
+        for name in names {
+            self.declare_current(name, AssignmentState::DeclaredUnassigned);
+        }
+    }
+
+    /// The assignment state of every binding in the outermost scope — the
+    /// container's own bindings, which outlive any branch.
+    pub(crate) fn root_states(&self) -> Vec<(Arc<str>, AssignmentState)> {
+        self.scopes
+            .first()
+            .map(|scope| {
+                scope
+                    .locals
+                    .iter()
+                    .map(|(name, state)| (Arc::clone(name), *state))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn root_state(&self, name: &str) -> Option<AssignmentState> {
+        self.scopes.first().and_then(|scope| scope.locals.get(name).copied())
+    }
+
+    pub(crate) fn set_root_state(&mut self, name: &str, state: AssignmentState) {
+        if let Some(slot) = self.scopes.first_mut().and_then(|scope| scope.locals.get_mut(name)) {
+            *slot = state;
         }
     }
 

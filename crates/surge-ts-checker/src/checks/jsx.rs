@@ -243,10 +243,13 @@ fn resolve_intrinsic_props_type(
 
     let (intrinsic_elements, declarer_scope) = match in_scope {
         Some(name) => (name.to_string(), None),
-        None => {
-            let (key, scope) = runtime_fallback()?;
-            (key, Some(scope))
-        }
+        None => match runtime_fallback() {
+            Some((key, scope)) => (key, Some(scope)),
+            None => {
+                report_missing_intrinsic_elements(element_span, ctx);
+                return None;
+            }
+        },
     };
 
     let named = ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
@@ -265,6 +268,7 @@ fn resolve_intrinsic_props_type(
         return None;
     };
 
+
     if let Some(property_type) = object.get_property_type(tag_name) {
         return Some(property_type.clone());
     }
@@ -278,6 +282,28 @@ fn resolve_intrinsic_props_type(
         element_span,
     ));
     None
+}
+
+/// tsc's `getIntrinsicTagSymbol`: with no `JSX.IntrinsicElements` to check the
+/// tag against, the element is an implicit `any`.
+fn report_missing_intrinsic_elements(
+    element_span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if !ctx.options.no_implicit_any {
+        return;
+    }
+    // Only when the program declares no intrinsic table at all. A table that
+    // exists but did not reach this file is surge's resolution gap — tsc
+    // reaches React's through the runtime module it synthesizes — and
+    // reporting it would describe that gap rather than the source.
+    if ctx.jsx_intrinsic_elements_declarer.is_some() {
+        return;
+    }
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts7026("IntrinsicElements", ctx.file_name.clone()),
+        element_span,
+    ));
 }
 
 /// Builds the value expression a component tag refers to: an identifier for
@@ -484,9 +510,16 @@ fn check_known_prop(
         return;
     }
 
+    // tsc checks an attribute value as a mutable location
+    // (`getWidenedLiteralLikeTypeForContextualType`): `disabled="yes"` against
+    // `boolean` relates `string`, not the literal.
+    let checked = crate::checks::function::widen_unit_return_type(
+        attribute_type.clone(),
+        Some(&expected_type),
+    );
     let (source, target) = crate::checks::expr::disambiguated_pair(
-        attribute_type,
-        source_display_name(attribute_type, &expected_type),
+        &checked,
+        source_display_name(&checked, &expected_type),
         &expected_type,
         expected_type.name(),
         &ctx.file_name,

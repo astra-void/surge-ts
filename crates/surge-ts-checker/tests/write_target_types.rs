@@ -33,7 +33,7 @@ fn a_write_uses_the_setter_type_not_the_getter_type() {
     let diagnostics = check(&format!("{ACCESSORS}c.value = true;\n"));
     assert_eq!(codes(&diagnostics), vec!["TS2322"]);
     assert!(
-        diagnostics[0].message.contains("number | string"),
+        diagnostics[0].message.contains("string | number"),
         "{}",
         diagnostics[0].message
     );

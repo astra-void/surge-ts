@@ -124,15 +124,28 @@ pub(crate) fn report_incompatible_heritage_members(
     }
 
     let own_type = map_parsed_type(named_type(&class.name, class.name_span), ctx);
-    let base_type = map_parsed_type(named_type(base_name, None), ctx);
+    // Resolved as the heritage position resolves it, where a base that names a
+    // value (`extends Mixed`) takes its instance type from the constructor.
+    let base_type = crate::program::with_dts_expansion_reason(
+        crate::program::DtsExpansionReason::InterfaceHeritageResolution,
+        || map_parsed_type(named_type(base_name, None), ctx),
+    );
     let members = class_instance_members(class);
     let incompatible = incompatible_members(&members, &own_type, &base_type);
     if incompatible.is_empty() {
         return false;
     }
 
+    // tsc names the base *type*; for a value base that is the constructed
+    // instance, not the identifier in the `extends` clause.
+    let base_display = if ctx.lookup_type_declaration(base_name).is_some() {
+        base_name.to_string()
+    } else {
+        base_type.name()
+    };
     for (name, name_span) in incompatible {
-        let diagnostic = Diagnostic::ts2416(&name, &class.name, base_name, ctx.file_name.clone());
+        let diagnostic =
+            Diagnostic::ts2416(&name, &class.name, &base_display, ctx.file_name.clone());
         ctx.push(match name_span {
             Some(span) => diagnostic.with_span(convert_span(span)),
             None => diagnostic,
@@ -164,6 +177,10 @@ pub(crate) fn check_interface_heritage(
 
     for base in &interface.extends {
         if !base.type_arguments.is_empty() {
+            continue;
+        }
+        // A base that names no type is already reported, at its own span.
+        if !base.name.contains('.') && ctx.lookup_type_declaration(&base.name).is_none() {
             continue;
         }
         let base_type = map_parsed_type(named_type(&base.name, None), ctx);

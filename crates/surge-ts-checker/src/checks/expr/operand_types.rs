@@ -56,8 +56,9 @@ fn is_valid_spread_type(ty: &Type) -> bool {
         | Type::OpenTuple(_)
         | Type::Function(_)
         | Type::TypeParameter(_) => true,
-        // A modelling failure is not evidence of a bad spread.
-        Type::Unknown => true,
+        // A modelling failure is not evidence of a bad spread, and tsc's error
+        // type is an `any`.
+        Type::Unknown | Type::ErrorType => true,
         Type::Reference(reference) => is_valid_spread_type(&reference.resolve()),
         Type::Union(union) => union.types().iter().all(is_valid_spread_type),
         _ => false,

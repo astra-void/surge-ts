@@ -228,10 +228,15 @@ pub(crate) fn parse_export_assignment(
 
     // Declaration-lite `export = identifier`. Any non-identifier target
     // (`export = require(...)`, object literals, member access, etc.) stays
-    // unsupported.
+    // unsupported as an export shape.
     let Expression::Identifier(identifier) = &declaration.expression else {
+        let (expression, expression_span) = parse_expression(&declaration.expression);
         return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
-            ParsedExportDeclaration::Unsupported { span },
+            ParsedExportDeclaration::EqualsExpression {
+                expression: Box::new(expression),
+                expression_span: Some(text_span_from_oxc_span(expression_span)),
+                span,
+            },
         ))]);
     };
 

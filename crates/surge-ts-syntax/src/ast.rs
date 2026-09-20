@@ -25,6 +25,13 @@ pub struct ParsedSource {
     /// Backs unused-import / unused-local diagnostics (TS6133): a top-level
     /// binding whose name never appears here and is not exported is unused.
     pub module_reads: Vec<String>,
+    /// Every name the file writes by definite assignment, sorted (tsc's
+    /// `AssignmentKindDefinite`; see `parser::writes`). Backs TS2454's
+    /// never-initialized rule for a `let` read from a nested function.
+    pub definite_writes: Vec<String>,
+    /// Where each `let` tsc may type by control flow is assigned, sorted by
+    /// the binding's name position (see [`LetAssignmentSummary`]).
+    pub let_assignments: Vec<LetAssignmentSummary>,
     /// Byte ranges of lines suppressed by an `@ts-expect-error`/`@ts-ignore`
     /// directive on the preceding line. Diagnostics starting inside one are
     /// dropped, matching tsc.
@@ -40,12 +47,40 @@ pub struct ParsedSource {
     /// with no annotation. Empty for declaration and non-TypeScript files,
     /// which surge does not report on.
     pub grammar_diagnostics: Vec<ParsedGrammarDiagnostic>,
+    /// Every parenthesized expression, sorted by the span of the expression it
+    /// wraps. The `Parsed*` tree drops the parentheses, but tsc reports on the
+    /// parenthesized node — `(x) * 1` is the unnamed `Object is possibly
+    /// 'undefined'`, anchored at the `(`. Collected with `grammar_diagnostics`.
+    pub parenthesized_expressions: Vec<ParenthesizedExpressionSpan>,
     /// For a `.json` file: the type of the value it holds, and the marker that
     /// this *is* a JSON module. Nothing in a JSON file is code, so it is never
     /// parsed as TypeScript and `statements` is empty; this carries its whole
     /// meaning. `None` for every other file. A `.json` file whose contents do
     /// not parse is still a module, with the degradation sentinel for a value.
     pub json_module_type: Option<ParsedType>,
+}
+
+/// How a flow-typed `let` (un-annotated, initialized with nothing, `undefined`,
+/// `null` or `[]`) is assigned across its declaring function — tsc's
+/// `markNodeAssignments`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LetAssignmentSummary {
+    pub name_start: u32,
+    /// The last write's position, extended to the end of the statement that
+    /// contains it (`extendAssignmentPosition`); `u32::MAX` when a nested
+    /// function writes it, `None` when nothing does.
+    pub last_assignment: Option<u32>,
+    /// Whether anything assigns it definitely (`=`, a logical assignment, a
+    /// destructuring or `for…in`/`for…of` target).
+    pub definitely_assigned: bool,
+}
+
+/// One [`ParsedSource::parenthesized_expressions`] entry: the outermost
+/// parentheses around the expression spanning `inner`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParenthesizedExpressionSpan {
+    pub inner: TextSpan,
+    pub outer: TextSpan,
 }
 
 /// One [`ParsedSource::grammar_diagnostics`] finding: what was wrong, where,
@@ -62,6 +97,11 @@ pub struct ParsedGrammarDiagnostic {
 pub enum ParsedGrammarDiagnosticKind {
     /// `const x;` outside an ambient context — TS1155.
     ConstNotInitialized,
+    /// `await` inside a function that is not `async` — TS1308.
+    AwaitOutsideAsyncFunction,
+    /// `export { … }` inside a namespace, or `export … from "m"` inside any
+    /// namespace — TS1194.
+    ExportDeclarationInNamespace,
     /// `delete someBinding` in strict-mode code — TS1102. Only a *direct*
     /// reference to a binding is a syntax error; `delete o.p` is the legal form.
     DeleteOnIdentifierInStrictMode,
@@ -224,6 +264,8 @@ pub struct ParsedDeclareModuleDeclaration {
 pub struct ParsedNamespaceDeclaration {
     /// The namespace identifier, e.g. `JSX`. Nested names (`A.B`) are joined with `.`.
     pub name: String,
+    /// Written `declare namespace`: its members are exported without `export`.
+    pub is_declare: bool,
     pub name_span: Option<TextSpan>,
     pub statements: Vec<ParsedStatement>,
     pub span: Option<TextSpan>,
@@ -454,6 +496,9 @@ pub struct ParsedTypeOfType {
     /// namespace value of. `name` then carries the rendered `import("spec")`
     /// and `members` the qualifier written after it.
     pub import_specifier: Option<String>,
+    /// Where each of `members` is written, when the parser kept it (the
+    /// qualifier of `typeof import("m").a.b`).
+    pub member_spans: Vec<TextSpan>,
     /// The instantiation expression's arguments: `typeof f<A, B>` binds the
     /// generic value's type parameters in type position, exactly as a call with
     /// explicit type arguments does. Empty for a plain `typeof f`. Dropping
@@ -534,6 +579,8 @@ pub struct ParsedObjectBindingElement {
     pub binding_name: ParsedBindingName,
     pub name_span: Option<TextSpan>,
     pub has_default: bool,
+    /// The default written for the property (`{ c = fallback }`), with its span.
+    pub default_value: Option<Box<(ParsedExpression, Option<TextSpan>)>>,
     pub span: Option<TextSpan>,
 }
 
@@ -678,6 +725,9 @@ pub struct ParsedClassStaticBlock {
     pub body: Vec<ParsedFunctionBodyStatement>,
     /// See [`ParsedFunctionDeclaration::body_reads`].
     pub body_reads: Vec<String>,
+    /// The member's whole source range, which is where a class type
+    /// parameter is out of scope when the member is static (TS2302).
+    pub span: Option<TextSpan>,
 }
 
 /// A `get`/`set` accessor pair, collapsed into a single member keyed by name.
@@ -698,6 +748,9 @@ pub struct ParsedClassAccessor {
     /// The written `get`/`set` declarations this member merges, each with its
     /// own body to check.
     pub declarations: Vec<ParsedAccessorDeclaration>,
+    /// The member's whole source range, which is where a class type
+    /// parameter is out of scope when the member is static (TS2302).
+    pub span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -712,6 +765,13 @@ pub struct ParsedAccessorDeclaration {
     /// False for an abstract or ambient accessor.
     pub has_body: bool,
 }
+
+/// The heritage name of a class whose `extends` clause is an expression surge
+/// does not reduce to a name — `extends mixin(Base)`. tsc takes the base from
+/// that expression's construct signatures; the checker resolves this name to
+/// `any`, which leaves the instance open instead of closed over the members
+/// the class declares itself.
+pub const EXPRESSION_HERITAGE_BASE: &str = "\0expression-base";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedClassProperty {
@@ -731,6 +791,9 @@ pub struct ParsedClassProperty {
     pub declared_type: Option<ParsedType>,
     pub initializer: Option<ParsedExpression>,
     pub initializer_span: Option<TextSpan>,
+    /// The member's whole source range, which is where a class type
+    /// parameter is out of scope when the member is static (TS2302).
+    pub span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -754,6 +817,9 @@ pub struct ParsedClassMethod {
     /// See [`ParsedFunctionDeclaration::is_generator`].
     pub is_generator: bool,
     pub is_async: bool,
+    /// The member's whole source range, which is where a class type
+    /// parameter is out of scope when the member is static (TS2302).
+    pub span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -871,6 +937,14 @@ pub enum ParsedExportDeclaration {
         exported_name_span: Option<TextSpan>,
         span: Option<TextSpan>,
     },
+    /// `export = <expression>` with any target but a bare identifier. The
+    /// module's export shape stays unsupported; the expression is kept only to
+    /// be checked.
+    EqualsExpression {
+        expression: Box<ParsedExpression>,
+        expression_span: Option<TextSpan>,
+        span: Option<TextSpan>,
+    },
     Unsupported {
         span: Option<TextSpan>,
     },
@@ -925,6 +999,9 @@ pub struct ParsedObjectType {
     /// The `object` keyword: every non-primitive. Its member surface is the
     /// empty object, but a primitive does not satisfy it, which `{}` cannot say.
     pub non_primitive: bool,
+    /// The name tsc displays the type by when it is not a written literal —
+    /// `typeof E` for an enum's object.
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1169,6 +1246,21 @@ pub enum ParsedExpression {
         span: Option<TextSpan>,
     },
     ArrowFunction(Box<ParsedArrowFunction>),
+    /// An assignment used as a value (`if ((m = re.exec(s)))`, `a = b = c`).
+    /// The target is a plain identifier, and `value` is what it stores, with a
+    /// compound or logical operator folded in as for an assignment statement.
+    /// The expression's own value is `value`'s.
+    Assignment {
+        target_name: String,
+        target_span: Option<TextSpan>,
+        value: Box<ParsedExpression>,
+        value_span: Option<TextSpan>,
+    },
+    /// A comma expression (`a, b`): every operand runs in order and the value
+    /// is the last one's.
+    Sequence {
+        expressions: Vec<(ParsedExpression, Option<TextSpan>)>,
+    },
     Unknown,
 }
 
@@ -1246,6 +1338,10 @@ pub struct ParsedObjectProperty {
     /// On a getter, the `set` accessor of the same name: its body is checked,
     /// but the getter decides the property's type.
     pub paired_setter: Option<Box<ParsedArrowFunction>>,
+    /// The value of a computed member whose key no member name can model
+    /// (`{ [f()]: v }`). Such a member is lowered to an empty spread that adds
+    /// nothing to the literal's type; the value is kept only to be checked.
+    pub unnamed_key_value: Option<Box<ParsedExpression>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1511,9 +1607,20 @@ pub struct ParsedWhileStatement {
     pub runs_at_least_once: bool,
 }
 
+/// How a `for…of`/`for…in` head binds its name. A `var` outlives the loop and
+/// is unassigned where the loop never ran; a bare name assigns an existing
+/// binding on each iteration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParsedForBindingKind {
+    Var,
+    BlockScoped,
+    ExistingBinding,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedForOfStatement {
     pub binding_name: ParsedBindingName,
+    pub binding_kind: ParsedForBindingKind,
     pub iterable: ParsedExpression,
     pub iterable_span: Option<TextSpan>,
     pub body: Vec<ParsedFunctionBodyStatement>,
@@ -1623,6 +1730,108 @@ pub struct ParsedArrayElement {
 /// retained-memory instrumentation to attribute parsed-annotation retention.
 /// Shallow-struct sizes plus owned string/vec heap; not allocator ground truth.
 impl ParsedType {
+    /// Visits every named reference written anywhere inside this type.
+    pub fn for_each_named_type(&self, visit: &mut dyn FnMut(&ParsedNamedType)) {
+        fn function(signature: &ParsedFunctionType, visit: &mut dyn FnMut(&ParsedNamedType)) {
+            for parameter in &signature.parameters {
+                parameter.ty.for_each_named_type(visit);
+            }
+            signature.return_type.for_each_named_type(visit);
+            for type_parameter in &signature.type_parameters {
+                for written in [&type_parameter.constraint, &type_parameter.default_type]
+                    .into_iter()
+                    .flatten()
+                {
+                    written.for_each_named_type(visit);
+                }
+            }
+        }
+        match self {
+            ParsedType::Named(named) => {
+                visit(named);
+                for argument in &named.type_arguments {
+                    argument.for_each_named_type(visit);
+                }
+            }
+            ParsedType::Array(element) | ParsedType::Readonly(element) | ParsedType::KeyOf(element) => {
+                element.for_each_named_type(visit);
+            }
+            ParsedType::Tuple(elements) | ParsedType::Union(elements) | ParsedType::Intersection(elements) => {
+                for element in elements.iter() {
+                    element.for_each_named_type(visit);
+                }
+            }
+            ParsedType::VariadicTuple(elements) => {
+                for element in elements.iter() {
+                    match element {
+                        ParsedTupleElement::Fixed(ty) | ParsedTupleElement::Rest(ty) => {
+                            ty.for_each_named_type(visit);
+                        }
+                    }
+                }
+            }
+            ParsedType::Object(object) => {
+                for property in &object.properties {
+                    property.ty.for_each_named_type(visit);
+                }
+                for index in [&object.string_index_type, &object.number_index_type]
+                    .into_iter()
+                    .flatten()
+                {
+                    index.for_each_named_type(visit);
+                }
+                if let Some(call_signature) = object.call_signature.as_deref() {
+                    function(call_signature, visit);
+                }
+            }
+            ParsedType::Function(signature) => function(signature, visit),
+            ParsedType::IndexedAccess(indexed_access) => {
+                indexed_access.object_type.for_each_named_type(visit);
+                indexed_access.index_type.for_each_named_type(visit);
+            }
+            ParsedType::Mapped(mapped) => {
+                mapped.constraint.for_each_named_type(visit);
+                mapped.value_type.for_each_named_type(visit);
+                if let Some(name_type) = mapped.name_type.as_deref() {
+                    name_type.for_each_named_type(visit);
+                }
+            }
+            ParsedType::Conditional(conditional) => {
+                conditional.check_type.for_each_named_type(visit);
+                conditional.extends_type.for_each_named_type(visit);
+                conditional.true_type.for_each_named_type(visit);
+                conditional.false_type.for_each_named_type(visit);
+            }
+            ParsedType::TemplateLiteral(template) => {
+                for interpolation in &template.interpolations {
+                    interpolation.for_each_named_type(visit);
+                }
+            }
+            ParsedType::Predicate(predicate) => {
+                if let Some(ty) = predicate.ty.as_ref() {
+                    ty.for_each_named_type(visit);
+                }
+            }
+            ParsedType::String
+            | ParsedType::Number
+            | ParsedType::Boolean
+            | ParsedType::BigInt
+            | ParsedType::Symbol
+            | ParsedType::Undefined
+            | ParsedType::Void
+            | ParsedType::Any
+            | ParsedType::ErrorType
+            | ParsedType::Unknown
+            | ParsedType::UnknownKeyword
+            | ParsedType::Never
+            | ParsedType::StringLiteral(_)
+            | ParsedType::NumberLiteral(_)
+            | ParsedType::BooleanLiteral(_)
+            | ParsedType::TypeOf(_)
+            | ParsedType::Infer(_) => {}
+        }
+    }
+
     pub fn estimated_heap_bytes(&self) -> u64 {
         let own = std::mem::size_of::<ParsedType>() as u64;
         own + match self {
@@ -1741,6 +1950,190 @@ impl ParsedNamedType {
 }
 
 impl ParsedExpression {
+    /// Calls `visit` on each direct operand, in evaluation order. A nested
+    /// function's body is not an operand: it runs later, in its own flow.
+    pub fn for_each_child<'a>(&'a self, visit: &mut impl FnMut(&'a ParsedExpression)) {
+        let arguments = |arguments: &'a [ParsedCallArgument], visit: &mut dyn FnMut(&'a ParsedExpression)| {
+            for argument in arguments {
+                visit(&argument.expression);
+            }
+        };
+        match self {
+            ParsedExpression::ObjectLiteral { properties, .. } => {
+                for property in properties {
+                    if !property.is_method && !property.is_accessor {
+                        visit(&property.value);
+                    }
+                }
+            }
+            ParsedExpression::ArrayLiteral { elements, .. } => {
+                for element in elements {
+                    visit(&element.expression);
+                }
+            }
+            ParsedExpression::TemplateLiteral { expressions, .. } => {
+                for expression in expressions {
+                    visit(expression);
+                }
+            }
+            ParsedExpression::Unary { operand, .. }
+            | ParsedExpression::Update { operand, .. }
+            | ParsedExpression::Await { operand, .. } => visit(operand),
+            ParsedExpression::Binary { left, right, .. }
+            | ParsedExpression::Logical { left, right, .. }
+            | ParsedExpression::NullishCoalescing { left, right, .. } => {
+                visit(left);
+                visit(right);
+            }
+            ParsedExpression::Conditional {
+                condition,
+                when_true,
+                when_false,
+                ..
+            } => {
+                visit(condition);
+                visit(when_true);
+                visit(when_false);
+            }
+            ParsedExpression::PropertyAccess { object, .. }
+            | ParsedExpression::OptionalPropertyAccess { object, .. } => visit(object),
+            ParsedExpression::IndexAccess { index, .. } => visit(index),
+            ParsedExpression::ElementAccess { object, index, .. }
+            | ParsedExpression::OptionalIndexAccess { object, index, .. } => {
+                visit(object);
+                visit(index);
+            }
+            ParsedExpression::Call { arguments: args, .. } => arguments(args, visit),
+            ParsedExpression::New { callee, arguments: args, .. }
+            | ParsedExpression::OptionalCall { callee, arguments: args, .. }
+            | ParsedExpression::ExpressionCall { callee, arguments: args, .. } => {
+                visit(callee);
+                arguments(args, visit);
+            }
+            ParsedExpression::PropertyCall { object, arguments: args, .. }
+            | ParsedExpression::OptionalPropertyCall { object, arguments: args, .. } => {
+                visit(object);
+                arguments(args, visit);
+            }
+            ParsedExpression::TypeAssertion { expression, .. }
+            | ParsedExpression::SatisfiesExpression { expression, .. }
+            | ParsedExpression::NonNullAssertion { expression, .. }
+            | ParsedExpression::ConstAssertion { expression, .. } => visit(expression),
+            ParsedExpression::Assignment { value, .. } => visit(value),
+            ParsedExpression::Sequence { expressions } => {
+                for (expression, _) in expressions {
+                    visit(expression);
+                }
+            }
+            ParsedExpression::JsxElement {
+                attributes,
+                children,
+                ..
+            } => {
+                for attribute in attributes {
+                    if let Some(value) = &attribute.value {
+                        visit(value);
+                    }
+                }
+                for child in children {
+                    match child {
+                        ParsedJsxChild::Expression {
+                            expression: Some(expression),
+                            ..
+                        }
+                        | ParsedJsxChild::Element(expression) => visit(expression),
+                        _ => {}
+                    }
+                }
+            }
+            ParsedExpression::JsxFragment { children, .. } => {
+                for child in children {
+                    match child {
+                        ParsedJsxChild::Expression {
+                            expression: Some(expression),
+                            ..
+                        }
+                        | ParsedJsxChild::Element(expression) => visit(expression),
+                        _ => {}
+                    }
+                }
+            }
+            ParsedExpression::StringLiteral(_)
+            | ParsedExpression::NumberLiteral(_)
+            | ParsedExpression::BigIntLiteral(_)
+            | ParsedExpression::BooleanLiteral(_)
+            | ParsedExpression::UndefinedLiteral
+            | ParsedExpression::NullLiteral
+            | ParsedExpression::Identifier { .. }
+            | ParsedExpression::This { .. }
+            | ParsedExpression::ArrowFunction(_)
+            | ParsedExpression::Unknown => {}
+        }
+    }
+
+    /// Whether evaluating this expression assigns a binding (outside nested
+    /// functions).
+    pub fn contains_assignment(&self) -> bool {
+        if matches!(self, ParsedExpression::Assignment { .. }) {
+            return true;
+        }
+        let mut found = false;
+        self.for_each_child(&mut |child| found |= child.contains_assignment());
+        found
+    }
+
+    /// This expression with each assignment replaced by a read of its target:
+    /// what a condition tests once its assignments have run (`(m = f()) !== null`
+    /// narrows `m`).
+    pub fn with_assignments_as_reads(&self) -> ParsedExpression {
+        match self {
+            ParsedExpression::Assignment {
+                target_name,
+                target_span,
+                ..
+            } => ParsedExpression::Identifier {
+                name: target_name.clone(),
+                span: *target_span,
+            },
+            _ if !self.contains_assignment() => self.clone(),
+            ParsedExpression::Binary { left, left_span, operator, operator_span, right, right_span } => {
+                ParsedExpression::Binary {
+                    left: Box::new(left.with_assignments_as_reads()),
+                    left_span: *left_span,
+                    operator: *operator,
+                    operator_span: *operator_span,
+                    right: Box::new(right.with_assignments_as_reads()),
+                    right_span: *right_span,
+                }
+            }
+            ParsedExpression::Logical { left, left_span, operator, operator_span, right, right_span } => {
+                ParsedExpression::Logical {
+                    left: Box::new(left.with_assignments_as_reads()),
+                    left_span: *left_span,
+                    operator: *operator,
+                    operator_span: *operator_span,
+                    right: Box::new(right.with_assignments_as_reads()),
+                    right_span: *right_span,
+                }
+            }
+            ParsedExpression::Unary { operator, operator_span, operand, operand_span } => {
+                ParsedExpression::Unary {
+                    operator: *operator,
+                    operator_span: *operator_span,
+                    operand: Box::new(operand.with_assignments_as_reads()),
+                    operand_span: *operand_span,
+                }
+            }
+            ParsedExpression::Sequence { expressions } => ParsedExpression::Sequence {
+                expressions: expressions
+                    .iter()
+                    .map(|(expression, span)| (expression.with_assignments_as_reads(), *span))
+                    .collect(),
+            },
+            other => other.clone(),
+        }
+    }
+
     /// Whether this expression is a later link of an optional chain, so a
     /// member access on it short-circuits with the chain instead of being a
     /// non-optional access on a possibly-`undefined` receiver: the `.c` of

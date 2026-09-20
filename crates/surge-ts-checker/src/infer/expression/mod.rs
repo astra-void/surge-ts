@@ -208,6 +208,10 @@ pub(crate) fn infer_expression(
         ParsedExpression::Update { operand, .. } => {
             crate::checks::expr::update_result_type(&infer_expression(operand, symbols, ctx))
         }
+        ParsedExpression::Sequence { expressions } => match expressions.last() {
+            Some((last, _)) => infer_expression(last, symbols, ctx),
+            None => InferredExpression::Unknown,
+        },
         ParsedExpression::Await { operand, .. } => {
             match infer_expression(operand, symbols, ctx) {
                 InferredExpression::Known(ty) => {
@@ -274,6 +278,7 @@ pub(crate) fn infer_expression(
             symbols,
             ctx,
         ),
+        ParsedExpression::Assignment { value, .. } => infer_expression(value, symbols, ctx),
         ParsedExpression::NullishCoalescing { left, right, .. } => {
             let left_type = infer_expression(left, symbols, ctx);
             let right_type = match &left_type {

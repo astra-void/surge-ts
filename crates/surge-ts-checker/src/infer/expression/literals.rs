@@ -100,12 +100,14 @@ pub(crate) fn infer_object_literal(
                 // anything, so the literal has no knowable shape at all. The
                 // remaining properties are still walked for their own
                 // diagnostics; only the resulting type collapses.
-                Type::Any => {
+                // tsc's error type is an `any` too.
+                Type::Any | Type::ErrorType => {
                     spread_source_is_any = true;
                 }
                 // Surge's own degradation sentinel: the members it stands for
-                // are real but unenumerable, so the result must stay open.
-                Type::Unknown => {
+                // are real but unenumerable, so the result must stay open — as
+                // must a type parameter's, which tsc keeps as `T & { … }`.
+                Type::Unknown | Type::TypeParameter(_) => {
                     spread_source_is_open = true;
                 }
                 Type::Object(source) => {
@@ -142,7 +144,7 @@ pub(crate) fn infer_object_literal(
                 // infers for a conditional spread.
                 Type::Union(source) => {
                     spread_source_is_open |= source.types().iter().any(|member| {
-                        matches!(member, Type::Object(object) if object.synthetic_open_index)
+                        matches!(member.peeled(), Type::Object(object) if object.synthetic_open_index)
                     });
                     merge_union_spread(&source, &mut merged_properties);
                 }
@@ -173,8 +175,10 @@ pub(crate) fn infer_object_literal(
 }
 
 fn merge_union_spread(source: &surge_ts_types::UnionType, merged: &mut PropertyMap) {
-    let members: Vec<Option<&surge_ts_types::ObjectType>> = source
-        .types()
+    // A member written as a named type (`IdleResult<T> | ErrorResult<T>`)
+    // spreads the members it names.
+    let peeled: Vec<Type> = source.types().iter().map(Type::peeled).collect();
+    let members: Vec<Option<&surge_ts_types::ObjectType>> = peeled
         .iter()
         .map(|member| match member {
             Type::Object(object) => Some(object),
@@ -280,8 +284,15 @@ pub(crate) fn infer_array_literal(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    // `[]` is `never[]`, or `undefined[]` when `undefined` is in every type's
+    // domain (the implicit element type tsc widens to `any`).
     if elements.is_empty() {
-        return InferredExpression::Known(Type::Array(Box::new(Type::Any)));
+        let element = if surge_ts_types::strict_null_checks() {
+            Type::Never
+        } else {
+            Type::Undefined
+        };
+        return InferredExpression::Known(Type::Array(Box::new(element)));
     }
 
     let mut element_types = Vec::new();

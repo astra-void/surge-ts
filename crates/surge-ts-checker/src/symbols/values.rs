@@ -83,6 +83,80 @@ pub(crate) struct FunctionSignatureInfo {
     pub(crate) overload_alternatives: Vec<Arc<FunctionSignatureInfo>>,
 }
 
+/// A local tsc types by control flow under `noImplicitAny` — `let x;`,
+/// `let x = undefined` (`autoType`) or `x = []` (`autoArrayType`). Its type
+/// follows the assignments reaching each read; an evolving array's elements
+/// grow with `push`, `unshift` and `x[n] = v`. A read that finds no type yet —
+/// an element-less array, or a closure that cannot see the flow — is an
+/// implicit `any`: TS7005, with TS7034 on the declaration. An array's element
+/// types only ever grow along the flow, so the state lives beside the binding
+/// instead of in branch frames.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AutoArrayBinding {
+    pub(crate) name_span: Option<TextSpan>,
+    pub(crate) is_const: bool,
+    /// Declared `= []` (`autoArrayType`) rather than uninitialized (`autoType`),
+    /// which is what a read that cannot see the flow is typed as.
+    pub(crate) declared_array: bool,
+    /// A `let` (tsc's mutable local), whose closures may continue its flow.
+    pub(crate) is_let: bool,
+    /// Declared with an initializer (`undefined`, `null` or `[]`), so never
+    /// "never initialized".
+    pub(crate) initialized: bool,
+    /// How the parser saw the binding assigned, when it recorded it.
+    pub(crate) assignments: Option<surge_ts_syntax::LetAssignmentSummary>,
+    /// Holding an evolving array (`[]`, then its mutations) rather than
+    /// whatever was last assigned.
+    pub(crate) evolving: bool,
+    /// What the mutations seen so far added; `never` until the first.
+    pub(crate) elements: Type,
+    /// A mutation whose element type surge could not settle. A read is then not
+    /// provably element-less, so it is not reported.
+    pub(crate) unsettled: bool,
+    /// Loops being checked whose body mutates the binding with an element type
+    /// that could not be settled before the body ran. tsc's loop fixed point
+    /// sees those elements at every read in the body; surge does not report
+    /// there.
+    pub(crate) pending_loops: u32,
+    /// Seen from a nested `function` declaration, which never continues the
+    /// enclosing flow.
+    pub(crate) declared_only: bool,
+    /// Declared at the top level of a module, whose flow surge does not walk:
+    /// a read there is element-less unless the parser saw a top-level mutation
+    /// reach it (see [`surge_ts_syntax::ModuleArrayMutations`]).
+    pub(crate) module_level: bool,
+}
+
+impl AutoArrayBinding {
+    /// Whether a read here finds no element type yet — tsc's `autoArrayType`.
+    pub(crate) fn is_element_less(&self) -> bool {
+        self.evolving && self.elements == Type::Never && !self.unsettled && self.pending_loops == 0
+    }
+
+    /// Whether a closure reading the binding at `position` continues the
+    /// enclosing flow (tsc: a `let` past its last assignment). Without the
+    /// parser's record it is assumed to, which reports nothing.
+    pub(crate) fn closure_sees_flow(&self, position: usize) -> bool {
+        if self.declared_only || !self.is_let {
+            return false;
+        }
+        match self.assignments {
+            None => true,
+            Some(summary) => summary
+                .last_assignment
+                .is_none_or(|last| last != u32::MAX && (last as usize) < position),
+        }
+    }
+
+    /// A `let` nothing ever definitely assigns, read before any assignment
+    /// could have run: tsc reads it as `undefined`, not as an implicit `any`.
+    pub(crate) fn never_initialized(&self) -> bool {
+        self.is_let
+            && !self.initialized
+            && self.assignments.is_some_and(|summary| !summary.definitely_assigned)
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct SymbolTable {
     // Copy-on-write: clones share this map through `Arc` and only pay for a
@@ -117,6 +191,12 @@ pub(crate) struct SymbolTable {
     // condition exactly as an `if (ok)` does. Written only by the function-body
     // declaration path; empty in nearly every table.
     alias_conditions: Option<Arc<HashMap<Arc<str>, Arc<ParsedExpression>, FxBuildHasher>>>,
+    // Function-local `[]`-initialized bindings tsc types by control flow
+    // (`autoArrayType`); see [`AutoArrayBinding`]. Empty in nearly every table.
+    auto_arrays: Option<Arc<HashMap<Arc<str>, AutoArrayBinding, FxBuildHasher>>>,
+    // A function body's table: a binding found past it belongs to an enclosing
+    // function or the module, not to this flow.
+    function_boundary: bool,
     // Optional read-only fallback consulted by lookups (`get`, `get_handle`,
     // `contains_let_or_const`) when a name is absent from `symbols`. A function
     // body's root scope sets this to the module/ambient environment instead of
@@ -140,6 +220,8 @@ impl Clone for SymbolTable {
             function_implementations: Arc::clone(&self.function_implementations),
             declared_types: self.declared_types.clone(),
             alias_conditions: self.alias_conditions.clone(),
+            auto_arrays: self.auto_arrays.clone(),
+            function_boundary: self.function_boundary,
             parent: self.parent.clone(),
         }
     }
@@ -164,6 +246,8 @@ impl SymbolTable {
             function_implementations: Arc::new(HashSet::default()),
             declared_types: self.declared_types.clone(),
             alias_conditions: self.alias_conditions.clone(),
+            auto_arrays: None,
+            function_boundary: false,
             parent: self.parent.clone(),
         }
     }
@@ -177,6 +261,8 @@ impl SymbolTable {
             function_implementations: Arc::new(HashSet::default()),
             declared_types: None,
             alias_conditions: None,
+            auto_arrays: None,
+            function_boundary: false,
             parent: Some(parent),
         }
     }
@@ -202,6 +288,8 @@ impl SymbolTable {
             function_implementations: Arc::clone(&parent.function_implementations),
             declared_types: parent.declared_types.clone(),
             alias_conditions: parent.alias_conditions.clone(),
+            auto_arrays: None,
+            function_boundary: false,
             parent: Some(parent),
         }
     }
@@ -368,6 +456,70 @@ impl SymbolTable {
         }
     }
 
+    /// The evolving-array state of `name`, and whether it belongs to an
+    /// enclosing function (or the module) rather than this one. Like
+    /// `declared_type`, a scope that declares its own `name` stops the search.
+    pub(crate) fn auto_array(&self, name: &str) -> Option<(&AutoArrayBinding, bool)> {
+        if self.symbols.contains_key(name) {
+            return self
+                .auto_arrays
+                .as_ref()
+                .and_then(|bindings| bindings.get(name))
+                .map(|binding| (binding, false));
+        }
+        self.parent
+            .as_ref()
+            .and_then(|parent| parent.auto_array(name))
+            .map(|(binding, crossed)| (binding, crossed || self.function_boundary))
+    }
+
+    pub(crate) fn mark_function_boundary(&mut self) {
+        self.function_boundary = true;
+    }
+
+    pub(crate) fn has_auto_arrays(&self) -> bool {
+        self.auto_arrays.as_ref().is_some_and(|bindings| !bindings.is_empty())
+    }
+
+    /// Installs (or, with `None`, clears) this table's own entry for `name`,
+    /// returning the entry it replaced.
+    pub(crate) fn set_auto_array(
+        &mut self,
+        name: Arc<str>,
+        binding: Option<AutoArrayBinding>,
+    ) -> Option<AutoArrayBinding> {
+        match binding {
+            Some(binding) => {
+                let bindings = self.auto_arrays.get_or_insert_with(Default::default);
+                Arc::make_mut(bindings).insert(name, binding)
+            }
+            None => match self.auto_arrays.as_mut() {
+                Some(bindings) if bindings.contains_key(&name) => {
+                    Arc::make_mut(bindings).remove(&name)
+                }
+                _ => None,
+            },
+        }
+    }
+
+    /// Marks this table's flow-typed bindings as seen only at their declared
+    /// types, as a nested `function` declaration sees them.
+    pub(crate) fn mark_auto_arrays_declared_only(&mut self) {
+        if let Some(bindings) = self.auto_arrays.as_mut() {
+            for binding in Arc::make_mut(bindings).values_mut() {
+                binding.declared_only = true;
+            }
+        }
+    }
+
+    pub(crate) fn auto_array_mut(&mut self, name: &str) -> Option<&mut AutoArrayBinding> {
+        let bindings = self.auto_arrays.as_mut()?;
+        if !bindings.contains_key(name) {
+            return None;
+        }
+        Arc::make_mut(bindings).get_mut(name)
+    }
+
     pub(crate) fn alias_condition(&self, name: &str) -> Option<Arc<ParsedExpression>> {
         if self.symbols.contains_key(name) {
             return self
@@ -417,6 +569,13 @@ impl SymbolTable {
         self.symbols
             .iter()
             .map(|(name, symbol)| (name, symbol.as_ref()))
+    }
+
+    /// Every name a lookup through this table can reach, parents included.
+    /// A name shadowed by a nearer table appears more than once.
+    pub(crate) fn visible_names(&self) -> impl Iterator<Item = &Arc<str>> {
+        std::iter::successors(Some(self), |table| table.parent.as_deref())
+            .flat_map(|table| table.symbols.keys())
     }
 
     pub(crate) fn iter_handles(&self) -> impl Iterator<Item = (&Arc<str>, &SymbolInfoHandle)> {

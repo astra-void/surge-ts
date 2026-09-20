@@ -29,6 +29,16 @@ pub fn check_source_with_options(
     file_name: &str,
     options: crate::context::CheckerOptions,
 ) -> Vec<Diagnostic> {
+    surge_ts_types::with_strict_null_checks(options.strict_null_checks, || {
+        check_single_source(source_text, file_name, options)
+    })
+}
+
+fn check_single_source(
+    source_text: &str,
+    file_name: &str,
+    options: crate::context::CheckerOptions,
+) -> Vec<Diagnostic> {
     let parsed = parse_source(source_text, file_name);
     let suppressed_ranges = parsed.suppressed_ranges.clone();
     let file_name = parsed.file_name;
@@ -51,11 +61,19 @@ pub fn check_source_with_options(
     }
     ctx.set_symbols(merged_sym);
 
-    for error in &parsed.parser_errors {
-        let diagnostic = crate::program::diagnostics::parser_error_diagnostic(error, &file_name);
+    let parser_diagnostics: Vec<_> = crate::program::unclaimed_parser_errors(
+        &parsed.parser_errors,
+        &parsed.grammar_diagnostics,
+        &ctx,
+    )
+    .map(|error| crate::program::diagnostics::parser_error_diagnostic(error, &file_name))
+    .collect();
+    for diagnostic in parser_diagnostics {
         ctx.push(diagnostic);
     }
     crate::program::emit_grammar_diagnostics(&parsed.grammar_diagnostics, &mut ctx);
+    ctx.parenthesized_expressions = parsed.parenthesized_expressions.into();
+    ctx.let_assignments = parsed.let_assignments.into();
 
     ctx.merge_script_interfaces_with_globals = !parsed.is_module;
     collect_type_declarations(&parsed.statements, &mut ctx);
@@ -94,11 +112,18 @@ pub fn check_source_with_options(
 
     ctx.module_value_fallback = Some(std::sync::Arc::new(validation_symbols));
 
+    crate::flow::begin_never_initialized_file(
+        &parsed.statements,
+        parsed.is_module,
+        &parsed.definite_writes,
+        &mut ctx,
+    );
     for (index, statement) in parsed.statements.iter().enumerate() {
         let statement =
             crate::program::expand_module_if_alias(statement.clone(), &parsed.statements[..index]);
         check_statement(statement, &mut ctx);
     }
+    crate::flow::check_module_definite_assignment(&parsed.statements, &mut ctx);
     ctx.module_value_fallback = None;
 
     let mut diagnostics = ctx.finish();
@@ -180,8 +205,11 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
                 import_call_specifiers: parsed.import_call_specifiers,
                 file_kind: FileKind::GeneratedDeclaration,
                 module_reads: parsed.module_reads,
+                definite_writes: parsed.definite_writes,
                 suppressed_ranges: parsed.suppressed_ranges,
                 grammar_diagnostics: Vec::new(),
+                parenthesized_expressions: Default::default(),
+                let_assignments: Default::default(),
                 json_module_type: None,
             }
         })
@@ -433,6 +461,7 @@ fn lower_global_augmentation_values(
         // resolves. Same first-wins discipline the variable arm below uses.
         if let ParsedStatement::NamespaceDeclaration(namespace) = stmt
             && ctx.ambient_global_symbols.get(&namespace.name).is_none()
+            && crate::program::is_instantiated_namespace(namespace)
         {
             crate::program::record_augmentation_value_insertion();
             ctx.ambient_global_symbols.insert(
@@ -468,6 +497,9 @@ fn lower_global_augmentation_values(
             };
             if ctx.ambient_global_symbols.get(&var.name).is_none() {
                 crate::program::record_augmentation_value_insertion();
+                if !matches!(var.kind, surge_ts_syntax::ParsedVariableKind::Var) {
+                    Arc::make_mut(&mut ctx.block_scoped_globals).insert(Arc::from(var.name.as_str()));
+                }
                 ctx.ambient_global_symbols.insert(
                     var.name.clone(),
                     crate::symbols::SymbolInfo {
@@ -530,7 +562,9 @@ pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
 
     let mut properties = PropertyMap::default();
     for (name, symbol) in ctx.ambient_global_symbols.iter() {
-        if name.as_ref() == "globalThis" {
+        // A block-scoped global (`let`/`const`) is not a property of the
+        // global object.
+        if name.as_ref() == "globalThis" || ctx.block_scoped_globals.contains(name.as_ref()) {
             continue;
         }
 
@@ -568,7 +602,7 @@ pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
 /// Reference id of `typeof globalThis`. Declaration ids are `file\0Name`, so a
 /// leading NUL keeps it disjoint from every declaration, like the intersection
 /// ids.
-const GLOBAL_THIS_REFERENCE_ID: &str = "\u{0}globalThis";
+pub(crate) const GLOBAL_THIS_REFERENCE_ID: &str = "\u{0}globalThis";
 
 struct GlobalObjectType(std::sync::Arc<surge_ts_types::Type>);
 
@@ -1426,7 +1460,8 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             ParsedExportDeclaration::Empty { .. } => {}
             ParsedExportDeclaration::Equals { .. } => {}
             ParsedExportDeclaration::NamespaceExport { .. } => {}
-            ParsedExportDeclaration::Unsupported { span } => {
+            ParsedExportDeclaration::Unsupported { span }
+            | ParsedExportDeclaration::EqualsExpression { span, .. } => {
                 let mut diagnostic =
                     Diagnostic::surge_unsupported_module_syntax(ctx.file_name.clone());
 

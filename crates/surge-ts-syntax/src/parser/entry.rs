@@ -61,9 +61,12 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             is_module: true,
             reference_type_directives: Vec::new(),
             module_reads: Vec::new(),
+            definite_writes: Vec::new(),
+            let_assignments: Vec::new(),
             suppressed_ranges: Vec::new(),
             import_call_specifiers: Vec::new(),
             grammar_diagnostics: Vec::new(),
+            parenthesized_expressions: Vec::new(),
             // A `.json` file that does not parse still *is* a JSON module —
             // reporting its importer as unresolved would be a worse answer than
             // an unmodelled value, and surge does not report JSON syntax errors.
@@ -101,7 +104,9 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     let (module_reads, statements) = if file_name.ends_with(".d.ts") {
         (Vec::new(), collect_statements())
     } else {
-        super::reads::with_body_read_index(&parsed.program, collect_statements)
+        super::spans::with_lowering_source(source_text, || {
+            super::reads::with_body_read_index(&parsed.program, collect_statements)
+        })
     };
 
     let parser_errors = parsed
@@ -142,12 +147,14 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     // Grammar findings are reported for hand-written TypeScript only: surge
     // suppresses every declaration-file diagnostic, and a `.js` file is not
     // type-checked the way `checkJs` would need.
-    let grammar_diagnostics = if collects_grammar_diagnostics(file_name) {
+    let (grammar_diagnostics, parenthesized_expressions) = if collects_grammar_diagnostics(file_name) {
         super::grammar::collect_grammar_diagnostics(&parsed.program)
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
 
+    let let_assignments =
+        super::let_assignments::collect_let_assignments(&parsed.program, source_text);
     ParsedSource {
         file_name: file_name.to_string(),
         statements,
@@ -155,9 +162,12 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         is_module,
         reference_type_directives,
         module_reads,
+        definite_writes: super::writes::collect_definite_writes(&parsed.program),
+        let_assignments,
         suppressed_ranges,
         import_call_specifiers,
         grammar_diagnostics,
+        parenthesized_expressions,
         json_module_type: None,
     }
 }

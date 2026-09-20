@@ -199,6 +199,16 @@ pub(super) fn predicate_type_argument_substitution(
         // Without it (a property-path subject) an unbound parameter drops the
         // guard, as it always has.
         let subject_ty = subject_ty?;
+        // Off a union there is nothing to select among: tsc infers a parameter
+        // with no candidate as `unknown`, so `isAsyncIterable(value: unknown)`
+        // narrows to `AsyncIterable<unknown>`.
+        if !matches!(subject_ty.peeled(), Type::Union(_)) {
+            let mut filled = substitution.clone_with_reason(TypeCopyReason::ScopeOrContext);
+            for type_parameter in unresolved {
+                filled.insert(type_parameter.name.clone(), Type::GenuineUnknown);
+            }
+            return Some(filled);
+        }
         let mut filled = substitution.clone_with_reason(TypeCopyReason::ScopeOrContext);
         for type_parameter in unresolved {
             filled.insert(type_parameter.name.clone(), Type::Any);

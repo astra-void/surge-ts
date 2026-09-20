@@ -22,10 +22,13 @@ mod alias_conditions;
 mod assignments;
 mod branch_assignments;
 mod control_flow;
+pub(crate) mod evolving_arrays;
 mod returns;
 
 pub(crate) use alias_conditions::*;
 pub(crate) use assignments::*;
+pub(crate) use evolving_arrays::{apply_array_mutations, collect_array_mutations};
+use evolving_arrays::{prime_loop_mutations, release_loop_mutations};
 use branch_assignments::*;
 pub(crate) use branch_assignments::branch_assigned_names;
 pub(crate) use control_flow::*;
@@ -40,7 +43,21 @@ pub(crate) fn check_function_variable_declaration(
 ) {
     let local_name = variable.name.clone();
     let variable_kind = variable.kind;
+    // An annotation naming an in-scope type parameter resolves to the body's
+    // placeholder, which reads as degraded; definite assignment needs to know
+    // it is `T` (see `type_assumed_initialized`).
+    let annotated_type_parameter = match &variable.declared_type {
+        Some(surge_ts_syntax::ParsedType::Named(named))
+            if named.type_arguments.is_empty() && ctx.type_parameter_in_scope(&named.name) =>
+        {
+            Some(Type::TypeParameter(surge_ts_types::TypeParameterType {
+                name: named.name.as_str().into(),
+            }))
+        }
+        _ => None,
+    };
     let has_initializer = variable.initializer.is_some();
+    let contextual_annotation = variable.declared_type.is_some() && annotated_type_parameter.is_none();
     // An ambient (`declare`) binding never carries an initializer but is not
     // "unassigned" — it is provided from outside. Body-local `enum`s lower to
     // one, so definite-assignment analysis must not report TS2454 on them. A
@@ -85,6 +102,22 @@ pub(crate) fn check_function_variable_declaration(
     }
 
     check_local_duplicate_declaration(&variable, scopes, ctx);
+    let auto_declaration = evolving_arrays::auto_declaration(&variable, ctx);
+    let auto_variable = auto_declaration.map(|_| ParsedVariableDeclaration {
+        declared_type: None,
+        initializer: variable
+            .initializer
+            .as_ref()
+            .filter(|initializer| {
+                matches!(
+                    initializer,
+                    ParsedExpression::UndefinedLiteral | ParsedExpression::NullLiteral
+                )
+            })
+            .cloned()
+            .or_else(|| variable.initializer.as_ref().map(|_| ParsedExpression::Unknown)),
+        ..variable.clone()
+    });
 
     let initializer_flow_blocked = variable.initializer.as_ref().is_some_and(|initializer| {
         if flow_state.tracked_local_count() == 0 {
@@ -99,13 +132,25 @@ pub(crate) fn check_function_variable_declaration(
             flow_state.declare_current(local_name.as_str(), AssignmentState::DeclaredUnassigned);
         }
 
-        let blocked = check_expression_flow(
-            initializer,
-            variable.initializer_span,
-            flow_state,
-            statement_index,
-            ctx,
-        )
+        // A written annotation other than a bare type parameter is a
+        // non-generic contextual type for the initializer.
+        let blocked = if contextual_annotation {
+            crate::flow::check_substituting_read_flow(
+                initializer,
+                variable.initializer_span,
+                flow_state,
+                statement_index,
+                ctx,
+            )
+        } else {
+            check_expression_flow(
+                initializer,
+                variable.initializer_span,
+                flow_state,
+                statement_index,
+                ctx,
+            )
+        }
         .is_blocked();
         let _ = flow_state.finish_branch_capture();
         blocked
@@ -128,6 +173,7 @@ pub(crate) fn check_function_variable_declaration(
         );
     }
 
+    let has_written_annotation = variable.declared_type.is_some();
     let literal_initializer_type = matches!(
         variable_kind,
         ParsedVariableKind::Let | ParsedVariableKind::Var | ParsedVariableKind::Const
@@ -156,12 +202,19 @@ pub(crate) fn check_function_variable_declaration(
             variable_kind,
             local_name.as_str(),
             definitely_assigned,
-            Some(&symbol.ty),
+            Some(annotated_type_parameter.as_ref().unwrap_or(&symbol.ty)),
             flow_state,
+            ctx,
         );
+        if let Some(Type::TypeParameter(parameter)) = &annotated_type_parameter
+            && crate::flow::constraint_substitutes(&parameter.name, ctx)
+        {
+            flow_state.constraint_exempt.insert(local_name.as_str().into());
+        }
         // A declared union narrows to what the initializer can inhabit, exactly
         // as a later assignment does: `let style: Style = "simple"` is
-        // `"simple"` until reassigned. Recorded as a *narrowing* so a later
+        // `"simple"` until reassigned, and `let v: string | number = "a"` is
+        // `string`. Recorded as a *narrowing* so a later
         // assignment still checks against the declaration. Only a literal
         // initializer participates — its type is known without re-evaluating
         // (and re-reporting) the expression.
@@ -169,6 +222,7 @@ pub(crate) fn check_function_variable_declaration(
             .filter(|initialized| {
                 matches!(symbol.ty, Type::Union(_)) && is_assignable_to(initialized, &symbol.ty)
             })
+            .map(|initialized| assignments::assignment_reduced_type(Some(&symbol.ty), initialized))
             .or_else(|| {
                 let Type::Union(union) = &symbol.ty else {
                     return None;
@@ -199,8 +253,46 @@ pub(crate) fn check_function_variable_declaration(
                 );
             }
             None => {
-                scopes.insert_current_handle(local_name.as_str(), symbol);
+                // An un-annotated `let`/`var` is declared at its initializer's
+                // *widened* type (`getWidenedTypeForVariableLikeDeclaration`),
+                // and a later assignment narrows within that — `let status =
+                // state.status` stays the union a written `"success"` selects
+                // from instead of widening to `string`.
+                // Only a *union* declaration is recorded: that is the shape a
+                // later assignment narrows within (`assignment_reduced_type`).
+                // An `undefined`/auto initializer must stay unbound — it is
+                // still evolving, and binding it would reject the assignments
+                // that give it its type.
+                let declared = (!has_written_annotation
+                    && matches!(variable_kind, ParsedVariableKind::Let | ParsedVariableKind::Var)
+                    && matches!(symbol.ty, Type::Union(_)))
+                .then(|| symbol.ty.clone());
+                match declared {
+                    Some(declared) => {
+                        scopes.insert_current_narrowed(
+                            local_name.as_str(),
+                            SymbolInfo {
+                                ty: declared.clone(),
+                                kind: symbol_kind_for_variable(variable_kind),
+                                function_signature: symbol.function_signature.clone(),
+                            },
+                            declared,
+                        );
+                    }
+                    None => {
+                        scopes.insert_current_handle(local_name.as_str(), symbol);
+                    }
+                }
             }
+        }
+        match &auto_variable {
+            Some(declaration) => evolving_arrays::declare_auto_binding(
+                declaration,
+                auto_declaration,
+                scopes,
+                ctx,
+            ),
+            None => scopes.declare_auto_array(local_name.as_str(), None),
         }
     }
 }

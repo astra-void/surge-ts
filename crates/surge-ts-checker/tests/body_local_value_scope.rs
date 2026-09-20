@@ -166,5 +166,5 @@ fn a_value_used_as_a_plain_type_annotation_is_still_reported() {
          declare let x: Parent;\n\
          export { x };\n",
     );
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2749"]);
 }

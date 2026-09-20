@@ -1,4 +1,6 @@
 mod global_alloc;
+mod memory_watchdog;
+mod probe;
 mod report;
 mod run_report;
 
@@ -253,6 +255,10 @@ struct Cli {
 const CHECK_THREAD_STACK_BYTES: usize = 512 << 20;
 
 fn main() -> ExitCode {
+    if let Err(error) = memory_watchdog::start_from_env() {
+        eprintln!("error: {error}");
+        return ExitCode::from(2);
+    }
     let handle = std::thread::Builder::new()
         .name("surge-check".into())
         .stack_size(CHECK_THREAD_STACK_BYTES)
@@ -491,6 +497,7 @@ fn run_single_file_mode(
     let diagnostics = Checker::new()
         .options(CheckerOptions {
             no_implicit_any,
+            strict_null_checks: true,
             // The single-file path has no tsconfig: `--noImplicitAny` stands in
             // for `strict`, which is what both of these derive from.
             strict_property_initialization: no_implicit_any,

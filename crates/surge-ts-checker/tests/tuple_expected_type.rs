@@ -32,7 +32,7 @@ fn a_too_long_tuple_literal_names_its_own_type() {
 #[test]
 fn an_unresolved_extra_element_reads_as_any() {
     let diagnostics = check("export const pair: [string, number] = [\"Ada\", 36, missing];\n");
-    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2322", "TS2304"]);
     assert!(
         diagnostics[0]
             .message

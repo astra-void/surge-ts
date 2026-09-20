@@ -1,7 +1,7 @@
 type Mapper = (value: string) => number;
 
-function length(value: string): string {
+function measure(value: string): string {
   return "1";
 }
 
-let mapper: Mapper = length;
+let mapper: Mapper = measure;

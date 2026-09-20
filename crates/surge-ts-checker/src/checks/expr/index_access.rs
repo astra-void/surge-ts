@@ -116,17 +116,29 @@ pub(super) fn evaluate_index_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    if super::check_auto_array_read(object_name, object_span, symbols, ctx).is_some() {
+        return InferredExpression::Known(Type::Any);
+    }
     let Some(symbol) = symbols.get(object_name) else {
-        if object_name == "super" || emit_type_only_as_value_diagnostic(object_name, object_span, ctx) {
-            return InferredExpression::Unknown;
+        if object_name != "super" {
+            report_unresolved_value_name(
+                object_name,
+                choose_span(object_span, fallback_span),
+                UnresolvedNameSite::Reference,
+                symbols,
+                ctx,
+            );
         }
-
-        ctx.push(diagnostic_with_syntax_span(
-            unresolved_name_diagnostic(object_name, symbols, ctx),
-            choose_span(object_span, fallback_span),
-        ));
         return InferredExpression::Unknown;
     };
+    if symbol.ty == Type::GenuineUnknown {
+        let object = ParsedExpression::Identifier {
+            name: object_name.to_string(),
+            span: object_span,
+        };
+        super::report_unknown_operand(&object, choose_span(object_span, fallback_span), ctx);
+        return InferredExpression::Unknown;
+    }
     if let Some(narrowed) = crate::infer::narrowed_element_read_named(object_name, index, symbols)
     {
         return InferredExpression::Known(narrowed);
@@ -149,6 +161,13 @@ pub(super) fn evaluate_index_access(
     // as the query object itself, exactly as a `Promise<T>` reaches it as `T`.
     let receiver_type = crate::checks::call::thenable_awaited_type(&receiver_type)
         .unwrap_or(receiver_type);
+
+    if let ParsedExpression::NumberLiteral(index_value) = index
+        && let Type::OpenTuple(tuple) = receiver_type.peeled()
+        && let Some(element) = tuple.leading_element(index_value)
+    {
+        return InferredExpression::Known(element.clone());
+    }
 
     // A nominal array reference (`Array<number>`, `ReadonlyArray<string>`)
     // indexes like the array it names; left unpeeled it fell through to the

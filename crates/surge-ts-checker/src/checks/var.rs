@@ -121,6 +121,7 @@ pub(crate) fn check_variable_declaration_against_symbols(
     let variable_name = variable.name.clone();
     let variable_name_span = variable.name_span;
     let redeclaration_candidate = !variable.is_declare && variable.declared_type.is_some();
+    let auto_array = is_auto_array_candidate(&variable, ctx);
 
     // A generic annotation is kept for call-site instantiation; a type-predicate
     // annotation is kept so `if (isFoo(x))` can narrow — neither is recoverable
@@ -250,7 +251,6 @@ pub(crate) fn check_variable_declaration_against_symbols(
         InferredExpression::Unknown
     };
     ctx.allow_missing_tuple_element = outer_allow_missing;
-
     let mut inferred_symbol_type = match &inferred_initializer {
         InferredExpression::Known(inferred_initializer_type) => {
             if let Some(ref declared_type) = declared_type {
@@ -262,7 +262,13 @@ pub(crate) fn check_variable_declaration_against_symbols(
                 );
             }
 
-            if declared_type.is_none()
+            // Only the check phase publishes an error-typed binding: during
+            // analysis the initializer may be the error type because an import
+            // it names is not bound yet, and an export typed from that would
+            // reach every consumer.
+            if declared_type.is_none() && matches!(inferred_initializer_type, Type::ErrorType) {
+                Some(crate::infer::unresolved_name_error_type().unwrap_or(Type::Unknown))
+            } else if declared_type.is_none()
                 && !inferred_initializer_type.is_unknown()
                 && let Some(initializer) = variable.initializer.as_ref()
             {
@@ -270,14 +276,19 @@ pub(crate) fn check_variable_declaration_against_symbols(
                     symbol_kind,
                     initializer,
                     inferred_initializer_type,
+                    auto_array,
                 ))
             } else {
                 declared_type.clone().or(Some(Type::Unknown))
             }
         }
+        // The binding of a failed lookup is tsc's error type too.
         InferredExpression::UnresolvedIdentifier { .. }
-        | InferredExpression::MissingProperty { .. }
-        | InferredExpression::Unknown => declared_type.clone().or(Some(Type::Unknown)),
+        | InferredExpression::MissingProperty { .. } => declared_type
+            .clone()
+            .or_else(|| inferred_initializer.clone().flowing_type())
+            .or(Some(Type::Unknown)),
+        InferredExpression::Unknown => declared_type.clone().or(Some(Type::Unknown)),
     };
 
     if declared_type.is_none() && variable.initializer.is_none() {
@@ -393,11 +404,51 @@ fn report_redeclared_var_type(
     });
 }
 
+/// A declaration tsc gives a control-flow tracked `any[]` (`autoArrayType`):
+/// an un-annotated, non-ambient, non-destructured variable initialized with
+/// `[]`, under `noImplicitAny`.
+pub(crate) fn is_auto_array_candidate(
+    variable: &surge_ts_syntax::ParsedVariableDeclaration,
+    ctx: &CheckerContext,
+) -> bool {
+    ctx.options.no_implicit_any
+        && variable.declared_type.is_none()
+        && !variable.is_declare
+        && !variable.from_binding_pattern
+        && matches!(
+            &variable.initializer,
+            Some(ParsedExpression::ArrayLiteral { elements, .. }) if elements.is_empty()
+        )
+}
+
 pub(crate) fn widen_implicit_variable_initializer_type(
     symbol_kind: SymbolKind,
     initializer: &ParsedExpression,
     ty: &Type,
+    auto_array: bool,
 ) -> Type {
+    // `getWidenedTypeForVariableLikeDeclaration`: under `noImplicitAny` an
+    // empty array initializer makes an evolving array (`autoArrayType`, read
+    // as `any[]` until pushes give it elements); otherwise it stays `never[]`.
+    if matches!(initializer, ParsedExpression::ArrayLiteral { elements, .. } if elements.is_empty())
+    {
+        return if auto_array || !surge_ts_types::strict_null_checks() {
+            Type::Array(Box::new(Type::Any))
+        } else {
+            ty.clone()
+        };
+    }
+    // Without `strictNullChecks`, `undefined` and `null` are widening types:
+    // a declaration initialized with one is `any` (`getWidenedType`).
+    if !surge_ts_types::strict_null_checks() {
+        match ty {
+            Type::Undefined => return Type::Any,
+            Type::Array(element) if **element == Type::Undefined => {
+                return Type::Array(Box::new(Type::Any));
+            }
+            _ => {}
+        }
+    }
     // tsc widens only fresh literal types, and an assertion (`as const`,
     // `as "a"`, `<T>x`) yields its regular type, so `let s = "a" as const`
     // stays `"a"`.
@@ -405,7 +456,19 @@ pub(crate) fn widen_implicit_variable_initializer_type(
         initializer,
         ParsedExpression::ConstAssertion { .. } | ParsedExpression::TypeAssertion { .. }
     );
-    if matches!(symbol_kind, SymbolKind::Let | SymbolKind::Var) && !is_assertion {
+    // A *bare* literal type is widened however it was reached: freshness
+    // survives a `const` read (`const a = "x"; let b = a` is `string`), and
+    // surge does not track it on the type itself. A union of literals is not
+    // widened unless it was written here, which is what keeps
+    // `let status = state.status` at its declared union.
+    let widens_as_literal = matches!(
+        ty,
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
+    );
+    if matches!(symbol_kind, SymbolKind::Let | SymbolKind::Var)
+        && !is_assertion
+        && (widens_as_literal || initializer_type_is_fresh(initializer))
+    {
         // tsc deep-widens `let`/`var` initializers, so object properties and
         // array/union members widen too (e.g. `let o = { a: 1 }` -> `{ a: number }`),
         // not just a top-level primitive literal.
@@ -414,6 +477,36 @@ pub(crate) fn widen_implicit_variable_initializer_type(
         widen_object_literal_members(initializer, ty)
     } else {
         ty.clone()
+    }
+}
+
+/// Whether the initializer's type is *fresh* — written as a literal here — which
+/// is the only kind tsc widens (`getWidenedLiteralType`). A literal type read
+/// from somewhere else (a property of a union-typed object, a call's declared
+/// return) is regular, so `let status = state.status` keeps the union instead
+/// of widening to `string`.
+fn initializer_type_is_fresh(initializer: &ParsedExpression) -> bool {
+    match initializer {
+        ParsedExpression::StringLiteral(_)
+        | ParsedExpression::NumberLiteral(_)
+        | ParsedExpression::BigIntLiteral(_)
+        | ParsedExpression::BooleanLiteral(_)
+        | ParsedExpression::NullLiteral
+        | ParsedExpression::UndefinedLiteral
+        | ParsedExpression::ObjectLiteral { .. }
+        | ParsedExpression::ArrayLiteral { .. }
+        | ParsedExpression::TemplateLiteral { .. }
+        | ParsedExpression::Unary { .. } => true,
+        ParsedExpression::Conditional {
+            when_true,
+            when_false,
+            ..
+        } => initializer_type_is_fresh(when_true) && initializer_type_is_fresh(when_false),
+        ParsedExpression::Logical { left, right, .. }
+        | ParsedExpression::NullishCoalescing { left, right, .. } => {
+            initializer_type_is_fresh(left) && initializer_type_is_fresh(right)
+        }
+        _ => false,
     }
 }
 

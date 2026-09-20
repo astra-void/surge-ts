@@ -1600,17 +1600,18 @@ fn resolve_named_import(
                 continue;
             }
 
-            // A type-only namespace exports only qualified `ns.Member` entries.
-            if has_qualified_type_exports {
-                continue;
-            }
-
             // `import type { f }` imports the SYMBOL, so a value-only export
             // (function/const) is a legal target — it is usable in type
             // position through `typeof f`. Binding the value here is what makes
-            // that query resolve instead of cascading TS2304.
+            // that query resolve instead of cascading TS2304. That holds for an
+            // `export * as ns` namespace too, whose types are only qualified
+            // `ns.Member` entries: `typeof ns.member` still reads its value side.
             if let Some(value_export) = value_export {
                 symbols.insert_shared(specifier.local_name.clone(), value_export);
+                continue;
+            }
+
+            if has_qualified_type_exports {
                 continue;
             }
 

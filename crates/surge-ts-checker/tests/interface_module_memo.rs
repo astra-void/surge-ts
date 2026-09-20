@@ -50,9 +50,13 @@ fn repeated_degraded_instantiations_render_their_own_arguments() {
         "example.ts",
     );
     let messages = rendered(&diagnostics);
-    assert_eq!(codes(&diagnostics), vec!["TS2339", "TS2339"], "{messages:?}");
-    assert!(messages[0].contains("inner: string"), "{messages:?}");
-    assert!(messages[1].contains("inner: number"), "{messages:?}");
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["TS2503", "TS2339", "TS2339"],
+        "{messages:?}"
+    );
+    assert!(messages[1].contains("inner: string"), "{messages:?}");
+    assert!(messages[2].contains("inner: number"), "{messages:?}");
 }
 
 // An interface that gains members from a later `declare global` augmentation

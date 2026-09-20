@@ -24,6 +24,7 @@ mod check_files;
 mod classes;
 mod forward_references;
 mod heritage;
+mod namespaces;
 mod property_initialization;
 pub(crate) mod diagnostics;
 mod file_classify;
@@ -38,11 +39,15 @@ mod unused_locals;
 pub(crate) use ambient::*;
 pub(crate) use binding::*;
 use check_files::*;
-pub(crate) use check_files::emit_grammar_diagnostics;
+pub(crate) use check_files::{emit_grammar_diagnostics, unclaimed_parser_errors};
 pub(crate) use classes::*;
 pub(crate) use diagnostics::*;
 pub(crate) use file_classify::*;
 pub(crate) use globals::*;
+pub(crate) use namespaces::{
+    MEANING_NAMESPACE, MEANING_TYPE, MEANING_VALUE, NamespaceInfo, NamespaceRegistry,
+    is_instantiated_namespace,
+};
 use parse::*;
 pub(crate) use phase::*;
 pub(crate) use probes::*;
@@ -83,6 +88,8 @@ pub(crate) struct ParsedProgramFile {
     /// Module-wide identifier reads (see [`surge_ts_syntax::ParsedSource`]),
     /// retained only when `noUnusedLocals` is enabled; empty otherwise.
     pub(crate) module_reads: Vec<String>,
+    /// See [`surge_ts_syntax::ParsedSource::definite_writes`].
+    pub(crate) definite_writes: Vec<String>,
     /// Byte ranges of the lines an `@ts-expect-error`/`@ts-ignore` directive
     /// suppresses (see [`surge_ts_syntax::ParsedSource::suppressed_ranges`]).
     pub(crate) suppressed_ranges: Vec<surge_ts_syntax::TextSpan>,
@@ -90,6 +97,11 @@ pub(crate) struct ParsedProgramFile {
     /// [`surge_ts_syntax::ParsedSource::grammar_diagnostics`]), turned into
     /// diagnostics at the start of the file's check.
     pub(crate) grammar_diagnostics: Vec<surge_ts_syntax::ParsedGrammarDiagnostic>,
+    /// See [`surge_ts_syntax::ParsedSource::parenthesized_expressions`]; handed
+    /// to the context for the file's check.
+    pub(crate) parenthesized_expressions: std::sync::Arc<[surge_ts_syntax::ParenthesizedExpressionSpan]>,
+    /// See [`surge_ts_syntax::ParsedSource::let_assignments`].
+    pub(crate) let_assignments: std::sync::Arc<[surge_ts_syntax::LetAssignmentSummary]>,
     /// See [`surge_ts_syntax::ParsedSource::json_module_type`]. Set for every
     /// `.json` file; its export table is built from this instead of from
     /// `statements`, which are always empty for such a file.
@@ -206,6 +218,7 @@ pub fn check_program_with_prescanned_sources(
     jobs: usize,
 ) -> ProgramCheckResult {
     let store = ProgramTypeStore::new();
+    store.set_strict_null_checks(options.strict_null_checks);
     with_program_type_store(store.clone(), || {
         check_program_with_stats_and_jobs_inner(files, prescanned, options, jobs, store)
     })
@@ -481,6 +494,7 @@ fn collect_program_globals(
     crate::driver::collect_global_augmentations(&parsed_files, ctx);
     lower_ambient_global_values(&parsed_files, ctx);
     collect_umd_global_names(&parsed_files, ctx);
+    namespaces::collect_namespace_registry(&parsed_files, ctx);
     collect_ambient_modules(&parsed_files, ctx, timings.as_ref());
     record_program_timing(timings.as_ref(), |timings| {
         timings.ambient_collection += ambient_collection_start.elapsed()
@@ -928,6 +942,18 @@ fn finalize_module_bindings(
     record_program_timing(timings.as_ref(), |timings| {
         timings.import_binding_resolution += import_binding_start.elapsed()
     });
+    let mut module_analyses = module_analyses;
+    refine_imported_value_exports(
+        parsed_files,
+        &local_type_declarations_by_module,
+        &preliminary_module_import_bindings,
+        &mut module_analyses,
+        &mut module_export_tables,
+        &mut module_import_bindings,
+        &module_resolution_scopes,
+        ctx,
+        timings.as_ref(),
+    );
     let scope_build_start = Instant::now();
     drop(std::mem::take(&mut module_resolution_scopes));
     module_resolution_scopes = build_module_resolution_scopes(
@@ -1018,7 +1044,7 @@ fn early_module_local_values_enabled() -> bool {
     })
 }
 
-fn build_module_local_values(
+pub(crate) fn build_module_local_values(
     parsed_files: &[ParsedProgramFile],
     module_analyses: &[Option<ModuleAnalysis>],
     module_import_bindings: &[Option<ModuleImportBindings>],

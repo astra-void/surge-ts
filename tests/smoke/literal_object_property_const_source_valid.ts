@@ -1,2 +1,2 @@
 const kind = "click";
-let event: { kind: "click" } = { kind: kind };
+let clickEvent: { kind: "click" } = { kind: kind };

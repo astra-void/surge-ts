@@ -34,7 +34,9 @@ pub(crate) fn should_check_missing_return(return_type: &Type) -> bool {
     // `number | void` union is exempt too — or is exactly `any`/`undefined`. A
     // union merely containing `undefined` is not exempt here; it is the TS2366
     // branch that then finds `undefined` assignable and stays quiet.
-    if matches!(return_type, Type::Any | Type::Undefined) || return_type_maybe_void(return_type) {
+    if matches!(return_type, Type::Any | Type::ErrorType | Type::Undefined)
+        || return_type_maybe_void(return_type)
+    {
         return false;
     }
     // `GenuineUnknown` is a written `unknown` annotation, which tsc does report
@@ -70,15 +72,20 @@ fn return_type_admits_undefined(return_type: &Type) -> bool {
 }
 
 pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
-    contains_unknown(ty, false)
+    crate::checks::structural_walk::query(|| contains_unknown(ty, false))
 }
 
 /// Like [`type_contains_unknown`], but a written `unknown` is a real type.
 pub(crate) fn type_contains_degradation(ty: &Type) -> bool {
-    contains_unknown(ty, true)
+    crate::checks::structural_walk::query(|| contains_unknown(ty, true))
 }
 
 fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
+    match crate::checks::structural_walk::visit(ty) {
+        crate::checks::structural_walk::Visit::Walk => {}
+        crate::checks::structural_walk::Visit::Seen => return false,
+        crate::checks::structural_walk::Visit::Exhausted => return true,
+    }
     thread_local! {
         // References resolved while walking the current type, to break the cyclic
         // structural graphs lazy nominal references form (interface A whose member
@@ -121,6 +128,10 @@ fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
                     .borrow()
                     .iter()
                     .any(|(id, arguments)| *id == reference.id && *arguments == reference.arguments)
+                    // tsc's `isDeeplyNestedType`: a declaration on the path three
+                    // times is an expanding recursion (`Deep<T>` reaching
+                    // `Deep<T[]>`) whose arguments never repeat.
+                    || visiting.borrow().iter().filter(|(id, _)| *id == reference.id).count() >= 3
             });
             if on_path {
                 return false;
@@ -352,7 +363,12 @@ pub(crate) fn check_function_body(
         .is_some()
         .then(|| std::mem::take(&mut ctx.symbols));
 
+    let mut nested_functions = Vec::new();
     for (statement_index, statement) in body.into_iter().enumerate() {
+        if let ParsedFunctionBodyStatement::Function(function) = statement {
+            nested_functions.push(function);
+            continue;
+        }
         if saved_symbols.is_some() {
             ctx.symbols = scopes.visible_symbols().clone();
         }
@@ -364,6 +380,17 @@ pub(crate) fn check_function_body(
             flow_state,
             ctx,
         );
+    }
+
+    // A nested `function` is hoisted: it may read a binding declared after it
+    // (called only once that binding exists), so its body is checked once the
+    // whole block is bound. It sees every binding at its declared type — tsc
+    // carries no narrowing into a function declaration.
+    if !nested_functions.is_empty() {
+        let enclosing = declared_type_view(scopes.visible_symbols());
+        for function in nested_functions {
+            crate::checks::function::check_nested_function_declaration(*function, &enclosing, ctx);
+        }
     }
 
     if pushed_scope {
@@ -381,6 +408,33 @@ pub(crate) fn check_function_body(
     if let Some(saved) = saved_module_value_fallback {
         ctx.module_value_fallback = saved;
     }
+}
+
+/// `symbols` with every narrowed binding, in it or a parent, back at its
+/// declared type.
+fn declared_type_view(symbols: &SymbolTable) -> SymbolTable {
+    let mut view = symbols.clone_with_reason(TypeCopyReason::FunctionBodySetup);
+    // A function declaration never continues the enclosing flow.
+    view.mark_auto_arrays_declared_only();
+    let mut narrowed: Vec<std::sync::Arc<str>> = Vec::new();
+    let mut table = Some(symbols);
+    while let Some(current) = table {
+        narrowed.extend(current.narrowed_names().cloned());
+        table = current.parent_table();
+    }
+    for name in narrowed {
+        let (Some(declared), Some(symbol)) = (symbols.declared_type(&name), symbols.get(&name))
+        else {
+            continue;
+        };
+        let restored = SymbolInfo {
+            ty: declared.clone(),
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        };
+        let _ = view.insert(name, restored);
+    }
+    view
 }
 
 /// Binds the body's own `type`/`interface`/`class` declarations as an inner
@@ -665,12 +719,64 @@ pub(crate) fn check_function_body_statement(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
+    // Collected before the statement is consumed; applied once it is checked,
+    // where tsc's flow places an array mutation.
+    let mutations = if super::body_statements::evolving_arrays::auto_arrays_visible(scopes, ctx) {
+        collect_array_mutations(&statement, scopes.visible_symbols())
+    } else {
+        Vec::new()
+    };
+    // Assignments inside the statement's own expressions take effect once it
+    // has run; a condition's are applied by its statement before the branches.
+    let assigning: Vec<surge_ts_syntax::ParsedExpression> = statement_value_expressions(&statement)
+        .into_iter()
+        .filter(|expression| expression.contains_assignment())
+        .cloned()
+        .collect();
+    check_function_body_statement_itself(
+        statement,
+        statement_index,
+        return_type,
+        scopes,
+        flow_state,
+        ctx,
+    );
+    if !mutations.is_empty() {
+        apply_array_mutations(mutations, scopes, ctx);
+    }
+    for expression in &assigning {
+        apply_expression_assignments(expression, scopes, flow_state, ctx);
+    }
+}
+
+fn statement_value_expressions(
+    statement: &ParsedFunctionBodyStatement,
+) -> Vec<&surge_ts_syntax::ParsedExpression> {
+    match statement {
+        ParsedFunctionBodyStatement::Expression(expression) => vec![expression],
+        ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
+            variable.initializer.iter().collect()
+        }
+        ParsedFunctionBodyStatement::Return(statement) => statement.expression.iter().collect(),
+        ParsedFunctionBodyStatement::Throw(statement) => vec![&statement.expression],
+        ParsedFunctionBodyStatement::Assignment(assignment) => vec![&assignment.value],
+        ParsedFunctionBodyStatement::MemberAssignment(assignment) => vec![&assignment.value],
+        ParsedFunctionBodyStatement::ThisPropertyAssignment(assignment) => vec![&assignment.value],
+        _ => Vec::new(),
+    }
+}
+
+fn check_function_body_statement_itself(
+    statement: ParsedFunctionBodyStatement,
+    statement_index: usize,
+    return_type: Option<&Type>,
+    scopes: &mut ScopeStack,
+    flow_state: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
     record_flow_statement_count();
     match statement {
-        // A nested function declaration is inert for the enclosing body's
-        // checking (its body is not separately type-checked, matching the prior
-        // drop-at-parse behavior); it is retained only so use-tracking can see
-        // identifier reads inside it.
+        // Checked by `check_function_body` once its block is fully bound.
         ParsedFunctionBodyStatement::Function(_) => {}
         // The type side is bound ahead of the statement loop by
         // `install_body_local_type_declarations`; the declaration is *checked*
@@ -687,6 +793,11 @@ pub(crate) fn check_function_body_statement(
             validate_body_local_declaration(&interface.name, ctx);
         }
         ParsedFunctionBodyStatement::Class(class) => {
+            if flow_state.tracked_local_count() > 0 {
+                crate::flow::walk_class(&class, statement_index, flow_state, ctx);
+            }
+            // Member bodies of a body-local class are not otherwise checked.
+            crate::flow::check_class_member_flow(&class, ctx);
             let symbol = crate::program::build_class_value_symbol(&class, ctx);
             scopes.insert_current_handle(class.name.as_str(), std::sync::Arc::new(symbol));
         }
@@ -747,6 +858,23 @@ pub(crate) fn check_function_body_statement(
         }
         ParsedFunctionBodyStatement::MemberAssignment(assignment) => {
             let start = Instant::now();
+            // `o.p = v` reads `o` (and `v`); only the member is written.
+            if flow_state.tracked_local_count() > 0 {
+                let _ = crate::flow::check_expression_flow(
+                    &assignment.target,
+                    assignment.target_span,
+                    flow_state,
+                    statement_index,
+                    ctx,
+                );
+                let _ = crate::flow::check_expression_flow(
+                    &assignment.value,
+                    assignment.value_span,
+                    flow_state,
+                    statement_index,
+                    ctx,
+                );
+            }
             check_member_assignment(*assignment, scopes, ctx);
             record_program_timing(ctx.timings.as_ref(), |timings| {
                 timings.assignability_checking += start.elapsed()

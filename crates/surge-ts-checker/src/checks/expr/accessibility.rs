@@ -28,10 +28,15 @@ fn identity(info: &InterfaceInfo) -> Option<ClassIdentity> {
 
 fn base_interface(info: &InterfaceInfo, ctx: &CheckerContext) -> Option<InterfaceInfo> {
     let base = info.body.extends.first()?;
-    let declaration = match info.resolution_scope.as_ref() {
-        Some(scope) => scope.get(&base.name),
-        None => ctx.lookup_type_declaration(&base.name),
-    };
+    // The declaration's own scope answers first, but it carries only the layer
+    // it was bound in: a base imported into the subclass's file is not in it,
+    // and stopping there cut the lineage short — every `super.x` on a
+    // `protected` member of a cross-module base read as out of reach.
+    let declaration = info
+        .resolution_scope
+        .as_ref()
+        .and_then(|scope| scope.get(&base.name))
+        .or_else(|| ctx.lookup_type_declaration(&base.name));
     match declaration? {
         TypeDeclarationInfo::Interface(base) => Some(base.clone()),
         TypeDeclarationInfo::Alias(_) => None,

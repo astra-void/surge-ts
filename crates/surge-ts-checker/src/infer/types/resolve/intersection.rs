@@ -56,8 +56,12 @@ pub(crate) fn resolve_intersection_type(
                 had_error: true,
             };
         }
+        // The failed operand's members are unknown, not absent: keep the
+        // merge open so a read of one is not reported missing.
+        let lost_operand = resolved_types.iter().any(Type::is_unknown);
+        let merged = merge_intersection_members(resolved_types);
         return ResolvedType {
-            ty: merge_intersection_members(resolved_types),
+            ty: if lost_operand { open_object_arms(merged) } else { merged },
             had_error: true,
         };
     }
@@ -65,6 +69,21 @@ pub(crate) fn resolve_intersection_type(
     ResolvedType {
         ty: merge_intersection_members(resolved_types),
         had_error: false,
+    }
+}
+
+fn open_object_arms(ty: Type) -> Type {
+    match ty {
+        Type::Object(mut object) => {
+            if object.string_index_type.is_none() {
+                object.string_index_type = Some(std::sync::Arc::new(Type::Unknown));
+            }
+            Type::Object(object.with_open_index_marker())
+        }
+        Type::Union(union) => {
+            surge_ts_types::union_type(union.types().iter().cloned().map(open_object_arms).collect())
+        }
+        other => other,
     }
 }
 

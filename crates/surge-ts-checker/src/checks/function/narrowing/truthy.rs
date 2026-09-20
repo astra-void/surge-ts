@@ -38,7 +38,7 @@ pub(crate) fn narrow_truthy_guarded_identifiers(
         let narrowed = match &target {
             TruthyGuardTarget::Identifier(_) => {
                 with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-                    surge_ts_types::remove_undefined(&symbol.ty)
+                    surge_ts_types::remove_definitely_falsy(&symbol.ty)
                 })
             }
             TruthyGuardTarget::Property { property, .. } => {
@@ -284,7 +284,7 @@ pub(crate) fn narrow_truthy_operand_symbol_table(
         let new_ty = match &target {
             TruthyGuardTarget::Identifier(_) => {
                 with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-                    surge_ts_types::remove_nullish(&symbol.ty)
+                    surge_ts_types::remove_definitely_falsy(&symbol.ty)
                 })
             }
             TruthyGuardTarget::Property { property, .. } => {
@@ -387,7 +387,7 @@ pub(super) fn narrow_union_by_property_truthiness_symbol_table(
 /// Whether the type at `path` inside `member` is always truthy (`Some(true)`),
 /// always falsy (`Some(false)`), or undecidable (`None`). An optional segment
 /// may be absent, so below it only a leaf that is itself falsy decides.
-pub(super) fn path_truthiness(member: &Type, path: &[String]) -> Option<bool> {
+pub(crate) fn path_truthiness(member: &Type, path: &[String]) -> Option<bool> {
     let mut current = member.peeled();
     let mut optional = false;
     for segment in path {
@@ -400,6 +400,69 @@ pub(super) fn path_truthiness(member: &Type, path: &[String]) -> Option<bool> {
     }
     let leaf = type_truthiness(&current)?;
     (!optional || !leaf).then_some(leaf)
+}
+
+/// The type at `path` inside `member`, with an optional segment's `undefined`
+/// put back.
+pub(crate) fn path_leaf_type(member: &Type, path: &[String]) -> Option<Type> {
+    let mut current = member.peeled();
+    let mut optional = false;
+    for segment in path {
+        let Type::Object(object) = &current else {
+            return None;
+        };
+        let property = object.properties.get(segment.as_str())?;
+        optional |= property.is_optional();
+        current = property.ty.peeled();
+    }
+    Some(if optional {
+        union_type(vec![current, Type::Undefined])
+    } else {
+        current
+    })
+}
+
+/// Whether the type at `path` inside `member` is always nullish (`Some(true)`),
+/// never nullish (`Some(false)`), or either (`None`). An optional segment may
+/// be absent, which reads as `undefined`.
+pub(crate) fn path_nullishness(member: &Type, path: &[String]) -> Option<bool> {
+    let mut current = member.peeled();
+    let mut optional = false;
+    for segment in path {
+        let Type::Object(object) = &current else {
+            return None;
+        };
+        let property = object.properties.get(segment.as_str())?;
+        optional |= property.is_optional();
+        current = property.ty.peeled();
+    }
+    let leaf = type_nullishness(&current)?;
+    (!optional || leaf).then_some(leaf)
+}
+
+fn type_nullishness(ty: &Type) -> Option<bool> {
+    match ty {
+        Type::Undefined | Type::Void => Some(true),
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::Function(_)
+        | Type::Object(_)
+        | Type::Array(_)
+        | Type::Tuple(_) => Some(false),
+        Type::Union(union) => {
+            let mut members = union.types().iter().map(|member| type_nullishness(&member.peeled()));
+            let first = members.next()??;
+            members.all(|member| member == Some(first)).then_some(first)
+        }
+        Type::Reference(_) => type_nullishness(&ty.peeled()),
+        _ => None,
+    }
 }
 
 /// tsc's truthiness facts for a type: every unit type decides, a callable or a
@@ -530,7 +593,7 @@ pub(crate) fn narrow_truthy_guarded_symbol_table(
         let narrowed = match &target {
             TruthyGuardTarget::Identifier(_) => {
                 with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-                    surge_ts_types::remove_undefined(&symbol.ty)
+                    surge_ts_types::remove_definitely_falsy(&symbol.ty)
                 })
             }
             TruthyGuardTarget::Property { property, .. } => {

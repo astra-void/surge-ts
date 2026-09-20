@@ -103,6 +103,7 @@ smoke_shards! {
 
 fn run_smoke_shard(shard: usize) {
     let manifest = load_smoke_manifest();
+    let mut mismatches = Vec::new();
 
     for case in manifest
         .case
@@ -161,15 +162,24 @@ fn run_smoke_shard(shard: usize) {
         };
         let actual_codes = diagnostic_codes(&diagnostics);
 
-        assert_eq!(
-            actual_codes,
-            case.expected_diagnostics,
-            "unexpected diagnostics for smoke case {} at {}\nrendered diagnostics:\n{}",
-            case.name,
-            case.path.as_deref().unwrap_or("<program files>"),
-            rendered
-        );
+        if actual_codes != case.expected_diagnostics {
+            mismatches.push(format!(
+                "smoke case {} at {}\n  actual:   {:?}\n  expected: {:?}\nrendered diagnostics:\n{}",
+                case.name,
+                case.path.as_deref().unwrap_or("<program files>"),
+                actual_codes,
+                case.expected_diagnostics,
+                rendered
+            ));
+        }
     }
+
+    assert!(
+        mismatches.is_empty(),
+        "{} smoke case(s) with unexpected diagnostics:\n\n{}",
+        mismatches.len(),
+        mismatches.join("\n\n")
+    );
 }
 
 fn smoke_checker_options(no_implicit_any: bool, use_native_profile: bool) -> CheckerOptions {
@@ -192,6 +202,7 @@ fn smoke_checker_options(no_implicit_any: bool, use_native_profile: bool) -> Che
 #[test]
 fn active_upstream_cases_emit_expected_codes() {
     let manifest = load_manifest();
+    let mut mismatches = Vec::new();
 
     for case in manifest
         .case
@@ -246,20 +257,29 @@ fn active_upstream_cases_emit_expected_codes() {
 
         let actual_codes = diagnostic_codes(&diagnostics);
 
-        assert_eq!(
-            actual_codes,
-            case.expected_diagnostics,
-            "unexpected diagnostics for active upstream case {} ({}) from {}@{} at {} (baseline {}, mode {})\nrendered diagnostics:\n{}",
-            case.name,
-            case.reason,
-            case.upstream_repo,
-            case.upstream_commit,
-            case.upstream_path,
-            case.upstream_baseline_path,
-            case.mode,
-            rendered_diagnostics
-        );
+        if actual_codes != case.expected_diagnostics {
+            mismatches.push(format!(
+                "active upstream case {} ({}) from {}@{} at {} (baseline {}, mode {})\n  actual:   {:?}\n  expected: {:?}\nrendered diagnostics:\n{}",
+                case.name,
+                case.reason,
+                case.upstream_repo,
+                case.upstream_commit,
+                case.upstream_path,
+                case.upstream_baseline_path,
+                case.mode,
+                actual_codes,
+                case.expected_diagnostics,
+                rendered_diagnostics
+            ));
+        }
     }
+
+    assert!(
+        mismatches.is_empty(),
+        "{} active upstream case(s) with unexpected diagnostics:\n\n{}",
+        mismatches.len(),
+        mismatches.join("\n\n")
+    );
 }
 
 #[test]
@@ -399,14 +419,14 @@ fn object_literal_missing_properties_are_listed_in_target_order() {
 }
 
 #[test]
-fn object_literal_missing_property_does_not_cascade_from_unresolved_value() {
+fn object_literal_missing_property_reported_beside_unresolved_value() {
     let source = "let user: { name: string; age: number } = { name: missing };";
     let diagnostics = check_source(source, "example.ts");
     let rendered = render_diagnostics(&diagnostics, source);
 
-    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(diagnostic_codes(&diagnostics), vec!["TS2741", "TS2304"]);
     assert!(
-        diagnostics[0].message.contains("missing"),
+        diagnostics[1].message.contains("missing"),
         "unexpected TS2304 message: {rendered}"
     );
 }
@@ -585,11 +605,9 @@ fn render_virtual_file_diagnostics(
 }
 
 fn split_typescript_testdata_virtual_files(source: &str, fallback_name: &str) -> Vec<VirtualFile> {
-    const MARKER_PREFIX: &str = "// @filename:";
-
     let has_marker = source
         .lines()
-        .any(|line| line.trim_start().starts_with(MARKER_PREFIX));
+        .any(|line| virtual_file_marker_name(line).is_some());
     if !has_marker {
         return vec![VirtualFile {
             file_name: fallback_name.to_string(),
@@ -604,10 +622,7 @@ fn split_typescript_testdata_virtual_files(source: &str, fallback_name: &str) ->
 
     for line in source.split_inclusive('\n') {
         let line_without_newline = line.trim_end_matches('\n').trim_end_matches('\r');
-        if let Some(rest) = line_without_newline
-            .trim_start()
-            .strip_prefix(MARKER_PREFIX)
-        {
+        if let Some(rest) = virtual_file_marker_name(line_without_newline) {
             saw_marker = true;
 
             if let Some(file_name) = current_file_name.take() {
@@ -635,6 +650,19 @@ fn split_typescript_testdata_virtual_files(source: &str, fallback_name: &str) ->
     }
 
     virtual_files
+}
+
+// Upstream's harness matches `//\s*@filename\s*:` case-insensitively, so
+// `//@filename: a.ts` and `// @Filename: a.ts` both start a virtual file.
+fn virtual_file_marker_name(line: &str) -> Option<&str> {
+    const DIRECTIVE: &str = "@filename";
+
+    let rest = line.trim_start().strip_prefix("//")?.trim_start();
+    let directive = rest.get(..DIRECTIVE.len())?;
+    if !directive.eq_ignore_ascii_case(DIRECTIVE) {
+        return None;
+    }
+    rest[DIRECTIVE.len()..].trim_start().strip_prefix(':')
 }
 
 fn workspace_root() -> PathBuf {

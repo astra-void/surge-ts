@@ -1,1 +1,1 @@
-let event: { nested: { kind: "click" } } = { nested: { kind: "click" } };
+let clickEvent: { nested: { kind: "click" } } = { nested: { kind: "click" } };

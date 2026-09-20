@@ -194,6 +194,24 @@ fn resolve_named_type_inner(
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
 ) -> ResolvedType {
+    // tsc's name resolver stops at the class: a static member may not name a
+    // class type parameter, and the name resolves to nothing afterwards.
+    if ctx.names_static_forbidden_type_parameter(
+        &named_type.name,
+        named_type.span,
+        resolving.is_empty(),
+    ) {
+        let diagnostic = crate::spans::diagnostic_with_syntax_span(
+            surge_ts_diagnostics::Diagnostic::ts2302(ctx.file_name.clone()),
+            named_type.span,
+        );
+        ctx.push(diagnostic);
+        return ResolvedType {
+            ty: Type::ErrorType,
+            had_error: true,
+        };
+    }
+
     if let Some(ty) = substitution.get(&named_type.name) {
         return ResolvedType {
             ty: ty.clone(),
@@ -204,21 +222,41 @@ fn resolve_named_type_inner(
         };
     }
 
+    if crate::infer::types::report_unexported_namespace_member(&named_type, ctx) {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: true,
+        };
+    }
+
     // Look up the declaration through a context-independent handle so resolution
     // can read the (often large) interface/alias payload while `ctx` is borrowed
     // mutably, without deep-cloning it. The handle owns its payload, so the
     // borrowed declaration below is decoupled from `ctx`.
     let Some(handle) = ctx.lookup_type_declaration_handle(&named_type.name) else {
+        if named_type.name == surge_ts_syntax::EXPRESSION_HERITAGE_BASE {
+            return ResolvedType {
+                ty: Type::Any,
+                had_error: false,
+            };
+        }
         if let Some(resolved) = resolve_value_heritage_base(&named_type, ctx) {
             return resolved;
         }
-        // A qualified reference (`React.Foo`, `Prisma.Bar`) we cannot resolve is
-        // treated as no-cascade: tsc resolves these against the full namespace
-        // surface and reports nothing, so emitting TS2304 here would be a false
-        // positive against `@types/*` and generated namespace clients.
-        if !named_type.name.contains('.') {
-            emit_unknown_type_name(&named_type, ctx);
-        }
+        // A qualified reference (`React.Foo`, `Prisma.Bar`) reports only on a
+        // head nothing could resolve: surge does not model a namespace's full
+        // member surface (`@types/*`, generated clients), so a miss past the
+        // head is surge's, not the source's.
+        let may_be_unbound_value_base = ctx.collecting_signatures
+            && ctx.resolving_class_heritage
+            && crate::program::current_dts_expansion_reason()
+                == crate::program::DtsExpansionReason::InterfaceHeritageResolution;
+        let reported = !may_be_unbound_value_base
+            && if named_type.name.contains('.') {
+                crate::infer::types::emit_unresolved_qualified_type_head(&named_type, ctx)
+            } else {
+                emit_unknown_type_name(&named_type, ctx)
+            };
         if crate::infer::types::interface::had_error_trace_enabled() {
             eprintln!(
                 "[had-error] lookup-miss '{}' scope_installed={} file_in_map={} map_len={} check_phase={} in file {}",
@@ -242,8 +280,11 @@ fn resolve_named_type_inner(
             // tsc has no answer for this name either — it resolves to the
             // error type, which stays `any`-permissive but is still *reported*
             // through (a callback parameter contextually typed by it is an
-            // implicit `any`). Surge's own modelling gaps keep `Type::Unknown`.
-            ty: Type::ErrorType,
+            // implicit `any`). Surge's own modelling gaps keep `Type::Unknown`,
+            // and a miss surge does not report is one of those: a member past a
+            // namespace head it only partly models, a name inside a declaration
+            // file whose imports it did not follow.
+            ty: if reported { Type::ErrorType } else { Type::Unknown },
             had_error: true,
         };
     };

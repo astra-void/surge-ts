@@ -32,6 +32,12 @@ pub struct OpenTupleType {
 }
 
 impl OpenTupleType {
+    /// The element a literal `index` reads when it falls in the fixed leading
+    /// run (`[A, ...B[]]` at `0` is exactly `A`, with no `undefined`).
+    pub fn leading_element(&self, index: &str) -> Option<&Type> {
+        self.leading.get(index.parse::<usize>().ok()?)
+    }
+
     /// Every element type the tuple can hold, as one union.
     pub fn element_union(&self) -> Type {
         let mut members = self.leading.clone();
@@ -185,6 +191,13 @@ impl Type {
         })
     }
 
+    /// Surge's own "could not model this": [`Type::is_unknown`] without tsc's
+    /// error type, which is a real `any` and keeps flowing — into an inference
+    /// candidate, a return type, a binding — where the sentinel must not.
+    pub fn is_degraded(&self) -> bool {
+        self.is_unknown() && !matches!(self, Type::ErrorType)
+    }
+
     pub fn is_unknown(&self) -> bool {
         matches!(
             self,
@@ -200,6 +213,7 @@ impl Type {
             Type::BigInt => Some(Type::BigInt),
             Type::Symbol => Some(Type::Symbol),
             Type::Reference(reference) => reference.resolve().base_primitive(),
+            Type::Object(object) => object.intersected_primitive()?.base_primitive(),
             // A union whose members share one base primitive behaves like that
             // primitive for operand checks. `number | 0` arises from `x ?? 0`
             // (TypeScript reduces it to `number`; surge keeps the literal), and
@@ -271,15 +285,18 @@ impl Type {
 
     pub fn get_property_access_type(&self, name: &str) -> Option<Type> {
         match self {
-            Type::Object(object) => object.get_property_access_type(name).or_else(|| {
-                // A callable or constructable object *is* a `Function`, so it
-                // carries `name`, `length`, `call`/`apply`/`bind` — `typeof C`
-                // and `new (...args: any[]) => T` both answer `.name`.
-                let signature = object
-                    .call_signature()
-                    .or_else(|| object.construct_signature())?;
-                function_property_access_type(signature, name)
-            }),
+            Type::Object(object) => object
+                .get_property_access_type(name)
+                .or_else(|| {
+                    // A callable or constructable object *is* a `Function`, so it
+                    // carries `name`, `length`, `call`/`apply`/`bind` — `typeof C`
+                    // and `new (...args: any[]) => T` both answer `.name`.
+                    let signature = object
+                        .call_signature()
+                        .or_else(|| object.construct_signature())?;
+                    function_property_access_type(signature, name)
+                })
+                .or_else(|| object.intersected_primitive()?.get_property_access_type(name)),
             Type::Array(element) => array_property_access_type(name, element.as_ref()),
             // A tuple is an array, so it carries every `Array.prototype` method
             // (`includes`, `map`, …) over the union of its element types — not just
@@ -398,8 +415,9 @@ impl Type {
             Type::Symbol => "symbol".to_string(),
             Type::Undefined => "undefined".to_string(),
             Type::Void => "void".to_string(),
-            Type::Any => "any".to_string(),
-            Type::Unknown | Type::GenuineUnknown | Type::ErrorType | Type::TypeParameter(_) => {
+            // tsc prints its error type as the `any` it is.
+            Type::Any | Type::ErrorType => "any".to_string(),
+            Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
                 "unknown".to_string()
             }
             Type::Never => "never".to_string(),
@@ -466,7 +484,7 @@ fn object_structural_name(object: &crate::ObjectType) -> String {
                 let properties = parts.join("; ");
 
                 if properties.is_empty() {
-                    "{}".to_string()
+                    if object.non_primitive { "object" } else { "{}" }.to_string()
                 } else {
                     format!("{{ {}; }}", properties)
                 }
@@ -697,6 +715,7 @@ pub fn array_property_names() -> &'static [&'static str] {
         "every", "forEach", "flatMap", "flat", "reduce", "reduceRight", "join", "concat", "slice",
         "sort", "reverse", "fill", "splice", "push", "pop", "shift", "unshift", "at", "indexOf",
         "lastIndexOf", "includes", "values", "keys", "entries", "toString", "toLocaleString",
+        "toSorted", "toReversed", "toSpliced", "with",
     ]
 }
 
@@ -801,7 +820,9 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
         // `sort`'s optional comparator is `(a, b) => number`; modelling both
         // parameters lets `(left, right) => …` type them as the element type
         // instead of cascading into `TS7006`.
-        "sort" => Some(function_type(
+        // ES2023's copying twins return a new array but take what the
+        // mutating originals take.
+        "sort" | "toSorted" => Some(function_type(
             vec![function_type(
                 vec![element.clone(), element.clone()],
                 Type::Number,
@@ -812,11 +833,17 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
             true,
             0,
         )),
-        "reverse" => Some(function_type(
+        "reverse" | "toReversed" => Some(function_type(
             vec![],
             Type::Array(Box::new(element.clone())),
             false,
             0,
+        )),
+        "with" => Some(function_type(
+            vec![Type::Number, element.clone()],
+            Type::Array(Box::new(element.clone())),
+            false,
+            2,
         )),
         // `fill(value: T, start?: number, end?: number)` — positional, not
         // variadic; modelling it as variadic checked `start`/`end` against `T`.
@@ -827,7 +854,7 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
             1,
         )),
         // `splice(start: number, deleteCount?: number, ...items: T[])`.
-        "splice" => Some(function_type(
+        "splice" | "toSpliced" => Some(function_type(
             vec![
                 Type::Number,
                 Type::Number,

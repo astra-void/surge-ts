@@ -31,3 +31,26 @@ pub(crate) enum InferredExpression {
     },
     Unknown,
 }
+
+/// tsc's error type for a *name* that did not resolve — but only where the
+/// failure is the source's. During module analysis an import that is not bound
+/// *yet* fails the same lookup, and publishing the error type from there
+/// poisons the export every consumer reads; those passes keep the sentinel. A
+/// missing *member* has no such ordering: its receiver already resolved.
+pub(crate) fn unresolved_name_error_type() -> Option<Type> {
+    crate::program::in_check_phase().then_some(Type::ErrorType)
+}
+
+impl InferredExpression {
+    /// The type the expression contributes where only a type can flow on: a
+    /// return, an inference candidate, a binding. `None` is surge's own "could
+    /// not model this".
+    pub(crate) fn flowing_type(self) -> Option<Type> {
+        match self {
+            Self::Known(ty) => Some(ty),
+            Self::MissingProperty { .. } => Some(Type::ErrorType),
+            Self::UnresolvedIdentifier { .. } => unresolved_name_error_type(),
+            Self::Unknown => None,
+        }
+    }
+}

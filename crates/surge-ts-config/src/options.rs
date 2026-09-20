@@ -168,6 +168,11 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
         support: TsConfigOptionSupport::KnownNoop,
     },
     TsConfigOptionDefinition {
+        name: "noErrorTruncation",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::KnownNoop,
+    },
+    TsConfigOptionDefinition {
         name: "allowImportingTsExtensions",
         value_kind: TsConfigOptionValueKind::Boolean,
         support: TsConfigOptionSupport::Supported,
@@ -235,7 +240,7 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
     TsConfigOptionDefinition {
         name: "strictNullChecks",
         value_kind: TsConfigOptionValueKind::Boolean,
-        support: TsConfigOptionSupport::KnownNoop,
+        support: TsConfigOptionSupport::Supported,
     },
     TsConfigOptionDefinition {
         name: "strictFunctionTypes",

@@ -114,11 +114,29 @@ pub(crate) fn record_program_timing(
     }
 }
 
+/// The most recent stage boundary, published so a memory watchdog on another
+/// thread can say where a run blew up. Stage boundaries are rare (a dozen per
+/// run), so a lock is fine here.
+static LAST_RSS_STAGE: std::sync::RwLock<Option<&'static str>> = std::sync::RwLock::new(None);
+
+pub fn last_rss_stage_label() -> Option<&'static str> {
+    *LAST_RSS_STAGE
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+pub(super) fn publish_rss_stage(label: &'static str) {
+    *LAST_RSS_STAGE
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(label);
+}
+
 pub(crate) fn record_rss_stage(
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
     label: &'static str,
     elapsed: Duration,
 ) {
+    publish_rss_stage(label);
     // `SURGE_STAGE_TIMES=1`: stage timeline without the per-file
     // instrumentation `SURGE_TIMINGS` enables — that per-file mutex traffic
     // serializes parallel phases badly enough to invert their measurements.

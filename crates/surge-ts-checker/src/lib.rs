@@ -60,7 +60,7 @@ pub mod lowlevel {
         bundled_typescript_version, default_full_lib_seed_for_target, find_typescript_lib_dir,
         load_default_lib_inputs, load_generated_default_lib_inputs,
     };
-    pub use crate::metrics::record_loader_rss_stage;
+    pub use crate::metrics::{last_rss_stage_label, record_loader_rss_stage};
     pub use crate::program::check_program_with_prescanned_sources;
 
     /// Centralized relative-path candidate generation shared by the loader's

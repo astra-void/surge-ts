@@ -267,6 +267,52 @@ pub(crate) fn insert_array_binding_pattern_bindings(
     }
 }
 
+/// Evaluates the defaults a destructuring pattern writes (`{ c = fallback }`)
+/// in the scope the pattern binds into, for their own diagnostics.
+pub(crate) fn check_binding_pattern_defaults(
+    binding: &ParsedBindingName,
+    bound_type: Option<&Type>,
+    scopes: &ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    match binding {
+        ParsedBindingName::ObjectPattern(pattern) => {
+            for element in &pattern.elements {
+                // The destructured member's own type is the default's
+                // contextual type, which is what types an arrow default's
+                // parameters (`{ reducer = (items, chunk) => … }`).
+                let member_type = bound_type
+                    .map(Type::peeled)
+                    .and_then(|ty| ty.get_property_access_type(&element.property_name))
+                    .map(|ty| surge_ts_types::remove_nullish(&ty));
+                if let Some(default) = element.default_value.as_deref() {
+                    let (expression, span) = default;
+                    let _ = crate::checks::expected::evaluate_expression_with_expected_type(
+                        expression,
+                        *span,
+                        member_type.as_ref(),
+                        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                        scopes.visible_symbols(),
+                        ctx,
+                    );
+                }
+                check_binding_pattern_defaults(
+                    &element.binding_name,
+                    member_type.as_ref(),
+                    scopes,
+                    ctx,
+                );
+            }
+        }
+        ParsedBindingName::ArrayPattern(pattern) => {
+            for element in pattern.elements.iter().flatten() {
+                check_binding_pattern_defaults(element, None, scopes, ctx);
+            }
+        }
+        ParsedBindingName::Identifier { .. } | ParsedBindingName::Unsupported { .. } => {}
+    }
+}
+
 pub(crate) fn insert_parameter_bindings(
     parameter: &ParsedFunctionParameter,
     parameter_type: &Type,
@@ -421,7 +467,7 @@ pub(crate) fn map_function_signature(
 
             match inferred_initializer {
                 InferredExpression::Known(ty) => {
-                    widen_implicit_variable_initializer_type(SymbolKind::Let, initializer, &ty)
+                    widen_implicit_variable_initializer_type(SymbolKind::Let, initializer, &ty, false)
                 }
                 InferredExpression::UnresolvedIdentifier { .. }
                 | InferredExpression::MissingProperty { .. }
@@ -790,6 +836,28 @@ pub(crate) fn namespace_member_signature_info(
     Arc::new(info)
 }
 
+/// Resolves every written type parameter constraint and default (`<T extends
+/// C = D>`) under the declaration's own type parameters, so a name either
+/// refers to is reported like any other type reference.
+pub(crate) fn check_type_parameter_declarations(
+    type_parameters: &[ParsedTypeParameter],
+    ctx: &mut CheckerContext,
+) {
+    if type_parameters
+        .iter()
+        .all(|parameter| parameter.constraint.is_none() && parameter.default_type.is_none())
+    {
+        return;
+    }
+    with_type_parameter_scope(type_parameters, ctx, |ctx| {
+        for parameter in type_parameters {
+            for written in [&parameter.constraint, &parameter.default_type].into_iter().flatten() {
+                let _ = crate::infer::map_parsed_type(written.clone(), ctx);
+            }
+        }
+    });
+}
+
 pub(crate) fn with_type_parameter_scope<R>(
     type_parameters: &[ParsedTypeParameter],
     ctx: &mut CheckerContext,
@@ -932,6 +1000,10 @@ pub(crate) fn register_function_signature(
     symbols: &mut SymbolTable,
     replace_existing: bool,
     is_implementation: bool,
+    // The implementation of a function this file also declares overloads for.
+    // tsc resolves calls against the overloads alone, so it stays out of the
+    // group: folded in, its usual `any` parameters accept every argument.
+    hidden_behind_overloads: bool,
 ) -> bool {
     let symbol_exists = matches!(
         symbols.get(&name),
@@ -962,6 +1034,7 @@ pub(crate) fn register_function_signature(
         // A second *implementation* is a duplicate declaration (TS2393), not an
         // overload group: the first signature stays authoritative for calls.
         if !duplicate_implementation
+            && !hidden_behind_overloads
             && let Some(existing) = symbols.get(&name)
             && let Type::Function(existing_function) = &existing.ty
         {
@@ -1391,11 +1464,17 @@ pub(crate) fn check_function_body_with_signature_and_this(
     let flow_facts = collect_function_flow_facts(&body);
     // Whether a `default`-less switch covers its discriminant is only known once
     // the body is checked, so such a body is kept to summarize again afterwards.
-    let recheck_body = (has_explicit_return_type && body_flow.guarantees_value_return)
+    let recheck_body = (body_flow.guarantees_value_return || body_flow.guarantees_exit)
         .then(|| body_has_defaultless_switch(&body).then(|| body.clone()))
         .flatten();
+    let tail_call = crate::checks::expr::tail_call_key(&body);
 
-    let mut scopes = ScopeStack::from_root(merged_function_body_root_symbols(ctx));
+    let root = match ctx.nested_function_scope.take() {
+        Some(enclosing) => SymbolTable::with_parent(enclosing),
+        None => merged_function_body_root_symbols(ctx),
+    };
+    let mut scopes = ScopeStack::from_root(root);
+    scopes.mark_function_boundary();
     if let Some(name) = name {
         scopes.insert_current(
             name,
@@ -1415,6 +1494,11 @@ pub(crate) fn check_function_body_with_signature_and_this(
     let outer_this_is_implicitly_any = ctx.this_is_implicitly_any;
     ctx.this_is_implicitly_any =
         this_type.is_none() && !is_constructor && !has_this_parameter;
+    let outer_constructor_writable_members = if is_constructor {
+        None
+    } else {
+        ctx.constructor_writable_members.take()
+    };
 
     if let Some(this_type) = this_type {
         scopes.insert_current(
@@ -1427,8 +1511,18 @@ pub(crate) fn check_function_body_with_signature_and_this(
         );
     }
     scopes.push_function_scope();
+    super::bind_arguments_object(&mut scopes, ctx);
     let mut flow_state = FunctionFlowState::new(
         flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
+    );
+    let saved_never_initialized =
+        crate::flow::enter_container(type_parameters, &parameters, &body, &mut flow_state, ctx);
+    crate::flow::check_parameter_default_flow(&parameters, &flow_state, ctx);
+    flow_state.hoist_vars(
+        crate::flow::collect_hoisted_vars(&body)
+            .into_iter()
+            .filter(|name| !crate::flow::binds_parameter(&parameters, name))
+            .collect(),
     );
 
     // `None` is an overload signature (no body); tsc never flags its parameters
@@ -1441,11 +1535,24 @@ pub(crate) fn check_function_body_with_signature_and_this(
     }
 
     for (parameter, parameter_type) in parameters
-        .into_iter()
+        .iter()
         .zip(function_type.parameters().iter())
     {
-        insert_parameter_bindings(&parameter, parameter_type, &mut scopes);
+        insert_parameter_bindings(parameter, parameter_type, &mut scopes);
     }
+    // A default is written inside the signature, so the function's own type
+    // parameters are in scope for it.
+    with_type_parameter_scope(type_parameters, ctx, |ctx| {
+        for (parameter, parameter_type) in parameters.iter().zip(function_type.parameters().iter())
+        {
+            check_binding_pattern_defaults(
+                &parameter.binding_name,
+                Some(parameter_type),
+                &scopes,
+                ctx,
+            );
+        }
+    });
 
     let returned_void_like = with_type_parameter_scope(type_parameters, ctx, |ctx| {
         // A declaration's own frame, never active — it has a real signature, so
@@ -1461,6 +1568,11 @@ pub(crate) fn check_function_body_with_signature_and_this(
         );
         ctx.close_contextual_return_frame()
     });
+    ctx.inherited_never_initialized = saved_never_initialized;
+
+    if !is_constructor {
+        ctx.constructor_writable_members = outer_constructor_writable_members;
+    }
 
     // A generator's declared type describes what it *yields*, so tsc requires no
     // `return` and reports neither TS2355 nor TS7030 on it.
@@ -1469,13 +1581,24 @@ pub(crate) fn check_function_body_with_signature_and_this(
     }
 
     let body_flow = match recheck_body {
-        Some(body) if !ctx.non_exhaustive_switches.is_empty() => {
-            crate::flow::with_non_exhaustive_switches(&ctx.non_exhaustive_switches, || {
+        Some(body)
+            if !ctx.non_exhaustive_switches.is_empty() || !ctx.exhaustive_switches.is_empty() =>
+        {
+            crate::flow::with_non_exhaustive_switches(
+                &ctx.non_exhaustive_switches,
+                &ctx.exhaustive_switches,
+                || {
                 analyze_function_body_flow(&body)
             })
         }
         _ => body_flow,
     };
+    let exits_via_never_call =
+        tail_call.is_some_and(|key| ctx.never_returning_calls.contains(&key));
+    if exits_via_never_call {
+        return;
+    }
+
     if has_explicit_return_type && should_check_missing_return(function_type.return_type()) {
         emit_missing_return_diagnostic(
             body_flow,
@@ -1515,7 +1638,7 @@ pub(crate) fn merged_function_body_root_symbols(ctx: &CheckerContext) -> SymbolT
     SymbolTable::with_parent(module_over_ambient)
 }
 
-fn body_has_defaultless_switch(body: &[ParsedFunctionBodyStatement]) -> bool {
+pub(crate) fn body_has_defaultless_switch(body: &[ParsedFunctionBodyStatement]) -> bool {
     body.iter().any(|statement| match statement {
         ParsedFunctionBodyStatement::Switch(switch_statement) => {
             switch_statement.cases.iter().all(|case| case.test.is_some())

@@ -159,6 +159,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             types: Vec::new(),
             stub_external_modules: false,
             no_implicit_any: loaded.compiler_options.no_implicit_any,
+            strict_null_checks: true,
             strict_property_initialization: loaded
                 .compiler_options
                 .strict_property_initialization,
@@ -1279,7 +1280,7 @@ fn project_mode_regular_type_export_value_usage_unresolved() {
 }
 
 #[test]
-fn project_mode_regular_value_export_type_usage_unresolved() {
+fn project_mode_regular_value_export_used_as_type_reports_ts2749() {
     let root = temp_dir("project-regular-value-export-type-usage");
     write_file(
         &root,
@@ -1298,7 +1299,7 @@ fn project_mode_regular_value_export_type_usage_unresolved() {
     let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
 
     assert!(stderr.is_empty());
-    assert!(stdout.contains("TS2304"));
+    assert!(stdout.contains("TS2749"));
     assert!(stdout.contains("src/index.ts"));
 }
 

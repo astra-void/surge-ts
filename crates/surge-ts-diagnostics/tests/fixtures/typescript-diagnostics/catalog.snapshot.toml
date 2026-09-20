@@ -57,6 +57,14 @@ message = "'{0}' cannot be used as a value because it was imported using 'import
 arity = 1
 
 [[diagnostic]]
+code = "TS2302"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Static members cannot reference class type parameters."
+arity = 0
+
+[[diagnostic]]
 code = "TS2304"
 category = "Error"
 source = "typescript"
@@ -628,7 +636,7 @@ arity = 2
 code = "TS2749"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "'{0}' refers to a value, but is being used as a type here. Did you mean 'typeof {0}'?"
 arity = 1
 
@@ -876,7 +884,7 @@ arity = 2
 code = "TS7034"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Variable '{0}' implicitly has type '{1}' in some locations where its type cannot be determined."
 arity = 2
 
@@ -1449,6 +1457,46 @@ message = "Cannot invoke an object which is possibly 'undefined'."
 arity = 0
 
 [[diagnostic]]
+code = "TS7009"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'new' expression, whose target lacks a construct signature, implicitly has an 'any' type."
+arity = 0
+
+[[diagnostic]]
+code = "TS2350"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Only a void function can be called with the 'new' keyword."
+arity = 0
+
+[[diagnostic]]
+code = "TS2721"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot invoke an object which is possibly 'null'."
+arity = 0
+
+[[diagnostic]]
+code = "TS2531"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Object is possibly 'null'."
+arity = 0
+
+[[diagnostic]]
+code = "TS2407"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The right-hand side of a 'for...in' statement must be of type 'any', an object type or a type parameter, but here has type '{0}'."
+arity = 1
+
+[[diagnostic]]
 code = "TS2724"
 category = "Error"
 source = "typescript"
@@ -1951,4 +1999,196 @@ source = "typescript"
 support = "catalog-only"
 message = "Named imports are not allowed in a deferred import."
 arity = 0
+
+[[diagnostic]]
+code = "TS2311"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Did you mean to write this in an async function?"
+arity = 1
+
+[[diagnostic]]
+code = "TS2503"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find namespace '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2581"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Do you need to install type definitions for jQuery? Try `npm i --save-dev @types/jquery`."
+arity = 1
+
+[[diagnostic]]
+code = "TS2582"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha`."
+arity = 1
+
+[[diagnostic]]
+code = "TS2583"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Do you need to change your target library? Try changing the 'lib' compiler option to '{1}' or later."
+arity = 2
+
+[[diagnostic]]
+code = "TS2584"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Do you need to change your target library? Try changing the 'lib' compiler option to include 'dom'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2585"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' only refers to a type, but is being used as a value here. Do you need to change your target library? Try changing the 'lib' compiler option to es2015 or later."
+arity = 1
+
+[[diagnostic]]
+code = "TS2592"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Do you need to install type definitions for jQuery? Try `npm i --save-dev @types/jquery` and then add 'jquery' to the types field in your tsconfig."
+arity = 1
+
+[[diagnostic]]
+code = "TS2593"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig."
+arity = 1
+
+[[diagnostic]]
+code = "TS2662"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Did you mean the static member '{1}.{0}'?"
+arity = 2
+
+[[diagnostic]]
+code = "TS2663"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Did you mean the instance member 'this.{0}'?"
+arity = 1
+
+[[diagnostic]]
+code = "TS2708"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot use namespace '{0}' as a value."
+arity = 1
+
+[[diagnostic]]
+code = "TS2713"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot access '{0}.{1}' because '{0}' is a type, but not a namespace. Did you mean to retrieve the type of the property '{1}' in '{0}' with '{0}[\"{1}\"]'?"
+arity = 2
+
+[[diagnostic]]
+code = "TS2867"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Do you need to install type definitions for Bun? Try `npm i --save-dev @types/bun`."
+arity = 1
+
+[[diagnostic]]
+code = "TS2868"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find name '{0}'. Do you need to install type definitions for Bun? Try `npm i --save-dev @types/bun` and then add 'bun' to the types field in your tsconfig."
+arity = 1
+
+[[diagnostic]]
+code = "TS2709"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot use namespace '{0}' as a type."
+arity = 1
+
+[[diagnostic]]
+code = "TS2702"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' only refers to a type, but is being used as a namespace here."
+arity = 1
+
+[[diagnostic]]
+code = "TS2833"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find namespace '{0}'. Did you mean '{1}'?"
+arity = 2
+
+[[diagnostic]]
+code = "TS1194"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Export declarations are not permitted in a namespace."
+arity = 0
+
+[[diagnostic]]
+code = "TS2694"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Namespace '{0}' has no exported member '{1}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS2689"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot extend an interface '{0}'. Did you mean 'implements'?"
+arity = 1
+
+[[diagnostic]]
+code = "TS1308"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'await' expressions are only allowed within async functions and at the top levels of modules."
+arity = 0
+
+[[diagnostic]]
+code = "TS7026"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "JSX element implicitly has type 'any' because no interface 'JSX.{0}' exists."
+arity = 1
+
+[[diagnostic]]
+code = "TS7017"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Element implicitly has an 'any' type because type '{0}' has no index signature."
+arity = 1
 

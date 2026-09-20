@@ -8,7 +8,44 @@ use crate::{ParsedImportDeclaration, ParsedImportKind, ParsedImportSpecifier};
 
 use super::spans::text_span_from_oxc_span;
 
-pub(crate) fn parse_import_declaration(
+/// An import declaration, with its inline `type` specifiers
+/// (`import { type A, b }`) split off into an `import type` of their own: they
+/// bind no value, exactly as if written that way.
+pub(crate) fn parse_import_declarations(
+    declaration: &ImportDeclaration<'_>,
+) -> Option<Vec<ParsedImportDeclaration>> {
+    let mut parsed = vec![parse_import_declaration(declaration)?];
+    if matches!(declaration.import_kind, ImportOrExportKind::Type) {
+        return Some(parsed);
+    }
+    let type_specifiers: Vec<ParsedImportSpecifier> = declaration
+        .specifiers
+        .iter()
+        .flatten()
+        .filter_map(|specifier| match specifier {
+            ImportDeclarationSpecifier::ImportSpecifier(specifier)
+                if matches!(specifier.import_kind, ImportOrExportKind::Type) =>
+            {
+                parse_import_specifier(specifier.as_ref())
+            }
+            _ => None,
+        })
+        .collect();
+    if !type_specifiers.is_empty() {
+        parsed.push(ParsedImportDeclaration {
+            kind: ParsedImportKind::Named {
+                is_type_only: true,
+                specifiers: type_specifiers,
+            },
+            module_specifier: declaration.source.value.to_string(),
+            module_specifier_span: Some(text_span_from_oxc_span(declaration.source.span)),
+            span: Some(text_span_from_oxc_span(declaration.span)),
+        });
+    }
+    Some(parsed)
+}
+
+fn parse_import_declaration(
     declaration: &ImportDeclaration<'_>,
 ) -> Option<ParsedImportDeclaration> {
     let module_specifier = declaration.source.value.to_string();
@@ -30,6 +67,10 @@ pub(crate) fn parse_import_declaration(
 
     for specifier in specifiers {
         match specifier {
+            // Split off by `parse_import_declarations`.
+            ImportDeclarationSpecifier::ImportSpecifier(specifier)
+                if matches!(specifier.import_kind, ImportOrExportKind::Type)
+                    && !matches!(declaration.import_kind, ImportOrExportKind::Type) => {}
             ImportDeclarationSpecifier::ImportSpecifier(specifier) => {
                 let Some(parsed_specifier) = parse_import_specifier(specifier.as_ref()) else {
                     return Some(ParsedImportDeclaration {
