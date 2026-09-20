@@ -1047,10 +1047,13 @@ pub(crate) fn parse_type_method_signature(
         parameters.push(parse_function_type_rest_parameter(rest)?);
     }
 
-    let return_type = method_signature
-        .return_type
-        .as_ref()
-        .and_then(|annotation| parse_type_annotation(annotation.as_ref()))?;
+    // A method signature written without a return type returns an implicit
+    // `any` (and is TS7010 under `noImplicitAny`); dropping the member instead
+    // made every use of it a missing property.
+    let return_type = match method_signature.return_type.as_ref() {
+        Some(annotation) => parse_type_annotation(annotation.as_ref())?,
+        None => ParsedType::Any,
+    };
 
     Some(ParsedObjectTypeProperty {
         name,

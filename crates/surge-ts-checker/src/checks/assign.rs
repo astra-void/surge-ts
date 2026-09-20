@@ -101,7 +101,18 @@ pub(crate) fn check_assignment_with_symbols(
                     ctx.file_name.clone(),
                 );
 
-                let diagnostic = diagnostic.with_span(convert_span(target_span));
+                // tsc's `elaborateDidYouMeanToCallOrConstruct`: a value that
+                // would fit once called or constructed (`a = B` where `new B()`
+                // is an `A`) is reported on the value, not on the target.
+                let anchor = match assignment.value_span {
+                    Some(value_span)
+                        if called_or_constructed_fits(&inferred_value_type, &target_type) =>
+                    {
+                        value_span
+                    }
+                    _ => target_span,
+                };
+                let diagnostic = diagnostic.with_span(convert_span(anchor));
                 ctx.push(diagnostic);
             }
             record_program_timing(ctx.timings.as_ref(), |timings| {
@@ -111,6 +122,25 @@ pub(crate) fn check_assignment_with_symbols(
         crate::infer::InferredExpression::UnresolvedIdentifier { .. } => {}
         crate::infer::InferredExpression::MissingProperty { .. } => {}
         crate::infer::InferredExpression::Unknown => {}
+    }
+}
+
+/// Whether calling or constructing `source` yields something assignable to
+/// `target`. `any` and `never` results prove nothing, as in tsc.
+fn called_or_constructed_fits(source: &surge_ts_types::Type, target: &surge_ts_types::Type) -> bool {
+    use surge_ts_types::Type;
+    let fits = |signature: &surge_ts_types::FunctionType| {
+        let returned = signature.return_type();
+        !matches!(returned, Type::Any | Type::Never)
+            && !returned.is_unknown()
+            && is_assignable_to(returned, target)
+    };
+    match source.peeled() {
+        Type::Function(function) => fits(&function),
+        Type::Object(object) => {
+            object.construct_signature().is_some_and(fits) || object.call_signature().is_some_and(fits)
+        }
+        _ => false,
     }
 }
 
