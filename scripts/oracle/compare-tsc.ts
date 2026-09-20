@@ -567,6 +567,7 @@ export const fixturePresets: Record<string, string> = {
   'loop-assignment-flow-basic': path.join(workspaceRoot, 'tests/compat-projects/loop-assignment-flow-basic/tsconfig.json'),
   'rest-tuple-parameters-basic': path.join(workspaceRoot, 'tests/compat-projects/rest-tuple-parameters-basic/tsconfig.json'),
   'typeof-narrow-subtype-basic': path.join(workspaceRoot, 'tests/compat-projects/typeof-narrow-subtype-basic/tsconfig.json'),
+  'discriminated-literal-report-basic': path.join(workspaceRoot, 'tests/compat-projects/discriminated-literal-report-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
