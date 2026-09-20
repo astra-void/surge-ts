@@ -74,6 +74,12 @@ pub struct ObjectType {
     /// but assignability refuses a primitive source. Excluded from equality
     /// like the other markers.
     pub non_primitive: bool,
+    /// Set for an object resolved from an `interface` or `class` declaration.
+    /// tsc gives only object and type literals an implicit index signature
+    /// (`isObjectTypeWithInferableIndex`), so such a source answers a target
+    /// index signature with one it declares or not at all. Excluded from
+    /// equality like the other markers.
+    pub without_inferable_index: bool,
     /// The nominal reference operands of the intersection this object was
     /// merged from (`Matcher<unknown, string> & Omit<…>` keeps the `Matcher`
     /// reference). An `infer` pattern naming that declaration binds its
@@ -212,6 +218,7 @@ impl ObjectType {
             is_intersection: false,
             synthetic_open_index: false,
             non_primitive: false,
+            without_inferable_index: false,
             intersection_operands: None,
         }
     }
@@ -269,6 +276,12 @@ impl ObjectType {
     /// rather than a declared `[key: string]: T`.
     pub fn with_open_index_marker(mut self) -> Self {
         self.synthetic_open_index = true;
+        self
+    }
+
+    /// Marks this object as resolved from an `interface` or `class` declaration.
+    pub fn with_nominal_declaration_marker(mut self) -> Self {
+        self.without_inferable_index = true;
         self
     }
 
@@ -405,6 +418,7 @@ impl Clone for ObjectType {
             is_intersection: self.is_intersection,
             synthetic_open_index: self.synthetic_open_index,
             non_primitive: self.non_primitive,
+            without_inferable_index: self.without_inferable_index,
             intersection_operands: self.intersection_operands.clone(),
         }
     }

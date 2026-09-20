@@ -872,6 +872,7 @@ pub(crate) fn resolve_interface_declaration(
     let mut properties = PropertyMap::default();
     let mut had_error = false;
     let mut inherited_index_type: Option<Type> = None;
+    let mut inherited_number_index_type: Option<Type> = None;
     let mut inherited_call_signature: Option<FunctionType> = None;
     let mut inherited_construct_signature: Option<FunctionType> = None;
     // A base that resolves to `any` (e.g. a mixin) leaves the derived member set
@@ -962,6 +963,11 @@ pub(crate) fn resolve_interface_declaration(
                 {
                     inherited_index_type = Some(index_type.as_ref().clone());
                 }
+                if inherited_number_index_type.is_none()
+                    && let Some(index_type) = &object_type.number_index_type
+                {
+                    inherited_number_index_type = Some(index_type.as_ref().clone());
+                }
                 // Call/construct signatures are inherited like members: React's
                 // `ForwardRefExoticComponent extends ExoticComponent` carries its
                 // callability entirely from the base, and dropping it here strips
@@ -989,6 +995,9 @@ pub(crate) fn resolve_interface_declaration(
             // surface is a name lookup, not a property map, so materialize it
             // here or every inherited `forEach`/`length` is a false TS2339.
             Type::Array(element) => {
+                if inherited_number_index_type.is_none() {
+                    inherited_number_index_type = Some(element.as_ref().clone());
+                }
                 for name in surge_ts_types::array_property_names() {
                     if properties.contains_key(*name) {
                         continue;
@@ -1399,17 +1408,20 @@ pub(crate) fn resolve_interface_declaration(
     // A numeric index signature is resolved alongside the string one: a numeric
     // key prefers it, and its presence alone is what makes a *string* key an
     // implicit `any` rather than a resolved member.
-    let resolved_number_index_type = number_index_type.map(|parsed| {
-        let resolved = crate::program::with_dts_expansion_reason(
-            crate::program::DtsExpansionReason::InterfaceIndexSignatureMapping,
-            || resolve_parsed_type(parsed.clone(), ctx, resolving, substitution),
-        );
-        had_error |= resolved.had_error;
-        resolved.ty
-    });
+    let resolved_number_index_type = number_index_type
+        .map(|parsed| {
+            let resolved = crate::program::with_dts_expansion_reason(
+                crate::program::DtsExpansionReason::InterfaceIndexSignatureMapping,
+                || resolve_parsed_type(parsed.clone(), ctx, resolving, substitution),
+            );
+            had_error |= resolved.had_error;
+            resolved.ty
+        })
+        .or(inherited_number_index_type);
 
     let mut object_type = alloc_object_type(properties, resolved_index_type)
-        .with_number_index_type(resolved_number_index_type);
+        .with_number_index_type(resolved_number_index_type)
+        .with_nominal_declaration_marker();
     if openness_is_synthetic {
         object_type = object_type.with_open_index_marker();
     }

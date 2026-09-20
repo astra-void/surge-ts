@@ -162,11 +162,23 @@ fn missing_required_properties(source: &Type, target: &Type) -> Option<Vec<Strin
             _ => source.get_property_access_type(name).is_some(),
         }
     };
+    // An intersection with a primitive operand (`number & { __brand: T }`)
+    // relates through its apparent type, so tsc names the missing members
+    // beneath the plain head rather than as it. One of object types alone is
+    // reported like any object.
+    let relates_through_apparent_type = |object: &surge_ts_types::ObjectType| {
+        object.is_intersection
+            && object.intersection_operands.as_deref().is_some_and(|operands| {
+                operands
+                    .iter()
+                    .any(|operand| !matches!(operand, Type::Reference(_) | Type::Object(_)))
+            })
+    };
     // A function source keeps the plain head, as does the global `Object`
     // (tsc chains its "assignable to very few other types" hint beneath it).
     match &source {
         Type::Object(object)
-            if !object.is_intersection
+            if !relates_through_apparent_type(object)
                 && !object.synthetic_open_index
                 && object.alias_name.as_deref() != Some("Object")
                 && !object.non_primitive

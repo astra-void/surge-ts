@@ -1442,9 +1442,9 @@ fn object_assignable(from_obj: &ObjectType, to_obj: &ObjectType, from: &Type, to
 /// the source's applicable one, or — the source having none — by every source
 /// member it would cover (the implicit index signature of an object type).
 /// An `any`-valued signature asks for nothing once the target has a string
-/// index at all. surge does not record whether an object came from an
-/// interface, which tsc denies the implicit signature to, so members are what
-/// every index-less source is judged by.
+/// index at all. Only an object or type literal has that implicit signature
+/// (`isObjectTypeWithInferableIndex`): an interface, a class instance or a
+/// callable object answers with a signature it declares, or not at all.
 fn index_signatures_related(source: &ObjectType, target: &ObjectType) -> bool {
     if target.synthetic_open_index || source.synthetic_open_index {
         return true;
@@ -1457,6 +1457,12 @@ fn index_signatures_related(source: &ObjectType, target: &ObjectType) -> bool {
         }
         if let Some(source_index) = source.applicable_index_type(numeric_only) {
             return source_index.is_unknown() || is_assignable_to(source_index, value);
+        }
+        if source.without_inferable_index
+            || source.call_signature().is_some()
+            || source.construct_signature().is_some()
+        {
+            return false;
         }
         // With no signature of the target's own kind, a numeric one still
         // covers keys a string signature answers (`membersRelatedToIndexer`).
@@ -1625,11 +1631,8 @@ pub fn object_assignability_failure(
         let source_property_ty = source_property.map(|property| &property.ty).or_else(|| {
             let index = source
                 .applicable_index_type(crate::object::is_numeric_key(property_name.as_ref()))?;
-            (target_property.is_optional()
-                || source.synthetic_open_index
-                || index.is_unknown()
-                || matches!(index, Type::Any))
-            .then_some(index)
+            (target_property.is_optional() || source.synthetic_open_index || index.is_unknown())
+                .then_some(index)
         });
 
         let source_property_ty = source_property_ty

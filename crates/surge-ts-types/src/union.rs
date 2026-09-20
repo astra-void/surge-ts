@@ -905,6 +905,7 @@ mod tests {
                 is_intersection: false,
                 synthetic_open_index: false,
                 non_primitive: false,
+                without_inferable_index: false,
                 intersection_operands: None,
             })
         };
@@ -1039,6 +1040,7 @@ mod tests {
                     is_intersection: false,
                     synthetic_open_index: false,
                     non_primitive: false,
+                    without_inferable_index: false,
                 intersection_operands: None,
                 })
             })
@@ -1074,6 +1076,7 @@ mod tests {
                 is_intersection: false,
                 synthetic_open_index: false,
                 non_primitive: false,
+                without_inferable_index: false,
                 intersection_operands: None,
             })
         };
@@ -1121,6 +1124,7 @@ mod tests {
                 is_intersection: false,
                 synthetic_open_index: false,
                 non_primitive: false,
+                without_inferable_index: false,
                 intersection_operands: None,
             })
         };
