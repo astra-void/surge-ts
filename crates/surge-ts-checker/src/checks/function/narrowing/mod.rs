@@ -749,10 +749,12 @@ fn narrow_value_guards_in_scope(
         return;
     }
 
-    // In the branch where the condition holds, a guard on a genuinely-`unknown`
-    // value narrows it (tsc), so a later access inside the branch is not a
-    // `TS18046`. Drop the guarded identifier to the degradation sentinel so the
-    // property-access check stays silent. See the matching `&&`-operand path in
+    narrow_value_guards_by_guard(condition, scopes, branch_is_true, ctx);
+
+    // A guard surge could not turn into a type still narrows a
+    // genuinely-`unknown` value for tsc, so a later access inside the branch is
+    // not a `TS18046`: what is left `unknown` after the narrowers above drops
+    // to the degradation sentinel. See the matching `&&`-operand path in
     // `narrow_truthy_operand_symbol_table`.
     if branch_is_true {
         downgrade_guarded_genuine_unknown_in_scope(condition, scopes);
@@ -761,7 +763,14 @@ fn narrow_value_guards_in_scope(
         collect_holding_guard_identifiers(condition, false, &mut names);
         downgrade_genuine_unknown_in_scope(&names, scopes);
     }
+}
 
+fn narrow_value_guards_by_guard(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+    ctx: &mut CheckerContext,
+) {
     narrow_element_reference_guards_in_scope(condition, scopes, branch_is_true, ctx);
 
     if narrow_logical_guard_in_scope(condition, scopes, branch_is_true, ctx) {

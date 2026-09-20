@@ -339,6 +339,11 @@ pub(super) fn narrow_to_instanceof_subclass(
     if !keep_matching || matches!(ty.peeled(), Type::Union(_)) {
         return None;
     }
+    // `unknown` narrows to the candidate itself (tsc's `narrowTypeByInstanceof`
+    // reads it as the widest subject there is).
+    if matches!(ty, Type::GenuineUnknown) {
+        return instance.filter(|instance| !instance.is_unknown()).cloned();
+    }
     // A subject that is already `any` or unresolved says nothing to narrow.
     if ty.is_unknown() || matches!(ty, Type::Any) {
         return None;
