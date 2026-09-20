@@ -2236,6 +2236,31 @@ pub(crate) fn collect_inferred_type_argument(
                 },
                 _ => return,
             };
+            // tsc's `instantiateTypeWithSingleGenericCallSignature`: a generic
+            // function passed where a non-generic signature is expected is
+            // instantiated in that signature's context first, so `id` against
+            // `(values: number[]) => r` contributes `number[]` for `r` rather
+            // than a placeholder return that infers nothing.
+            let actual_function = if actual_function.type_parameter_head().is_some()
+                && expected_function.type_parameters.is_empty()
+            {
+                let diagnostics_before = ctx.diagnostics().len();
+                let contextual = map_parsed_type_with_substitution(
+                    ParsedType::Function(expected_function.clone()),
+                    ctx,
+                    substitution,
+                );
+                ctx.truncate_diagnostics(diagnostics_before);
+                match contextual {
+                    Type::Function(contextual) => {
+                        surge_ts_types::generic_source_in_context_of(&actual_function, &contextual)
+                            .unwrap_or(actual_function)
+                    }
+                    _ => actual_function,
+                }
+            } else {
+                actual_function
+            };
             let actual_parameters = actual_function.parameters();
             let rest_index = actual_function
                 .is_variadic()
@@ -2883,6 +2908,14 @@ pub(crate) fn record_type_argument_candidate(
     }
 
     if existing == candidate {
+        return;
+    }
+
+    // `never` is a subtype of every candidate, so a later `never` never
+    // decides the supertype: `withFew(xs, id, fail)` binds `r` from `id`'s
+    // return, not from `fail`'s. An *existing* `never` stands: replacing it
+    // needs the candidate's variance, which is not tracked here.
+    if matches!(candidate, Type::Never) {
         return;
     }
 

@@ -137,6 +137,7 @@ pub(crate) fn check_function_variable_declaration(
 
     let visible_symbols = visible_symbols(scopes);
 
+    let is_annotated = variable.declared_type.is_some();
     let probe_initializer = (literal_initializer_type.is_none()
         && variable.declared_type.is_some()
         && !initializer_flow_blocked)
@@ -188,7 +189,7 @@ pub(crate) fn check_function_variable_declaration(
             Some(initialized) => {
                 let declared = symbol.ty.clone();
                 scopes.insert_current_handle(local_name.as_str(), symbol);
-                scopes.insert_current_narrowed(
+                scopes.insert_current_declared(
                     local_name.as_str(),
                     SymbolInfo {
                         ty: initialized,
@@ -197,6 +198,19 @@ pub(crate) fn check_function_variable_declaration(
                     },
                     declared,
                 );
+            }
+            // An annotation is the binding's declared type for good: recording
+            // it lets a later write be checked against it and narrowed from
+            // it, rather than rewriting the binding to whatever was assigned.
+            None if is_annotated && !symbol.ty.is_unknown() => {
+                let declared = symbol.ty.clone();
+                let info = SymbolInfo {
+                    ty: declared.clone(),
+                    kind: symbol_kind_for_variable(variable_kind),
+                    function_signature: symbol.function_signature.clone(),
+                };
+                scopes.insert_current_handle(local_name.as_str(), symbol);
+                scopes.insert_current_declared(local_name.as_str(), info, declared);
             }
             None => {
                 scopes.insert_current_handle(local_name.as_str(), symbol);

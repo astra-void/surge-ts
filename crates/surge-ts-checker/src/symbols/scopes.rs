@@ -103,6 +103,31 @@ impl ScopeStack {
         self.insert_current(name, symbol)
     }
 
+    /// Declares `name` in the current frame with `declared` as its declaration
+    /// type. Unlike a narrowing, a declaration does not inherit the record of
+    /// an outer binding it shadows: `let v: T` in a block, where the block
+    /// declares its own `T`, is checked against *that* `T`.
+    pub(crate) fn insert_current_declared(
+        &mut self,
+        name: impl Into<Arc<str>>,
+        symbol: SymbolInfo,
+        declared: Type,
+    ) -> Option<SymbolInfoHandle> {
+        let name = name.into();
+        let previous_declared = self.visible_symbols.declared_type(&name).cloned();
+        let current_frame = self
+            .frames
+            .last_mut()
+            .expect("scope stack must contain at least one frame");
+        current_frame
+            .declared_shadows
+            .entry(Arc::clone(&name))
+            .or_insert(previous_declared);
+        self.visible_symbols
+            .set_declared_type(Arc::clone(&name), Some(declared));
+        self.insert_current(name, symbol)
+    }
+
     /// Records (or clears, with `None`) the condition a boolean `const` guard
     /// stands for, visible to expression-level narrowing until the frame pops.
     pub(crate) fn record_alias_condition(

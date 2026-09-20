@@ -1109,7 +1109,11 @@ pub(crate) fn update_assigned_symbol_type(
         });
 
     let mut narrowed_by_assignment = false;
-    let updated_ty = if symbol.ty == Type::Undefined && !declared_union_admits_value {
+    let has_declared_type = scopes.visible_symbols().declared_type(target_name).is_some();
+    let updated_ty = if symbol.ty == Type::Undefined
+        && !declared_union_admits_value
+        && !has_declared_type
+    {
         union_type(vec![
             Type::Undefined,
             with_type_copy_reason(TypeCopyReason::ScopeOrContext, || value_ty.clone()),

@@ -1011,7 +1011,147 @@ fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bo
     if let Some(opaque_target) = opaque_generic_target(source, target) {
         return is_signature_assignable_to(source, &opaque_target, false);
     }
+    if let Some(instantiated) = generic_source_in_context_of(source, target) {
+        return is_signature_assignable_to(&instantiated, target, false);
+    }
     is_signature_assignable_to(source, target, false)
+}
+
+/// tsc's `instantiateSignatureInContextOf`: a generic source compared with a
+/// non-generic target is first instantiated with what the target's parameters
+/// infer for its type parameters, so `<T>(x: T) => T[]` against
+/// `(x: number) => string[]` compares `number[]` with `string[]` and fails.
+/// surge's placeholders relate like `unknown`, which accepted every such pair.
+/// A constrained parameter stays a placeholder: the head is display text and
+/// carries no resolved constraint to fall back to when the inference misses it.
+pub fn generic_source_in_context_of(source: &FunctionType, target: &FunctionType) -> Option<FunctionType> {
+    if target.type_parameter_head().is_some() {
+        return None;
+    }
+    let head = source.type_parameter_head()?;
+    let names: Vec<String> = head
+        .split(',')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty() && !segment.contains(' ') && !segment.contains('<'))
+        .map(String::from)
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    let mut candidates: Vec<(String, Vec<Type>)> =
+        names.iter().map(|name| (name.clone(), Vec::new())).collect();
+    for index in 0..source.parameters().len() {
+        let (Some(source_parameter), Some(target_parameter)) =
+            (parameter_type_at(source, index), parameter_type_at(target, index))
+        else {
+            continue;
+        };
+        infer_to_type_parameters(&source_parameter, &target_parameter, &mut candidates, 0);
+    }
+    let inferred = |name: &str| -> Type {
+        let found = candidates
+            .iter()
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, types)| types.as_slice())
+            .unwrap_or(&[]);
+        // The leftmost candidate every other one is assignable to, as
+        // `getCommonSupertype` picks; with none, the first stands and the
+        // comparison reports the disagreement.
+        found
+            .iter()
+            .find(|candidate| found.iter().all(|other| is_assignable_to(other, candidate)))
+            .or_else(|| found.first())
+            .cloned()
+            .unwrap_or_else(|| Type::type_parameter(name))
+    };
+    let mut changed = false;
+    let parameters: Vec<Type> = source
+        .parameters()
+        .iter()
+        .map(|parameter| substitute_type_parameters(parameter, &names, &inferred, &mut changed))
+        .collect();
+    let return_type = substitute_type_parameters(source.return_type(), &names, &inferred, &mut changed);
+    let resolved_any = candidates.iter().any(|(_, types)| !types.is_empty());
+    (changed && resolved_any).then(|| {
+        FunctionType::new(
+            parameters,
+            return_type,
+            source.is_variadic(),
+            source.required_parameter_count(),
+        )
+    })
+}
+
+/// tsc's `getTypeAtPosition`: a rest parameter answers for every position it
+/// covers — its element for an array, the element at that offset for a tuple.
+fn parameter_type_at(function: &FunctionType, index: usize) -> Option<Type> {
+    let parameters = function.parameters();
+    let last = parameters.len().checked_sub(1)?;
+    if !function.is_variadic() || index < last {
+        return parameters.get(index).cloned();
+    }
+    let offset = index - last;
+    match parameters[last].peeled() {
+        Type::Array(element) => Some(*element),
+        Type::Tuple(elements) => elements.get(offset).cloned(),
+        Type::OpenTuple(tuple) => Some(
+            tuple
+                .leading
+                .get(offset)
+                .cloned()
+                .unwrap_or_else(|| tuple.rest.as_ref().clone()),
+        ),
+        other => Some(other),
+    }
+}
+
+/// Collects, for each named type parameter, the target types standing where
+/// the source writes it.
+fn infer_to_type_parameters(
+    source: &Type,
+    target: &Type,
+    candidates: &mut Vec<(String, Vec<Type>)>,
+    depth: usize,
+) {
+    if depth > 8 {
+        return;
+    }
+    match (source, target) {
+        (Type::TypeParameter(parameter), target) => {
+            if target.is_unknown() || matches!(target, Type::Any) {
+                return;
+            }
+            if let Some((_, types)) = candidates
+                .iter_mut()
+                .find(|(name, _)| **name == *parameter.name)
+                && !types.contains(target)
+            {
+                types.push(target.clone());
+            }
+        }
+        (Type::Array(source), Type::Array(target)) => {
+            infer_to_type_parameters(source, target, candidates, depth + 1);
+        }
+        (Type::Tuple(source), Type::Tuple(target)) => {
+            for (source, target) in source.iter().zip(target) {
+                infer_to_type_parameters(source, target, candidates, depth + 1);
+            }
+        }
+        (Type::Function(source), Type::Function(target)) => {
+            for (source, target) in source.parameters().iter().zip(target.parameters()) {
+                infer_to_type_parameters(source, target, candidates, depth + 1);
+            }
+            infer_to_type_parameters(source.return_type(), target.return_type(), candidates, depth + 1);
+        }
+        (Type::Reference(source), Type::Reference(target))
+            if source.id == target.id && source.arguments.len() == target.arguments.len() =>
+        {
+            for (source, target) in source.arguments.iter().zip(target.arguments.iter()) {
+                infer_to_type_parameters(source, target, candidates, depth + 1);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// tsc's `compareSignaturesRelated` instantiates a *generic source* in the
