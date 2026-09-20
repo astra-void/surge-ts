@@ -424,6 +424,152 @@ pub(crate) fn narrow_condition_symbol_table(
     symbols: &SymbolTable,
     branch_is_true: bool,
 ) -> Option<SymbolTable> {
+    let narrowed = narrow_condition_symbol_table_by_guard(condition, symbols, branch_is_true);
+    let siblings =
+        tuple_destructure_sibling_narrowings(condition, narrowed.as_ref().unwrap_or(symbols), branch_is_true);
+    if siblings.is_empty() {
+        return narrowed;
+    }
+    let mut table = narrowed.unwrap_or_else(|| symbols.clone_with_reason(TypeCopyReason::ScopeOrContext));
+    for (name, symbol, declared) in siblings {
+        table.insert_narrowed(name, symbol, declared);
+    }
+    Some(table)
+}
+
+/// The binding a condition proves truthy (`true`) or falsy (`false`), when the
+/// condition is exactly that binding or its negation.
+fn truthiness_tested_binding(condition: &ParsedExpression, branch_is_true: bool) -> Option<(&str, bool)> {
+    match condition {
+        ParsedExpression::Identifier { name, .. } => Some((name.as_str(), branch_is_true)),
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => truthiness_tested_binding(operand, !branch_is_true),
+        _ => None,
+    }
+}
+
+/// tsc's destructured-discriminated-union narrowing: `const [error, value] =
+/// tuple` over a *union of tuples* binds dependent names, so proving `error`
+/// falsy rules out the union members whose first element is not nullish, and
+/// `value` is retyped from the survivors.
+///
+/// Only the source's own union is filtered — each sibling is re-derived from
+/// it, never narrowed on its own — so a binding whose element is identical in
+/// every surviving member keeps exactly the type it already had.
+pub(crate) fn tuple_destructure_sibling_narrowings(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+) -> Vec<(Arc<str>, SymbolInfo, Type)> {
+    let Some((tested, holds)) = truthiness_tested_binding(condition, branch_is_true) else {
+        return Vec::new();
+    };
+    let Some(binding) = symbols.tuple_destructure(tested) else {
+        return Vec::new();
+    };
+    let (source, tested_index) = (binding.source, binding.index);
+    let Some(source_type) = binding
+        .source_type
+        .or_else(|| symbols.get(&source).map(|symbol| symbol.ty.clone()))
+    else {
+        return Vec::new();
+    };
+    let Type::Union(union) = source_type.peeled() else {
+        return Vec::new();
+    };
+    let members: Vec<Type> = union.types().iter().map(Type::peeled).collect();
+    if !members.iter().all(|member| matches!(member, Type::Tuple(_))) {
+        return Vec::new();
+    }
+    let element_union = |index: usize| -> Option<Type> {
+        members
+            .iter()
+            .map(|member| match member {
+                Type::Tuple(elements) => elements.get(index).cloned(),
+                _ => None,
+            })
+            .collect::<Option<Vec<Type>>>()
+            .map(union_type)
+    };
+    // A binding holds its element or a narrowing of it; anything else is a
+    // different declaration under the same name.
+    let still_bound = |name: &str, index: usize| {
+        symbols.get(name).is_some_and(|symbol| {
+            element_union(index)
+                .is_some_and(|element| surge_ts_types::is_assignable_to(&symbol.ty, &element))
+        })
+    };
+    if !still_bound(tested, tested_index) {
+        return Vec::new();
+    }
+
+    let kept: Vec<&Type> = members
+        .iter()
+        .filter(|member| {
+            let Type::Tuple(elements) = member else {
+                return false;
+            };
+            match elements.get(tested_index) {
+                // Truthy rules out an element that can only be nullish; falsy
+                // rules out one that can never be. Anything else stays: this is
+                // a discriminant test, not a general truthiness analysis.
+                Some(element) => {
+                    matches!(element, Type::Undefined | Type::Void | Type::Never) != holds
+                }
+                None => false,
+            }
+        })
+        .collect();
+    if kept.is_empty() || kept.len() == members.len() {
+        return Vec::new();
+    }
+
+    let mut narrowings = Vec::new();
+    for (name, index) in symbols.tuple_destructure_siblings(&source) {
+        if !still_bound(&name, index) {
+            continue;
+        }
+        let Some(symbol) = symbols.get(&name) else {
+            continue;
+        };
+        let selected: Vec<Type> = kept
+            .iter()
+            .filter_map(|member| match member {
+                Type::Tuple(elements) => elements.get(index).cloned(),
+                _ => None,
+            })
+            .collect();
+        if selected.len() != kept.len() {
+            continue;
+        }
+        let narrowed = surge_ts_types::with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+            union_type(selected)
+        });
+        if narrowed == symbol.ty {
+            continue;
+        }
+        let declared = symbols.declared_type(&name).unwrap_or(&symbol.ty).clone();
+        narrowings.push((
+            name,
+            SymbolInfo {
+                ty: narrowed,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            },
+            declared,
+        ));
+    }
+    narrowings
+}
+
+fn narrow_condition_symbol_table_by_guard(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+) -> Option<SymbolTable> {
     // `ok ? a : b` where `ok` is a boolean `const` alias narrows by the
     // condition the alias was written as, not by the opaque identifier.
     if let ParsedExpression::Identifier { name, .. } = condition

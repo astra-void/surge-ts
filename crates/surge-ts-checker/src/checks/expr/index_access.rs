@@ -473,6 +473,41 @@ fn report_non_numeric_index(
     ));
 }
 
+/// What `receiver[index]` reads off an object receiver, for the
+/// diagnostic-free inference path: the member a literal key names, or the
+/// applicable index signature. `None` wherever the checked path would report.
+pub(crate) fn object_element_read(
+    receiver_type: &Type,
+    index: &ParsedExpression,
+    index_type: &Type,
+    symbols: &SymbolTable,
+    ctx: &CheckerContext,
+) -> Option<Type> {
+    let peeled = receiver_type.peeled();
+    let index_is_numeric =
+        is_assignable_to(index_type, &Type::Number) || indexes_as_number(index, symbols);
+    let Some(key) = literal_index_key(index_type) else {
+        let Type::Object(object_type) = &peeled else {
+            return None;
+        };
+        return match object_type.applicable_index_type(index_is_numeric) {
+            Some(index_value) => Some(crate::infer::unchecked_index_read(index_value.clone(), ctx)),
+            None => union_literal_index_read(object_type, index_type),
+        };
+    };
+    if let Some(element_type) = literal_tuple_element(&peeled, &key) {
+        return Some(element_type);
+    }
+    let Type::Object(object_type) = &peeled else {
+        return None;
+    };
+    object_type.get_property_access_type(&key).or_else(|| {
+        object_type
+            .applicable_index_type(index_is_numeric)
+            .map(|index_value| crate::infer::unchecked_index_read(index_value.clone(), ctx))
+    })
+}
+
 fn indexes_as_number(index: &ParsedExpression, symbols: &SymbolTable) -> bool {
     let ParsedExpression::Identifier { name, .. } = index else {
         return false;

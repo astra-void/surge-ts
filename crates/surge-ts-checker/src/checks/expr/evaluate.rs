@@ -82,8 +82,11 @@ pub(crate) fn evaluate_expression(
                 }
                 if let Some(signature) = &tag_signature {
                     // The tag receives the strings array first, so interpolation
-                    // `index` is argument `index`.
-                    check_tagged_template_argument(signature, index, ty, interpolation_span, ctx);
+                    // `index` is argument `index`. tsc reports a call's first
+                    // inapplicable argument and stops.
+                    if check_tagged_template_argument(signature, index, ty, interpolation_span, ctx) {
+                        tag_signature = None;
+                    }
                 }
             }
             infer_expression(expression, symbols, ctx)
@@ -1459,8 +1462,18 @@ fn is_primitive_assertion_side(ty: &Type) -> bool {
 /// The signature a tagged template calls when surge can relate its arguments
 /// directly: a single, non-generic function with resolved parameters.
 pub(crate) fn tagged_template_signature(tag: &Type) -> Option<surge_ts_types::FunctionType> {
-    let Type::Function(function) = tag else {
-        return None;
+    let peeled;
+    let function = match tag {
+        Type::Function(function) => function,
+        Type::Reference(_) | Type::Object(_) => {
+            peeled = tag.peeled();
+            match &peeled {
+                Type::Function(function) => function,
+                Type::Object(object) => object.call_signature()?,
+                _ => return None,
+            }
+        }
+        _ => return None,
     };
     if function.overloads().is_some()
         || function
@@ -1480,21 +1493,21 @@ fn check_tagged_template_argument(
     argument: &Type,
     span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
-) {
+) -> bool {
     let parameters = signature.parameters();
     let parameter = if signature.is_variadic() && position + 1 >= parameters.len() {
         match parameters.last().map(Type::peeled) {
             Some(Type::Array(element)) => *element,
-            _ => return,
+            _ => return false,
         }
     } else {
         match parameters.get(position) {
             Some(parameter) => parameter.clone(),
-            None => return,
+            None => return false,
         }
     };
     if argument.is_unknown() || surge_ts_types::is_assignable_to(argument, &parameter) {
-        return;
+        return false;
     }
     let parameter = super::reported_relation_target(argument, &parameter);
     let source_name = super::source_display_name(argument, &parameter);
@@ -1502,4 +1515,5 @@ fn check_tagged_template_argument(
         Diagnostic::ts2345(&source_name, &parameter.name(), ctx.file_name.clone()),
         span,
     ));
+    true
 }

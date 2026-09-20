@@ -581,6 +581,7 @@ export const fixturePresets: Record<string, string> = {
   'index-signature-relation-basic': path.join(workspaceRoot, 'tests/compat-projects/index-signature-relation-basic/tsconfig.json'),
   'spread-argument-check-basic': path.join(workspaceRoot, 'tests/compat-projects/spread-argument-check-basic/tsconfig.json'),
   'promise-relation-basic': path.join(workspaceRoot, 'tests/compat-projects/promise-relation-basic/tsconfig.json'),
+  'element-read-dependent-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/element-read-dependent-narrowing-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

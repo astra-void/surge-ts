@@ -77,11 +77,17 @@ pub(crate) fn check_function_variable_declaration(
         // `const [error, value] = tuple` lowers to one `tuple[N]` binding per
         // element; remembering which element each one is makes the group
         // dependent when `tuple` is a union of tuples.
-        if matches!(variable_kind, ParsedVariableKind::Const)
-            && let Some((source, index)) = tuple_destructure_source(initializer)
-        {
-            flow_state.record_tuple_destructure_binding(local_name.clone(), source, index);
-        }
+        let destructured = matches!(variable_kind, ParsedVariableKind::Const)
+            .then(|| {
+                tuple_destructure_binding(
+                    initializer,
+                    variable.array_pattern_span,
+                    &visible_symbols(scopes),
+                    ctx,
+                )
+            })
+            .flatten();
+        scopes.record_tuple_destructure(local_name.as_str(), destructured);
     }
 
     check_local_duplicate_declaration(&variable, scopes, ctx);

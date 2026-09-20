@@ -5,7 +5,9 @@ use crate::program::record_scope_stack_visible_symbol_handle_copy_count;
 use surge_ts_syntax::ParsedExpression;
 use surge_ts_types::Type;
 
-use crate::symbols::{SymbolInfo, SymbolInfoHandle, SymbolTable, clone_symbol_info_handle};
+use crate::symbols::{
+    SymbolInfo, SymbolInfoHandle, SymbolTable, TupleDestructureBinding, clone_symbol_info_handle,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ScopeStack {
@@ -24,6 +26,7 @@ pub(crate) struct ScopeFrame {
     /// Guard-alias conditions this frame's declarations shadowed, restored on
     /// `pop_child` like `declared_shadows`.
     alias_shadows: HashMap<Arc<str>, Option<Arc<ParsedExpression>>>,
+    destructure_shadows: HashMap<Arc<str>, Option<TupleDestructureBinding>>,
     /// A function body's own frame, which `var` hoisting stops at. Every other
     /// frame is a block (`{}`, an `if` branch, a loop or a `switch` case), and a
     /// `var` declared there stays visible after it.
@@ -48,6 +51,7 @@ impl ScopeStack {
                 visible_shadows: HashMap::new(),
                 declared_shadows: HashMap::new(),
                 alias_shadows: HashMap::new(),
+                destructure_shadows: HashMap::new(),
                 is_function_scope: true,
             }],
         }
@@ -151,6 +155,29 @@ impl ScopeStack {
         self.visible_symbols.set_alias_condition(name, condition);
     }
 
+    /// Records (or clears, with `None`) the tuple element a `const` binding was
+    /// destructured from, until the frame pops.
+    pub(crate) fn record_tuple_destructure(
+        &mut self,
+        name: &str,
+        binding: Option<TupleDestructureBinding>,
+    ) {
+        let name: Arc<str> = name.into();
+        let previous = self.visible_symbols.tuple_destructure(&name);
+        if previous.is_none() && binding.is_none() {
+            return;
+        }
+        let current_frame = self
+            .frames
+            .last_mut()
+            .expect("scope stack must contain at least one frame");
+        current_frame
+            .destructure_shadows
+            .entry(Arc::clone(&name))
+            .or_insert(previous);
+        self.visible_symbols.set_tuple_destructure(name, binding);
+    }
+
     pub(crate) fn insert_current_handle(
         &mut self,
         name: impl Into<Arc<str>>,
@@ -235,6 +262,10 @@ impl ScopeStack {
         for (name, previous_condition) in frame.alias_shadows {
             self.visible_symbols
                 .set_alias_condition(name, previous_condition);
+        }
+        for (name, previous_binding) in frame.destructure_shadows {
+            self.visible_symbols
+                .set_tuple_destructure(name, previous_binding);
         }
         for (name, previous_symbol) in frame.visible_shadows {
             // `var` is function-scoped: a block that declared one leaves it

@@ -132,7 +132,6 @@ pub(crate) fn check_function_if_statement(
                 rewritten_condition.as_ref(),
                 scopes,
                 true,
-                flow_state,
                 ctx,
             );
         flow_state.begin_branch_capture();
@@ -162,7 +161,6 @@ pub(crate) fn check_function_if_statement(
                 rewritten_condition.as_ref(),
                 scopes,
                 false,
-                flow_state,
                 ctx,
             );
             flow_state.begin_branch_capture();
@@ -182,7 +180,6 @@ pub(crate) fn check_function_if_statement(
                 rewritten_condition.as_ref(),
                 scopes,
                 false,
-                flow_state,
                 ctx,
             );
             narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
@@ -196,7 +193,6 @@ pub(crate) fn check_function_if_statement(
                 rewritten_condition.as_ref(),
                 scopes,
                 true,
-                flow_state,
                 ctx,
             );
         check_function_body(
@@ -219,7 +215,6 @@ pub(crate) fn check_function_if_statement(
                 rewritten_condition.as_ref(),
                 scopes,
                 false,
-                flow_state,
                 ctx,
             );
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
@@ -235,7 +230,6 @@ pub(crate) fn check_function_if_statement(
                 rewritten_condition.as_ref(),
                 scopes,
                 false,
-                flow_state,
                 ctx,
             );
             narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
@@ -290,7 +284,6 @@ pub(crate) fn check_function_while_statement(
         rewritten_condition.as_ref(),
         scopes,
         true,
-        flow_state,
         ctx,
     );
     if flow_state.tracked_local_count() > 0 {

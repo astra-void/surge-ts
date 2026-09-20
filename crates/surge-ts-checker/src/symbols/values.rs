@@ -83,6 +83,18 @@ pub(crate) struct FunctionSignatureInfo {
     pub(crate) overload_alternatives: Vec<Arc<FunctionSignatureInfo>>,
 }
 
+
+/// One name of `const [error, value] = source`: element `index` of `source`.
+/// `source` names a binding, whose current type is read when narrowing; a
+/// pattern over any other expression keys its group by the pattern and keeps
+/// the type that expression had.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TupleDestructureBinding {
+    pub(crate) source: Arc<str>,
+    pub(crate) index: usize,
+    pub(crate) source_type: Option<Type>,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct SymbolTable {
     // Copy-on-write: clones share this map through `Arc` and only pay for a
@@ -117,6 +129,11 @@ pub(crate) struct SymbolTable {
     // condition exactly as an `if (ok)` does. Written only by the function-body
     // declaration path; empty in nearly every table.
     alias_conditions: Option<Arc<HashMap<Arc<str>, Arc<ParsedExpression>, FxBuildHasher>>>,
+    // `const [error, value] = tuple` binds dependent names: each records the
+    // `(source, index)` it was destructured from, so a truthiness test on one
+    // retypes the others. Same discipline as `alias_conditions`.
+    // `None` marks a name redeclared since, which hides a parent's binding.
+    tuple_destructures: Option<Arc<HashMap<Arc<str>, Option<TupleDestructureBinding>, FxBuildHasher>>>,
     // Optional read-only fallback consulted by lookups (`get`, `get_handle`,
     // `contains_let_or_const`) when a name is absent from `symbols`. A function
     // body's root scope sets this to the module/ambient environment instead of
@@ -144,6 +161,7 @@ impl Clone for SymbolTable {
             function_implementations: Arc::clone(&self.function_implementations),
             declared_types: self.declared_types.clone(),
             alias_conditions: self.alias_conditions.clone(),
+            tuple_destructures: self.tuple_destructures.clone(),
             parent: self.parent.clone(),
             declaration_scope_root: self.declaration_scope_root,
         }
@@ -169,6 +187,7 @@ impl SymbolTable {
             function_implementations: Arc::new(HashSet::default()),
             declared_types: self.declared_types.clone(),
             alias_conditions: self.alias_conditions.clone(),
+            tuple_destructures: self.tuple_destructures.clone(),
             parent: self.parent.clone(),
             declaration_scope_root: self.declaration_scope_root,
         }
@@ -183,6 +202,7 @@ impl SymbolTable {
             function_implementations: Arc::new(HashSet::default()),
             declared_types: None,
             alias_conditions: None,
+            tuple_destructures: None,
             parent: Some(parent),
             declaration_scope_root: false,
         }
@@ -209,6 +229,7 @@ impl SymbolTable {
             function_implementations: Arc::clone(&parent.function_implementations),
             declared_types: parent.declared_types.clone(),
             alias_conditions: parent.alias_conditions.clone(),
+            tuple_destructures: parent.tuple_destructures.clone(),
             parent: Some(parent),
             declaration_scope_root: false,
         }
@@ -374,6 +395,51 @@ impl SymbolTable {
                 }
             }
         }
+    }
+
+    pub(crate) fn set_tuple_destructure(
+        &mut self,
+        name: Arc<str>,
+        binding: Option<TupleDestructureBinding>,
+    ) {
+        let bindings = self.tuple_destructures.get_or_insert_with(Default::default);
+        Arc::make_mut(bindings).insert(name, binding);
+    }
+
+    pub(crate) fn tuple_destructure(&self, name: &str) -> Option<TupleDestructureBinding> {
+        if let Some(binding) = self
+            .tuple_destructures
+            .as_ref()
+            .and_then(|bindings| bindings.get(name))
+        {
+            return binding.clone();
+        }
+        self.parent
+            .as_ref()
+            .and_then(|parent| parent.tuple_destructure(name))
+    }
+
+    /// Every binding destructured out of `source`, with its index.
+    pub(crate) fn tuple_destructure_siblings(&self, source: &str) -> Vec<(Arc<str>, usize)> {
+        let mut names: Vec<Arc<str>> = Vec::new();
+        let mut table = Some(self);
+        while let Some(current) = table {
+            for name in current.tuple_destructures.iter().flat_map(|bindings| bindings.keys()) {
+                if !names.contains(name) {
+                    names.push(Arc::clone(name));
+                }
+            }
+            table = current.parent.as_deref();
+        }
+        let mut siblings: Vec<(Arc<str>, usize)> = names
+            .into_iter()
+            .filter_map(|name| {
+                let binding = self.tuple_destructure(&name)?;
+                (&*binding.source == source).then_some((name, binding.index))
+            })
+            .collect();
+        siblings.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+        siblings
     }
 
     pub(crate) fn alias_condition(&self, name: &str) -> Option<Arc<ParsedExpression>> {

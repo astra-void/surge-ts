@@ -110,8 +110,7 @@ pub(crate) fn infer_index_access(
 
             InferredExpression::Known(unchecked_index_read(element_type.clone(), ctx))
         }
-        Type::Object(_)
-        | Type::Function(_)
+        Type::Function(_)
         | Type::String
         | Type::Number
         | Type::Boolean
@@ -122,9 +121,26 @@ pub(crate) fn infer_index_access(
         | Type::StringLiteral(_)
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
-        | Type::Reference(_)
         | Type::Undefined
         | Type::Null => InferredExpression::Unknown,
+        Type::Object(_) | Type::Reference(_) => {
+            infer_object_element_read(&receiver_type, index, symbols, ctx)
+        }
+    }
+}
+
+fn infer_object_element_read(
+    receiver_type: &Type,
+    index: &ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let InferredExpression::Known(index_type) = infer_expression(index, symbols, ctx) else {
+        return InferredExpression::Unknown;
+    };
+    match crate::checks::expr::object_element_read(receiver_type, index, &index_type, symbols, ctx) {
+        Some(ty) => InferredExpression::Known(ty),
+        None => InferredExpression::Unknown,
     }
 }
 
@@ -702,6 +718,9 @@ pub(crate) fn infer_element_access(
                 _ => InferredExpression::Unknown,
             }
         }
+        Type::Object(_) | Type::Reference(_) => {
+            infer_object_element_read(&object_type, index, symbols, ctx)
+        }
         _ => InferredExpression::Unknown,
     }
 }
@@ -852,6 +871,11 @@ pub(crate) fn infer_optional_property_access(
     };
 
     let result = match result_type {
+        // `unknown` and `any` absorb the chain's `undefined`, as every union
+        // with them does.
+        InferredExpression::Known(ty @ (Type::GenuineUnknown | Type::Any)) => {
+            InferredExpression::Known(ty)
+        }
         InferredExpression::Known(ty) if object_is_nullish => {
             InferredExpression::Known(union_type(vec![ty, Type::Undefined]))
         }

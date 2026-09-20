@@ -210,6 +210,7 @@ pub(crate) fn insert_binding_name(
 ) {
     match binding_name {
         ParsedBindingName::Identifier { name, .. } => {
+            scopes.record_tuple_destructure(name, None);
             scopes.insert_current(
                 name.as_str(),
                 SymbolInfo {
