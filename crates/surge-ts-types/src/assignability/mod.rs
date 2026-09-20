@@ -465,6 +465,34 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
 }
 
 fn assignability_arms(from: &Type, to: &Type) -> bool {
+    // A string mapping target (`Uppercase<string>`): the same mapping relates
+    // by what it maps, anything else has to be a member of it
+    // (`isMemberOfStringMapping`).
+    if let Some((target_kind, target_inner)) = crate::string_mapping_parts(to) {
+        let source = crate::peel_to_pattern_literal(from);
+        if let Some((source_kind, source_inner)) = crate::string_mapping_parts(&source) {
+            return source_kind == target_kind && is_assignable_to(source_inner, target_inner);
+        }
+        return match &source {
+            Type::Union(union) => union.types().iter().all(|member| is_assignable_to(member, to)),
+            Type::Any | Type::Never | Type::Unknown | Type::ErrorType | Type::TypeParameter(_) => true,
+            other => crate::is_member_of_string_mapping(other, to),
+        };
+    }
+
+    // A template literal target relates by pattern (tsc's
+    // `isTypeMatchedByTemplateLiteralType`), before either side is peeled: the
+    // pattern resolves to `string`, which would accept every string literal and
+    // reject nothing.
+    if let Some((texts, types)) = crate::template_literal_parts(to) {
+        let source = crate::peel_to_pattern_literal(from);
+        return match &source {
+            Type::Union(union) => union.types().iter().all(|member| is_assignable_to(member, to)),
+            Type::Any | Type::Never | Type::Unknown | Type::ErrorType | Type::TypeParameter(_) => true,
+            other => crate::is_type_matched_by_template_literal(other, &texts, &types),
+        };
+    }
+
     // Enum types are nominal (`isEnumTypeRelatedTo`): a member of one enum
     // never relates to another enum, even where the values coincide.
     if let (Type::Reference(from_ref), Type::Reference(to_ref)) = (from, to)
@@ -542,6 +570,19 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
     // comparing the structural expansion, so a reference stays interchangeable
     // with its expanded shape without forcing eager expansion at construction.
     if let Type::Reference(reference) = from {
+        // A pattern source against a target that only *names* a pattern (an
+        // annotation's lazy `Capitalize<string>`): resolve the target first,
+        // or the source peels to `string` below and the pattern is gone.
+        if matches!(to, Type::Reference(_))
+            && (crate::is_template_literal_type(from) || crate::string_mapping_parts(from).is_some())
+        {
+            let target = crate::peel_to_pattern_literal(to);
+            if crate::is_template_literal_type(&target)
+                || crate::string_mapping_parts(&target).is_some()
+            {
+                return is_assignable_to(from, &target);
+            }
+        }
         // A readonly array or tuple is not assignable to a mutable one: the
         // mutable surface has `push`/`splice` the readonly one lacks.
         if reference.is_readonly_array()
@@ -563,6 +604,16 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         let display = reference.display.as_ref();
         let base = display.split('<').next().unwrap_or(display);
         if base == "Function" && is_function_like(from) {
+            return true;
+        }
+        // A primitive's apparent type *is* its global wrapper interface
+        // (`getApparentType`), so `string` to `String` is an identity, not a
+        // member-by-member comparison against a surface surge only partly
+        // models.
+        if reference.arguments.is_empty()
+            && primitive_wrapper_interface(from) == Some(base)
+            && is_global_wrapper_interface(reference, base)
+        {
             return true;
         }
         let resolved = reference.resolve_arc();
@@ -765,6 +816,28 @@ fn union_source_related(from_union: &crate::UnionType, to: &Type) -> bool {
         Relation::Assignable => members.all(|from_ty| is_assignable_to(from_ty, to)),
         Relation::Comparable => members.any(|from_ty| is_assignable_to(from_ty, to)),
     }
+}
+
+/// The global interface a primitive's apparent type is.
+fn primitive_wrapper_interface(ty: &Type) -> Option<&'static str> {
+    match ty {
+        Type::String | Type::StringLiteral(_) => Some("String"),
+        Type::Number | Type::NumberLiteral(_) => Some("Number"),
+        Type::Boolean | Type::BooleanLiteral(_) => Some("Boolean"),
+        Type::Symbol => Some("Symbol"),
+        Type::BigInt => Some("BigInt"),
+        _ => None,
+    }
+}
+
+/// Whether `reference` names the lib's own wrapper interface rather than a
+/// user type that happens to share the name: the lib's carries `valueOf`.
+fn is_global_wrapper_interface(reference: &crate::TypeReference, name: &str) -> bool {
+    reference.id.split('\u{0}').next_back() == Some(name)
+        && matches!(
+            &*reference.resolve_arc(),
+            Type::Object(object) if object.properties.contains_key("valueOf")
+        )
 }
 
 fn is_function_like(ty: &Type) -> bool {

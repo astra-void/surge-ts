@@ -361,7 +361,15 @@ pub(crate) fn resolve_type_alias(
     let physical_modifier_utility = is_physical_default_lib_file_name(&alias.file_name)
         && matches!(
             &*alias.name,
-            "Pick" | "Omit" | "Required" | "Readonly" | "NoInfer"
+            "Pick"
+                | "Omit"
+                | "Required"
+                | "Readonly"
+                | "NoInfer"
+                | "Uppercase"
+                | "Lowercase"
+                | "Capitalize"
+                | "Uncapitalize"
         );
     if from_default_lib || physical_modifier_utility {
         if let Some(resolved) = resolve_builtin_utility_alias(
@@ -478,6 +486,22 @@ pub(crate) fn resolve_builtin_utility_alias(
             ty: substitution.get("T").cloned().unwrap_or(Type::Unknown),
             had_error: false,
         }),
+        // `type Uppercase<S extends string> = intrinsic` and its three
+        // siblings: tsc's `getStringMappingType`.
+        "Uppercase" | "Lowercase" | "Capitalize" | "Uncapitalize" => {
+            let kind = surge_ts_types::StringMappingKind::from_name(alias_name)?;
+            let argument = substitution.get("S")?.clone();
+            // A named argument is judged by what it names; a pattern keeps its
+            // own shape rather than resolving to `string`.
+            let argument = surge_ts_types::peel_to_pattern_literal(&argument);
+            if argument.is_unknown() {
+                return None;
+            }
+            Some(ResolvedType {
+                ty: surge_ts_types::string_mapping_type(kind, &argument),
+                had_error: false,
+            })
+        }
         "Record" => Some(resolve_record_utility_type(substitution)),
         "Pick" => Some(resolve_pick_utility_type(substitution, name_span, ctx)),
         "Omit" => Some(resolve_omit_utility_type(substitution)),
@@ -858,7 +882,13 @@ fn record_key_is_open(key_type: &Type) -> bool {
     match key_type {
         Type::String | Type::Number | Type::Symbol => true,
         Type::Union(union) => union.types().iter().any(record_key_is_open),
-        _ => false,
+        // A pattern key (`` `data-${string}` ``) is a string index restricted
+        // to the pattern; the open string index is the nearest thing surge
+        // models.
+        other => {
+            surge_ts_types::is_template_literal_type(other)
+                || surge_ts_types::string_mapping_parts(other).is_some()
+        }
     }
 }
 

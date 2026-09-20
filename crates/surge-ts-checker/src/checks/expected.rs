@@ -187,6 +187,16 @@ fn evaluate_expression_with_expected_type_inner(
         return evaluate_expression(expression, fallback_span, symbols, ctx);
     };
 
+    // Before the expected type is peeled below: a template literal type
+    // resolves to `string`, and the pattern is what this reads.
+    if let Some(template) = contextual_template_literal_type(expression, expected_type, symbols, ctx)
+    {
+        // The interpolations are still checked as expressions; only the type
+        // the template evaluates to changes.
+        let _ = evaluate_expression(expression, fallback_span, symbols, ctx);
+        return InferredExpression::Known(template);
+    }
+
     // `new C(...)` contextually typed by a generic instance reference (e.g.
     // `Promise<void>`) lets the constructor infer its type arguments. Route it
     // through `check_new_like` with the (un-peeled) expected reference so the
@@ -761,6 +771,55 @@ fn evaluate_expression_with_expected_type_rest(
     }
 
     evaluate_expression(expression, fallback_span, symbols, ctx)
+}
+
+/// tsc's `checkTemplateExpression` under a template-literal contextual type: a
+/// template written where a string literal or template literal type is
+/// expected is typed by its own pattern rather than as `string`, so
+/// `` `abc${s}` `` satisfies `` `abc${string}` ``. A placeholder that is not
+/// `string | number | boolean | bigint | null | undefined` reads as `string`.
+fn contextual_template_literal_type(
+    expression: &ParsedExpression,
+    expected_type: &Type,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    // A const context types the template by pattern whatever is expected.
+    let (expression, const_context) = match expression {
+        ParsedExpression::ConstAssertion { expression, .. } => (expression.as_ref(), true),
+        other => (other, false),
+    };
+    let ParsedExpression::TemplateLiteral {
+        expressions,
+        quasis,
+        is_tagged: false,
+        ..
+    } = expression
+    else {
+        return None;
+    };
+    if expressions.is_empty() || quasis.len() != expressions.len() + 1 {
+        return None;
+    }
+    if const_context {
+        return crate::infer::expression::template_expression_pattern_type(
+            expressions,
+            quasis,
+            symbols,
+            ctx,
+        );
+    }
+    let is_template_context = |ty: &Type| {
+        matches!(ty, Type::StringLiteral(_)) || surge_ts_types::is_template_literal_type(ty)
+    };
+    let in_template_context = match expected_type {
+        Type::Union(union) => flattened_union_members(union).iter().any(is_template_context),
+        other => is_template_context(other),
+    };
+    if !in_template_context {
+        return None;
+    }
+    crate::infer::expression::template_expression_pattern_type(expressions, quasis, symbols, ctx)
 }
 
 /// Whether `member` declares `name` as a real property.

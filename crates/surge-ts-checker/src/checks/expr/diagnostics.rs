@@ -65,6 +65,13 @@ fn type_contains_literal(ty: &Type) -> bool {
         | Type::Undefined => true,
         // An enum is a union of enum literal types.
         Type::Reference(reference) if reference.enum_owner.is_some() => true,
+        // tsc's `isLiteralType`: a template literal or string mapping type
+        // is one.
+        ty if surge_ts_types::is_template_literal_type(ty)
+            || surge_ts_types::string_mapping_parts(ty).is_some() =>
+        {
+            true
+        }
         Type::Union(types) => types.types().iter().any(type_contains_literal),
         _ => false,
     }

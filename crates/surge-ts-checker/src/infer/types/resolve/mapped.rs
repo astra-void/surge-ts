@@ -18,7 +18,12 @@ fn mapped_key_is_open(constraint: &Type) -> bool {
         // sentinel, and `T extends Record<any, any>` then answered backwards.
         Type::Any => true,
         Type::Union(union) => union.types().iter().any(mapped_key_is_open),
-        _ => false,
+        // A pattern key is a string index restricted to the pattern; see
+        // `record_key_is_open`.
+        other => {
+            surge_ts_types::is_template_literal_type(other)
+                || surge_ts_types::string_mapping_parts(other).is_some()
+        }
     }
 }
 

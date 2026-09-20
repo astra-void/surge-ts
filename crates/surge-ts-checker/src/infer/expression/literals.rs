@@ -272,6 +272,20 @@ pub(crate) fn infer_const_expression(
                 members, None,
             )))
         }
+        // tsc's `checkTemplateExpression` in a const context: the template is
+        // typed by its own pattern, `` `*${s}*` `` rather than `string`.
+        ParsedExpression::TemplateLiteral {
+            expressions,
+            quasis,
+            is_tagged: false,
+            ..
+        } if !expressions.is_empty() => {
+            let inferred = infer_expression(expression, symbols, ctx);
+            match template_expression_pattern_type(expressions, quasis, symbols, ctx) {
+                Some(pattern) => InferredExpression::Known(pattern),
+                None => inferred,
+            }
+        }
         _ => infer_expression(expression, symbols, ctx),
     }
 }
@@ -394,4 +408,57 @@ pub(crate) fn check_paired_setter(
         parameter.declared_type = Some(getter.return_type.clone().unwrap_or(surge_ts_syntax::ParsedType::Any));
     }
     let _ = check_arrow_function_expression(setter, symbols, ctx);
+}
+
+/// The template literal type a template expression has where tsc types it by
+/// pattern (a const context, or a template-literal contextual type): each
+/// interpolation contributes its own type when that is within
+/// `string | number | boolean | bigint | null | undefined`
+/// (`templateConstraintType`), and `string` otherwise.
+pub(crate) fn template_expression_pattern_type(
+    expressions: &[ParsedExpression],
+    quasis: &[Option<String>],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    if quasis.len() != expressions.len() + 1 {
+        return None;
+    }
+    let texts: Vec<String> = quasis.iter().cloned().collect::<Option<_>>()?;
+    let before = ctx.diagnostics().len();
+    let types: Vec<Type> = expressions
+        .iter()
+        .map(|interpolation| match infer_expression(interpolation, symbols, ctx) {
+            InferredExpression::Known(ty) if is_template_constraint(&ty) => ty,
+            // A type parameter is a generic placeholder tsc relates through
+            // its constraint, which surge's placeholder does not carry; like a
+            // value surge could not type, it stands as `any`, the placeholder
+            // that matches whatever the target asks for.
+            InferredExpression::Known(ty) if !ty.is_unknown() && ty != Type::Any => Type::String,
+            _ => Type::Any,
+        })
+        .collect();
+    ctx.truncate_diagnostics_releasing_utility_keys(before);
+    Some(surge_ts_types::template_literal_type(&texts, &types))
+}
+
+fn is_template_constraint(ty: &Type) -> bool {
+    let primitive = |ty: &Type| {
+        matches!(
+            ty,
+            Type::String
+                | Type::Number
+                | Type::Boolean
+                | Type::BigInt
+                | Type::Null
+                | Type::Undefined
+                | Type::StringLiteral(_)
+                | Type::NumberLiteral(_)
+                | Type::BooleanLiteral(_)
+        ) || surge_ts_types::is_template_literal_type(ty)
+    };
+    match ty {
+        Type::Union(union) => union.types().iter().all(primitive),
+        other => primitive(other),
+    }
 }

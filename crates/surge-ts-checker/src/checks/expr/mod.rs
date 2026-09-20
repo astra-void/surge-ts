@@ -343,6 +343,26 @@ pub(crate) fn evaluate_const_expression(
             );
             result
         }
+        // A template in a const context is typed by its own pattern (tsc's
+        // `checkTemplateExpression`); its interpolations are still checked as
+        // the expressions they are.
+        ParsedExpression::TemplateLiteral {
+            expressions,
+            quasis,
+            is_tagged: false,
+            ..
+        } if !expressions.is_empty() => {
+            let evaluated = evaluate_expression(expression, fallback_span, symbols, ctx);
+            match crate::infer::expression::template_expression_pattern_type(
+                expressions,
+                quasis,
+                symbols,
+                ctx,
+            ) {
+                Some(pattern) => InferredExpression::Known(pattern),
+                None => evaluated,
+            }
+        }
         // Primitives just evaluate normally without widening
         _ => evaluate_expression(expression, fallback_span, symbols, ctx),
     }
