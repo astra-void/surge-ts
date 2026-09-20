@@ -589,6 +589,7 @@ export const fixturePresets: Record<string, string> = {
   'inferable-index-signature-basic': path.join(workspaceRoot, 'tests/compat-projects/inferable-index-signature-basic/tsconfig.json'),
   'logical-operand-value-basic': path.join(workspaceRoot, 'tests/compat-projects/logical-operand-value-basic/tsconfig.json'),
   'instanceof-constructor-value-basic': path.join(workspaceRoot, 'tests/compat-projects/instanceof-constructor-value-basic/tsconfig.json'),
+  'binding-element-default-basic': path.join(workspaceRoot, 'tests/compat-projects/binding-element-default-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

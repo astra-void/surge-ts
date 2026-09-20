@@ -900,6 +900,16 @@ pub(crate) fn check_arrow_function_expression_anchored(
         }
 
         let visible_symbols = visible_symbols(&scopes);
+        for (index, parameter) in parameters.iter().enumerate() {
+            if let Some(parameter_type) = parameter_types.get(index) {
+                check_binding_pattern_defaults(
+                    &parameter.binding_name,
+                    parameter_type,
+                    &visible_symbols,
+                    ctx,
+                );
+            }
+        }
         match body {
             ParsedArrowFunctionBody::Expression(expression) => {
                 let return_type_for_body = match &return_type {

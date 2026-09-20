@@ -280,6 +280,89 @@ pub(crate) fn insert_parameter_bindings(
     );
 }
 
+/// tsc's `checkBindingElement`: the initializer of `{ a = value }` is
+/// contextually typed by, and has to be assignable to, the type the pattern
+/// reads at that position.
+pub(crate) fn check_binding_pattern_defaults(
+    binding_name: &ParsedBindingName,
+    source_type: &Type,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let ParsedBindingName::ObjectPattern(pattern) = binding_name else {
+        return;
+    };
+    for element in &pattern.elements {
+        let read_type = object_binding_element_type(source_type, &element.property_name);
+        // A nested pattern over a possibly-missing property with no default of
+        // its own is the error (TS2339), and tsc checks nothing beneath it.
+        if element.default_value.is_none()
+            && !matches!(element.binding_name, ParsedBindingName::Identifier { .. })
+            && !matches!(read_type, Type::Any)
+            && !read_type.is_unknown()
+            && (surge_ts_types::is_assignable_to(&Type::Undefined, &read_type)
+                || surge_ts_types::is_assignable_to(&Type::Null, &read_type))
+        {
+            if ctx.options.strict_null_checks
+                && !crate::checks::function::type_contains_unknown(&read_type)
+                && let ParsedBindingName::ObjectPattern(nested) = &element.binding_name
+            {
+                for nested_element in &nested.elements {
+                    ctx.push(crate::spans::diagnostic_with_syntax_span(
+                        Diagnostic::ts2339(
+                            &nested_element.property_name,
+                            read_type.name(),
+                            ctx.file_name.clone(),
+                        ),
+                        nested_element.span,
+                    ));
+                }
+            }
+            continue;
+        }
+        let element_type = surge_ts_types::remove_undefined(&read_type);
+        if let Some(default_value) = element.default_value.as_deref()
+            && !matches!(element_type, Type::Any)
+            && !element_type.is_unknown()
+        {
+            let diagnostics_before = ctx.diagnostics().len();
+            let default_type = crate::checks::expected::evaluate_expression_with_expected_type(
+                default_value,
+                element.default_span,
+                Some(&element_type),
+                crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                symbols,
+                ctx,
+            );
+            // A mismatch inside the initializer is reported where it is; one of
+            // the whole value is reported here, on the binding element.
+            if ctx.diagnostics().len() == diagnostics_before
+                && let InferredExpression::Known(default_type) = default_type
+                && !default_type.is_unknown()
+                && !crate::checks::function::type_contains_unknown(&default_type)
+                && !crate::checks::function::type_contains_unknown(&element_type)
+                && !surge_ts_types::is_assignable_to(&default_type, &element_type)
+            {
+                let reported_target =
+                    crate::checks::expr::reported_relation_target(&default_type, &element_type);
+                let source_name =
+                    crate::checks::expr::source_display_name(&default_type, &reported_target);
+                ctx.push(crate::spans::diagnostic_with_syntax_span(
+                    crate::checks::expr::type_not_assignable_diagnostic(
+                        &default_type,
+                        &reported_target,
+                        &source_name,
+                        &reported_target.name(),
+                        ctx.file_name.clone(),
+                    ),
+                    element.span.or(element.default_span),
+                ));
+            }
+        }
+        check_binding_pattern_defaults(&element.binding_name, &element_type, symbols, ctx);
+    }
+}
+
 pub(crate) fn insert_object_binding_pattern_bindings(
     pattern: &ParsedObjectBindingPattern,
     parameter_type: Type,
@@ -1445,11 +1528,27 @@ pub(crate) fn check_function_body_with_signature_and_this(
         emit_unused_locals(&body, reads, ctx);
     }
 
-    for (parameter, parameter_type) in parameters
-        .into_iter()
-        .zip(function_type.parameters().iter())
+    for (parameter, parameter_type) in parameters.iter().zip(function_type.parameters().iter()) {
+        insert_parameter_bindings(parameter, parameter_type, &mut scopes);
+    }
+    if parameters
+        .iter()
+        .any(|parameter| matches!(parameter.binding_name, ParsedBindingName::ObjectPattern(_)))
     {
-        insert_parameter_bindings(&parameter, parameter_type, &mut scopes);
+        let visible_symbols = visible_symbols(&scopes);
+        // An initializer may name the function's own type parameters.
+        with_type_parameter_scope(type_parameters, ctx, |ctx| {
+            for (parameter, parameter_type) in
+                parameters.iter().zip(function_type.parameters().iter())
+            {
+                check_binding_pattern_defaults(
+                    &parameter.binding_name,
+                    parameter_type,
+                    &visible_symbols,
+                    ctx,
+                );
+            }
+        });
     }
 
     let returned_void_like = with_type_parameter_scope(type_parameters, ctx, |ctx| {

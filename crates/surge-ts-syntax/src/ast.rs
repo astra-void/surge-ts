@@ -540,6 +540,9 @@ pub struct ParsedObjectBindingElement {
     pub binding_name: ParsedBindingName,
     pub name_span: Option<TextSpan>,
     pub has_default: bool,
+    /// The initializer of `{ a = value }`, checked against the property's type.
+    pub default_value: Option<Box<ParsedExpression>>,
+    pub default_span: Option<TextSpan>,
     pub span: Option<TextSpan>,
 }
 

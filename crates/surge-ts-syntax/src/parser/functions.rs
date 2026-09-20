@@ -900,6 +900,8 @@ fn parse_object_binding_element(
 ) -> Option<ParsedObjectBindingElement> {
     let property_name = match &property.key {
         PropertyKey::StaticIdentifier(identifier) => identifier.name.to_string(),
+        // `{ "show": x }` and `{ ["show"]: x }` name the same property.
+        PropertyKey::StringLiteral(literal) => literal.value.to_string(),
         _ => {
             return Some(ParsedObjectBindingElement {
                 property_name: "<unsupported>".to_string(),
@@ -909,12 +911,21 @@ fn parse_object_binding_element(
                 },
                 name_span: Some(text_span_from_oxc_span(property.span)),
                 has_default: false,
+                default_value: None,
+                default_span: None,
                 span: Some(text_span_from_oxc_span(property.span)),
             });
         }
     };
 
     let has_default = matches!(&property.value, BindingPattern::AssignmentPattern(_));
+    let (default_value, default_span) = match &property.value {
+        BindingPattern::AssignmentPattern(assignment) => {
+            let (value, span) = super::expressions::parse_expression(&assignment.right);
+            (Some(Box::new(value)), Some(text_span_from_oxc_span(span)))
+        }
+        _ => (None, None),
+    };
     let binding_name = match &property.value {
         BindingPattern::AssignmentPattern(assignment) => parse_binding_name(&assignment.left),
         _ => parse_binding_name(&property.value),
@@ -932,6 +943,8 @@ fn parse_object_binding_element(
         binding_name,
         name_span,
         has_default,
+        default_value,
+        default_span,
         span: Some(text_span_from_oxc_span(property.span)),
     })
 }

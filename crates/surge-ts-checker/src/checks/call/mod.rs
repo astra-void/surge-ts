@@ -1331,8 +1331,15 @@ fn immediately_invoked_arrow_type(
     // array spread one argument of its element type.
     let mut argument_types: Vec<Type> = Vec::with_capacity(arguments.len());
     for argument in arguments {
+        // tsc reads the widened literal type of the argument
+        // (`getContextuallyTypedParameterType`): `({ p = 14 }) => p` called with
+        // `{ p: 15 }` binds `p: number`.
         let ty = match evaluate_expression(&argument.expression, argument.span, symbols, ctx) {
-            InferredExpression::Known(ty) => ty,
+            InferredExpression::Known(ty) => crate::checks::var::widen_implicit_variable_initializer_type(
+                crate::symbols::SymbolKind::Let,
+                &argument.expression,
+                &ty,
+            ),
             _ => Type::Unknown,
         };
         if !argument.spread {
