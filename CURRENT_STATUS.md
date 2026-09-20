@@ -661,6 +661,14 @@ corpora.
 `SURGE_TYPE_GRAPH_CENSUS`, and the various `SURGE_TRACE_*` / `SURGE_*_STATS`
 gates. The hidden CLI flags `--timings` and `--rss` set the first two.
 
+**Memory guard** (no semantic effect unless it fires): `SURGE_MAX_FOOTPRINT_MB=<n>`
+makes the `surge` binary exit with status 137 once its physical footprint
+(resident set where the platform has no footprint counter) exceeds `n` MiB,
+naming the last stage boundary on stderr. macOS enforces neither `RLIMIT_AS`
+nor `RLIMIT_RSS` and has no per-process OOM killer, so a runaway type
+expansion otherwise takes the whole machine down; set it in harness runs.
+Off by default.
+
 ---
 
 ## Current performance state
