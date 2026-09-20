@@ -45,7 +45,8 @@ pub(crate) fn check_array_map_call(
         array_iteration_callback_parameters(element_type),
         Type::Any,
         false,
-        1,
+        // `(value, index, array)` are all required in the lib's signature.
+        3,
     ));
 
     let inferred_callback = evaluate_expression_with_expected_type(
@@ -95,7 +96,8 @@ pub(crate) fn check_array_find_call(
         array_iteration_callback_parameters(element_type),
         Type::Any,
         false,
-        1,
+        // `(value, index, array)` are all required in the lib's signature.
+        3,
     ));
 
     let inferred_callback = evaluate_expression_with_expected_type(

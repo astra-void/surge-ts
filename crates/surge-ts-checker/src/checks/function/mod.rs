@@ -516,15 +516,54 @@ fn contextual_rest_parameter_type(expected_type: &FunctionType, position: usize)
     })
 }
 
+fn without_undefined(ty: Type) -> Type {
+    match &ty {
+        Type::Union(union) if union.types().contains(&Type::Undefined) => surge_ts_types::union_type(
+            union
+                .types()
+                .iter()
+                .filter(|member| !matches!(member, Type::Undefined))
+                .cloned()
+                .collect(),
+        ),
+        _ => ty,
+    }
+}
+
 fn contextual_parameter_types(expected_type: &FunctionType, parameter_count: usize) -> Vec<Type> {
+    // tsc's `getTypeOfParameter`: an optional parameter of the contextual
+    // signature is `T | undefined`, and that is the type an unannotated
+    // callback parameter takes from it — the caller may well omit it.
+    let required = expected_type.required_parameter_count();
+    let with_optionality = |index: usize, parameter: &Type| {
+        if index >= required
+            && surge_ts_types::strict_null_checks()
+            && !parameter.is_unknown()
+            && !matches!(parameter, Type::Any)
+        {
+            surge_ts_types::union_type(vec![parameter.clone(), Type::Undefined])
+        } else {
+            parameter.clone()
+        }
+    };
     let parameters = expected_type.parameters();
     if !expected_type.is_variadic() {
-        return parameters.to_vec();
+        return parameters
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| with_optionality(index, parameter))
+            .collect();
     }
 
     let Some((rest, leading)) = parameters.split_last() else {
         return Vec::new();
     };
+    let leading: Vec<Type> = leading
+        .iter()
+        .enumerate()
+        .map(|(index, parameter)| with_optionality(index, parameter))
+        .collect();
+    let leading = leading.as_slice();
     let peeled;
     let rest = match rest {
         Type::Reference(reference) => {
@@ -776,7 +815,16 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 .enumerate()
             {
                 if index < parameter_types.len() && parameters[index].declared_type.is_none() {
-                    parameter_types[index] = parameter_type;
+                    // A default initializer supplies the value whenever the
+                    // caller passes `undefined`, so inside the function the
+                    // parameter no longer includes it
+                    // (`(fn, options = {}) => …` reads `options` as the
+                    // object).
+                    parameter_types[index] = if parameters[index].initializer.is_some() {
+                        without_undefined(parameter_type)
+                    } else {
+                        parameter_type
+                    };
                 }
             }
 

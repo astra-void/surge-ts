@@ -667,7 +667,9 @@ fn array_iteration_callback(element: &Type, return_type: Type) -> Type {
         ],
         return_type,
         false,
-        1,
+        // All three are required in the lib's signature; the target passes
+        // every one, and a callback is free to declare fewer.
+        3,
     )
 }
 
@@ -803,7 +805,8 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
                     ],
                     Type::Any,
                     false,
-                    2,
+                    // All four are required in the lib's signature.
+                    4,
                 ),
                 Type::Any,
             ],

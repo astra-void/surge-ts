@@ -786,6 +786,18 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
                 .properties
                 .iter()
                 .all(|(name, property)| match from.get_property_access_type(name) {
+                    // A member declared with method syntax compares its
+                    // parameters bivariantly, as it does between two objects:
+                    // `ConcatArray<T>.join(separator?: string)` takes the
+                    // array's own `join`.
+                    Some(Type::Function(source_method)) if property.method => {
+                        match property.ty.peeled() {
+                            Type::Function(target_method) => {
+                                is_signature_assignable_to(&source_method, &target_method, true)
+                            }
+                            _ => is_assignable_to(&Type::Function(source_method), &property.ty),
+                        }
+                    }
                     Some(source_ty) => is_assignable_to(&source_ty, &property.ty),
                     None => property.is_optional(),
                 })
@@ -932,6 +944,44 @@ fn expanded_signature(function: &FunctionType) -> (std::borrow::Cow<'_, [Type]>,
         std::borrow::Cow::Borrowed(parameters),
         function.required_parameter_count(),
         function.is_variadic(),
+    )
+}
+
+/// Adds `undefined` to every optional, non-rest parameter under
+/// `strictNullChecks`. Parameters surge could not type are left alone.
+fn with_parameter_optionality(
+    parameters: std::borrow::Cow<'_, [Type]>,
+    required: usize,
+    variadic: bool,
+) -> std::borrow::Cow<'_, [Type]> {
+    let rest_index = variadic.then(|| parameters.len().saturating_sub(1));
+    let optional = |index: usize, parameter: &Type| {
+        index >= required
+            && Some(index) != rest_index
+            && !parameter.is_unknown()
+            && !matches!(parameter, Type::Any)
+            && !type_includes_undefined(parameter)
+    };
+    if !crate::strict_null_checks()
+        || !parameters
+            .iter()
+            .enumerate()
+            .any(|(index, parameter)| optional(index, parameter))
+    {
+        return parameters;
+    }
+    std::borrow::Cow::Owned(
+        parameters
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| {
+                if optional(index, parameter) {
+                    crate::union_type(vec![parameter.clone(), Type::Undefined])
+                } else {
+                    parameter.clone()
+                }
+            })
+            .collect(),
     )
 }
 
@@ -1251,7 +1301,14 @@ fn is_signature_assignable_to(
     bivariant_parameters: bool,
 ) -> bool {
     let (source_parameters, source_required, source_variadic) = expanded_signature(source);
-    let (target_parameters, _, target_variadic) = expanded_signature(target);
+    let (target_parameters, target_required, target_variadic) = expanded_signature(target);
+    // tsc's `getTypeOfParameter`: an optional parameter's type includes
+    // `undefined`, which is what the target passes when it omits the argument.
+    // `(x: number) => void` therefore does not fit `(x?: number) => void`.
+    let source_parameters =
+        with_parameter_optionality(source_parameters, source_required, source_variadic);
+    let target_parameters =
+        with_parameter_optionality(target_parameters, target_required, target_variadic);
     let width = source_parameters.len().max(target_parameters.len());
     let source_parameters = widen_variadic_parameters(source_parameters, source_variadic, width);
     let target_parameters = widen_variadic_parameters(target_parameters, target_variadic, width);
