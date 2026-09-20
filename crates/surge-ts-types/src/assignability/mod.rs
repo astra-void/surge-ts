@@ -809,7 +809,9 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             | Type::Number
             | Type::NumberLiteral(_)
             | Type::Boolean
-            | Type::BooleanLiteral(_),
+            | Type::BooleanLiteral(_)
+            | Type::BigInt
+            | Type::Symbol,
             Type::Object(target),
         ) if target.non_primitive => false,
         (
@@ -819,6 +821,8 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             | Type::NumberLiteral(_)
             | Type::Boolean
             | Type::BooleanLiteral(_)
+            | Type::BigInt
+            | Type::Symbol
             | Type::Array(_)
             | Type::Tuple(_)
             | Type::OpenTuple(_),

@@ -473,12 +473,27 @@ fn object_structural_name(object: &crate::ObjectType) -> String {
                 let mut parts = object
                     .properties
                     .iter()
-                    .map(|(name, property)| {
-                        if property.is_optional() {
+                    .flat_map(|(name, property)| {
+                        // tsc prints a member declared with method syntax as
+                        // one, overload by overload: `f(s: string): number`.
+                        if property.method
+                            && let Type::Function(function) = &property.ty
+                            && function.alias_name().is_none()
+                        {
+                            let optional = if property.is_optional() { "?" } else { "" };
+                            return match function.overloads() {
+                                Some(overloads) => overloads
+                                    .iter()
+                                    .map(|overload| format!("{name}{optional}{}", overload.member_name()))
+                                    .collect(),
+                                None => vec![format!("{name}{optional}{}", function.member_name())],
+                            };
+                        }
+                        vec![if property.is_optional() {
                             format!("{name}?: {}", optional_property_display(&property.ty))
                         } else {
                             format!("{name}: {}", property.ty.name())
-                        }
+                        }]
                     })
                     .collect::<Vec<_>>();
 
@@ -506,7 +521,7 @@ fn object_structural_name(object: &crate::ObjectType) -> String {
                 }
 
                 if properties.is_empty() {
-                    "{}".to_string()
+                    if object.non_primitive { "object" } else { "{}" }.to_string()
                 } else {
                     // tsc prints an object type's signatures ahead of its
                     // properties.

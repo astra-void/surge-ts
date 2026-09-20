@@ -81,7 +81,8 @@ pub(crate) fn check_assignment_with_symbols(
             if inferred_value_type != surge_ts_types::Type::Unknown
                 && ((!type_contains_unknown(&target_type)
                     && !type_contains_unknown(&inferred_value_type))
-                    || definite_unit_member_mismatch(&inferred_value_type, &target_type))
+                    || definite_unit_member_mismatch(&inferred_value_type, &target_type)
+                    || definite_primitive_member_mismatch(&inferred_value_type, &target_type))
                 && !with_dts_expansion_reason(DtsExpansionReason::Assignability, || {
                     is_assignable_to(&inferred_value_type, &target_type)
                 })
@@ -247,6 +248,44 @@ pub(crate) fn definite_unit_member_mismatch(
                 .properties
                 .get(name)
                 .is_some_and(|actual| is_unit(&actual.ty) && actual.ty != expected.ty)
+    })
+}
+
+/// Whether a `number`, `boolean` or `bigint` source is related to an object
+/// type requiring a member no such value has. Their apparent types are small
+/// closed interfaces, so the verdict does not depend on how well surge
+/// modelled the rest of the target — an overload fold or a degraded member
+/// elsewhere in it would otherwise suppress the comparison.
+pub(crate) fn definite_primitive_member_mismatch(
+    source: &surge_ts_types::Type,
+    target: &surge_ts_types::Type,
+) -> bool {
+    use surge_ts_types::Type;
+    const OBJECT_MEMBERS: &[&str] = &[
+        "constructor",
+        "toString",
+        "toLocaleString",
+        "valueOf",
+        "hasOwnProperty",
+        "isPrototypeOf",
+        "propertyIsEnumerable",
+    ];
+    let own_members: &[&str] = match source {
+        Type::Number | Type::NumberLiteral(_) => &["toFixed", "toExponential", "toPrecision"],
+        Type::Boolean | Type::BooleanLiteral(_) | Type::BigInt => &[],
+        _ => return false,
+    };
+    let Type::Object(target) = target.peeled() else {
+        return false;
+    };
+    if target.synthetic_open_index {
+        return false;
+    }
+    target.properties.iter().any(|(name, expected)| {
+        !expected.optional
+            && !OBJECT_MEMBERS.contains(&&**name)
+            && !own_members.contains(&&**name)
+            && source.get_property_access_type(name).is_none()
     })
 }
 

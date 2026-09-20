@@ -1877,7 +1877,15 @@ pub(crate) fn check_function_type_call(
                         || crate::checks::assign::definite_unit_member_mismatch(
                             &argument_type,
                             &parameter_type,
-                        ))
+                        )
+                        // Not at a rest position: a rest type that is not an
+                        // array is related to the gathered arguments as a
+                        // whole, which this per-argument pairing is not.
+                        || (!is_rest_position
+                            && crate::checks::assign::definite_primitive_member_mismatch(
+                                &argument_type,
+                                &parameter_type,
+                            )))
                     && !is_open_instantiation(&argument_type)
                     && !is_assignable_to(&argument_type, &parameter_type)
                 {

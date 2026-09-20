@@ -76,8 +76,12 @@ pub(crate) fn report_initializer_mismatch(
     target_span: Option<surge_ts_syntax::TextSpan>,
     ctx: &mut CheckerContext,
 ) {
+    let definite_mismatch = crate::checks::assign::definite_primitive_member_mismatch(
+        inferred_initializer_type,
+        declared_type,
+    );
     if inferred_initializer_type.is_unknown()
-        || type_contains_unknown(declared_type)
+        || (type_contains_unknown(declared_type) && !definite_mismatch)
         || type_contains_unknown(inferred_initializer_type)
         || crate::checks::call::is_open_instantiation(inferred_initializer_type)
         || is_assignable_to(inferred_initializer_type, declared_type)
