@@ -165,6 +165,101 @@ measured, timing still works and the memory fields are null.
 - Compare wall-clock timings alongside the diagnostic drift status.
 - This is not yet a claim of full compiler parity. See `REAL_PROJECT_COMPAT.md` for current compatibility limitations.
 
+## Diagnostic Accuracy vs bolt-ts (`compare-checkers.ts`)
+
+Scores `surge-ts` and [bolt-ts](https://github.com/bvanjoi/bolt-ts) against
+`tsgo` (TypeScript 7.0) as true/false positives and negatives, using the same
+`file:line:code` multiset key the oracle sweep gates on. It measures accuracy,
+not speed; the per-tool time column is a single run.
+
+Setup — bolt-ts is expected beside this checkout (or point `BOLT_TS_BIN` at it):
+
+```bash
+git clone https://github.com/bvanjoi/bolt-ts ../bolt-ts
+(cd ../bolt-ts && cargo build --release -p bolt_ts_compiler)
+cargo build --release -p surge-ts-cli
+```
+
+The default tier is **upstream held-out**: TypeScript's own test cases minus
+every case either checker uses in its own test suite (bolt-ts's
+`tests/compiler`, surge-ts's `tests/upstream` manifest), matched by name,
+option-suffixed name, and whitespace-insensitive content. It is the only tier
+neither checker was tuned on. Provision the cases at the commits typescript-go
+pins (TypeScript submodule `c3bd12d8`, typescript-go `2c251880`):
+
+```bash
+git clone --filter=blob:none --no-checkout https://github.com/microsoft/TypeScript.git .local-projects/typescript-cases
+(cd .local-projects/typescript-cases && git sparse-checkout set --no-cone 'tests/cases/compiler/**' 'tests/cases/conformance/**' && git checkout c3bd12d888b86f676718b16e64d7d2abcb423514)
+git clone --filter=blob:none --no-checkout https://github.com/microsoft/typescript-go.git .local-projects/typescript-go-cases
+(cd .local-projects/typescript-go-cases && git sparse-checkout set --no-cone 'testdata/tests/cases/**' && git checkout 2c251880acd98bad0fda5e01985b10eb7821d06a)
+```
+
+Each case becomes a project the way TypeScript's harness reads it (`// @option`
+directives, `@filename` units, the first value of an option variation); emit-only
+options are dropped since every tool runs `noEmit`, and a case tsgo rejects with
+TS5xxx is `invalid-config`, not scored. Cases needing harness machinery
+(`@link`, `@currentDirectory`, a case-supplied `tsconfig.json`) are skipped.
+
+Run:
+
+```bash
+pnpm run bench:checkers                          # upstream held-out, hash-sampled 1000 (default)
+pnpm run bench:checkers -- --upstreamLimit 0     # every held-out case
+pnpm run bench:checkers -- --fixtures            # tests/compat-projects (surge-biased)
+pnpm run bench:checkers -- --corpora             # provisioned .local-projects corpora, one at a time (surge-biased)
+pnpm run bench:checkers -- --all --filter react  # substring filter over target names
+```
+
+Every spawned tool is polled for resident memory (its whole process group) and
+killed past `--maxMemory` (default 2048 MB) or, for corpora, `--corpusMaxMemory`
+(default 6144 MB); the target reports `memory limit` and is not scored. macOS
+enforces no address-space rlimit, and bolt-ts runs away on some upstream cases
+fast enough to take a 16 GB machine down inside the timeout. `--jobs` is
+lowered so jobs × `--maxMemory` stays within half of physical memory.
+
+Reports land in `.bench/checkers/report.{md,json,svg,html}` (`--out <dir>` to
+change). The SVG and HTML reuse the compiler benchmark's panel renderer and page
+chrome from `report.ts`. Re-render them from a previous run without re-checking:
+
+```bash
+pnpm run bench:checkers -- --fromJson .bench/checkers/report.json
+```
+
+Accuracy is reported twice: over the targets both checkers completed (the fair
+comparison), and over each checker's own completed targets. Crashes and
+timeouts are counted, never scored.
+
+How bolt-ts output is read, and what that costs:
+
+- bolt-ts prints miette reports with message text but no `TSxxxx` code. Codes
+  are recovered by matching the text against the error templates in the
+  TypeScript 6 JS compiler's diagnostic table. Text it words differently from
+  tsc is **unmapped**: excluded from FP, while the tsgo diagnostic it stood for
+  still counts as FN. The report lists the most frequent unmapped shapes. A
+  short `boltRewordings` table maps one-to-one rewordings (bolt-ts's
+  `Property 'x' is missing.` is TS2741); ambiguous wordings stay unmapped.
+- Diagnostics in files outside the tsgo program (`tsc --listFilesOnly`) are
+  **out-of-program**, not FP. bolt-ts globs `.js` sources without `allowJs`.
+- bolt-ts reads a config only when the file is named exactly `tsconfig.json`,
+  ignores `extends` and `files`, cannot expand a directory entry in `include`,
+  and rejects option spellings tsc accepts (`nodenext`, `DOM`). Each config is
+  therefore resolved with TypeScript's own parser and written to a temp
+  `tsconfig.json`: the program's root files as an explicit `include`, and every
+  effective option (tsgo's defaults included, e.g. `strict`) in bolt-ts's
+  spelling. Options bolt-ts has no field for (`paths`, `types`, `skipLibCheck`,
+  …) and libs it does not ship are dropped and reported as config translation
+  gaps. Per its README it also does not resolve `exports`/`imports` or
+  `node_modules/@types`.
+- bolt-ts exits 0 even when its include glob matches nothing. Each run is
+  paired with an `include: []` run of the same config; if the real run loaded
+  no more files than that lib-only run, the target is **no input** and is not
+  scored, like a crash.
+- The fixture tier was written to drive surge-ts against tsgo, and the corpora
+  are the projects surge-ts burned its false positives down on (three through a
+  surge-specific `tsconfig.surge.json`), so both are biased toward surge-ts.
+  Only the upstream held-out tier is neutral. Do not turn any tier into a
+  compatibility claim.
+
 ## Allocator Benchmark (`allocator-bench.ts`)
 
 Compares the `surge` binary built with each supported global allocator:
