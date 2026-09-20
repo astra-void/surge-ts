@@ -576,6 +576,7 @@ export const fixturePresets: Record<string, string> = {
   'literal-element-context-basic': path.join(workspaceRoot, 'tests/compat-projects/literal-element-context-basic/tsconfig.json'),
   'generic-signature-context-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-signature-context-basic/tsconfig.json'),
   'optional-parameter-relation-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-parameter-relation-basic/tsconfig.json'),
+  'object-signature-relation-basic': path.join(workspaceRoot, 'tests/compat-projects/object-signature-relation-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

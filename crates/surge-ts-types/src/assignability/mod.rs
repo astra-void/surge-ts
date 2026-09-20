@@ -1376,11 +1376,55 @@ fn object_assignable(from_obj: &ObjectType, to_obj: &ObjectType, from: &Type, to
         return true;
     }
 
-    let result = object_assignability_failure(from, to).is_none();
+    let result = object_assignability_failure(from, to).is_none()
+        && object_signatures_related(from_obj, to_obj);
     OBJECT_ASSIGNABILITY_IN_PROGRESS.with(|set| {
         set.borrow_mut().remove(&key);
     });
     result
+}
+
+/// tsc's `signaturesRelatedTo`, for both kinds: every call (construct)
+/// signature the target declares has to be matched by one of the source's. A
+/// target with none asks for nothing; a source with none matches nothing.
+fn object_signatures_related(source: &ObjectType, target: &ObjectType) -> bool {
+    signatures_of_kind_related(source.call_signature(), target.call_signature())
+        && signatures_of_kind_related(source.construct_signature(), target.construct_signature())
+}
+
+fn signatures_of_kind_related(source: Option<&FunctionType>, target: Option<&FunctionType>) -> bool {
+    let Some(target) = target else {
+        return true;
+    };
+    let Some(source) = source else {
+        return false;
+    };
+    // Two shapes are left unjudged, as they were before signatures were
+    // related at all. A generic signature on either side is instantiated by
+    // tsc with inferences drawn from the *return* type as well, which surge's
+    // in-context instantiation does not model. And an overload group surge
+    // folded into one signature stands at the degradation sentinel wherever
+    // its members disagreed, which says nothing about any one of them.
+    let unmodelled = |signature: &FunctionType| {
+        signature.type_parameter_head().is_some()
+            || signature.parameters().iter().any(|parameter| matches!(parameter, Type::Unknown))
+            || matches!(signature.return_type(), Type::Unknown)
+    };
+    if unmodelled(source) || unmodelled(target) {
+        return true;
+    }
+    let overloads = |signature: &FunctionType| -> Vec<FunctionType> {
+        match signature.overloads() {
+            Some(members) if !members.is_empty() => members.to_vec(),
+            _ => vec![signature.clone()],
+        }
+    };
+    let sources = overloads(source);
+    overloads(target).iter().all(|target_signature| {
+        sources
+            .iter()
+            .any(|source_signature| is_function_assignable_to(source_signature, target_signature))
+    })
 }
 
 /// Function/constructor objects (those carrying a call or construct signature)

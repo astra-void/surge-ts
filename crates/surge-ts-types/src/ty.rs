@@ -492,6 +492,19 @@ fn object_structural_name(object: &crate::ObjectType) -> String {
 
                 let properties = parts.join("; ");
 
+                // An object that is nothing but one signature prints as that
+                // signature, as tsc prints `new (x: number) => T` and
+                // `(x: string) => string`.
+                if properties.is_empty() {
+                    match (object.call_signature(), object.construct_signature()) {
+                        (Some(call), None) => return Type::Function(call.clone()).name(),
+                        (None, Some(construct)) => {
+                            return format!("new {}", Type::Function(construct.clone()).name());
+                        }
+                        _ => {}
+                    }
+                }
+
                 if properties.is_empty() {
                     "{}".to_string()
                 } else {
