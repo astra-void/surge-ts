@@ -584,6 +584,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2556",
+    "category": "Error",
+    "message": "A spread argument must either have a tuple type or be passed to a rest parameter.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2576",
     "category": "Error",
     "message": "Property '{0}' does not exist on type '{1}'. Did you mean to access the static member '{2}' instead?",

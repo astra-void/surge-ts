@@ -735,6 +735,16 @@ pub const TS2555: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2556: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2556",
+    number: Some(2556),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A spread argument must either have a tuple type or be passed to a rest parameter.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2576: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2576",
     number: Some(2576),
@@ -2579,6 +2589,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2552,
     TS2554,
     TS2555,
+    TS2556,
     TS2576,
     TS2588,
     TS2580,
@@ -3467,6 +3478,11 @@ impl Diagnostic {
             ],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2556(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2556, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

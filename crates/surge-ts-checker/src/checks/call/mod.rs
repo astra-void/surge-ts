@@ -1327,15 +1327,23 @@ fn immediately_invoked_arrow_type(
     }
 
     let diagnostics_before = ctx.diagnostics().len();
-    let argument_types: Vec<Type> = arguments
-        .iter()
-        .map(
-            |argument| match evaluate_expression(&argument.expression, argument.span, symbols, ctx) {
-                InferredExpression::Known(ty) => ty,
-                _ => Type::Unknown,
-            },
-        )
-        .collect();
+    // The effective arguments: a tuple spread is one argument per element, an
+    // array spread one argument of its element type.
+    let mut argument_types: Vec<Type> = Vec::with_capacity(arguments.len());
+    for argument in arguments {
+        let ty = match evaluate_expression(&argument.expression, argument.span, symbols, ctx) {
+            InferredExpression::Known(ty) => ty,
+            _ => Type::Unknown,
+        };
+        if !argument.spread {
+            argument_types.push(ty);
+            continue;
+        }
+        match ty.peeled() {
+            Type::Tuple(elements) => argument_types.extend(elements),
+            other => argument_types.push(crate::checks::function::for_of_element_type(&other)),
+        }
+    }
     ctx.truncate_diagnostics(diagnostics_before);
     if argument_types.iter().any(|ty| ty.is_unknown()) {
         return None;
@@ -1506,6 +1514,32 @@ fn overload_arity_fits(candidate: &FunctionType, argument_count: usize) -> bool 
     argument_count >= required && (candidate.is_variadic() || argument_count <= parameters.len())
 }
 
+/// The parameter an argument at `index` is checked against: the rest
+/// parameter's element past the fixed ones, and an optional parameter with the
+/// `undefined` a caller may pass it. `None` once the signature has run out.
+fn effective_parameter_type(function_type: &FunctionType, index: usize) -> Option<Type> {
+    let parameters = function_type.parameters();
+    let expected = parameters.len();
+    if function_type.is_variadic() && expected > 0 && index >= expected - 1 {
+        // tsc relates the arguments a non-array rest type receives as one
+        // gathered tuple (`getSpreadArgumentType`), not position by position.
+        return match parameters[expected - 1].peeled() {
+            Type::Array(element) => Some(*element),
+            _ => None,
+        };
+    }
+    let declared = parameters.get(index)?.clone();
+    Some(
+        if index >= function_type.required_parameter_count()
+            && !is_assignable_to(&Type::Undefined, &declared)
+        {
+            union_type(vec![declared, Type::Undefined])
+        } else {
+            declared
+        },
+    )
+}
+
 fn rest_parameter_element_type(parameter_type: &Type, rest_offset: usize) -> Type {
     match parameter_type {
         Type::Array(element) => element.as_ref().clone(),
@@ -1657,11 +1691,11 @@ pub(crate) fn check_function_type_call(
     // spread.
     let mut argument_types: Vec<ArgumentShape> = Vec::with_capacity(arguments.len());
 
-    for (i, argument) in arguments.iter().enumerate() {
-        // A spread stands for however many arguments its type holds, so it does
-        // not line up with the parameter at this position — checking it against
-        // one would report the whole tuple against a single parameter. Its own
-        // expression is still evaluated so errors inside it surface.
+    // tsc's `getEffectiveCallArguments`: a tuple spread stands for one argument
+    // per element, an array spread for one argument of its element type, and
+    // what follows lines up with the parameters after them.
+    let mut i = 0usize;
+    for argument in arguments.iter() {
         if argument.spread {
             let spread_result =
                 evaluate_expression(&argument.expression, argument.span, symbols, ctx);
@@ -1672,8 +1706,69 @@ pub(crate) fn check_function_type_call(
                 ctx,
             );
             argument_types.push(ArgumentShape::wildcard());
+            let spread_elements: Vec<Type> = match &spread_result {
+                InferredExpression::Known(spread) => match spread.peeled() {
+                    Type::Tuple(elements) => elements,
+                    other => {
+                        let element = crate::checks::function::for_of_element_type(&other);
+                        // `hasCorrectArity`: an array spread may only begin
+                        // where every required parameter is already supplied
+                        // and a parameter is still there to receive it.
+                        if matches!(other, Type::Array(_))
+                            && !type_contains_unknown(&element)
+                            && !matches!(element, Type::Any)
+                            && !mismatch_reported
+                            && function_type.overloads().is_none()
+                            && (i < function_type.required_parameter_count()
+                                || (!function_type.is_variadic() && i >= expected))
+                        {
+                            ctx.push(diagnostic_with_syntax_span(
+                                Diagnostic::ts2556(ctx.file_name.clone()),
+                                argument.span,
+                            ));
+                            mismatch_reported = true;
+                        }
+                        vec![element]
+                    }
+                },
+                _ => vec![Type::Unknown],
+            };
+            for element in spread_elements {
+                if !mismatch_reported
+                    && !element.is_unknown()
+                    && !matches!(element, Type::Any)
+                    && function_type.overloads().is_none()
+                    && let Some(parameter_type) = effective_parameter_type(function_type, i)
+                    && !type_contains_unknown(&parameter_type)
+                    && !surge_ts_types::parameter_type_is_degraded(&parameter_type)
+                    && !type_contains_unknown(&element)
+                    && !is_assignable_to(&element, &parameter_type)
+                {
+                    let reported_parameter =
+                        crate::checks::expr::reported_relation_target(&element, &parameter_type);
+                    let element_name = source_display_name(&element, &reported_parameter);
+                    ctx.push(diagnostic_with_syntax_span(
+                        crate::checks::expr::assignability_mismatch_diagnostic(
+                            &element,
+                            &parameter_type,
+                            &element_name,
+                            &reported_parameter.name(),
+                            true,
+                            ctx.file_name.clone(),
+                        ),
+                        argument.span,
+                    ));
+                    mismatch_reported = true;
+                }
+                i += 1;
+            }
             continue;
         }
+        let i = {
+            let position = i;
+            i += 1;
+            position
+        };
 
         // For a variadic signature the trailing rest parameter (declared as an
         // array) matches each remaining argument against its *element* type, not

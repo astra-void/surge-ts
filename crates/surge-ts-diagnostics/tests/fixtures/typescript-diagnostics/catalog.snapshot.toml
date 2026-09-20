@@ -585,6 +585,14 @@ message = "Expected at least {0} arguments, but got {1}."
 arity = 2
 
 [[diagnostic]]
+code = "TS2556"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A spread argument must either have a tuple type or be passed to a rest parameter."
+arity = 0
+
+[[diagnostic]]
 code = "TS2576"
 category = "Error"
 source = "typescript"
