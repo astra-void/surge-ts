@@ -1990,20 +1990,29 @@ pub(crate) fn collect_module_import_bindings(
 }
 
 /// `SURGE_VALUE_EXPORT_REFINEMENT=1`: settle exported values whose initializer
-/// reads an imported value, by re-analyzing the module once its imports have
+/// reads an imported value, by re-analyzing a module once its imports have
 /// types (see [`refine_imported_value_exports`]).
 ///
-/// OFF by default. Measured 2026-09-20 on trpc: with the narrow gate (a module
-/// whose own value imports improved) it closes 6 false negatives — tRPC's
-/// `todoRouter` finally carries its six routes — and opens 13 false positives,
-/// every one of them the *same* downstream gap: the Next client's
-/// `ProtectedIntersection<CreateTRPCNextBase<…>, DecorateRouterRecord<…>>`
-/// decides from a mapped type surge does not model, so it publishes tRPC's
-/// "collides with a built-in method" error string and every `trpc.todo.…` read
-/// off it is a TS2339. Widening the gate to re-offer every module (needed for a
-/// type-only `import type { AppRouter }`, which carries no value symbol) walks
-/// the whole thing back to the unrefined answers and costs +17s on trpc.
-/// Land this together with that mapped type, not before.
+/// OFF by default: correct, but no gain yet, and costly. A module is re-offered
+/// when its own value imports improved *or* any file it imports from — value or
+/// type-only — changed; the type-only half is what reaches tRPC's
+/// `utils/trpc.ts`, whose `import type { AppRouter }` carries no value symbol.
+/// With it, the exported `createTRPCNext<AppRouter>` client is the right
+/// `CreateTRPCNextBase & DecorateRouterRecord` intersection (verified by probe),
+/// and trpc's diagnostics are byte-identical to the pass being off.
+///
+/// An earlier measurement credited this pass with 6 closed false negatives. That
+/// was an artifact: its dependency map missed relative imports, so the client
+/// was still published as tRPC's "collides with a built-in method" error string,
+/// every `trpc.todo` read off it was a false TS2339, and error-type propagation
+/// turned those into TS7006 reports that happened to land on tsc's lines.
+///
+/// What actually blocks those TS7006 is the router's root types, which surge has
+/// as `{ ctx: unknown; errorShape: unknown; transformer: unknown }` where tsc has
+/// a real context, `DefaultErrorShape` and `true` — `Unwrap<T>`'s `Awaited<R>`
+/// leaking `R`, and `TOptions` not inferred through `create(opts?:
+/// ValidateShape<TOptions, …>)` — plus `useQuery` itself degrading. Measured
+/// cost on zod: about 7s to 53s wall, from re-analyzing its module graph.
 fn value_export_refinement_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("SURGE_VALUE_EXPORT_REFINEMENT").as_deref() == Ok("1"))
@@ -2013,6 +2022,72 @@ fn value_export_refinement_enabled() -> bool {
 /// through. Each round settles the exports one import further from a module
 /// whose values were already known; a chain longer than this keeps the sentinel.
 const MAX_VALUE_EXPORT_REFINEMENT_ROUNDS: usize = 8;
+
+/// The program files each module reads from, through any import — value or
+/// type-only — or `export … from`. A type-only import still carries a type
+/// whose meaning can change when its source settles: `import type { AppRouter }`
+/// of a `typeof appRouter` alias has no value symbol at all, yet the client
+/// built from it is decided by that router's key set.
+fn module_dependency_indices(
+    parsed_files: &[ParsedProgramFile],
+    ctx: &CheckerContext,
+) -> Vec<Vec<usize>> {
+    use surge_ts_syntax::ParsedExportDeclaration;
+    parsed_files
+        .iter()
+        .map(|parsed_file| {
+            let mut dependencies: Vec<usize> = Vec::new();
+            // Resolved the way `try_resolve_module` does: a relative specifier
+            // is resolved on the fly against the program's files, a bare one
+            // through the resolver's per-importer map.
+            let mut add = |specifier: &str| {
+                let index = crate::modules::resolve_relative_module(
+                    &parsed_file.file_name,
+                    specifier,
+                    parsed_files,
+                    &ctx.module_file_index_by_identity,
+                )
+                .map(|resolution| resolution.resolved_file_index)
+                .or_else(|| {
+                    let resolved = ctx
+                        .options
+                        .resolved_module_for(&parsed_file.file_name, specifier)?;
+                    let identity = crate::modules::canonical_file_identity(resolved);
+                    ctx.module_file_index_by_identity
+                        .get(identity.as_str())
+                        .copied()
+                });
+                if let Some(index) = index
+                    && !dependencies.contains(&index)
+                {
+                    dependencies.push(index);
+                }
+            };
+            for statement in &parsed_file.statements {
+                match statement {
+                    ParsedStatement::ImportDeclaration(import) => add(&import.module_specifier),
+                    ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                        ParsedExportDeclaration::Named {
+                            module_specifier: Some(specifier),
+                            ..
+                        }
+                        | ParsedExportDeclaration::All {
+                            module_specifier: specifier,
+                            ..
+                        }
+                        | ParsedExportDeclaration::Namespace {
+                            module_specifier: specifier,
+                            ..
+                        } => add(specifier),
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+            dependencies
+        })
+        .collect()
+}
 
 /// Whether two export tables publish the same value surface. Display-inclusive
 /// so a type that only *renders* differently still counts as a change; it is the
@@ -2082,11 +2157,14 @@ pub(crate) fn refine_imported_value_exports(
     if !value_export_refinement_enabled() {
         return;
     }
+    let dependencies = module_dependency_indices(parsed_files, ctx);
+    let mut changed_last_round: Vec<bool> = vec![false; parsed_files.len()];
     let saved_file_name = ctx.file_name.clone();
 
     for _ in 0..MAX_VALUE_EXPORT_REFINEMENT_ROUNDS {
         let analysis_round = next_analysis_round();
         let mut refined_any = false;
+        let mut changed_this_round: Vec<bool> = vec![false; parsed_files.len()];
         for file_index in 0..parsed_files.len() {
             let parsed_file = &parsed_files[file_index];
             if !parsed_file.is_module || parsed_file.file_kind.is_declaration() {
@@ -2098,7 +2176,11 @@ pub(crate) fn refine_imported_value_exports(
             let degraded_imports = module_import_bindings[file_index]
                 .as_ref()
                 .map_or(0, |bindings| degraded_value_count(&bindings.symbols));
-            if degraded_imports >= degraded_imports_when_analyzed[file_index] {
+            let imports_improved = degraded_imports < degraded_imports_when_analyzed[file_index];
+            let dependency_changed = dependencies[file_index]
+                .iter()
+                .any(|dependency| changed_last_round[*dependency]);
+            if !imports_improved && !dependency_changed {
                 continue;
             }
             degraded_imports_when_analyzed[file_index] = degraded_imports;
@@ -2137,11 +2219,13 @@ pub(crate) fn refine_imported_value_exports(
                 continue;
             }
             analysis.local_export_table = refined.local_export_table;
+            changed_this_round[file_index] = true;
             refined_any = true;
         }
         if !refined_any {
             break;
         }
+        changed_last_round = changed_this_round;
 
         let local_module_export_tables = module_analyses
             .iter()
