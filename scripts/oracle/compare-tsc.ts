@@ -565,6 +565,8 @@ export const fixturePresets: Record<string, string> = {
   'relation-rules-basic': path.join(workspaceRoot, 'tests/compat-projects/relation-rules-basic/tsconfig.json'),
   'enum-nominal-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-nominal-basic/tsconfig.json'),
   'loop-assignment-flow-basic': path.join(workspaceRoot, 'tests/compat-projects/loop-assignment-flow-basic/tsconfig.json'),
+  'rest-tuple-parameters-basic': path.join(workspaceRoot, 'tests/compat-projects/rest-tuple-parameters-basic/tsconfig.json'),
+  'typeof-narrow-subtype-basic': path.join(workspaceRoot, 'tests/compat-projects/typeof-narrow-subtype-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -1,5 +1,5 @@
 use surge_ts_syntax::{ParsedExpression, ParsedUnaryOperator};
-use surge_ts_types::{Type, TypeCopyReason, union_type};
+use surge_ts_types::{Type, TypeCopyReason, is_assignable_to, union_type};
 
 use crate::symbols::{SymbolInfo, SymbolTable};
 
@@ -68,17 +68,51 @@ pub(super) fn type_for_typeof_tag(tag: &str) -> Option<Type> {
     }
 }
 
-pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Option<Type> {
-    let Type::Union(union) = ty else {
-        // A lone primitive the test rules out leaves the branch unreachable
-        // (`typeof x === "number"` after `x` narrowed to `string`), which is how
-        // an exhaustive chain of `typeof` checks reaches `never`. Object and
-        // function tags are left alone: surge's object shapes do not always
-        // carry the call signature that decides between them.
-        return typeof_tag_of(ty)
+/// tsc's `getNarrowedType` for a receiver that is not a union: the tag's own
+/// type stands in when it is a subtype of what the receiver holds
+/// (`let a: {}` tested `typeof a === "number"` is a `number`), the receiver
+/// stands when it is the narrower of the two (`{ q: number }` tested for
+/// `"object"`), and a tag the receiver can never report leaves the branch
+/// unreachable.
+fn narrow_non_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Option<Type> {
+    // A lone primitive the test rules out leaves the branch unreachable
+    // (`typeof x === "number"` after `x` narrowed to `string`), which is how an
+    // exhaustive chain of `typeof` checks reaches `never`. Object and function
+    // tags are left alone: surge's object shapes do not always carry the call
+    // signature that decides between them.
+    let ruled_out = || {
+        typeof_tag_of(ty)
             .filter(|member_tag| !matches!(*member_tag, "object" | "function"))
             .filter(|member_tag| (*member_tag == tag) != keep_matching)
-            .map(|_| Type::Never);
+            .map(|_| Type::Never)
+    };
+    if !keep_matching {
+        return ruled_out();
+    }
+    if matches!(
+        ty,
+        Type::Any | Type::Unknown | Type::ErrorType | Type::TypeParameter(_)
+    ) {
+        return None;
+    }
+    let Some(candidate) = type_for_typeof_tag(tag) else {
+        return ruled_out();
+    };
+    if matches!(ty, Type::GenuineUnknown) {
+        return Some(candidate);
+    }
+    if is_assignable_to(&candidate, ty) {
+        return (candidate != *ty).then_some(candidate);
+    }
+    if is_assignable_to(ty, &candidate) {
+        return None;
+    }
+    ruled_out().or(Some(Type::Never))
+}
+
+pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Option<Type> {
+    let Type::Union(union) = ty else {
+        return narrow_non_union_by_typeof(ty, tag, keep_matching);
     };
     let kept: Vec<Type> = union
         .types()
