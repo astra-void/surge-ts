@@ -162,6 +162,7 @@ fn name_is_genuine_any(name: &str, symbols: &SymbolTable, ctx: &CheckerContext) 
 /// read from there; anything else falls through to the ordinary `filter` model.
 fn filtered_element_type(
     arguments: &[ParsedCallArgument],
+    element: &Type,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
@@ -176,7 +177,7 @@ fn filtered_element_type(
         // written return type.
         ParsedExpression::ArrowFunction(arrow) => {
             let Some(ParsedType::Predicate(predicate)) = &arrow.return_type else {
-                return None;
+                return inferred_predicate_target(arrow, element, symbols, ctx);
             };
             if predicate.asserts || !arrow.type_parameters.is_empty() {
                 return None;
@@ -193,6 +194,89 @@ fn filtered_element_type(
             (!target.is_unknown()).then_some(target)
         }
         _ => None,
+    }
+}
+
+/// tsc's `getTypePredicateFromBody`: a callback with no return annotation that
+/// does nothing but narrow its own parameter *is* a type predicate, so
+/// `xs.filter(x => x !== null)` yields `number[]` (TS 5.5). Only the first
+/// parameter is read, which is the one `filter`'s predicate overload tests.
+fn inferred_predicate_target(
+    arrow: &surge_ts_syntax::ParsedArrowFunction,
+    element: &Type,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    if arrow.return_type.is_some()
+        || arrow.is_async
+        || arrow.is_generator
+        || !arrow.type_parameters.is_empty()
+    {
+        return None;
+    }
+    let parameter = arrow.parameters.first()?;
+    if parameter.rest {
+        return None;
+    }
+    let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } = &parameter.binding_name
+    else {
+        return None;
+    };
+    let returned = single_returned_expression(&arrow.body)?;
+
+    let mut scope = symbols.clone();
+    scope.insert(
+        name.clone(),
+        crate::symbols::SymbolInfo {
+            ty: element.clone(),
+            kind: crate::symbols::SymbolKind::Parameter,
+            function_signature: None,
+        },
+    );
+    let narrowed_type = |branch_is_true: bool| {
+        crate::checks::function::narrow_condition_symbol_table(returned, &scope, branch_is_true)
+            .and_then(|narrowed| narrowed.get(name).map(|symbol| symbol.ty.clone()))
+    };
+    let target = narrowed_type(true)?;
+    let rejected = narrowed_type(false)?;
+    // The false branch has to be exactly what the true branch leaves out:
+    // `x => !!x` narrows `number | null` to `number` when true but proves
+    // nothing when false (`0` is falsy), and tsc infers no predicate from it.
+    if target.is_unknown() || !partitions(element, &target, &rejected) {
+        return None;
+    }
+    Some(target)
+}
+
+/// Whether `a` and `b` are exactly the two halves `declared` splits into.
+fn partitions(declared: &Type, a: &Type, b: &Type) -> bool {
+    let members = |ty: &Type| match ty {
+        Type::Union(union) => union.types().to_vec(),
+        Type::Never => Vec::new(),
+        other => vec![other.clone()],
+    };
+    let declared = members(declared);
+    let mut halves = members(a);
+    halves.extend(members(b));
+    declared.len() == halves.len()
+        && declared.iter().all(|member| halves.contains(member))
+        && halves.iter().all(|member| declared.contains(member))
+}
+
+/// The one expression a predicate body can consist of: an expression body, or a
+/// block whose only statement is a `return`. tsc refuses to infer from anything
+/// with more than one return.
+fn single_returned_expression(
+    body: &surge_ts_syntax::ParsedArrowFunctionBody,
+) -> Option<&ParsedExpression> {
+    match body {
+        surge_ts_syntax::ParsedArrowFunctionBody::Expression(expression) => Some(expression),
+        surge_ts_syntax::ParsedArrowFunctionBody::Block(statements) => match statements.as_slice() {
+            [surge_ts_syntax::ParsedFunctionBodyStatement::Return(statement)] => {
+                statement.expression.as_ref()
+            }
+            _ => None,
+        },
     }
 }
 
@@ -256,10 +340,12 @@ pub(crate) fn check_property_call_like(
 
     // Computed before the dispatch below so the narrowed element can be matched
     // on: `filter` with a type-predicate callback yields that predicate's type.
-    let filtered_element = if property_name == "filter" && matches!(object_ty, Type::Array(_)) {
-        filtered_element_type(arguments, symbols, ctx)
-    } else {
-        None
+    let filtered_element = match (&object_ty, property_name) {
+        (Type::Array(element), "filter") => {
+            let element = element.as_ref().clone();
+            filtered_element_type(arguments, &element, symbols, ctx)
+        }
+        _ => None,
     };
 
     if property_name == "all" && is_promise_all_receiver(&object_ty) {
