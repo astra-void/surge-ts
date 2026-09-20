@@ -49,6 +49,16 @@ pub(crate) fn branch_assigned_names(body: &[ParsedFunctionBodyStatement], names:
     }
 }
 
+/// The bindings a loop's exit joins: an assignment nested in a branch of the
+/// body still reaches the exit, and the inner join has already written it to
+/// the declaring frame.
+pub(super) fn loop_join_names(body: &[ParsedFunctionBodyStatement]) -> Vec<String> {
+    let mut names = Vec::new();
+    branch_assigned_names(body, &mut names);
+    loop_assigned_names(body, &mut names);
+    names
+}
+
 /// Every plain binding a loop body assigns, at any depth. Unlike a branch, a
 /// loop's nested assignments reach its head through the back edge.
 fn loop_assigned_names(body: &[ParsedFunctionBodyStatement], names: &mut Vec<String>) {
@@ -87,11 +97,6 @@ fn loop_assigned_names(body: &[ParsedFunctionBodyStatement], names: &mut Vec<Str
     }
 }
 
-/// tsc types a binding at a loop head as the union of the entry edge and every
-/// back edge. surge checks a loop body once, so a binding the body reassigns
-/// starts the body at its declared type rather than at whatever it was narrowed
-/// to on entry — otherwise `let min: number | null = null` read as `null`
-/// throughout a loop that assigns it.
 thread_local! {
     static IN_LOOP_PREPASS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -100,6 +105,9 @@ pub(super) fn in_loop_prepass() -> bool {
     IN_LOOP_PREPASS.with(std::cell::Cell::get)
 }
 
+/// tsc types a binding at a loop head as the union of the entry edge and every
+/// back edge, so `let min: number | null = null` does not read as `null`
+/// throughout a loop that assigns it.
 pub(super) fn widen_loop_assigned_bindings(
     body: &[ParsedFunctionBodyStatement],
     return_type: Option<&Type>,

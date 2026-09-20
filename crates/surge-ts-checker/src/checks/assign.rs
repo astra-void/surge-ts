@@ -164,7 +164,7 @@ fn declared_type_parameter_names(head: &str) -> Vec<std::sync::Arc<str>> {
     let mut names = Vec::new();
     let mut depth = 0usize;
     let mut segment = String::new();
-    let mut flush = |segment: &mut String, names: &mut Vec<std::sync::Arc<str>>| {
+    let flush = |segment: &mut String, names: &mut Vec<std::sync::Arc<str>>| {
         if let Some(name) = segment
             .split_whitespace()
             .find(|word| !matches!(*word, "const" | "in" | "out"))

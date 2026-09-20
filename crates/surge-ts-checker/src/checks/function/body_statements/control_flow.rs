@@ -23,7 +23,7 @@ use super::super::{
 use super::{
     adopt_branch_assignments, body_ends_in_never_call, branch_assigned_names,
     branch_assignment_types, deep_assigned_names, widen_assigned_bindings,
-    widen_loop_assigned_bindings,
+    loop_join_names, widen_loop_assigned_bindings,
     join_branch_assignments, join_branch_pair, narrow_aliased_guard_after_exit,
     narrow_condition_and_aliases_in_scope, resolved_alias_condition, rewrite_discriminant_aliases,
 };
@@ -264,8 +264,7 @@ pub(crate) fn check_function_while_statement(
     // tsc types the code after a loop from every edge into it: the body's end
     // (the assignments it made) and, unless the body always runs, the state
     // before the first iteration.
-    let mut assigned = Vec::new();
-    branch_assigned_names(&body, &mut assigned);
+    let assigned = loop_join_names(&body);
     widen_loop_assigned_bindings(&body, return_type, scopes, flow_state, ctx);
     if runs_at_least_once {
         scopes.push_child();
@@ -397,10 +396,7 @@ pub(crate) fn check_function_for_of_statement(
         }
     }
 
-    let mut assigned = Vec::new();
-    branch_assigned_names(&for_of_statement.body, &mut assigned);
-    widen_loop_assigned_bindings(&for_of_statement.body, return_type, scopes, flow_state, ctx);
-    let entry_types = branch_assignment_types(&assigned, scopes);
+    let assigned = loop_join_names(&for_of_statement.body);
     scopes.push_child();
     // `for (const _ in ref)` acts as a non-null assertion on `ref` for the
     // duration of the body (tsc: `getTypeAtFlowNode`, flow.go — "for (const _
@@ -426,6 +422,10 @@ pub(crate) fn check_function_for_of_statement(
             },
         );
     }
+    // The pre-pass reads the loop binding, so it runs once that is in scope;
+    // head types land on the declaring frames, outside this child.
+    widen_loop_assigned_bindings(&for_of_statement.body, return_type, scopes, flow_state, ctx);
+    let entry_types = branch_assignment_types(&assigned, scopes);
     if flow_active {
         flow_state.begin_branch_capture();
         check_function_body(for_of_statement.body, return_type, scopes, flow_state, ctx);
