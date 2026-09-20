@@ -1776,9 +1776,13 @@ pub(crate) fn check_function_type_call(
                 if (!matches!(parameter_type, Type::Never)
                     || is_rest_position
                     || is_unnarrowable_literal(&argument.expression))
-                    && !type_contains_unknown(&parameter_type)
-                    && !surge_ts_types::parameter_type_is_degraded(&parameter_type)
-                    && (genuine_unknown_argument || !type_contains_unknown(&argument_type))
+                    && ((!type_contains_unknown(&parameter_type)
+                        && !surge_ts_types::parameter_type_is_degraded(&parameter_type)
+                        && (genuine_unknown_argument || !type_contains_unknown(&argument_type)))
+                        || crate::checks::assign::definite_unit_member_mismatch(
+                            &argument_type,
+                            &parameter_type,
+                        ))
                     && !is_open_instantiation(&argument_type)
                     && !is_assignable_to(&argument_type, &parameter_type)
                 {

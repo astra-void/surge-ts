@@ -79,8 +79,9 @@ pub(crate) fn check_assignment_with_symbols(
             let assignability_start = Instant::now();
             record_assignability_check();
             if inferred_value_type != surge_ts_types::Type::Unknown
-                && !type_contains_unknown(&target_type)
-                && !type_contains_unknown(&inferred_value_type)
+                && ((!type_contains_unknown(&target_type)
+                    && !type_contains_unknown(&inferred_value_type))
+                    || definite_unit_member_mismatch(&inferred_value_type, &target_type))
                 && !with_dts_expansion_reason(DtsExpansionReason::Assignability, || {
                     is_assignable_to(&inferred_value_type, &target_type)
                 })
@@ -187,6 +188,36 @@ fn declared_type_parameter_names(head: &str) -> Vec<std::sync::Arc<str>> {
     }
     flush(&mut segment, &mut names);
     names
+}
+
+/// Whether two object types disagree on a member both declare with a unit
+/// type — `[Symbol.toStringTag]: "Int8Array"` against `"Uint8Array"`. Such a
+/// mismatch is definite whatever else about the two types surge failed to
+/// model, so it reports even where a degraded member elsewhere would suppress
+/// the comparison: the lib's typed arrays differ in nothing else, and every
+/// cross-assignment between them went unreported.
+pub(crate) fn definite_unit_member_mismatch(
+    source: &surge_ts_types::Type,
+    target: &surge_ts_types::Type,
+) -> bool {
+    use surge_ts_types::Type;
+    let is_unit = |ty: &Type| {
+        matches!(
+            ty,
+            Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
+        )
+    };
+    let (Type::Object(source), Type::Object(target)) = (source.peeled(), target.peeled()) else {
+        return false;
+    };
+    target.properties.iter().any(|(name, expected)| {
+        !expected.optional
+            && is_unit(&expected.ty)
+            && source
+                .properties
+                .get(name)
+                .is_some_and(|actual| is_unit(&actual.ty) && actual.ty != expected.ty)
+    })
 }
 
 pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
