@@ -573,6 +573,7 @@ export const fixturePresets: Record<string, string> = {
   'interface-call-overloads-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-call-overloads-basic/tsconfig.json'),
   'typed-array-cross-assign-basic': path.join(workspaceRoot, 'tests/compat-projects/typed-array-cross-assign-basic/tsconfig.json'),
   'template-literal-pattern-basic': path.join(workspaceRoot, 'tests/compat-projects/template-literal-pattern-basic/tsconfig.json'),
+  'literal-element-context-basic': path.join(workspaceRoot, 'tests/compat-projects/literal-element-context-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

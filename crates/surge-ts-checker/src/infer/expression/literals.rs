@@ -338,11 +338,10 @@ pub(crate) fn infer_array_literal(
     // not widened: `[...combination]` off a `('a' | 'b')[]` stays that union
     // where widening made it `string[]` and rejected every use of the copy.
     let element_type = if spread_element_types.is_empty() {
-        crate::checks::expr::widen_type(&union_type(element_types))
+        widen_outside_literal_context(element_types)
     } else {
         if !element_types.is_empty() {
-            spread_element_types
-                .push(crate::checks::expr::widen_type(&union_type(element_types)));
+            spread_element_types.push(widen_outside_literal_context(element_types));
         }
         union_type(spread_element_types)
     };
@@ -461,4 +460,49 @@ fn is_template_constraint(ty: &Type) -> bool {
         Type::Union(union) => union.types().iter().all(primitive),
         other => primitive(other),
     }
+}
+
+/// Which literal kinds an array literal's elements keep, per tsc's
+/// `isLiteralOfContextualType`: an element whose contextual type is a type
+/// variable constrained to `string` stays a string literal, and likewise for
+/// `number`. Set by generic inference around the one argument it applies to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct LiteralElementContext {
+    pub(crate) string: bool,
+    pub(crate) number: bool,
+}
+
+thread_local! {
+    static LITERAL_ELEMENT_CONTEXT: std::cell::Cell<LiteralElementContext> =
+        const { std::cell::Cell::new(LiteralElementContext { string: false, number: false }) };
+}
+
+pub(crate) fn with_literal_element_context<R>(
+    context: LiteralElementContext,
+    run: impl FnOnce() -> R,
+) -> R {
+    let previous = LITERAL_ELEMENT_CONTEXT.with(|cell| cell.replace(context));
+    let result = run();
+    LITERAL_ELEMENT_CONTEXT.with(|cell| cell.set(previous));
+    result
+}
+
+fn widen_outside_literal_context(element_types: Vec<Type>) -> Type {
+    let context = LITERAL_ELEMENT_CONTEXT.with(std::cell::Cell::get);
+    if context == LiteralElementContext::default() {
+        return crate::checks::expr::widen_type(&union_type(element_types));
+    }
+    let members: Vec<Type> = element_types
+        .into_iter()
+        .flat_map(|ty| match ty {
+            Type::Union(union) => union.types().to_vec(),
+            other => vec![other],
+        })
+        .map(|member| match &member {
+            Type::StringLiteral(_) if context.string => member,
+            Type::NumberLiteral(_) if context.number => member,
+            _ => crate::checks::expr::widen_type(&member),
+        })
+        .collect();
+    union_type(members)
 }

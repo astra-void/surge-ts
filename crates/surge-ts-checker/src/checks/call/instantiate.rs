@@ -1266,6 +1266,75 @@ fn constraint_target_display(
     Type::Object(resolved_object.clone()).name()
 }
 
+/// The literal kinds an argument's array elements keep while it is inferred
+/// from: those a type parameter the written parameter mentions is constrained
+/// to (tsc's `isLiteralOfContextualType`). `T extends string` infers
+/// `"a" | "b"` from `["a", "b"]`; an unconstrained `T` infers `string`.
+fn literal_element_context(
+    parameter_type: &ParsedType,
+    function_signature: &FunctionSignatureInfo,
+    top_level_return_type_parameters: &[&str],
+    expected_return_type: Option<&Type>,
+    ctx: &mut CheckerContext,
+) -> crate::infer::expression::LiteralElementContext {
+    let mut context = crate::infer::expression::LiteralElementContext::default();
+    for type_parameter in &function_signature.type_parameters {
+        if !parsed_type_mentions_name(parameter_type, &type_parameter.name) {
+            continue;
+        }
+        // The contextual return type reaches the elements through the return
+        // mapper: `const c: "a" | "b" = pick(["a", "b"])` instantiates `T` to
+        // the literal union, which is a literal context in its own right.
+        if let Some(expected) = expected_return_type
+            && top_level_return_type_parameters.contains(&type_parameter.name.as_str())
+        {
+            let members = match surge_ts_types::peel_to_pattern_literal(expected) {
+                Type::Union(union) => union.types().to_vec(),
+                other => vec![other],
+            };
+            for member in &members {
+                match member {
+                    Type::StringLiteral(_) => context.string = true,
+                    Type::NumberLiteral(_) => context.number = true,
+                    pattern
+                        if surge_ts_types::is_template_literal_type(pattern)
+                            || surge_ts_types::string_mapping_parts(pattern).is_some() =>
+                    {
+                        context.string = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let Some(constraint) = type_parameter.constraint.as_ref() else {
+            continue;
+        };
+        let diagnostics_before = ctx.diagnostics().len();
+        let constraint = with_declaring_scope(function_signature, ctx, |ctx| {
+            crate::infer::map_parsed_type(constraint.clone(), ctx)
+        });
+        ctx.truncate_diagnostics(diagnostics_before);
+        let members = match surge_ts_types::peel_to_pattern_literal(&constraint) {
+            Type::Union(union) => union.types().to_vec(),
+            other => vec![other],
+        };
+        for member in members {
+            match surge_ts_types::peel_to_pattern_literal(&member) {
+                Type::String | Type::StringLiteral(_) => context.string = true,
+                Type::Number | Type::NumberLiteral(_) => context.number = true,
+                pattern
+                    if surge_ts_types::is_template_literal_type(&pattern)
+                        || surge_ts_types::string_mapping_parts(&pattern).is_some() =>
+                {
+                    context.string = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    context
+}
+
 pub(crate) fn infer_type_argument_substitution(
     function_signature: &FunctionSignatureInfo,
     arguments: &[ParsedCallArgument],
@@ -1373,6 +1442,13 @@ pub(crate) fn infer_type_argument_substitution(
         // emits; the authoritative pass re-evaluates every argument and reports the
         // genuine ones.
         let diagnostics_before = ctx.diagnostics().len();
+        let literal_context = literal_element_context(
+            parameter_type,
+            function_signature,
+            &top_level_return_type_parameters,
+            expected_return_type,
+            ctx,
+        );
         let inferred_argument = match array_literal_tuple_inference(
             parameter_type,
             &function_signature.type_parameters,
@@ -1384,7 +1460,9 @@ pub(crate) fn infer_type_argument_substitution(
             written_tuple_argument_inference(parameter_type, &argument.expression, symbols, ctx)
         }) {
             Some(tuple) => InferredExpression::Known(tuple),
-            None => infer_expression(&argument.expression, symbols, ctx),
+            None => crate::infer::expression::with_literal_element_context(literal_context, || {
+                infer_expression(&argument.expression, symbols, ctx)
+            }),
         };
         ctx.truncate_diagnostics(diagnostics_before);
         let InferredExpression::Known(argument_type) = inferred_argument else {
@@ -1413,7 +1491,11 @@ pub(crate) fn infer_type_argument_substitution(
         // `id(1)` is `1` while `box(1)` is `{ v: number }`. A literal inside an
         // object or array literal argument has already widened at its mutable
         // location, so only a bare primitive literal is kept.
+        // Elements kept as literals by their contextual type were never
+        // widened at their mutable location, and tsc does not widen them here
+        // either.
         let widen_literals = argument_is_fresh_literal(&argument.expression)
+            && literal_context == crate::infer::expression::LiteralElementContext::default()
             && !(argument_is_primitive_literal(&argument.expression)
                 && top_level_return_type_parameters
                     .iter()
