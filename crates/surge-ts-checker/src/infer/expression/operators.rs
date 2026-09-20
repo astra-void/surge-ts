@@ -108,11 +108,11 @@ pub(crate) fn infer_logical_expression(
         (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty))
             if !left_ty.is_unknown() && !right_ty.is_unknown() =>
         {
-            // `a || b` -> `NonNullable<a> | b`; `a && b` -> `a | b`. See
+            // `a || b` -> `truthy(a) | b`; `a && b` -> `falsy(a) | b`. See
             // `ops::evaluate_logical_expression`.
             let result = match operator {
                 surge_ts_syntax::ParsedLogicalOperator::Or => {
-                    union_type(vec![surge_ts_types::remove_nullish(&left_ty), right_ty])
+                    union_type(vec![truthy_part(&left_ty), right_ty])
                 }
                 // `a && b` is `b` when `a` is truthy and `a` otherwise, so
                 // only `a`'s falsy part survives (`Box | undefined` contributes
@@ -268,6 +268,9 @@ pub(crate) fn falsy_part(ty: &Type) -> Type {
     match ty {
         Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => ty.clone(),
         Type::Undefined | Type::Void => Type::Undefined,
+        Type::Null => Type::Null,
+        // `0n`, which surge has no literal type for.
+        Type::BigInt => Type::BigInt,
         Type::Boolean => Type::BooleanLiteral(false),
         Type::BooleanLiteral(false) => ty.clone(),
         Type::String => Type::StringLiteral(String::new()),
@@ -281,3 +284,24 @@ pub(crate) fn falsy_part(ty: &Type) -> Type {
         _ => Type::Never,
     }
 }
+
+/// What is left of `ty` once it is known truthy — the left operand of `a || b`
+/// when it does not fall through. tsc's `removeDefinitelyFalsyTypes` under
+/// `getNonNullableType`: the nullish members and the falsy literals go, and
+/// `boolean` is `true`. A primitive keeps its type, since only one of its
+/// values is falsy, and a named reference is opened only when that changes it.
+pub(crate) fn truthy_part(ty: &Type) -> Type {
+    match ty {
+        Type::Undefined | Type::Void | Type::Null | Type::BooleanLiteral(false) => Type::Never,
+        Type::StringLiteral(value) if value.is_empty() => Type::Never,
+        Type::NumberLiteral(literal) if literal.value == "0" => Type::Never,
+        Type::Boolean => Type::BooleanLiteral(true),
+        Type::Union(union) => union_type(union.types().iter().map(truthy_part).collect()),
+        Type::Reference(reference) if reference.enum_owner.is_none() => match reference.resolve() {
+            resolved @ (Type::Union(_) | Type::Boolean) => truthy_part(&resolved),
+            _ => ty.clone(),
+        },
+        _ => ty.clone(),
+    }
+}
+

@@ -95,14 +95,14 @@ pub(crate) fn evaluate_logical_expression(
     }
 
     // A logical expression yields one of its operand *values*, not `boolean`:
-    // `a || b` is `NonNullable<a> | b` (the left's nullish branch is gone when it
-    // falls through), and `a && b` is `falsy(a) | b` (`a`'s falsy part when it
+    // `a || b` is `truthy(a) | b` (the left's falsy members are gone when it does
+    // not fall through), and `a && b` is `falsy(a) | b` (`a`'s falsy part when it
     // stops the chain, otherwise `b`). `??` has its own handler. Modelling the
     // operand union avoids false assignability errors like
     // `string | undefined || "x"` being treated as `boolean`.
     let result = match operator {
         surge_ts_syntax::ParsedLogicalOperator::Or => surge_ts_types::union_type(vec![
-            surge_ts_types::remove_nullish(left_ty),
+            crate::infer::truthy_part(left_ty),
             right_ty.clone(),
         ]),
         surge_ts_syntax::ParsedLogicalOperator::And => surge_ts_types::union_type(vec![

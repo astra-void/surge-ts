@@ -587,6 +587,7 @@ export const fixturePresets: Record<string, string> = {
   'property-signature-implicit-any-basic': path.join(workspaceRoot, 'tests/compat-projects/property-signature-implicit-any-basic/tsconfig.json'),
   'primitive-apparent-type-basic': path.join(workspaceRoot, 'tests/compat-projects/primitive-apparent-type-basic/tsconfig.json'),
   'inferable-index-signature-basic': path.join(workspaceRoot, 'tests/compat-projects/inferable-index-signature-basic/tsconfig.json'),
+  'logical-operand-value-basic': path.join(workspaceRoot, 'tests/compat-projects/logical-operand-value-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
