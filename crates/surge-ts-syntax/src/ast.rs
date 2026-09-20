@@ -1381,6 +1381,7 @@ pub struct ParsedFunctionDeclaration {
     /// describes what it *yields*, so tsc does not require it to `return` a
     /// value — the missing-return checks skip it.
     pub is_generator: bool,
+    pub is_async: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

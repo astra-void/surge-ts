@@ -359,6 +359,15 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         return true;
     }
 
+    // Only the outermost relation: a promise nested in a member may have been
+    // collapsed to its awaited type on one side alone.
+    if depth == 1
+        && ((promise_reference(to) && definitely_not_thenable(from))
+            || (promise_reference(from) && definitely_not_thenable(to)))
+    {
+        return false;
+    }
+
     if from == to
         || matches!(from, Type::Any)
         || matches!(from, Type::Never)
@@ -462,6 +471,34 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         });
     }
     result
+}
+
+/// An un-collapsed lib `Promise<T>` / `PromiseLike<T>` reference. It peels to
+/// its awaited `T`, which would relate it to every plain `T`.
+fn promise_reference(ty: &Type) -> bool {
+    let Type::Reference(reference) = ty else {
+        return false;
+    };
+    reference.enum_owner.is_none()
+        && !reference.arguments.is_empty()
+        && matches!(
+            reference.display.split('<').next(),
+            Some("Promise" | "PromiseLike")
+        )
+}
+
+fn definitely_not_thenable(ty: &Type) -> bool {
+    match ty {
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => true,
+        Type::Union(union) => union.types().iter().all(definitely_not_thenable),
+        _ => false,
+    }
 }
 
 fn assignability_arms(from: &Type, to: &Type) -> bool {

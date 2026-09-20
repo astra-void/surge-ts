@@ -527,6 +527,9 @@ pub(crate) struct CheckerContext {
     /// contextual type, so only the mismatch verdicts get recorded — every other
     /// diagnostic raised inside the expression is unrelated and must survive.
     pub(crate) in_contextual_return_check: bool,
+    /// The body being checked belongs to an `async` function, whose returns
+    /// relate awaited value to awaited return type (tsc's `unwrapReturnType`).
+    pub(crate) in_async_body: bool,
     /// Set by a return-value check whose value is a conditional, consumed by
     /// that conditional: tsc checks each branch of a returned conditional
     /// against the return type on its own (`checkReturnExpression`).
@@ -682,6 +685,7 @@ impl CheckerContext {
             union_member_probe_depth: 0,
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
+            in_async_body: false,
             split_returned_conditional: false,
             allow_missing_tuple_element: false,
             non_exhaustive_switches: Vec::new(),
@@ -828,6 +832,7 @@ impl CheckerContext {
             union_member_probe_depth: 0,
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
+            in_async_body: false,
             split_returned_conditional: false,
             allow_missing_tuple_element: false,
             non_exhaustive_switches: Vec::new(),
@@ -1198,6 +1203,7 @@ impl CheckerContext {
         self.union_member_probe_depth = 0;
         self.contextual_return_frames.clear();
         self.in_contextual_return_check = false;
+        self.in_async_body = false;
         self.next_body_frame_active = false;
         if !is_module || self.options.allow_umd_global_access || self.umd_global_names.is_empty() {
             return;

@@ -1335,6 +1335,7 @@ pub(crate) fn check_function_body_with_signature(
     missing_return_span: Option<TextSpan>,
     body_reads: Option<&[String]>,
     is_generator: bool,
+    is_async: bool,
     has_this_parameter: bool,
     this_parameter_type: Option<ParsedType>,
     ctx: &mut CheckerContext,
@@ -1357,6 +1358,7 @@ pub(crate) fn check_function_body_with_signature(
         false,
         body_reads,
         is_generator,
+        is_async,
         has_this_parameter,
         ctx,
     );
@@ -1383,6 +1385,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
     is_constructor: bool,
     body_reads: Option<&[String]>,
     is_generator: bool,
+    is_async: bool,
     // `function f(this: T)`: oxc keeps the `this` parameter out of the parameter
     // list, so the caller has to report whether one was written.
     has_this_parameter: bool,
@@ -1453,6 +1456,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
         // its returns are checked. Opening one stops a nested declaration from
         // recording into an enclosing arrow's frame.
         ctx.open_contextual_return_frame();
+        let outer_async_body = std::mem::replace(&mut ctx.in_async_body, is_async && !is_generator);
         check_function_body(
             body,
             Some(function_type.return_type()),
@@ -1460,6 +1464,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
             &mut flow_state,
             ctx,
         );
+        ctx.in_async_body = outer_async_body;
         ctx.close_contextual_return_frame()
     });
 

@@ -1057,6 +1057,7 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
                     None,
                     false,
                     false,
+                    false,
                     ctx,
                 );
             }
@@ -1097,6 +1098,7 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
                     false,
                     method.has_body.then(|| method.body_reads.as_slice()),
                     method.is_generator,
+                    method.is_async,
                     false,
                     ctx,
                 );
@@ -1126,6 +1128,7 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
                     Some(static_type.clone()),
                     false,
                     Some(block.body_reads.as_slice()),
+                    false,
                     false,
                     false,
                     ctx,
@@ -1185,6 +1188,7 @@ fn check_class_accessor_body(
             Some(this_type),
             false,
             Some(declaration.body_reads.as_slice()),
+            false,
             false,
             false,
             ctx,

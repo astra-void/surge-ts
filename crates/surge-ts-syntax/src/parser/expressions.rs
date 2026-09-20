@@ -768,10 +768,16 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
             parse_expression(&parenthesized_expression.expression).0,
             argument.span(),
         ),
-        Argument::AwaitExpression(await_expression) => (
-            parse_expression(&await_expression.argument).0,
-            argument.span(),
-        ),
+        Argument::AwaitExpression(await_expression) => {
+            let (operand, operand_span) = parse_expression(&await_expression.argument);
+            (
+                ParsedExpression::Await {
+                    operand: Box::new(operand),
+                    operand_span: Some(text_span_from_oxc_span(operand_span)),
+                },
+                argument.span(),
+            )
+        }
         Argument::ConditionalExpression(conditional_expression) => (
             parse_conditional_expression(conditional_expression)
                 .unwrap_or(ParsedExpression::Unknown),

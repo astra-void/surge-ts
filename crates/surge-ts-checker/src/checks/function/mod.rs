@@ -282,6 +282,7 @@ pub(crate) fn check_function_declaration(
         has_body,
         body_reads,
         is_generator,
+        is_async,
         ..
     } = function;
 
@@ -360,6 +361,7 @@ pub(crate) fn check_function_declaration(
             return_type_span.or(name_span),
             has_body.then(|| body_reads.as_slice()),
             is_generator,
+            is_async,
             has_this_parameter,
             this_parameter_type,
             ctx,
@@ -390,6 +392,7 @@ pub(crate) fn check_function_declaration_body(
         has_body,
         body_reads,
         is_generator,
+        is_async,
         ..
     } = function;
 
@@ -418,6 +421,7 @@ pub(crate) fn check_function_declaration_body(
         return_type_span.or(name_span),
         has_body.then(|| body_reads.as_slice()),
         is_generator,
+        is_async,
         has_this_parameter,
         this_parameter_type,
         ctx,
@@ -931,10 +935,23 @@ pub(crate) fn check_arrow_function_expression_anchored(
                             ctx,
                         );
                         // tsc's `checkReturnExpression` relates an expression body
-                        // to the annotation as a whole, at the body. An async body
-                        // is left alone: surge reads `Promise<T>` as `T`.
-                        if !is_async
-                            && let InferredExpression::Known(body_type) = &inferred
+                        // to the annotation as a whole, at the body — awaited on
+                        // both sides for an async one (`unwrapReturnType`).
+                        let awaited_sides = match &inferred {
+                            InferredExpression::Known(body_type) if is_async => Some((
+                                crate::checks::call::awaited_type(body_type),
+                                crate::checks::call::awaited_type(return_type_for_body),
+                            )),
+                            _ => None,
+                        };
+                        let related_sides = match (&awaited_sides, &inferred) {
+                            (Some((body_type, return_type)), _) => Some((body_type, return_type)),
+                            (None, InferredExpression::Known(body_type)) => {
+                                Some((body_type, return_type_for_body))
+                            }
+                            _ => None,
+                        };
+                        if let Some((body_type, return_type_for_body)) = related_sides
                             && !body_type.is_unknown()
                             && !surge_ts_types::is_assignable_to(body_type, return_type_for_body)
                             && !type_contains_unknown(body_type)
@@ -1010,6 +1027,8 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     ctx.activate_next_body_frame();
                 }
                 ctx.open_contextual_return_frame();
+                let outer_async_body =
+                    std::mem::replace(&mut ctx.in_async_body, is_async && !is_generator);
                 check_function_body(
                     statements,
                     return_type_for_body,
@@ -1017,6 +1036,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     &mut flow_state,
                     ctx,
                 );
+                ctx.in_async_body = outer_async_body;
                 // The flow verdict is checked first: the return-type gate walks
                 // the whole type, which on a large annotation is far costlier
                 // than the body it guards.

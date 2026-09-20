@@ -79,6 +79,7 @@ pub(crate) fn parse_function_declaration_named(
         body,
         has_body: function.body.is_some(),
         is_generator: function.generator,
+        is_async: function.r#async,
         body_reads: function
             .body
             .as_ref()
