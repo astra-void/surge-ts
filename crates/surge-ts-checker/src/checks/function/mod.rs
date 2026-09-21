@@ -493,12 +493,23 @@ fn type_is_deeply_concrete(ty: &Type) -> bool {
 /// measured on its merits.
 /// `SURGE_INFER_DECLARATION_RETURN_TYPES=lazy`: publish the body return as a
 /// [`LazyBodyReturn`] read on first demand, instead of walking the body during
-/// signature collection.
-fn lazy_body_returns() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("SURGE_INFER_DECLARATION_RETURN_TYPES").as_deref() == Ok("lazy")
-    })
+/// signature collection. `lazy:<substring>` limits it to files whose name
+/// contains the substring, to bisect which declaration moves a diagnostic.
+fn lazy_body_returns(file_name: &str) -> bool {
+    static SETTING: std::sync::OnceLock<Option<Option<String>>> = std::sync::OnceLock::new();
+    let setting = SETTING.get_or_init(|| {
+        let value = std::env::var("SURGE_INFER_DECLARATION_RETURN_TYPES").ok()?;
+        if value == "lazy" {
+            Some(None)
+        } else {
+            value.strip_prefix("lazy:").map(|filter| Some(filter.to_string()))
+        }
+    });
+    match setting {
+        None => false,
+        Some(None) => true,
+        Some(Some(filter)) => file_name.contains(filter.as_str()),
+    }
 }
 
 fn infer_declaration_return_types(file_name: &str) -> bool {
@@ -508,6 +519,7 @@ fn infer_declaration_return_types(file_name: &str) -> bool {
         .as_deref()
     {
         None | Some("") | Some("lazy") => false,
+        Some(value) if value.starts_with("lazy:") => false,
         Some("1") => true,
         Some(filter) => file_name.contains(filter),
     }
@@ -570,7 +582,18 @@ pub(crate) fn collect_function_declaration_signature(
         map_signature(ctx)
     };
 
-    let lazy_return = lazy_body_returns() && return_type_comes_from_body(function);
+    // A declaration whose body can mention a type parameter is left out — its
+    // own, or an enclosing generic's. Go computes such a return once and
+    // instantiates it per call (`instantiateType(getReturnTypeOfSignature(
+    // sig.target), sig.mapper)`); a `LazyBodyReturn` is opaque to that
+    // substitution. `createDeferred<TValue>()` called where the context supplies
+    // `TValue` came back with a bare `TValue` and assignment narrowing dropped
+    // the member it should have kept; a component declared inside
+    // `createHydrationStreamProvider<TShape>` kept a bare `TShape` in its props.
+    let lazy_return = lazy_body_returns(&ctx.file_name)
+        && function.type_parameters.is_empty()
+        && ctx.type_parameter_scopes.iter().all(|scope| scope.is_empty())
+        && return_type_comes_from_body(function);
     let function_type = match lazy_return
         .then(|| lazy_body_return_reference(function, function_type.parameters(), ctx))
         .or_else(|| {
@@ -835,6 +858,29 @@ pub(crate) fn check_function_declaration_body(
     type_parameters: &[ParsedTypeParameter],
     ctx: &mut CheckerContext,
 ) {
+    // A return type read from the body is not an annotation, and Go checks a
+    // return statement only against the annotation (`checkReturnStatement` via
+    // `getReturnTypeFromAnnotation`, nil here). Handing the body its own
+    // `LazyBodyReturn` as the expectation lifted the degraded-expectation
+    // suppression the plain sentinel gives: a component's returned JSX then
+    // reported its callback props as implicit `any`.
+    let settled_signature;
+    let function_type = if function.return_type.is_none()
+        && matches!(
+            function_type.return_type(),
+            Type::Reference(reference) if reference.id.contains(BODY_RETURN_ID_TAG)
+        ) {
+        settled_signature = FunctionType::new(
+            function_type.parameters().to_vec(),
+            Type::Unknown,
+            function_type.is_variadic(),
+            function_type.required_parameter_count(),
+        )
+        .with_parameter_names(signature::written_binding_names(&function.parameters));
+        &settled_signature
+    } else {
+        function_type
+    };
     let start = Instant::now();
     let ParsedFunctionDeclaration {
         has_this_parameter,
