@@ -283,6 +283,7 @@ pub(crate) fn check_call_like_with_expected_type(
                     call_span,
                     type_arguments,
                     arguments,
+                    None,
                     symbols,
                     ctx,
                 )
@@ -323,6 +324,7 @@ pub(crate) fn check_call_like_with_expected_type(
                     call_span,
                     type_arguments,
                     arguments,
+                    None,
                     symbols,
                     ctx,
                 )
@@ -636,6 +638,7 @@ fn check_callable_union_call(
                 call_span,
                 type_arguments,
                 arguments,
+                None,
                 symbols,
                 ctx,
             ),
@@ -664,6 +667,7 @@ fn check_callable_union_call(
             call_span,
             type_arguments,
             arguments,
+            None,
             symbols,
             ctx,
         )
@@ -906,6 +910,7 @@ pub(crate) fn check_new_like(
                         call_span,
                         type_arguments,
                         arguments,
+                        None,
                         symbols,
                         ctx,
                     )
@@ -995,6 +1000,7 @@ pub(crate) fn check_new_like(
                 call_span,
                 type_arguments,
                 arguments,
+                None,
                 symbols,
                 ctx,
             );
@@ -1023,6 +1029,7 @@ pub(crate) fn check_new_like(
                 call_span,
                 type_arguments,
                 arguments,
+                None,
                 symbols,
                 ctx,
             )
@@ -1051,6 +1058,7 @@ pub(crate) fn check_new_like(
                         call_span,
                         type_arguments,
                         arguments,
+                        None,
                         symbols,
                         ctx,
                     ) {
@@ -1426,6 +1434,7 @@ pub(crate) fn check_expression_call(
             call_span,
             type_arguments,
             arguments,
+            None,
             symbols,
             ctx,
         );
@@ -1457,6 +1466,7 @@ pub(crate) fn check_expression_call(
             call_span,
             type_arguments,
             arguments,
+            None,
             symbols,
             ctx,
         ),
@@ -1572,6 +1582,7 @@ pub(crate) fn check_optional_call_like(
             call_span,
             type_arguments,
             arguments,
+            None,
             symbols,
             ctx,
         )
@@ -1656,8 +1667,9 @@ pub(crate) fn check_function_type_call(
     function_type: &FunctionType,
     callee_span: Option<SyntaxTextSpan>,
     call_span: Option<SyntaxTextSpan>,
-    _type_arguments: &[ParsedType],
+    type_arguments: &[ParsedType],
     arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
@@ -1686,8 +1698,9 @@ pub(crate) fn check_function_type_call(
                 sole,
                 callee_span,
                 call_span,
-                _type_arguments,
+                type_arguments,
                 arguments,
+                expected_return_type,
                 symbols,
                 ctx,
             );
@@ -1959,7 +1972,16 @@ pub(crate) fn check_function_type_call(
     let return_type = if mismatch_reported || has_spread_argument {
         None
     } else {
-        select_overload_return_type(function_type, &argument_types)
+        choose_overload_return_type(
+            function_type,
+            &argument_types,
+            type_arguments,
+            callee_span,
+            arguments,
+            expected_return_type,
+            symbols,
+            ctx,
+        )
     };
     Some(with_type_copy_reason(
         TypeCopyReason::CallResolution,
@@ -1985,6 +2007,16 @@ pub(crate) fn select_overload_return_type_for_inferred_call(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    let argument_types = inferred_argument_shapes(function_type, arguments, symbols, ctx)?;
+    select_overload_return_type(function_type, &argument_types)
+}
+
+fn inferred_argument_shapes(
+    function_type: &FunctionType,
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Vec<ArgumentShape>> {
     function_type.overloads()?;
     if arguments.iter().any(|argument| argument.spread) {
         return None;
@@ -2006,7 +2038,7 @@ pub(crate) fn select_overload_return_type_for_inferred_call(
         })
         .collect();
     ctx.diagnostics.truncate(diagnostics_before);
-    select_overload_return_type(function_type, &argument_types)
+    Some(argument_types)
 }
 
 /// What overload selection knows about one argument.
@@ -2090,6 +2122,60 @@ fn select_overload_return_type(
     }
     crate::program::record_overload_selection_pick();
     Some(picked.return_type().clone())
+}
+
+/// tsc's `chooseOverload` over the evaluated arguments: the candidates in
+/// declaration order, a generic one instantiated for this call from its own
+/// written signature before it is tested, and the first that accepts the
+/// arguments answers the call. `None` when none does or the answer still names
+/// an open parameter, which leaves the fold's return.
+///
+/// A candidate with no written signature to instantiate keeps its open
+/// parameters, which reject every argument exactly as they did before this
+/// walk: a free function's group is instantiated per call before it is attached,
+/// so only an interface method group reaches the instantiation.
+fn choose_overload_return_type(
+    function_type: &FunctionType,
+    argument_types: &[ArgumentShape],
+    type_arguments: &[ParsedType],
+    callee_span: Option<SyntaxTextSpan>,
+    arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let overloads = function_type.overloads()?;
+    crate::program::record_overload_selection_attempt();
+    for candidate in overloads {
+        let instantiated;
+        let candidate = if names_open_parameter(&Type::Function(candidate.clone())) {
+            let diagnostics_before = ctx.diagnostics.len();
+            instantiated = property::instantiate_declared_member_signature(
+                candidate,
+                None,
+                type_arguments,
+                callee_span,
+                arguments,
+                expected_return_type,
+                symbols,
+                ctx,
+            )
+            .into_owned();
+            ctx.diagnostics.truncate(diagnostics_before);
+            &instantiated
+        } else {
+            candidate
+        };
+        if !signature_accepts_argument_types(candidate, argument_types) {
+            continue;
+        }
+        if names_open_parameter(candidate.return_type()) {
+            return None;
+        }
+        crate::program::record_overload_selection_pick();
+        return Some(candidate.return_type().clone());
+    }
+    None
 }
 
 /// `type_contains_unknown` without the written `unknown`: an overload taking

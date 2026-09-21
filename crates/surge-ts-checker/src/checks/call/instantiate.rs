@@ -99,6 +99,7 @@ pub(crate) fn instantiate_function_type<'a>(
             outer_type_arguments,
             type_arguments,
             arguments,
+            expected_return_type,
             symbols,
             ctx,
         );
@@ -199,6 +200,7 @@ pub(crate) fn instantiate_function_type<'a>(
         outer_type_arguments,
         type_arguments,
         arguments,
+        expected_return_type,
         symbols,
         ctx,
     )
@@ -224,6 +226,7 @@ fn fold_overload_alternative_parameters<'a>(
     outer_type_arguments: &[(String, Type)],
     type_arguments: &[ParsedType],
     arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Cow<'a, FunctionType> {
@@ -245,7 +248,16 @@ fn fold_overload_alternative_parameters<'a>(
     for alternative in &function_signature.overload_alternatives {
         let mut substitution = if type_arguments.is_empty() {
             let mut substitution =
-                infer_type_argument_substitution(alternative, arguments, &[], None, symbols, ctx);
+                // Each candidate is inferred under the call's contextual
+                // return, as tsc's `chooseOverload` infers every one.
+                infer_type_argument_substitution(
+                    alternative,
+                    arguments,
+                    &[],
+                    expected_return_type,
+                    symbols,
+                    ctx,
+                );
             apply_uninferred_type_parameter_defaults(
                 alternative,
                 arguments.len(),
@@ -1345,6 +1357,29 @@ fn constraint_target_display(
     Type::Object(resolved_object.clone()).name()
 }
 
+fn contextual_type_names_literal(contextual: &Type, literal: &Type, depth: u8) -> bool {
+    if depth > 4
+        || !matches!(
+            literal,
+            Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
+        )
+    {
+        return false;
+    }
+    match contextual {
+        ty if ty == literal => true,
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| contextual_type_names_literal(member, literal, depth + 1)),
+        Type::Reference(reference) => reference
+            .arguments
+            .iter()
+            .any(|argument| contextual_type_names_literal(argument, literal, depth + 1)),
+        _ => false,
+    }
+}
+
 pub(crate) fn infer_type_argument_substitution(
     function_signature: &FunctionSignatureInfo,
     arguments: &[ParsedCallArgument],
@@ -1492,11 +1527,16 @@ pub(crate) fn infer_type_argument_substitution(
         // `id(1)` is `1` while `box(1)` is `{ v: number }`. A literal inside an
         // object or array literal argument has already widened at its mutable
         // location, so only a bare primitive literal is kept.
+        // A literal the call's contextual type itself names stays a literal too
+        // (tsc's `isLiteralOfContextualType`): `Promise.resolve('data')` where a
+        // `'data'` result is expected infers `'data'`.
         let widen_literals = argument_is_fresh_literal(&argument.expression)
             && !(argument_is_primitive_literal(&argument.expression)
                 && top_level_return_type_parameters
                     .iter()
-                    .any(|name| type_parameter_at_top_level(parameter_type, name, 0)));
+                    .any(|name| type_parameter_at_top_level(parameter_type, name, 0)))
+            && !expected_return_type
+                .is_some_and(|expected| contextual_type_names_literal(expected, &argument_type, 0));
         // `f(...xs)` supplies the *elements* of `xs`, each lined up with the
         // position it covers — tsc's `getSpreadArgumentType`. Matching the
         // spread's own type against the parameter bound a rest `T[]`'s `T` to
@@ -1882,13 +1922,21 @@ fn array_literal_tuple_inference(
     if !named.type_arguments.is_empty() {
         return None;
     }
-    let constraint = type_parameters
+    let type_parameter = type_parameters
         .iter()
-        .find(|type_parameter| type_parameter.name == named.name)?
-        .constraint
-        .as_ref()?;
-    let element_constraint = tuple_element_constraint(constraint)?;
-    let keep_literals = matches!(
+        .find(|type_parameter| type_parameter.name == named.name)?;
+    // A `const` type parameter infers its argument in a const context: an array
+    // literal is a tuple of its elements' own types, whatever the constraint
+    // spells (zod's `input<const Items extends util.TupleItems>([schema])`).
+    let keep_literals = if type_parameter.is_const {
+        if elements.iter().any(|element| element.spread) {
+            return None;
+        }
+        true
+    } else {
+        let constraint = type_parameter.constraint.as_ref()?;
+        let element_constraint = tuple_element_constraint(constraint)?;
+        matches!(
         element_constraint,
         ParsedType::String | ParsedType::Number | ParsedType::Boolean
     ) || matches!(
@@ -1901,7 +1949,8 @@ fn array_literal_tuple_inference(
                         Some(ParsedType::String | ParsedType::Number | ParsedType::Boolean)
                     )
             })
-    );
+        )
+    };
 
     let mut element_types = Vec::with_capacity(elements.len());
     for element in elements {

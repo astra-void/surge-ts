@@ -353,6 +353,7 @@ pub(crate) fn check_property_call_like(
                         call_span,
                         type_arguments,
                         arguments,
+                        expected_return_type,
                         symbols,
                         ctx,
                     )?;
@@ -479,6 +480,7 @@ pub(crate) fn check_property_call_like(
                             call_span,
                             type_arguments,
                             arguments,
+                            expected_return_type,
                             symbols,
                             ctx,
                         )?;
@@ -619,6 +621,7 @@ pub(crate) fn check_property_call_like(
                         call_span,
                         type_arguments,
                         arguments,
+                        expected_return_type,
                         symbols,
                         ctx,
                     )
@@ -954,6 +957,7 @@ pub(crate) fn check_optional_property_call(
                             call_span,
                             type_arguments,
                             arguments,
+                            expected_return_type,
                             symbols,
                             ctx,
                         )?;
@@ -1071,6 +1075,7 @@ pub(crate) fn check_optional_property_call(
                         call_span,
                         type_arguments,
                         arguments,
+                        expected_return_type,
                         symbols,
                         ctx,
                     )
@@ -1109,7 +1114,7 @@ pub(crate) fn check_optional_property_call(
 /// declared symbol would, so `vi.fn()` binds `T` (to its default) instead of
 /// returning `Mock<T>` with the parameter bare. Any other function-typed member
 /// is used as resolved.
-fn instantiate_declared_member_signature<'a>(
+pub(super) fn instantiate_declared_member_signature<'a>(
     function_type: &'a surge_ts_types::FunctionType,
     declared_member: Option<&Type>,
     type_arguments: &[ParsedType],
@@ -1227,9 +1232,22 @@ pub(crate) fn callable_member_call_return_type(
         ctx,
     );
     Some(
-        super::select_overload_return_type_for_inferred_call(&declared, arguments, symbols, ctx)
+        overloaded_member_call_return_type(&declared, arguments, symbols, ctx)
             .unwrap_or_else(|| function_type.return_type().clone()),
     )
+}
+
+/// The return type of the overload an inferred member call lands on. Only a
+/// non-generic pick answers: an inferred call has no contextual type, and a
+/// generic candidate instantiated without one widens what the context would
+/// have kept (`() => Promise.resolve('data')` against `QueryFunction<'data'>`).
+pub(crate) fn overloaded_member_call_return_type(
+    declared: &surge_ts_types::FunctionType,
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    super::select_overload_return_type_for_inferred_call(declared, arguments, symbols, ctx)
 }
 
 /// Under `noLib` the array member surface comes from the configured replacement

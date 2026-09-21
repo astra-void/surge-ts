@@ -766,6 +766,7 @@ mod physical_interface_cache_tests {
                     constraint: None,
                     default_type: None,
                     span: None,
+                    is_const: false,
                 })
                 .collect(),
             Vec::new(),

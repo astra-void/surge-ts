@@ -1122,6 +1122,7 @@ fn parse_type_parameter(type_parameter: &TSTypeParameter<'_>) -> ParsedTypeParam
         constraint: type_parameter.constraint.as_ref().and_then(parse_type),
         default_type: type_parameter.default.as_ref().and_then(parse_type),
         span: Some(text_span_from_oxc_span(type_parameter.span)),
+        is_const: type_parameter.r#const,
     }
 }
 

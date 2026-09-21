@@ -549,6 +549,9 @@ pub struct ParsedTypeParameter {
     pub constraint: Option<ParsedType>,
     pub default_type: Option<ParsedType>,
     pub span: Option<TextSpan>,
+    /// `<const T>`: an argument inferred for it keeps its const-context shape
+    /// (an array literal is a tuple).
+    pub is_const: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
