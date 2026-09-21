@@ -177,11 +177,29 @@ fn accessor_property_type(accessor: &ParsedClassAccessor) -> ParsedType {
 }
 
 fn method_function_type(method: &ParsedClassMethod) -> ParsedType {
+    // tsc's `addOptionality`, as `build_function_type` applies it to a
+    // declaration: a defaulted parameter a required one follows is written
+    // `T | undefined` for its callers.
+    let required = crate::checks::function::required_parameter_count(&method.parameters);
     ParsedType::Function(std::sync::Arc::new(ParsedFunctionType {
         parameters: method
             .parameters
             .iter()
-            .map(parameter_to_type_parameter)
+            .enumerate()
+            .map(|(index, parameter)| {
+                let mut lowered = parameter_to_type_parameter(parameter);
+                if parameter.initializer.is_some()
+                    && index < required
+                    && !matches!(lowered.ty, ParsedType::Any)
+                {
+                    lowered.ty = ParsedType::Union(std::sync::Arc::new(vec![
+                        lowered.ty,
+                        ParsedType::Undefined,
+                    ]));
+                    lowered.optional = false;
+                }
+                lowered
+            })
             .collect(),
         return_type: Box::new(
             method

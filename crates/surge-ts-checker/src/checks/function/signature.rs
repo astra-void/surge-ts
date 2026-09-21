@@ -177,6 +177,27 @@ pub(crate) fn parameter_scope_type(
     parameter: &ParsedFunctionParameter,
     parameter_type: &Type,
 ) -> Type {
+    // The initializer stands in for `undefined`, so the body never sees it —
+    // whether the signature carries it (`(a = 1, b: T)`) or the annotation
+    // wrote it (`a: T | undefined = v`).
+    // An initializer that can itself be `undefined` fills nothing.
+    let initializer_fills_gap = parameter.initializer.as_ref().is_some_and(|initializer| {
+        !matches!(
+            initializer,
+            surge_ts_syntax::ParsedExpression::UndefinedLiteral
+                | surge_ts_syntax::ParsedExpression::Unary {
+                    operator: surge_ts_syntax::ParsedUnaryOperator::Void,
+                    ..
+                }
+        ) && !matches!(initializer, surge_ts_syntax::ParsedExpression::Identifier { name, .. } if name == "undefined")
+    });
+    let without_default_gap;
+    let parameter_type = if initializer_fills_gap && matches!(parameter_type, Type::Union(_)) {
+        without_default_gap = surge_ts_types::remove_undefined(parameter_type);
+        &without_default_gap
+    } else {
+        parameter_type
+    };
     match &parameter.binding_name {
         ParsedBindingName::Identifier { .. } => {
             let ty =
@@ -273,11 +294,26 @@ pub(crate) fn insert_parameter_bindings(
     parameter_type: &Type,
     scopes: &mut ScopeStack,
 ) {
-    insert_binding_name(
-        &parameter.binding_name,
-        parameter_scope_type(parameter, parameter_type),
-        scopes,
-    );
+    let scope_type = parameter_scope_type(parameter, parameter_type);
+    // `x: T | undefined = v` reads `T` but is still declared `T | undefined`:
+    // `x = undefined` in the body is a valid write.
+    if let ParsedBindingName::Identifier { name, .. } = &parameter.binding_name
+        && parameter.initializer.is_some()
+        && scope_type != *parameter_type
+    {
+        scopes.record_tuple_destructure(name, None);
+        let _ = scopes.insert_current_narrowed(
+            name.as_str(),
+            SymbolInfo {
+                ty: scope_type,
+                kind: SymbolKind::Parameter,
+                function_signature: None,
+            },
+            parameter_type.clone(),
+        );
+        return;
+    }
+    insert_binding_name(&parameter.binding_name, scope_type, scopes);
 }
 
 /// tsc's `checkBindingElement`: the initializer of `{ a = value }` is
@@ -553,6 +589,21 @@ pub(crate) fn map_function_signature(
             parameter_bindings.push((name.to_string(), parameter_binding_type));
         }
 
+        // tsc's `addOptionality`: a parameter with an initializer accepts
+        // `undefined` from its callers wherever it stands. A trailing one is
+        // optional and widened at the call; one a required parameter follows
+        // (`reducer(state = initial, action)`) carries it in its type. The
+        // body binding above stays `T` — the initializer fills the gap.
+        let inferred_parameter_type = if parameter.initializer.is_some()
+            && ctx.options.strict_null_checks
+            && index < required_parameter_count(parameters)
+            && !inferred_parameter_type.is_unknown()
+            && !matches!(inferred_parameter_type, Type::Any)
+        {
+            surge_ts_types::union_type(vec![inferred_parameter_type, Type::Undefined])
+        } else {
+            inferred_parameter_type
+        };
         parameter_types.push(inferred_parameter_type);
 
         if ctx.options.no_implicit_any {
