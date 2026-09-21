@@ -539,6 +539,10 @@ fn check_statements_over_module_scope(
     ctx: &mut CheckerContext,
 ) -> Vec<Option<surge_ts_types::Type>> {
     let mut scopes = crate::symbols::ScopeStack::from_root(symbols);
+    // The block is a scope of its own: a `const name` in it shadows the module
+    // binding or the global of that name instead of redeclaring it. The frame
+    // stays pushed so `names` still read what the block narrowed them to.
+    scopes.push_child();
     let flow_facts = crate::flow::collect_function_flow_facts(&statements);
     let mut flow_state = crate::flow::FunctionFlowState::new(
         flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,

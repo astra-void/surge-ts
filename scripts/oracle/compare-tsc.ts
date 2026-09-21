@@ -614,6 +614,7 @@ export const fixturePresets: Record<string, string> = {
   'defaulted-parameter-optionality-basic': path.join(workspaceRoot, 'tests/compat-projects/defaulted-parameter-optionality-basic/tsconfig.json'),
   'inferred-type-predicate-declaration-basic': path.join(workspaceRoot, 'tests/compat-projects/inferred-type-predicate-declaration-basic/tsconfig.json'),
   'expando-function-member-basic': path.join(workspaceRoot, 'tests/compat-projects/expando-function-member-basic/tsconfig.json'),
+  'module-block-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/module-block-scope-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
