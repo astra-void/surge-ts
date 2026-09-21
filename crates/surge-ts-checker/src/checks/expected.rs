@@ -300,6 +300,8 @@ fn evaluate_expression_with_expected_type_inner(
     if let (Type::Function(expected_function_type), ParsedExpression::ArrowFunction(arrow)) =
         (expected_type, expression)
     {
+        ctx.next_arrow_is_argument =
+            matches!(_expected_diagnostic, ExpectedTypeDiagnostic::ArgumentNotAssignable);
         let function_type = crate::checks::function::check_arrow_function_expression_anchored(
             with_type_copy_reason(TypeCopyReason::ExpectedType, || arrow.as_ref().clone()),
             Some(expected_function_type),
@@ -317,6 +319,8 @@ fn evaluate_expression_with_expected_type_inner(
         (expected_type, expression)
     {
         if let Some(call_signature) = expected_object.call_signature() {
+            ctx.next_arrow_is_argument =
+                matches!(_expected_diagnostic, ExpectedTypeDiagnostic::ArgumentNotAssignable);
             let function_type = crate::checks::function::check_arrow_function_expression_anchored(
                 with_type_copy_reason(TypeCopyReason::ExpectedType, || arrow.as_ref().clone()),
                 Some(call_signature),

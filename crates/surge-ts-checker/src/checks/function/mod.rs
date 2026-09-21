@@ -604,8 +604,9 @@ pub(crate) fn check_arrow_function_expression(
     check_arrow_function_expression_with_expected_type(arrow, None, symbols, ctx)
 }
 
-/// Emits the whole-signature TS2322 tsc reports when a contextually-typed
-/// arrow's returns do not fit, anchored on the assignment target.
+/// Emits the whole-signature mismatch tsc reports when a contextually-typed
+/// arrow's returns do not fit: TS2322 anchored on the assignment target, or
+/// TS2345 when the arrow is a call argument.
 #[allow(clippy::too_many_arguments)]
 fn emit_contextual_signature_mismatch(
     parameter_types: &[Type],
@@ -615,6 +616,7 @@ fn emit_contextual_signature_mismatch(
     required_parameter_count: usize,
     expected_type: &FunctionType,
     span: Option<surge_ts_syntax::TextSpan>,
+    is_argument: bool,
     ctx: &mut CheckerContext,
 ) {
     if returned_types.is_empty() {
@@ -640,16 +642,25 @@ fn emit_contextual_signature_mismatch(
         target.name(),
         &ctx.file_name,
     );
-    ctx.push(crate::spans::diagnostic_with_syntax_span(
+    let diagnostic = if is_argument {
+        crate::checks::expr::assignability_mismatch_diagnostic(
+            &source,
+            &target,
+            &source_name,
+            &target_name,
+            true,
+            ctx.file_name.clone(),
+        )
+    } else {
         crate::checks::expr::type_not_assignable_diagnostic(
             &source,
             &target,
             &source_name,
             &target_name,
             ctx.file_name.clone(),
-        ),
-        span,
-    ));
+        )
+    };
+    ctx.push(crate::spans::diagnostic_with_syntax_span(diagnostic, span));
 }
 
 pub(crate) fn check_arrow_function_expression_with_expected_type(
@@ -776,6 +787,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
         body_span,
         span: arrow_span,
     } = arrow;
+    let is_argument = std::mem::take(&mut ctx.next_arrow_is_argument);
 
     // An arrow does not bind `this`, so it keeps whatever the enclosing function
     // established; a `function` expression and an object-literal method both
@@ -1078,6 +1090,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                         function_type.required_parameter_count(),
                         expected_type,
                         target_span.or(arrow_span),
+                        is_argument,
                         ctx,
                     );
                 }

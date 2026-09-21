@@ -594,6 +594,7 @@ export const fixturePresets: Record<string, string> = {
   'tuple-length-anchor-basic': path.join(workspaceRoot, 'tests/compat-projects/tuple-length-anchor-basic/tsconfig.json'),
   'parenthesized-assignment-target-basic': path.join(workspaceRoot, 'tests/compat-projects/parenthesized-assignment-target-basic/tsconfig.json'),
   'object-to-array-missing-members-basic': path.join(workspaceRoot, 'tests/compat-projects/object-to-array-missing-members-basic/tsconfig.json'),
+  'callback-argument-signature-basic': path.join(workspaceRoot, 'tests/compat-projects/callback-argument-signature-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
