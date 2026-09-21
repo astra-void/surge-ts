@@ -81,6 +81,19 @@ pub(crate) struct FunctionSignatureInfo {
     /// alongside restores the fold at the instantiated level, so an argument
     /// written for a later overload is not reported against the first.
     pub(crate) overload_alternatives: Vec<Arc<FunctionSignatureInfo>>,
+    /// tsc's `getTypePredicateFromBody`: a function with no return annotation
+    /// whose body is one `return` of a condition that splits a parameter's
+    /// type exactly in two *is* a type predicate over that parameter (TS 5.5).
+    /// Computed where the signature is collected, which is where the
+    /// parameter types are known; guard narrowing reads it as it reads a
+    /// written `x is T`.
+    pub(crate) inferred_predicate: Option<InferredPredicate>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct InferredPredicate {
+    pub(crate) parameter_index: usize,
+    pub(crate) target: Type,
 }
 
 

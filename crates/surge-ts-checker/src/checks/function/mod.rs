@@ -233,10 +233,10 @@ pub(crate) fn collect_function_declaration_signature(
     let duplicate = register_function_signature(
         function.name.clone(),
         with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || function_type.clone()),
-        Some(function_signature_info(
-            &function.type_parameters,
-            &function.parameters,
-            function.return_type.as_ref(),
+        Some(function_declaration_signature_info(
+            function,
+            &function_type,
+            symbols,
             &ctx.file_name,
         )),
         symbols,

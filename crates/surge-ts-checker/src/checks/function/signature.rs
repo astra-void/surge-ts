@@ -888,7 +888,56 @@ pub(crate) fn function_signature_info(
         namespace_prefix: None,
         predicate_overload: None,
         overload_alternatives: Vec::new(),
+        inferred_predicate: None,
     })
+}
+
+/// [`function_signature_info`] for a declaration with a body, which may imply
+/// a type predicate its signature does not write (see
+/// [`FunctionSignatureInfo::inferred_predicate`]).
+pub(crate) fn function_declaration_signature_info(
+    function: &surge_ts_syntax::ParsedFunctionDeclaration,
+    function_type: &FunctionType,
+    symbols: &SymbolTable,
+    declaring_file: &str,
+) -> Arc<FunctionSignatureInfo> {
+    let info = function_signature_info(
+        &function.type_parameters,
+        &function.parameters,
+        function.return_type.as_ref(),
+        declaring_file,
+    );
+    if function.return_type.is_some()
+        || function.is_async
+        || function.is_generator
+        || !function.type_parameters.is_empty()
+    {
+        return info;
+    }
+    let inferred = crate::checks::function::single_returned_statement_expression(&function.body)
+        .and_then(|returned| {
+            crate::checks::function::infer_predicate_from_body(
+                &function.parameters,
+                function_type.parameters(),
+                returned,
+                symbols,
+            )
+        });
+    with_inferred_predicate(info, inferred)
+}
+
+pub(crate) fn with_inferred_predicate(
+    info: Arc<FunctionSignatureInfo>,
+    inferred: Option<crate::symbols::InferredPredicate>,
+) -> Arc<FunctionSignatureInfo> {
+    match inferred {
+        Some(inferred) => {
+            let mut info = (*info).clone();
+            info.inferred_predicate = Some(inferred);
+            Arc::new(info)
+        }
+        None => info,
+    }
 }
 
 /// [`function_signature_info`] for a value whose *annotation* is a generic
@@ -924,6 +973,7 @@ pub(crate) fn function_type_signature_info(
         namespace_prefix: None,
         predicate_overload: None,
         overload_alternatives: Vec::new(),
+        inferred_predicate: None,
     })
 }
 

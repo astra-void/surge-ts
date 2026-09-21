@@ -241,25 +241,10 @@ fn inferred_predicate_target(
     // The false branch has to be exactly what the true branch leaves out:
     // `x => !!x` narrows `number | null` to `number` when true but proves
     // nothing when false (`0` is falsy), and tsc infers no predicate from it.
-    if target.is_unknown() || !partitions(element, &target, &rejected) {
+    if target.is_unknown() || !crate::checks::function::predicate_partitions(element, &target, &rejected) {
         return None;
     }
     Some(target)
-}
-
-/// Whether `a` and `b` are exactly the two halves `declared` splits into.
-fn partitions(declared: &Type, a: &Type, b: &Type) -> bool {
-    let members = |ty: &Type| match ty {
-        Type::Union(union) => union.types().to_vec(),
-        Type::Never => Vec::new(),
-        other => vec![other.clone()],
-    };
-    let declared = members(declared);
-    let mut halves = members(a);
-    halves.extend(members(b));
-    declared.len() == halves.len()
-        && declared.iter().all(|member| halves.contains(member))
-        && halves.iter().all(|member| declared.contains(member))
 }
 
 /// The one expression a predicate body can consist of: an expression body, or a

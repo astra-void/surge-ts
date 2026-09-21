@@ -321,19 +321,19 @@ pub(crate) fn check_function_body(
                 ctx,
             );
             ctx.symbols = saved_symbols;
+            let signature_info =
+                crate::checks::function::signature::function_declaration_signature_info(
+                    function,
+                    &function_type,
+                    scopes.visible_symbols(),
+                    &ctx.file_name,
+                );
             scopes.insert_current_handle(
                 function.name.as_str(),
                 std::sync::Arc::new(SymbolInfo {
                     ty: Type::Function(function_type),
                     kind: crate::symbols::SymbolKind::Function,
-                    function_signature: Some(
-                        crate::checks::function::signature::function_signature_info(
-                            &function.type_parameters,
-                            &function.parameters,
-                            function.return_type.as_ref(),
-                            &ctx.file_name,
-                        ),
-                    ),
+                    function_signature: Some(signature_info),
                 }),
             );
         }

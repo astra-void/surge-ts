@@ -612,6 +612,7 @@ export const fixturePresets: Record<string, string> = {
   'reference-path-discriminant-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-path-discriminant-basic/tsconfig.json'),
   'index-slot-narrowing-unchecked-basic': path.join(workspaceRoot, 'tests/compat-projects/index-slot-narrowing-unchecked-basic/tsconfig.json'),
   'defaulted-parameter-optionality-basic': path.join(workspaceRoot, 'tests/compat-projects/defaulted-parameter-optionality-basic/tsconfig.json'),
+  'inferred-type-predicate-declaration-basic': path.join(workspaceRoot, 'tests/compat-projects/inferred-type-predicate-declaration-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

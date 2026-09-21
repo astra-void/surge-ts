@@ -316,6 +316,42 @@ pub(crate) fn check_variable_declaration_against_symbols(
         }
         _ => None,
     };
+    // `const isStr = (x: string | number) => typeof x === "string"` implies
+    // its predicate exactly as the `function` spelling does.
+    let function_signature = function_signature.or_else(|| {
+        let (None, Some(surge_ts_syntax::ParsedExpression::ArrowFunction(arrow))) =
+            (&declared_type, variable.initializer.as_ref())
+        else {
+            return None;
+        };
+        if arrow.return_type.is_some() || arrow.is_async || arrow.is_generator {
+            return None;
+        }
+        let Some(Type::Function(function_type)) = inferred_symbol_type.as_ref() else {
+            return None;
+        };
+        let returned = match &arrow.body {
+            surge_ts_syntax::ParsedArrowFunctionBody::Expression(expression) => expression,
+            surge_ts_syntax::ParsedArrowFunctionBody::Block(statements) => {
+                crate::checks::function::single_returned_statement_expression(statements)?
+            }
+        };
+        let inferred = crate::checks::function::infer_predicate_from_body(
+            &arrow.parameters,
+            function_type.parameters(),
+            returned,
+            symbols,
+        )?;
+        Some(crate::checks::function::with_inferred_predicate(
+            crate::checks::function::function_signature_info(
+                &arrow.type_parameters,
+                &arrow.parameters,
+                None,
+                &ctx.file_name,
+            ),
+            Some(inferred),
+        ))
+    });
     // An explicit *generic* function-type annotation supplies the callable
     // shape, but not the parsed return annotation a call with explicit type
     // arguments needs to re-resolve.
