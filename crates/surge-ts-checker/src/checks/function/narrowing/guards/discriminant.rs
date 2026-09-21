@@ -144,8 +144,13 @@ pub(crate) fn narrow_discriminant_symbol_table(
             property_name: base_property,
             ..
         } => {
-            let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
-                return None;
+            // `this.state.kind === "a"` narrows `this.state` as `p.state.kind`
+            // narrows `p.state`: `this` is bound like any other name.
+            let this_name = "this".to_string();
+            let name = match object.as_ref() {
+                ParsedExpression::Identifier { name, .. } => name,
+                ParsedExpression::This { .. } => &this_name,
+                _ => return None,
             };
             let symbol = symbols.get(name)?;
             // `draft` may be typed by a named declaration (nominal reference);

@@ -867,8 +867,13 @@ fn narrow_value_guards_by_guard(
             property_name: base_property,
             ..
         } => {
-            let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
-                return;
+            // `this.state.kind === "a"` narrows `this.state` as `p.state.kind`
+            // narrows `p.state`: `this` is bound like any other name.
+            let this_name = "this".to_string();
+            let name = match object.as_ref() {
+                ParsedExpression::Identifier { name, .. } => name,
+                ParsedExpression::This { .. } => &this_name,
+                _ => return,
             };
             let Some(symbol) = scopes.resolve(name) else {
                 return;

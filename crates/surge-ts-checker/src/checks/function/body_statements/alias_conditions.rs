@@ -151,14 +151,16 @@ pub(super) fn narrow_condition_and_aliases_in_scope(
     narrow_tuple_destructure_siblings(base, scopes, branch_is_true);
 }
 
-/// Whether an initializer is a static property reference over identifiers
-/// (`opts.direction`, `node.kind.value`) — the shape a discriminant alias takes.
+/// Whether an initializer is a static property reference over identifiers or
+/// `this` (`opts.direction`, `node.kind.value`, `this.test.type`) — the shape a discriminant alias takes.
 pub(super) fn is_property_reference(expression: &ParsedExpression) -> bool {
     match expression {
         ParsedExpression::PropertyAccess { object, .. }
         | ParsedExpression::OptionalPropertyAccess { object, .. } => {
-            matches!(object.as_ref(), ParsedExpression::Identifier { .. })
-                || is_property_reference(object)
+            matches!(
+                object.as_ref(),
+                ParsedExpression::Identifier { .. } | ParsedExpression::This { .. }
+            ) || is_property_reference(object)
         }
         _ => false,
     }
