@@ -1078,7 +1078,13 @@ pub(crate) fn build_module_local_values(
         // old eager build). `SURGE_LV_FILTER=0` restores unconditional
         // building; the `SURGE_LV_PROBE` accessor probe warns on any
         // consult miss.
-        if local_values_typeof_filter_enabled() && !parsed_file.contains_typeof {
+        // A lazy body return also resolves its body against this table.
+        let consulted_by_body_returns = !parsed_file.file_kind.is_declaration()
+            && crate::checks::function::lazy_body_returns(&parsed_file.file_name);
+        if local_values_typeof_filter_enabled()
+            && !parsed_file.contains_typeof
+            && !consulted_by_body_returns
+        {
             continue;
         }
         let mut seed = SymbolTable::new();

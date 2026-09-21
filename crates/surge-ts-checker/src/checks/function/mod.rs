@@ -164,9 +164,15 @@ impl surge_ts_types::ResolveReference for LazyBodyReturn {
         if self.creation_scope.is_some() {
             ctx.type_declaration_scope = self.creation_scope.clone();
         }
-        let scope = ctx
-            .symbols
-            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+        // An environment holds no value table, so the body's calls into its own
+        // module (`prepareUrl` awaiting the imported `resultOf`) resolve against
+        // the declaring module's values as the program holds them now.
+        let scope = match self.environment.current_module_local_values(&self.file_name) {
+            Some(values) => values.as_ref().clone(),
+            None => ctx
+                .symbols
+                .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+        };
         let resolved = infer_body_return(&self.function, &self.parameter_types, scope, &mut ctx)
             .unwrap_or(Type::Unknown);
         // A force during module analysis runs with its scopes still incomplete,
@@ -495,7 +501,7 @@ fn type_is_deeply_concrete(ty: &Type) -> bool {
 /// [`LazyBodyReturn`] read on first demand, instead of walking the body during
 /// signature collection. `lazy:<substring>` limits it to files whose name
 /// contains the substring, to bisect which declaration moves a diagnostic.
-fn lazy_body_returns(file_name: &str) -> bool {
+pub(crate) fn lazy_body_returns(file_name: &str) -> bool {
     static SETTING: std::sync::OnceLock<Option<Option<String>>> = std::sync::OnceLock::new();
     let setting = SETTING.get_or_init(|| {
         let value = std::env::var("SURGE_INFER_DECLARATION_RETURN_TYPES").ok()?;

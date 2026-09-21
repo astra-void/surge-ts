@@ -1892,6 +1892,8 @@ impl CheckerContext {
         module_local_values_by_file: FxHashMap<Arc<str>, Arc<SymbolTable>>,
     ) {
         self.module_local_values_by_file = Arc::new(module_local_values_by_file);
+        self.declaration_environment_store
+            .publish_module_local_values(&self.module_local_values_by_file);
         self.declaration_environment_generation =
             self.declaration_environment_generation.wrapping_add(1);
     }
