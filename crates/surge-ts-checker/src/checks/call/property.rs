@@ -333,7 +333,37 @@ pub(crate) fn check_property_call_like(
     };
 
     if property_name == "all" && is_promise_all_receiver(&object_ty) {
-        return check_promise_all_call(arguments, call_span.or(property_span), symbols, ctx);
+        return check_promise_all_call(
+            arguments,
+            call_span.or(property_span),
+            expected_return_type,
+            symbols,
+            ctx,
+        );
+    }
+    // Only with the promise kept as a type: collapsed, the result would be a
+    // bare `T`, which the "a primitive is no promise" rule then rejects where
+    // a `Promise<T>` is expected (`return Promise.resolve("")`).
+    if property_name == "resolve"
+        && promise_nominal_enabled()
+        && arguments.len() <= 1
+        && type_arguments.is_empty()
+        && !arguments.iter().any(|argument| argument.spread)
+        && is_promise_all_receiver(&object_ty)
+    {
+        return check_promise_resolve_call(arguments, expected_return_type, symbols, ctx);
+    }
+    // `Promise.reject(reason)` is a `Promise<never>`. Only with the promise
+    // kept as a type: collapsed, it would be a bare `never`, and a call typed
+    // `never` ends the flow it sits in.
+    if property_name == "reject"
+        && promise_nominal_enabled()
+        && arguments.len() <= 1
+        && type_arguments.is_empty()
+        && is_promise_all_receiver(&object_ty)
+    {
+        evaluate_arguments_context_free(object, arguments, symbols, ctx);
+        return Some(promise_of(&Type::Never, ctx));
     }
     // `Promise<T>` is modeled as its awaited `T`, so a `.then`/`.catch`/`.finally`
     // chained on a promise-returning call lands on the value type and would be
@@ -840,7 +870,15 @@ pub(crate) fn promise_of(value: &Type, ctx: &mut CheckerContext) -> Type {
         &substitution,
     );
     ctx.truncate_diagnostics(reported);
-    if promise.is_unknown() { value } else { promise }
+    match promise {
+        // The reference renders its written argument, which is the slot name.
+        Type::Reference(mut reference) => {
+            reference.display = format!("Promise<{}>", value.name()).into();
+            Type::Reference(reference)
+        }
+        promise if promise.is_unknown() => value,
+        promise => promise,
+    }
 }
 
 /// `SURGE_PROMISE_NOMINAL=1`: keep the lib's `Promise<T>` / `PromiseLike<T>` as

@@ -527,6 +527,31 @@ pub(crate) fn infer_property_call(
         return inferred;
     }
 
+    // `Promise.all` / `Promise.resolve` are typed by their own rules on the
+    // checked path; the inferred path — a destructuring initializer takes it —
+    // has to answer the same type, without reporting anything itself.
+    if (property_name == "all"
+        || (property_name == "resolve" && crate::checks::call::promise_nominal_enabled()))
+        && type_arguments.is_empty()
+        && !arguments.iter().any(|argument| argument.spread)
+        && crate::checks::call::is_promise_all_receiver(&object_type)
+    {
+        let reported = ctx.diagnostics().len();
+        let result = if property_name == "all" {
+            (!arguments.is_empty())
+                .then(|| crate::checks::call::check_promise_all_call(arguments, None, None, symbols, ctx))
+                .flatten()
+        } else if arguments.len() <= 1 {
+            crate::checks::call::check_promise_resolve_call(arguments, None, symbols, ctx)
+        } else {
+            None
+        };
+        ctx.truncate_diagnostics(reported);
+        if let Some(result) = result {
+            return InferredExpression::Known(result);
+        }
+    }
+
     // `Promise<T>` is modelled as its awaited `T`, so a `.then`/`.catch`/`.finally`
     // chained on a promise-returning call lands on the value type, which declares
     // no such member. The checking path answers these from the chain; without the

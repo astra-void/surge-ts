@@ -1,7 +1,7 @@
 //! Built-in call shapes: Array.map/find, Promise.all.
 
 use surge_ts_diagnostics::Diagnostic;
-use surge_ts_syntax::{ParsedCallArgument, TextSpan as SyntaxTextSpan};
+use surge_ts_syntax::{ParsedCallArgument, ParsedExpression, TextSpan as SyntaxTextSpan};
 use surge_ts_types::{Type, TypeCopyReason, with_type_copy_reason};
 
 use crate::checks::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
@@ -202,7 +202,8 @@ pub(crate) fn check_array_find_call(
 }
 
 pub(crate) fn is_promise_all_receiver(object_type: &Type) -> bool {
-    match object_type {
+    // The lib's `PromiseConstructor` is usually still a lazy reference here.
+    match object_type.peeled() {
         Type::Object(object) => {
             object.contains_property("resolve") && object.contains_property("all")
         }
@@ -210,7 +211,82 @@ pub(crate) fn is_promise_all_receiver(object_type: &Type) -> bool {
     }
 }
 
+/// `Promise.resolve(value)`: a promise of what `value` awaits to, and
+/// `Promise<void>` with no argument.
+pub(crate) fn check_promise_resolve_call(
+    arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Some(argument) = arguments.first() else {
+        return Some(super::promise_of(&Type::Void, ctx));
+    };
+    // `T` is inferred from the argument with the contextual return type as a
+    // second source, so under `Promise<"data">` the literal `"data"` stays the
+    // literal it is; with no such context it widens like any inferred `T`.
+    let contextual = expected_return_type
+        .map(super::awaited_type)
+        .filter(|contextual| !contextual.is_unknown() && !matches!(contextual, Type::Any));
+    let checkpoint = ctx.diagnostics().len();
+    let evaluated = evaluate_expression_with_expected_type(
+        &argument.expression,
+        argument.span,
+        contextual.as_ref(),
+        ExpectedTypeDiagnostic::ArgumentNotAssignable,
+        symbols,
+        ctx,
+    );
+    match evaluated {
+        InferredExpression::Known(ty) if !ty.is_unknown() => {
+            let fits_context = contextual
+                .as_ref()
+                .is_some_and(|contextual| surge_ts_types::is_assignable_to(&ty, contextual));
+            let value = if fits_context {
+                ty
+            } else {
+                crate::checks::var::widen_implicit_variable_initializer_type(
+                    crate::symbols::SymbolKind::Let,
+                    &argument.expression,
+                    &ty,
+                )
+            };
+            Some(super::promise_of(&value, ctx))
+        }
+        // A value that does not fit the context is the enclosing relation's to
+        // report, against the promise — not this argument's against `T`.
+        _ => {
+            if contextual.is_some() {
+                ctx.truncate_diagnostics(checkpoint);
+            }
+            None
+        }
+    }
+}
+
 pub(crate) fn check_promise_all_call(
+    arguments: &[ParsedCallArgument],
+    call_span: Option<SyntaxTextSpan>,
+    expected_return_type: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let result = promise_all_result(arguments, call_span, symbols, ctx)?;
+    // The contextual return type also types the argument (an element written
+    // `[a, b]` is a tuple under `Promise<[A, B][]>`), which this path does not
+    // do; a result that misses the context is therefore not asserted.
+    let contextual = expected_return_type
+        .map(super::awaited_type)
+        .filter(|contextual| !contextual.is_unknown() && !matches!(contextual, Type::Any));
+    if let Some(contextual) = contextual
+        && !surge_ts_types::is_assignable_to(&super::awaited_type(&result), &contextual)
+    {
+        return None;
+    }
+    Some(result)
+}
+
+fn promise_all_result(
     arguments: &[ParsedCallArgument],
     call_span: Option<SyntaxTextSpan>,
     symbols: &SymbolTable,
@@ -233,7 +309,34 @@ pub(crate) fn check_promise_all_call(
         ctx,
     );
 
-    match inferred {
+    // `Promise.all([a, b])` answers a tuple of what each element awaits to
+    // (the lib's `{ -readonly [P in keyof T]: Awaited<T[P]> }` over a tuple
+    // `T`), which is what `const [x, y] = await Promise.all([…])` destructures.
+    if let ParsedExpression::ArrayLiteral { elements, .. } = &arguments[0].expression
+        && !elements.is_empty()
+        && !elements.iter().any(|element| element.spread)
+        && matches!(inferred, InferredExpression::Known(_))
+    {
+        let reported = ctx.diagnostics().len();
+        let awaited: Vec<Type> = elements
+            .iter()
+            .map(|element| match crate::infer::infer_expression(&element.expression, symbols, ctx) {
+                InferredExpression::Known(ty) => super::awaited_type(&ty),
+                _ => Type::Any,
+            })
+            .collect();
+        ctx.truncate_diagnostics(reported);
+        return Some(super::promise_of(&Type::Tuple(awaited), ctx));
+    }
+
+    let inferred = match inferred {
+        InferredExpression::Known(ty) => InferredExpression::Known(match ty {
+            Type::Array(element) => Type::Array(Box::new(super::awaited_type(&element))),
+            other => other,
+        }),
+        other => other,
+    };
+    let all = match inferred {
         InferredExpression::Known(Type::Array(element_type)) => Some(Type::Array(Box::new(
             with_type_copy_reason(TypeCopyReason::PropertyCallResolution, || {
                 (*element_type).clone()
@@ -247,9 +350,12 @@ pub(crate) fn check_promise_all_call(
             })))
         }
         InferredExpression::Known(Type::Any) => Some(Type::Array(Box::new(Type::Any))),
-        InferredExpression::Known(ty) => Some(Type::Array(Box::new(ty))),
+        // Any other iterable (a readonly tuple, a `Set`) has a shape this path
+        // does not map; making one up would be asserted downstream.
+        InferredExpression::Known(_) => None,
         InferredExpression::UnresolvedIdentifier { .. }
         | InferredExpression::MissingProperty { .. }
         | InferredExpression::Unknown => Some(Type::Array(Box::new(Type::Any))),
-    }
+    };
+    all.map(|all| super::promise_of(&all, ctx))
 }
