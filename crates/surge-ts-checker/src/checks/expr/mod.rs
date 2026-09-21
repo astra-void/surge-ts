@@ -132,6 +132,43 @@ pub(crate) fn missing_properties_report(
     ))
 }
 
+/// The members of the global `Array` an object source lacks, in the order the
+/// lib declares them (tsc lists the first four). The count beyond those follows
+/// surge's own table of array members, not the configured lib's.
+fn missing_array_members(source: &Type) -> Option<Vec<String>> {
+    const DECLARATION_ORDER: [&str; 20] = [
+        "length", "pop", "push", "concat", "join", "reverse", "shift", "slice", "sort", "splice",
+        "unshift", "indexOf", "lastIndexOf", "every", "some", "forEach", "map", "filter", "reduce",
+        "reduceRight",
+    ];
+    let Type::Object(object) = source else {
+        return None;
+    };
+    if object.is_intersection
+        || object.synthetic_open_index
+        || object.non_primitive
+        || object.call_signature().is_some()
+        || object.construct_signature().is_some()
+        || object.alias_name.as_deref() == Some("Object")
+    {
+        return None;
+    }
+    let missing: Vec<String> = DECLARATION_ORDER
+        .iter()
+        .chain(
+            surge_ts_types::array_property_names()
+                .iter()
+                .filter(|name| !DECLARATION_ORDER.contains(name)),
+        )
+        .filter(|name| {
+            !object.properties.contains_key(**name)
+                && surge_ts_types::object_prototype_member_type(name).is_none()
+        })
+        .map(|name| name.to_string())
+        .collect();
+    (!missing.is_empty()).then_some(missing)
+}
+
 fn missing_required_properties(source: &Type, target: &Type) -> Option<Vec<String>> {
     // Two instantiations of one generic relate through their type arguments,
     // so any missing member is reported for an argument pair, beneath the head.
@@ -142,6 +179,9 @@ fn missing_required_properties(source: &Type, target: &Type) -> Option<Vec<Strin
     }
     let source = source.peeled();
     let target = target.peeled();
+    if let Type::Array(_) = &target {
+        return missing_array_members(&source);
+    }
     let Type::Object(target_object) = &target else {
         return None;
     };

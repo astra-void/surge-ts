@@ -474,11 +474,11 @@ fn evaluate_expression_with_expected_type_inner(
         );
     }
 
-    // An object literal against a tuple target is checked against the tuple's
+    // An object literal against a tuple or array target is checked against its
     // apparent members (indices, `length`, the array methods): tsc reports the
     // first property that is none of them as excess, at the property, rather
     // than the whole literal as unassignable.
-    if let (Type::Tuple(_), ParsedExpression::ObjectLiteral { properties, span }) =
+    if let (Type::Tuple(_) | Type::Array(_), ParsedExpression::ObjectLiteral { properties, span }) =
         (expected_type, expression)
         && let Some(property) = properties.iter().find(|property| {
             !property.is_spread
