@@ -777,6 +777,14 @@ pub(crate) fn check_member_assignment(
             &visible_symbols,
             ctx,
         );
+        // A dotted write through the index signature is the same TS4111 a
+        // dotted read is.
+        crate::checks::expr::emit_index_signature_access_on(
+            &object_type,
+            property_name,
+            property_span.or(assignment.target_span),
+            ctx,
+        );
     }
 
     // A write checks against the property's *declared* type: after

@@ -270,6 +270,7 @@ pub(crate) fn resolve_mapped_type(
                     method: source_method,
                     readonly,
                     restriction: None,
+                    index_slot: false,
                 },
             );
         }

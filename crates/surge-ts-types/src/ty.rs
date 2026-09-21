@@ -246,7 +246,9 @@ impl Type {
     pub fn property_only_from_string_index(&self, name: &str) -> bool {
         match self {
             Type::Object(object) => {
-                object.get_property(name).is_none()
+                object
+                    .get_property(name)
+                    .is_none_or(|property| property.index_slot)
                     && object.allows_string_index_access()
                     && !object.synthetic_open_index
             }
@@ -265,6 +267,27 @@ impl Type {
                     && members
                         .iter()
                         .all(|member| member.property_only_from_string_index(name))
+            }
+            _ => false,
+        }
+    }
+
+    /// [`Self::property_only_from_string_index`] where no guard has narrowed
+    /// the slot yet: the read `noUncheckedIndexedAccess` still widens with
+    /// `undefined`. A narrowed slot already holds what its guard proved.
+    pub fn reads_unnarrowed_string_index(&self, name: &str) -> bool {
+        match self {
+            Type::Object(object) => {
+                object.get_property(name).is_none() && self.property_only_from_string_index(name)
+            }
+            Type::Reference(reference) => reference.resolve().reads_unnarrowed_string_index(name),
+            Type::Union(union) => {
+                self.property_only_from_string_index(name)
+                    && union
+                        .types()
+                        .iter()
+                        .filter(|member| !matches!(member, Type::Undefined | Type::Void))
+                        .any(|member| member.reads_unnarrowed_string_index(name))
             }
             _ => false,
         }

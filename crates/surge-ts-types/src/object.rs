@@ -141,6 +141,11 @@ pub struct ObjectProperty {
     /// a restricted member (protected), whatever its type. Participates in
     /// equality but not in the property fingerprint, like `readonly`.
     pub restriction: Option<MemberRestriction>,
+    /// Not a declaration: the slot of the string index signature this name
+    /// reads, recorded by flow narrowing (`if (env.URL) env.URL`). It answers
+    /// reads like a property but still *comes from* the index signature, which
+    /// is what `noPropertyAccessFromIndexSignature` asks.
+    pub index_slot: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,6 +163,7 @@ impl ObjectProperty {
             method: false,
             readonly: false,
             restriction: None,
+            index_slot: false,
         }
     }
 
@@ -168,6 +174,7 @@ impl ObjectProperty {
             method: false,
             readonly: false,
             restriction: None,
+            index_slot: false,
         }
     }
 

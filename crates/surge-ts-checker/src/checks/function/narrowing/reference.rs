@@ -264,9 +264,33 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
 
     match ty.peeled() {
         Type::Object(mut object_type) => {
-            let existing = object_type.properties.get(head.as_str())?.clone();
+            // A name reached only through the string index signature is a
+            // reference like any other (`typeof config.works !== "boolean"`);
+            // the narrowed slot is recorded as a property marked `index_slot`.
+            let existing = match object_type.properties.get(head.as_str()) {
+                Some(existing) => existing.clone(),
+                None => surge_ts_types::ObjectProperty {
+                    index_slot: true,
+                    ..surge_ts_types::ObjectProperty::required(
+                        object_type.string_index_type.as_deref()?.clone(),
+                    )
+                },
+            };
             let (narrowed_ty, narrowed_optional) = if rest.is_empty() {
-                guard.narrow_leaf(&existing.ty, existing.optional)?
+                match guard.narrow_leaf(&existing.ty, existing.optional) {
+                    Some(narrowed) => narrowed,
+                    // An index slot a guard proves present, or a write fills,
+                    // is recorded even when its type stands: that is what
+                    // keeps `noUncheckedIndexedAccess` from widening the read
+                    // with `undefined` again.
+                    None if existing.index_slot
+                        && (guard.proves_defined()
+                            || matches!(guard, ReferenceGuard::Assigned { .. })) =>
+                    {
+                        (existing.ty.clone(), false)
+                    }
+                    None => return None,
+                }
             } else {
                 // A truthy test further down the chain proves this link is
                 // present too — the same fact that drops a nullish union
@@ -292,6 +316,7 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
                     method: existing.method,
                     readonly: existing.readonly,
                     restriction: existing.restriction.clone(),
+                    index_slot: existing.index_slot,
                 },
             );
             Some(Type::Object(object_type))
@@ -348,6 +373,27 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
 /// such a member (it *is* the undefined one), and the truthy guard reaches its
 /// own arm above.
 fn property_path_is_impossible(member: &Type, path: &[String], guard: ReferenceGuard<'_>) -> bool {
+    // A literal test reached through a path discriminates the unions it
+    // crosses: `w.thing && w.thing.kind === "a"` drops the members of
+    // `w.thing` whose `kind` can never be `"a"`.
+    if let ReferenceGuard::LiteralEquality {
+        literal,
+        keep_matching,
+    } = guard
+    {
+        let (Some(literal), Some(leaf)) = (
+            literal_expression_value(literal),
+            property_path_leaf_type(member, path),
+        ) else {
+            return false;
+        };
+        let result = discriminant_type_match(&leaf, &literal);
+        return if keep_matching {
+            result == DiscriminantMatch::No
+        } else {
+            result == DiscriminantMatch::Yes
+        };
+    }
     let ReferenceGuard::Nullish {
         keep_matching: false,
         test,

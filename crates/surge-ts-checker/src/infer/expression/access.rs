@@ -402,7 +402,7 @@ fn widen_index_signature_read(
     ctx: &CheckerContext,
 ) -> Type {
     if ctx.options.no_unchecked_indexed_access
-        && receiver.property_only_from_string_index(property_name)
+        && receiver.reads_unnarrowed_string_index(property_name)
     {
         unchecked_index_read(property_type, ctx)
     } else {

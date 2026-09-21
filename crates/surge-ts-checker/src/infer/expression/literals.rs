@@ -130,6 +130,7 @@ pub(crate) fn infer_object_literal(
                                     method: existing.method || source_property.method,
                                     readonly: false,
                                     restriction: None,
+                                    index_slot: false,
                                 }
                             }
                             _ => source_property.clone(),

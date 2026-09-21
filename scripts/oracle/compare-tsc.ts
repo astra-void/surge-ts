@@ -609,6 +609,8 @@ export const fixturePresets: Record<string, string> = {
   'union-receiver-missing-property-basic': path.join(workspaceRoot, 'tests/compat-projects/union-receiver-missing-property-basic/tsconfig.json'),
   'discriminant-comparable-domain-basic': path.join(workspaceRoot, 'tests/compat-projects/discriminant-comparable-domain-basic/tsconfig.json'),
   'logical-or-empty-fallback-basic': path.join(workspaceRoot, 'tests/compat-projects/logical-or-empty-fallback-basic/tsconfig.json'),
+  'reference-path-discriminant-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-path-discriminant-basic/tsconfig.json'),
+  'index-slot-narrowing-unchecked-basic': path.join(workspaceRoot, 'tests/compat-projects/index-slot-narrowing-unchecked-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

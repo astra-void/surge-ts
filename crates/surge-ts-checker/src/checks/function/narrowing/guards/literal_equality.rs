@@ -5,7 +5,7 @@ use crate::symbols::SymbolTable;
 
 /// Whether a union member's discriminant `property` is the given literal.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum DiscriminantMatch {
+pub(crate) enum DiscriminantMatch {
     Yes,
     No,
     Unknown,
@@ -80,7 +80,12 @@ pub(super) fn discriminant_match(member: &Type, property: &str, literal: &Type) 
     };
     // The discriminant is often written as `typeof Codes.a`, which resolves to a
     // lazy reference around the literal rather than the literal itself.
-    let property_ty = property_type.ty.peeled();
+    discriminant_type_match(&property_type.ty, literal)
+}
+
+/// Whether a discriminant of type `property_ty` can hold `literal`.
+pub(crate) fn discriminant_type_match(property_ty: &Type, literal: &Type) -> DiscriminantMatch {
+    let property_ty = property_ty.peeled();
     match &property_ty {
         Type::Union(union) => {
             let matches: Vec<DiscriminantMatch> = union

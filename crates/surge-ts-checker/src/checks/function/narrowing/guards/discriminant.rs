@@ -93,9 +93,25 @@ pub(crate) fn parse_discriminant_condition_with<'a>(
             ..
         } = access
         {
-            return Some((object.as_ref(), property_name.as_str(), literal, eq));
+            return Some((
+                without_non_null_assertions(object),
+                property_name.as_str(),
+                literal,
+                eq,
+            ));
         }
         None
+    }
+
+    // tsc's `isMatchingReference` looks through `!`: `w.thing!.kind === "a"`
+    // discriminates `w.thing` exactly as `w.thing.kind === "a"` does.
+    fn without_non_null_assertions(expression: &ParsedExpression) -> &ParsedExpression {
+        match expression {
+            ParsedExpression::NonNullAssertion { expression, .. } => {
+                without_non_null_assertions(expression)
+            }
+            other => other,
+        }
     }
 
     discriminant_side(left, right, eq, resolve_literal)
@@ -203,6 +219,7 @@ pub(crate) fn narrow_discriminant_symbol_table(
                     method: base_property_type.method,
                     readonly: base_property_type.readonly,
                     restriction: base_property_type.restriction.clone(),
+                    index_slot: base_property_type.index_slot,
                 },
             );
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);

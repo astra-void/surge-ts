@@ -384,6 +384,7 @@ pub(crate) fn evaluate_const_expression(
                         // what turns a write to one into TS2540.
                         readonly: true,
                         restriction: None,
+                        index_slot: false,
                     },
                 );
             }

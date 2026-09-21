@@ -935,6 +935,7 @@ fn narrow_value_guards_by_guard(
                     method: base_property_type.method,
                     readonly: base_property_type.readonly,
                     restriction: base_property_type.restriction.clone(),
+                    index_slot: base_property_type.index_slot,
                 },
             );
             (
@@ -1068,6 +1069,7 @@ mod tests {
                     method: false,
                     readonly: false,
                     restriction: None,
+                    index_slot: false,
                 },
             );
         }

@@ -23,6 +23,7 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
                         method: v.method,
                         readonly: false,
                         restriction: v.restriction.clone(),
+                        index_slot: v.index_slot,
                     },
                 );
             }
@@ -325,12 +326,33 @@ pub(super) fn maybe_emit_index_signature_access(
         return;
     }
     if let InferredExpression::Known(object_type) = infer_expression(object, symbols, ctx) {
-        if object_type.property_only_from_string_index(property_name) {
-            ctx.push(diagnostic_with_syntax_span(
-                Diagnostic::ts4111(property_name, ctx.file_name.clone()),
-                choose_span(property_span, fallback_span),
-            ));
-        }
+        emit_index_signature_access_on(
+            &object_type,
+            property_name,
+            choose_span(property_span, fallback_span),
+            ctx,
+        );
+    }
+}
+
+/// [`maybe_emit_index_signature_access`] for a receiver whose type is already
+/// known, as a member write has it.
+pub(crate) fn emit_index_signature_access_on(
+    object_type: &Type,
+    property_name: &str,
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if !ctx.options.no_property_access_from_index_signature
+        || OBJECT_PROTOTYPE_MEMBERS.contains(&property_name)
+    {
+        return;
+    }
+    if object_type.property_only_from_string_index(property_name) {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts4111(property_name, ctx.file_name.clone()),
+            span,
+        ));
     }
 }
 

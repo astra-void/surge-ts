@@ -759,6 +759,7 @@ fn merge_intersection_members_now(
                             method: existing.method,
                             readonly: false,
                             restriction: existing.restriction.clone(),
+                            index_slot: existing.index_slot,
                         };
                         properties.insert(name.clone(), merged_property);
                     }
