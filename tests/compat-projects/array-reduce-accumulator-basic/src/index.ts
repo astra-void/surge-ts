@@ -1,0 +1,12 @@
+const arr = [1, 2, 3];
+const r1 = arr.reduce((acc, x) => acc + x, 0); const s1: string = r1;
+const r2 = arr.reduce((acc, x) => acc + x); const s2: string = r2;
+const r3 = arr.reduce((acc, x) => acc + x, ""); const s3: number = r3;
+const r4 = arr.reduce<Record<string, number[]>>((acc, x) => { (acc[String(x)] ||= []).push(x); return acc; }, {}); const s4: number = r4;
+const r5 = arr.reduce((acc, x) => { acc.set(x, String(x)); return acc; }, new Map<number, string>()); const s5: number = r5.get(1);
+const r6 = arr.reduce((acc, x) => ({ ...acc, [x]: true }), {} as Record<number, boolean>); const s6: string = r6[1];
+const words = ["a", "b"]; const r7 = words.reduce((acc, w) => acc + w.length, 0); const s7: string = r7;
+const r8 = words.reduceRight((acc, w) => [...acc, w], [] as string[]); const s8: number = r8;
+const r9 = arr.reduce((acc, x) => { acc.total += x; acc.nope; return acc; }, { total: 0 }); const s9: string = r9.total;
+const objs = [{ n: 1 }]; const r10 = objs.reduce((m, o) => Math.max(m, o.n), 0); const s10: string = r10;
+export {};

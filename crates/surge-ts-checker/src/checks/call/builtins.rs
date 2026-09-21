@@ -74,6 +74,81 @@ pub(crate) fn check_array_map_call(
     }
 }
 
+/// `Array.prototype.reduce` / `reduceRight`, by the lib's three overloads:
+/// with no initial value the accumulator is the element type; an initial value
+/// that fits the element type keeps it (`reduce((a, x) => a + x, 0)`);
+/// anything else is the generic overload, whose `U` is the explicit type
+/// argument or the initial value's widened type. The callback's return is not
+/// compared against `U` here — only its parameters are given their types.
+pub(crate) fn check_array_reduce_call(
+    element_type: &Type,
+    type_arguments: &[surge_ts_syntax::ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Type {
+    let (callback, initial) = match arguments {
+        [callback, initial] => (callback, Some(initial)),
+        [callback, ..] => (callback, None),
+        [] => return Type::Any,
+    };
+    // A type argument or an initial value surge cannot type leaves the
+    // accumulator `any`; the callback is still checked against that.
+    let explicit = type_arguments
+        .first()
+        .map(|type_argument| crate::infer::map_parsed_type(type_argument.clone(), ctx))
+        .map(|mapped| if mapped.is_unknown() { Type::Any } else { mapped });
+    let accumulator = match initial {
+        None => explicit.unwrap_or_else(|| element_type.clone()),
+        Some(initial) => {
+            let evaluated = evaluate_expression_with_expected_type(
+                &initial.expression,
+                initial.span,
+                explicit.as_ref().filter(|explicit| !matches!(explicit, Type::Any)),
+                ExpectedTypeDiagnostic::ArgumentNotAssignable,
+                symbols,
+                ctx,
+            );
+            match (explicit, evaluated) {
+                (Some(explicit), _) => explicit,
+                (None, InferredExpression::Known(initial_type)) if !initial_type.is_unknown() => {
+                    let widened = crate::checks::var::widen_implicit_variable_initializer_type(
+                        crate::symbols::SymbolKind::Let,
+                        &initial.expression,
+                        &initial_type,
+                    );
+                    if surge_ts_types::is_assignable_to(&widened, element_type) {
+                        element_type.clone()
+                    } else {
+                        widened
+                    }
+                }
+                _ => Type::Any,
+            }
+        }
+    };
+    let callback_type = Type::Function(alloc_function_type(
+        vec![
+            accumulator.clone(),
+            element_type.clone(),
+            Type::Number,
+            Type::Array(Box::new(element_type.clone())),
+        ],
+        Type::Any,
+        false,
+        4,
+    ));
+    let _ = evaluate_expression_with_expected_type(
+        &callback.expression,
+        callback.span,
+        Some(&callback_type),
+        ExpectedTypeDiagnostic::ArgumentNotAssignable,
+        symbols,
+        ctx,
+    );
+    accumulator
+}
+
 pub(crate) fn check_array_find_call(
     element_type: &Type,
     property_span: Option<SyntaxTextSpan>,

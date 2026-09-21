@@ -416,6 +416,20 @@ pub(crate) fn check_property_call_like(
             symbols,
             ctx,
         ),
+        Type::Array(element_type)
+            if matches!(property_name, "reduce" | "reduceRight")
+                && matches!(arguments.len(), 1 | 2)
+                && type_arguments.len() <= 1
+                && !arguments.iter().any(|argument| argument.spread) =>
+        {
+            Some(check_array_reduce_call(
+                element_type.as_ref(),
+                type_arguments,
+                arguments,
+                symbols,
+                ctx,
+            ))
+        }
         Type::Array(element_type) if property_name == "find" => check_array_find_call(
             element_type.as_ref(),
             property_span,
