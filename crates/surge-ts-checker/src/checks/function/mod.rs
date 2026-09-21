@@ -79,54 +79,109 @@ fn inferred_declaration_return_type(
         }
     }
 
-    let usable_type = |ty: &Type| !ty.is_unknown() && !matches!(ty, Type::Any);
+    // Deeply concrete: a shallow check passes an object whose *member* is the
+    // degradation sentinel, and publishing that as a declaration's return type
+    // hands every consumer a shape that silences its own checks. tsc has no such
+    // condition — it has no sentinel — so this is surge's own guard, and it is
+    // what makes inferring a branchy body affordable.
+    let usable_type = |ty: &Type| type_is_deeply_concrete(ty);
     let diagnostics_before = ctx.diagnostics().len();
     let mut returned: Vec<Type> = Vec::new();
     let mut usable = true;
-    for statement in &function.body {
-        match statement {
-            BodyStatement::VariableDeclaration(variable) => {
-                if variable.declared_type.is_none()
-                    && let Some(initializer) = variable.initializer.as_ref()
-                    && let crate::infer::InferredExpression::Known(ty) =
-                        crate::infer::infer_expression(initializer, &scope, ctx)
-                {
-                    scope.insert(
-                        variable.name.clone(),
-                        crate::symbols::SymbolInfo {
-                            ty,
-                            kind: crate::symbols::SymbolKind::Const,
-                            function_signature: None,
-                        },
-                    );
-                }
+
+    // Every `return` the body can reach, branches included: tsc's
+    // `getReturnTypeFromBody` unions them all, and stopping at the first
+    // statement that carries control flow left an early return
+    // (`if (!opts.connectionParams) return url;`) — the shape tRPC's
+    // `prepareUrl` has — with no inferred type at all.
+    fn collect(
+        body: &[BodyStatement],
+        scope: &mut crate::symbols::SymbolTable,
+        returned: &mut Vec<Type>,
+        usable: &mut bool,
+        usable_type: &impl Fn(&Type) -> bool,
+        ctx: &mut CheckerContext,
+    ) {
+        for statement in body {
+            if !*usable {
+                return;
             }
-            BodyStatement::Return(statement) => match statement.expression.as_ref() {
-                Some(expression) => {
-                    match crate::infer::infer_expression(expression, &scope, ctx) {
-                        crate::infer::InferredExpression::Known(ty) if usable_type(&ty) => {
-                            returned.push(ty)
-                        }
-                        _ => usable = false,
+            match statement {
+                BodyStatement::VariableDeclaration(variable) => {
+                    if variable.declared_type.is_none()
+                        && let Some(initializer) = variable.initializer.as_ref()
+                        && let crate::infer::InferredExpression::Known(ty) =
+                            crate::infer::infer_expression(initializer, scope, ctx)
+                    {
+                        scope.insert(
+                            variable.name.clone(),
+                            crate::symbols::SymbolInfo {
+                                ty,
+                                kind: crate::symbols::SymbolKind::Const,
+                                function_signature: None,
+                            },
+                        );
                     }
                 }
-                None => returned.push(Type::Undefined),
-            },
-            BodyStatement::Throw(_)
-            | BodyStatement::Assignment(_)
-            | BodyStatement::ThisPropertyAssignment(_)
-            | BodyStatement::MemberAssignment(_)
-            | BodyStatement::Expression(_)
-            | BodyStatement::Function(_)
-            | BodyStatement::TypeAlias(_)
-            | BodyStatement::Continue
-            | BodyStatement::Break => {}
-            _ => usable = false,
-        }
-        if !usable {
-            break;
+                BodyStatement::Return(statement) => match statement.expression.as_ref() {
+                    Some(expression) => {
+                        match crate::infer::infer_expression(expression, scope, ctx) {
+                            crate::infer::InferredExpression::Known(ty) if usable_type(&ty) => {
+                                returned.push(ty)
+                            }
+                            _ => *usable = false,
+                        }
+                    }
+                    None => returned.push(Type::Undefined),
+                },
+                BodyStatement::Block(block) => {
+                    collect(block, scope, returned, usable, usable_type, ctx)
+                }
+                BodyStatement::If(if_statement) => {
+                    collect(&if_statement.then_body, scope, returned, usable, usable_type, ctx);
+                    collect(&if_statement.else_body, scope, returned, usable, usable_type, ctx);
+                }
+                BodyStatement::While(while_statement) => {
+                    collect(&while_statement.body, scope, returned, usable, usable_type, ctx)
+                }
+                BodyStatement::ForOf(for_of) => {
+                    collect(&for_of.body, scope, returned, usable, usable_type, ctx)
+                }
+                BodyStatement::Switch(switch_statement) => {
+                    for case in &switch_statement.cases {
+                        collect(&case.consequent, scope, returned, usable, usable_type, ctx);
+                    }
+                }
+                BodyStatement::Try(try_statement) => {
+                    collect(&try_statement.block, scope, returned, usable, usable_type, ctx);
+                    if let Some(handler) = &try_statement.handler {
+                        collect(&handler.body, scope, returned, usable, usable_type, ctx);
+                    }
+                    collect(&try_statement.finalizer, scope, returned, usable, usable_type, ctx);
+                }
+                BodyStatement::Throw(_)
+                | BodyStatement::Assignment(_)
+                | BodyStatement::ThisPropertyAssignment(_)
+                | BodyStatement::MemberAssignment(_)
+                | BodyStatement::Expression(_)
+                | BodyStatement::Function(_)
+                | BodyStatement::TypeAlias(_)
+                | BodyStatement::Interface(_)
+                | BodyStatement::Class(_)
+                | BodyStatement::Continue
+                | BodyStatement::Break => {}
+            }
         }
     }
+
+    collect(
+        &function.body,
+        &mut scope,
+        &mut returned,
+        &mut usable,
+        &usable_type,
+        ctx,
+    );
     ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
 
     // tsc widens the fresh literals a returned expression carries
@@ -140,11 +195,72 @@ fn inferred_declaration_return_type(
     Some(inferred)
 }
 
+/// Whether a type carries no permissive or unresolved part anywhere: neither
+/// surge's degradation sentinel nor `any`, at any depth.
+///
+/// Both halves are load-bearing for publishing an *inferred* return type. The
+/// sentinel silences a consumer's own checks, and so does a nested `any`: on
+/// tRPC's `packages/upgrade` the shallow check let through object returns whose
+/// members were `any`, and 16 diagnostics surge reported correctly — and tsc
+/// reports too — disappeared, because the consumer's receiver started answering
+/// every member. When the body cannot be typed this cleanly the declaration keeps
+/// the sentinel, which is the behavior without this inference at all.
+fn type_is_deeply_concrete(ty: &Type) -> bool {
+    fn permissive(ty: &Type, depth: usize) -> bool {
+        if depth > 8 {
+            return true;
+        }
+        match ty {
+            Type::Any | Type::Unknown | Type::GenuineUnknown | Type::ErrorType => true,
+            Type::TypeParameter(_) => true,
+            Type::Array(element) => permissive(element, depth + 1),
+            Type::Tuple(elements) => elements.iter().any(|element| permissive(element, depth + 1)),
+            Type::Union(union) => union.types().iter().any(|member| permissive(member, depth + 1)),
+            Type::Reference(reference) => reference
+                .arguments
+                .iter()
+                .any(|argument| permissive(argument, depth + 1)),
+            Type::Function(function) => {
+                function
+                    .parameters()
+                    .iter()
+                    .any(|parameter| permissive(parameter, depth + 1))
+                    || permissive(function.return_type(), depth + 1)
+            }
+            Type::Object(object) => {
+                object
+                    .properties
+                    .values()
+                    .any(|property| permissive(&property.ty, depth + 1))
+                    || object
+                        .string_index_type
+                        .as_deref()
+                        .is_some_and(|index| permissive(index, depth + 1))
+            }
+            _ => false,
+        }
+    }
+    !permissive(ty, 0)
+}
+
 /// `SURGE_INFER_DECLARATION_RETURN_TYPES=1`: infer an unannotated function
 /// declaration's return type from its body (see
 /// [`inferred_declaration_return_type`]). Any other non-empty value is a file
 /// substring filter, so the effect can be bisected across the corpus without a
-/// rebuild.
+/// rebuild — which is how the blocker below was found.
+///
+/// Still OFF. Measured 2026-09-21 on trpc: false positives are down from 55 to
+/// 17 (the branch-aware collector plus [`type_is_deeply_concrete`]), and zod,
+/// ky, ofetch, ts-pattern, tanstack-query and zustand are all neutral. What
+/// holds it back is no longer a filter: **16 diagnostics surge reports
+/// correctly disappear**, and enabling the inference for that *one* file
+/// reproduces the whole delta, so the loss is self-inflicted. Running
+/// `infer_expression` over a body during signature collection leaves state the
+/// check phase then reuses — in `packages/upgrade/src/transforms/provider.ts`,
+/// `path.node.declarations[0]` stops being `T | undefined` and its TS18048 and
+/// TS2339 both vanish. The body inference needs a shadow context of its own, the
+/// way `collect_exportable_value_symbols` builds one, before this can be
+/// measured on its merits.
 fn infer_declaration_return_types(file_name: &str) -> bool {
     static SETTING: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     match SETTING
