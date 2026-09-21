@@ -102,7 +102,18 @@ pub(crate) fn infer_logical_expression(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let left_type = infer_expression(left, symbols, ctx);
-    let right_type = infer_expression(right, symbols, ctx);
+    // `(options || {}).color`: the empty fallback reads the left operand's names
+    // as `undefined`, exactly as `options ?? {}` does.
+    let empty_fallback = match (&operator, &left_type) {
+        (surge_ts_syntax::ParsedLogicalOperator::Or, InferredExpression::Known(known)) => {
+            crate::checks::expr::empty_object_fallback_type(right, &truthy_part(known))
+        }
+        _ => None,
+    };
+    let right_type = match empty_fallback {
+        Some(fallback) => InferredExpression::Known(fallback),
+        None => infer_expression(right, symbols, ctx),
+    };
 
     match (left_type, right_type) {
         (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty))
