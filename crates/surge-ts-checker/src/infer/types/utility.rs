@@ -313,6 +313,25 @@ pub(crate) fn resolve_type_alias(
                 .any(|&frame| frame > index);
         if legal_recursion && (alias.body.type_parameters.is_empty() || literal_member_back_edge)
         {
+            // The lazy reference re-expands from these arguments on peel, and
+            // answers from the interner by them. A generic back-edge reached
+            // inside an open type-parameter scope arrives without them resolved
+            // (`D<R[K]>` under `R`, `K`); an empty list would peel `D` with no
+            // arguments at all, so they are resolved here under this frame's
+            // substitution.
+            let resolved_back_edge_arguments;
+            let pre_resolved_arguments = match pre_resolved_arguments {
+                None if !type_arguments.is_empty() => {
+                    resolved_back_edge_arguments = type_arguments
+                        .iter()
+                        .map(|argument| {
+                            resolve_parsed_type(argument.clone(), ctx, resolving, substitution).ty
+                        })
+                        .collect::<Vec<_>>();
+                    Some(resolved_back_edge_arguments.as_slice())
+                }
+                other => other,
+            };
             return ResolvedType {
                 ty: make_recursive_cycle_reference(
                     ctx,

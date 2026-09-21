@@ -686,6 +686,10 @@ pub(crate) fn resolve_parsed_type(
         // A predicate annotation types the function's return value: `boolean`
         // for `x is T`, `void` for an assertion signature. The predicate payload
         // itself is consumed by guard narrowing, not by type resolution.
+        ParsedType::UniqueSymbol(name) => ResolvedType {
+            ty: surge_ts_types::unique_symbol_type(&ctx.file_name, &name),
+            had_error: false,
+        },
         ParsedType::InferredMember(member) => ResolvedType {
             ty: crate::checks::function::inferred_member_reference(member, ctx),
             had_error: false,

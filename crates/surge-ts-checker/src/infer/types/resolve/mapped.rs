@@ -225,12 +225,22 @@ pub(crate) fn resolve_mapped_type(
             }
         };
 
+        // A mapped property's template is a member like a type literal's, and
+        // tsc instantiates it on demand (`getTemplateTypeFromMappedType`), so a
+        // generic alias re-entering itself through it — tRPC's
+        // `DecoratedProcedureRecord<TRoot, $Value>` for a nested router — is
+        // legal recursion that peels lazily, not a cycle to degrade.
+        let member_frame = resolving.len();
+        ctx.structural_resolution_frames.push(member_frame);
+        ctx.type_literal_member_frames.push(member_frame);
         let resolved_value = resolve_parsed_type(
             *mapped.value_type.clone(),
             ctx,
             resolving,
             &new_substitution,
         );
+        ctx.type_literal_member_frames.pop();
+        ctx.structural_resolution_frames.pop();
 
         if resolved_value.had_error {
             had_error = true;

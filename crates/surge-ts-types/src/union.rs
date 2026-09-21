@@ -236,6 +236,13 @@ pub fn remove_undefined(ty: &Type) -> Type {
 /// value cannot be (`undefined`, `false`, `0`, `""`) go, and `boolean` keeps
 /// only `true`. A non-union is left as [`remove_nullish`] leaves it.
 pub fn remove_definitely_falsy(ty: &Type) -> Type {
+    // tsc narrows the resolved type; a reference standing for a union (a
+    // recursive alias's lazy back-edge, `R<T[K]>` resolving to `string |
+    // undefined`) narrows as that union. One that resolves to anything else is
+    // kept as written, so its nominal display survives.
+    if let Some(flattened) = flatten_reference_unions(ty) {
+        return remove_definitely_falsy(&flattened);
+    }
     let Type::Union(union) = ty else {
         return remove_nullish(ty);
     };
@@ -251,6 +258,38 @@ pub fn remove_definitely_falsy(ty: &Type) -> Type {
         })
         .collect();
     union_type(kept)
+}
+
+/// `ty` with every reference that resolves to a union replaced by that union —
+/// the reference itself, or a member of a union (an optional property typed by
+/// one reads as `R<…> | undefined`). A narrowing sorts members by what they
+/// are, which a reference standing for several of them does not say. `None`
+/// when there is nothing to expand.
+pub fn flatten_reference_unions(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::Reference(reference) if reference_resolves_to_union(ty) => Some(reference.resolve()),
+        Type::Union(union) if union.types().iter().any(reference_resolves_to_union) => {
+            Some(union_type(
+                union
+                    .types()
+                    .iter()
+                    .map(|member| match member {
+                        Type::Reference(reference) if reference_resolves_to_union(member) => {
+                            reference.resolve()
+                        }
+                        other => other.clone(),
+                    })
+                    .collect(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn reference_resolves_to_union(ty: &Type) -> bool {
+    matches!(ty, Type::Reference(reference)
+        if !reference.is_unique_symbol()
+            && matches!(reference.resolve_arc().as_ref(), Type::Union(_)))
 }
 
 pub fn remove_nullish(ty: &Type) -> Type {

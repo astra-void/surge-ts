@@ -225,6 +225,16 @@ pub(crate) fn check_variable_declaration_against_symbols(
     let outer_allow_missing = ctx.allow_missing_tuple_element;
     ctx.allow_missing_tuple_element = variable.from_binding_pattern
         && matches!(variable.initializer, Some(ParsedExpression::NullishCoalescing { .. }));
+    // `const s: unique symbol = Symbol()` is what creates that unique symbol:
+    // the call's `symbol` is this declaration's own type, not a mismatch.
+    let initializer_target = declared_type.as_ref().filter(|declared_type| {
+        !(matches!(
+            declared_type,
+            Type::Reference(reference)
+                if reference.is_unique_symbol()
+                    && reference.id.ends_with(&format!("\u{0}{}", variable.name))
+        ) && variable.initializer.as_ref().is_some_and(is_symbol_constructor_call))
+    });
     let inferred_initializer = if non_iterable_pattern_source {
         InferredExpression::Known(Type::Any)
     } else if options.check_initializer {
@@ -232,7 +242,7 @@ pub(crate) fn check_variable_declaration_against_symbols(
             .initializer
             .as_ref()
             .map(|initializer| {
-                if let Some(ref declared_type) = declared_type {
+                if let Some(declared_type) = initializer_target {
                     evaluate_expression_with_expected_type_anchored(
                         initializer,
                         variable.initializer_span,
@@ -253,7 +263,7 @@ pub(crate) fn check_variable_declaration_against_symbols(
     ctx.allow_missing_tuple_element = outer_allow_missing;
     let mut inferred_symbol_type = match &inferred_initializer {
         InferredExpression::Known(inferred_initializer_type) => {
-            if let Some(ref declared_type) = declared_type {
+            if let Some(declared_type) = initializer_target {
                 report_initializer_mismatch(
                     inferred_initializer_type,
                     declared_type,
@@ -619,5 +629,20 @@ fn array_pattern_source(initializer: &ParsedExpression) -> Option<ParsedExpressi
             Some(object.as_ref().clone())
         }
         _ => None,
+    }
+}
+
+fn is_symbol_constructor_call(expression: &ParsedExpression) -> bool {
+    match expression {
+        ParsedExpression::Call { callee_name, .. } => callee_name == "Symbol",
+        ParsedExpression::PropertyCall {
+            object,
+            property_name,
+            ..
+        } => {
+            property_name == "for"
+                && matches!(object.as_ref(), ParsedExpression::Identifier { name, .. } if name == "Symbol")
+        }
+        _ => false,
     }
 }

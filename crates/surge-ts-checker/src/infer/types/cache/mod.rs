@@ -250,6 +250,18 @@ pub(crate) fn intern_instantiation(
     arguments: &[Type],
     structural: Type,
 ) -> Arc<Type> {
+    // A recursive alias's back-edge resolves to a lazy reference to this very
+    // instantiation. Stored, every later peel would read itself back and answer
+    // the sentinel (`LazyInstantiation::is_self_reference`), so the value is
+    // returned without being interned.
+    if let Type::Reference(reference) = &structural
+        && reference.arguments.as_ref() == arguments
+        && reference.id.len() == key.file_name.len() + 1 + key.name.len()
+        && reference.id.starts_with(key.file_name.as_ref())
+        && reference.id.ends_with(key.name.as_ref())
+    {
+        return Arc::new(structural);
+    }
     if let Some(session) = crate::speculative::active_check_session()
         .filter(|session| session.owns_instantiations(&ctx.program_instantiations))
     {

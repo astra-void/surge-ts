@@ -37,6 +37,11 @@ pub(crate) fn const_member_literal_value(
     // discriminates like the member form.
     if let ParsedExpression::Identifier { name, .. } = expression {
         let symbol = symbols.get(name)?;
+        // A declared `unique symbol` is its own unit type; the equality test
+        // removes exactly that member.
+        if matches!(&symbol.ty, Type::Reference(reference) if reference.is_unique_symbol()) {
+            return Some(symbol.ty.clone());
+        }
         let ty = symbol.ty.peeled();
         // A `const` of type `symbol` is a `unique symbol` to tsc — a unit type
         // an equality test can remove (`fn !== skipToken`). surge types it as
@@ -276,8 +281,9 @@ pub(super) fn literal_base_primitive(literal: &Type) -> Option<Type> {
         Type::StringLiteral(_) => Some(Type::String),
         Type::NumberLiteral(_) => Some(Type::Number),
         Type::BooleanLiteral(_) => Some(Type::Boolean),
-        // The `unique symbol` stand-in above.
+        // The `unique symbol` stand-in above, and a declared one.
         Type::Symbol => Some(Type::Symbol),
+        Type::Reference(reference) if reference.is_unique_symbol() => Some(Type::Symbol),
         _ => None,
     }
 }

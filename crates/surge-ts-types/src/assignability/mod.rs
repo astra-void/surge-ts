@@ -458,6 +458,16 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         }
     }
 
+    // A unique symbol admits only itself: another unique symbol, or the `symbol`
+    // either one widens to, is not it. A union source is left to the
+    // every-member arm below.
+    if let Type::Reference(target) = to
+        && target.is_unique_symbol()
+        && !matches!(from, Type::Union(_))
+    {
+        return matches!(from, Type::Reference(source) if source.id == target.id);
+    }
+
     // Nominal references compare nominally first (same declaration + arguments is
     // handled by the `from == to` fast path above); anything else falls back to
     // comparing the structural expansion, so a reference stays interchangeable

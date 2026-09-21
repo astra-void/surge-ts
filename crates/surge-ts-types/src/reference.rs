@@ -107,6 +107,11 @@ impl TypeReference {
         &*self.id == READONLY_REFERENCE_ID
     }
 
+    /// A `unique symbol` declared by some `const` (see [`unique_symbol_type`]).
+    pub fn is_unique_symbol(&self) -> bool {
+        self.id.starts_with(UNIQUE_SYMBOL_ID_PREFIX)
+    }
+
     pub fn new(
         id: impl Into<Arc<str>>,
         display: impl Into<Arc<str>>,
@@ -287,4 +292,26 @@ mod tests {
         let id = reference("ids.ts\u{0}Id", "Id", vec![], Type::String);
         assert_eq!(id.base_primitive(), Some(Type::String));
     }
+}
+
+const UNIQUE_SYMBOL_ID_PREFIX: &str = "\u{0}unique-symbol\u{0}";
+
+struct UniqueSymbol;
+
+impl ResolveReference for UniqueSymbol {
+    fn resolve(&self) -> Type {
+        Type::Symbol
+    }
+}
+
+/// The type of `const name: unique symbol` declared in `file_name`: a `symbol`
+/// whose identity is its declaration, so two unique symbols are unrelated
+/// (tsc's `TypeFlagsUniqueESSymbol`) while each still flows into `symbol`.
+pub fn unique_symbol_type(file_name: &str, name: &str) -> Type {
+    Type::Reference(TypeReference::new(
+        format!("{UNIQUE_SYMBOL_ID_PREFIX}{file_name}\u{0}{name}"),
+        format!("typeof {name}"),
+        Vec::new(),
+        Arc::new(UniqueSymbol),
+    ))
 }

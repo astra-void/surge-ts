@@ -435,6 +435,7 @@ pub(super) fn parsed_annotation_display(annotation: &surge_ts_syntax::ParsedType
             display
         }
         ParsedType::Infer(name) => format!("infer {name}"),
+        ParsedType::UniqueSymbol(name) => format!("typeof {name}"),
         ParsedType::InferredMember(member) => {
             format!("{}[\"{}\"]", member.class_name, member.member_name)
         }

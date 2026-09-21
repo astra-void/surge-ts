@@ -49,6 +49,9 @@ pub(super) fn type_for_typeof_tag(tag: &str) -> Option<Type> {
 }
 
 pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Option<Type> {
+    if let Some(flattened) = surge_ts_types::flatten_reference_unions(ty) {
+        return narrow_union_by_typeof(&flattened, tag, keep_matching);
+    }
     let Type::Union(union) = ty else {
         // A lone primitive the test rules out leaves the branch unreachable
         // (`typeof x === "number"` after `x` narrowed to `string`), which is how

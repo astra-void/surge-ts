@@ -600,6 +600,7 @@ export const fixturePresets: Record<string, string> = {
   'intersection-disjoint-property-basic': path.join(workspaceRoot, 'tests/compat-projects/intersection-disjoint-property-basic/tsconfig.json'),
   'lazy-inferred-member-basic': path.join(workspaceRoot, 'tests/compat-projects/lazy-inferred-member-basic/tsconfig.json'),
   'interface-method-overload-selection-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-method-overload-selection-basic/tsconfig.json'),
+  'recursive-mapped-alias-member-basic': path.join(workspaceRoot, 'tests/compat-projects/recursive-mapped-alias-member-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

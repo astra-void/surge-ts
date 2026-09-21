@@ -339,6 +339,11 @@ pub enum ParsedType {
     /// property's initializer or a getter's body. The checker resolves it on
     /// first read, with `this` bound to the class instance.
     InferredMember(std::sync::Arc<ParsedInferredMember>),
+    /// `const name: unique symbol`: a symbol type of its own, distinct from every
+    /// other unique symbol (`$input` is not `$output`). Only a variable
+    /// declaration's annotation lowers to it; `unique symbol` elsewhere is
+    /// `symbol`.
+    UniqueSymbol(std::sync::Arc<str>),
 }
 
 /// The source of a [`ParsedType::InferredMember`].
@@ -425,6 +430,7 @@ impl Clone for ParsedType {
             Self::Infer(name) => Self::Infer(name.clone()),
             Self::Predicate(payload) => Self::Predicate(payload.clone()),
             Self::InferredMember(payload) => Self::InferredMember(payload.clone()),
+            Self::UniqueSymbol(name) => Self::UniqueSymbol(name.clone()),
         }
     }
 }
@@ -458,7 +464,11 @@ impl ParsedType {
             Self::TypeOf(_) => 8,
             Self::IndexedAccess(_) => 9,
             Self::Mapped(_) | Self::Conditional(_) => 10,
-            Self::TemplateLiteral(_) | Self::Infer(_) | Self::Predicate(_) | Self::InferredMember(_) => 11,
+            Self::TemplateLiteral(_)
+            | Self::Infer(_)
+            | Self::Predicate(_)
+            | Self::InferredMember(_)
+            | Self::UniqueSymbol(_) => 11,
         }
     }
 }
@@ -1866,6 +1876,7 @@ impl ParsedType {
             | ParsedType::NumberLiteral(_)
             | ParsedType::BooleanLiteral(_)
             | ParsedType::InferredMember(_)
+            | ParsedType::UniqueSymbol(_)
             | ParsedType::TypeOf(_)
             | ParsedType::Infer(_) => {}
         }

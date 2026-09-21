@@ -163,10 +163,22 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
         .declarations
         .iter()
         .flat_map(|declarator| {
-            let declared_type = declarator
-                .type_annotation
-                .as_ref()
-                .and_then(|annotation| parse_type_annotation(annotation));
+            let declared_type = match (&declarator.id, declarator.type_annotation.as_ref()) {
+                (BindingPattern::BindingIdentifier(identifier), Some(annotation))
+                    if matches!(
+                        &annotation.type_annotation,
+                        oxc_ast::ast::TSType::TSTypeOperatorType(operator)
+                            if operator.operator == oxc_ast::ast::TSTypeOperatorOperator::Unique
+                    ) =>
+                {
+                    Some(crate::ParsedType::UniqueSymbol(std::sync::Arc::from(
+                        identifier.name.as_str(),
+                    )))
+                }
+                (_, annotation) => {
+                    annotation.and_then(|annotation| parse_type_annotation(annotation))
+                }
+            };
             let Some(init) = declarator.init.as_ref() else {
                 return parse_binding_pattern_declarations_with_definite(
                     &declarator.id,
