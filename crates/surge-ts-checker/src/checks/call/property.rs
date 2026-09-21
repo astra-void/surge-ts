@@ -811,6 +811,49 @@ pub(crate) fn promise_like_awaited_type(ty: &Type) -> Type {
     ty.clone()
 }
 
+/// `Promise<value>` — what an async function returns for a body that
+/// completes with `value` (tsc's `createPromiseReturnType`). The awaited value
+/// is what gets wrapped, so a body returning a promise does not nest. Without a
+/// lib `Promise` the value is kept as it is.
+pub(crate) fn promise_of(value: &Type, ctx: &mut CheckerContext) -> Type {
+    if !promise_nominal_enabled() {
+        return value.clone();
+    }
+    let value = awaited_type(value);
+    if value.is_unknown() {
+        return value;
+    }
+    const SLOT: &str = "__surge_promised";
+    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    substitution.insert(SLOT.to_string(), value.clone());
+    let named = |name: &str, type_arguments| {
+        ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            name: name.to_string(),
+            span: None,
+            type_arguments,
+        }))
+    };
+    let reported = ctx.diagnostics().len();
+    let promise = crate::infer::map_parsed_type_with_substitution(
+        named("Promise", vec![named(SLOT, Vec::new())]),
+        ctx,
+        &substitution,
+    );
+    ctx.truncate_diagnostics(reported);
+    if promise.is_unknown() { value } else { promise }
+}
+
+/// `SURGE_PROMISE_NOMINAL=1`: keep the lib's `Promise<T>` / `PromiseLike<T>` as
+/// the interface it is instead of collapsing it to its awaited `T`. The
+/// collapse dates from when `await` was erased at parse time; it makes
+/// `Promise<T> | undefined` read as `T | undefined` and hides every misuse of
+/// a promise as its value. Off until the corpora are clean under it — see
+/// CURRENT_STATUS.md, semantic compatibility gates.
+pub(crate) fn promise_nominal_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_PROMISE_NOMINAL").is_some())
+}
+
 /// The type `await ty` produces, following tsc's `getAwaitedTypeNoAlias`:
 /// `any` awaits to itself, a union awaits constituent-wise, and a promise is
 /// unwrapped repeatedly (`Promise<Promise<T>>` awaits to `T`). Anything that is

@@ -383,7 +383,7 @@ pub(crate) fn resolve_interface(
                     had_error: false,
                 };
             }
-            "Promise" | "PromiseLike" => {
+            "Promise" | "PromiseLike" if !crate::checks::call::promise_nominal_enabled() => {
                 let ty = local_substitution
                     .get("T")
                     .cloned()
@@ -425,7 +425,7 @@ pub(crate) fn resolve_interface(
             // `PromiseLike<T>` as their resolved value `T` (an implicit await
             // everywhere). `.then()`-style chaining on a raw promise remains a
             // documented limitation.
-            "Promise" | "PromiseLike" => {
+            "Promise" | "PromiseLike" if !crate::checks::call::promise_nominal_enabled() => {
                 let ty = local_substitution
                     .get("T")
                     .cloned()

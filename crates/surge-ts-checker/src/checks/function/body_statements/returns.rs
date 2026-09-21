@@ -115,6 +115,17 @@ pub(crate) fn check_function_return_statement(
         return;
     };
 
+    // tsc's `unwrapReturnType`: what an async function returns is related — and
+    // contextually typed — by the awaited return type, so `return { … }` under
+    // `Promise<R>` is read against `R`.
+    let awaited_return_type;
+    let return_type = if ctx.in_async_body {
+        awaited_return_type = crate::checks::call::awaited_type(return_type);
+        &awaited_return_type
+    } else {
+        return_type
+    };
+
     // Only the mismatch verdicts raised while checking this value belong to the
     // contextual-return frame; everything else the expression reports is
     // unrelated and must survive.

@@ -922,9 +922,17 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 );
             }
         }
+        // tsc's `unwrapReturnType`: an async body is typed against the awaited
+        // return type (`async (): Promise<R> => ({ … })` reads the literal
+        // against `R`).
+        let body_return_type = if is_async && !is_generator {
+            crate::checks::call::awaited_type(&return_type)
+        } else {
+            return_type.clone()
+        };
         match body {
             ParsedArrowFunctionBody::Expression(expression) => {
-                let return_type_for_body = match &return_type {
+                let return_type_for_body = match &body_return_type {
                     Type::Any
                     | Type::Unknown
                     | Type::GenuineUnknown
@@ -1019,6 +1027,9 @@ pub(crate) fn check_arrow_function_expression_anchored(
                                     body_type,
                                     expected_type.map(|expected| expected.return_type()),
                                 );
+                                if is_async && !is_generator {
+                                    return_type = crate::checks::call::promise_of(&return_type, ctx);
+                                }
                             }
                         }
                     }

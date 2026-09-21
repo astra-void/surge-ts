@@ -545,7 +545,8 @@ pub(super) fn canonical_type_identity(
         Type::Function(_) | Type::Union(_) => {
             Err(InterfaceCacheSkipReason::UnsupportedTypeArgument)
         }
-        _ => unreachable!("primitive canonical identities returned above"),
+        // Anything without a canonical identity is simply not cached.
+        _ => Err(InterfaceCacheSkipReason::UnsupportedTypeArgument),
     }
 }
 
