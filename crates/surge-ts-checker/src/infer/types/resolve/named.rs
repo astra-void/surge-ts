@@ -469,6 +469,7 @@ fn resolve_named_type_inner(
     // parameter).
     let alias_display_name = generic_instantiation_display_name(
         &named_type,
+        substitution,
         declaration.declared_name(),
         match declaration {
             // `library_scoped` reads `file_kinds`, which an analysis-phase
@@ -1199,6 +1200,7 @@ fn is_dependency_declaration_path(file_name: &str) -> bool {
 /// `None` when an argument (or a needed default) is not a simple renderable form.
 fn generic_instantiation_display_name(
     named_type: &ParsedNamedType,
+    substitution: &TypeParameterSubstitution,
     declaration_name: &str,
     type_parameters: &[surge_ts_syntax::ParsedTypeParameter],
 ) -> Option<String> {
@@ -1212,11 +1214,33 @@ fn generic_instantiation_display_name(
         }
     } else {
         for argument in &named_type.type_arguments {
-            names.push(crate::driver::parsed_type_display(argument)?);
+            names.push(
+                bound_argument_display(argument, substitution)
+                    .map_or_else(|| crate::driver::parsed_type_display(argument), Some)?,
+            );
         }
     }
 
     Some(format!("{}<{}>", declaration_name, names.join(", ")))
+}
+
+/// A written argument that is only a name the enclosing instantiation has bound
+/// — a type parameter, or an `infer` capture — renders as what it is bound to.
+/// The written text alone named the variable, so `Awaited<R>` inside
+/// `T extends (...args: any[]) => infer R ? Awaited<R> : T` reached diagnostics
+/// as "type 'Awaited<R>'" long after `R` was known.
+fn bound_argument_display(
+    argument: &ParsedType,
+    substitution: &TypeParameterSubstitution,
+) -> Option<String> {
+    let ParsedType::Named(named) = argument else {
+        return None;
+    };
+    if !named.type_arguments.is_empty() || substitution.is_placeholder(&named.name) {
+        return None;
+    }
+    let bound = substitution.get(&named.name)?;
+    (!bound.is_unknown()).then(|| bound.name())
 }
 
 /// Opt-in (`SURGE_COMPLETE_DEFAULT_ARGS=1`): carry an interface's resolved
