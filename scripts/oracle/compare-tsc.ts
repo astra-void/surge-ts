@@ -596,6 +596,7 @@ export const fixturePresets: Record<string, string> = {
   'object-to-array-missing-members-basic': path.join(workspaceRoot, 'tests/compat-projects/object-to-array-missing-members-basic/tsconfig.json'),
   'callback-argument-signature-basic': path.join(workspaceRoot, 'tests/compat-projects/callback-argument-signature-basic/tsconfig.json'),
   'object-literal-union-head-basic': path.join(workspaceRoot, 'tests/compat-projects/object-literal-union-head-basic/tsconfig.json'),
+  'object-literal-normalization-basic': path.join(workspaceRoot, 'tests/compat-projects/object-literal-normalization-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

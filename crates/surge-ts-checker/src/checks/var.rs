@@ -421,7 +421,7 @@ pub(crate) fn widen_implicit_variable_initializer_type(
         return Type::Any;
     }
     let ty = &widen_nullable_type(ty);
-    if matches!(symbol_kind, SymbolKind::Let | SymbolKind::Var) && !is_assertion {
+    let widened = if matches!(symbol_kind, SymbolKind::Let | SymbolKind::Var) && !is_assertion {
         // tsc deep-widens `let`/`var` initializers, so object properties and
         // array/union members widen too (e.g. `let o = { a: 1 }` -> `{ a: number }`),
         // not just a top-level primitive literal.
@@ -430,6 +430,98 @@ pub(crate) fn widen_implicit_variable_initializer_type(
         widen_object_literal_members(initializer, ty)
     } else {
         ty.clone()
+    };
+    if writes_object_literal_union(initializer) {
+        normalize_object_literal_union(&widened)
+    } else {
+        widened
+    }
+}
+
+/// Whether the initializer writes object literals that widen together: the
+/// branches of a conditional or logical expression, or the elements of an
+/// array literal (read whole or through an index).
+fn writes_object_literal_union(initializer: &ParsedExpression) -> bool {
+    fn written(expression: &ParsedExpression) -> usize {
+        match expression {
+            ParsedExpression::ObjectLiteral { .. } => 1,
+            ParsedExpression::Conditional {
+                when_true,
+                when_false,
+                ..
+            } => written(when_true) + written(when_false),
+            ParsedExpression::Logical { left, right, .. }
+            | ParsedExpression::NullishCoalescing { left, right, .. } => {
+                written(left) + written(right)
+            }
+            ParsedExpression::ArrayLiteral { elements, .. } => elements
+                .iter()
+                .filter(|element| !element.spread)
+                .map(|element| written(&element.expression))
+                .sum(),
+            ParsedExpression::ElementAccess { object, .. } => written(object),
+            _ => 0,
+        }
+    }
+    written(initializer) >= 2
+}
+
+/// tsc's `getWidenedTypeOfObjectLiteral`: object literals widened together are
+/// normalized, each gaining the names its siblings write as `name?: undefined`,
+/// so `(c ? { a: 1 } : { a: 1, b: "x" }).b` reads `string | undefined` instead
+/// of being a missing property. The members keep the types they were written
+/// with: `type: "ok" as const` stays the discriminant it is.
+fn normalize_object_literal_union(ty: &Type) -> Type {
+    let is_written_literal = |member: &Type| {
+        matches!(member, Type::Object(object)
+            if object.alias_name.is_none()
+                && !object.without_inferable_index
+                && !object.synthetic_open_index
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none()
+                && object.call_signature().is_none()
+                && object.construct_signature().is_none())
+    };
+    match ty {
+        Type::Array(element) => Type::Array(Box::new(normalize_object_literal_union(element))),
+        Type::Union(union) => {
+            let members = union.types();
+            let mut names: Vec<std::sync::Arc<str>> = Vec::new();
+            let mut literals = 0;
+            for member in members.iter().filter(|member| is_written_literal(member)) {
+                literals += 1;
+                if let Type::Object(object) = member {
+                    for name in object.properties.keys() {
+                        if !names.contains(name) {
+                            names.push(name.clone());
+                        }
+                    }
+                }
+            }
+            if literals < 2 {
+                return ty.clone();
+            }
+            let normalized = members
+                .iter()
+                .map(|member| match member {
+                    Type::Object(object) if is_written_literal(member) => {
+                        let mut properties = (*object.properties).clone();
+                        for name in &names {
+                            if !properties.contains_key(name) {
+                                properties.insert(
+                                    name.clone(),
+                                    surge_ts_types::ObjectProperty::optional(Type::Undefined),
+                                );
+                            }
+                        }
+                        Type::Object(crate::metrics::alloc_object_type(properties, None))
+                    }
+                    other => other.clone(),
+                })
+                .collect();
+            surge_ts_types::union_type(normalized)
+        }
+        _ => ty.clone(),
     }
 }
 
