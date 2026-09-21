@@ -216,7 +216,8 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
 
     match ty.peeled() {
         Type::Object(mut object_type) => {
-            let existing = object_type.properties.get(head.as_str())?.clone();
+            let mut existing = object_type.properties.get(head.as_str())?.clone();
+            existing.ty = crate::checks::function::settle_lazy_read(existing.ty);
             let (narrowed_ty, narrowed_optional) = if rest.is_empty() {
                 guard.narrow_leaf(&existing.ty, existing.optional)?
             } else {
@@ -325,11 +326,12 @@ pub(super) fn property_path_leaf_type(ty: &Type, path: &[String]) -> Option<Type
         return None;
     };
     let property = object_type.properties.get(head.as_str())?;
-    let effective = ReferenceGuard::effective_leaf_type(&property.ty, property.optional);
+    let property_ty = crate::checks::function::settle_lazy_read(property.ty.clone());
+    let effective = ReferenceGuard::effective_leaf_type(&property_ty, property.optional);
     if rest.is_empty() {
         return Some(effective);
     }
-    property_path_leaf_type(&property.ty, rest)
+    property_path_leaf_type(&property_ty, rest)
 }
 
 /// The narrowed type of `base` under `guard` applied at `path`, or `None` when

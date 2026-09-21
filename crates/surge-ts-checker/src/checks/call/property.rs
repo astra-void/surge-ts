@@ -1252,6 +1252,14 @@ fn callable_property_signature(ty: Type) -> Type {
             // match sees the unpeeled reference and misreports TS2349 (lazy
             // value annotations wrap plain function-typed `declare const`s).
             Type::Function(function) => Some(function),
+            // A reference resolving to `any`, the sentinel, or a union of
+            // signatures is judged by what it resolves to, as the unwrapped
+            // types are (an inferred class member is such a reference).
+            resolved @ (Type::Any
+            | Type::Unknown
+            | Type::ErrorType
+            | Type::TypeParameter(_)
+            | Type::Union(_)) => return resolved,
             _ => None,
         },
         _ => None,

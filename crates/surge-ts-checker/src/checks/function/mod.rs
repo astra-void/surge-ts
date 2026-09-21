@@ -184,7 +184,139 @@ impl surge_ts_types::ResolveReference for LazyBodyReturn {
     }
 }
 
+/// An unannotated class member's type, read from its initializer or getter
+/// body on first demand, with `this` bound to the class instance — tsc's
+/// `getWidenedTypeForVariableLikeDeclaration` for a property and the getter's
+/// `getReturnTypeFromBody`. Whatever cannot be typed cleanly stays `any`, which
+/// is what the member was before this inference existed.
+struct LazyInferredMember {
+    id: std::sync::Arc<str>,
+    member: std::sync::Arc<surge_ts_syntax::ParsedInferredMember>,
+    file_name: std::sync::Arc<str>,
+    environment: crate::context::DeclarationEnvironmentHandle,
+    creation_scope: Option<std::sync::Arc<crate::symbols::TypeDeclarationScope>>,
+    memo: std::sync::OnceLock<Type>,
+}
+
+impl surge_ts_types::ResolveReference for LazyInferredMember {
+    fn resolve(&self) -> Type {
+        if let Some(resolved) = self.memo.get() {
+            return resolved.clone();
+        }
+        let re_entered = BODY_RETURNS_IN_PROGRESS.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if stack.iter().any(|id| **id == *self.id) {
+                return true;
+            }
+            stack.push(self.id.clone());
+            false
+        });
+        // tsc answers a member whose type depends on itself with `any`.
+        if re_entered {
+            return Type::Any;
+        }
+        struct PopInProgress;
+        impl Drop for PopInProgress {
+            fn drop(&mut self) {
+                BODY_RETURNS_IN_PROGRESS.with(|stack| {
+                    stack.borrow_mut().pop();
+                });
+            }
+        }
+        let _pop = PopInProgress;
+        let Some(mut ctx) = self.environment.checker_context() else {
+            return Type::Any;
+        };
+        ctx.set_file_name(self.file_name.to_string());
+        if self.creation_scope.is_some() {
+            ctx.type_declaration_scope = self.creation_scope.clone();
+        }
+        let resolved = infer_member_type(&self.member, &self.file_name, &self.environment, &mut ctx)
+            .unwrap_or(Type::Any);
+        if crate::program::in_check_phase() {
+            let _ = self.memo.set(resolved.clone());
+        }
+        resolved
+    }
+}
+
+fn infer_member_type(
+    member: &surge_ts_syntax::ParsedInferredMember,
+    file_name: &str,
+    environment: &crate::context::DeclarationEnvironmentHandle,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    // A script's declarations are globals, which lookup reaches without a table.
+    let mut scope = match environment.current_module_local_values(file_name) {
+        Some(values) => values.as_ref().clone(),
+        None => ctx
+            .symbols
+            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+    };
+    let instance = crate::infer::types::map_parsed_type(
+        surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            name: member.class_name.clone(),
+            span: None,
+            type_arguments: Vec::new(),
+        })),
+        ctx,
+    );
+    scope.insert(
+        "this".to_string(),
+        crate::symbols::SymbolInfo {
+            ty: instance,
+            kind: crate::symbols::SymbolKind::Const,
+            function_signature: None,
+        },
+    );
+    match &member.source {
+        surge_ts_syntax::ParsedInferredMemberSource::GetterBody(body) => {
+            infer_statements_return(body, scope, ctx)
+        }
+        surge_ts_syntax::ParsedInferredMemberSource::Initializer(initializer) => {
+            let mut shadow = body_inference_shadow_context(ctx);
+            let crate::infer::InferredExpression::Known(ty) =
+                crate::infer::infer_expression(initializer, &scope, &mut shadow)
+            else {
+                return None;
+            };
+            let ty = if member.keep_literal {
+                ty
+            } else {
+                crate::checks::expr::widen_type(&ty)
+            };
+            type_is_deeply_concrete(&ty).then_some(ty)
+        }
+    }
+}
+
+pub(crate) fn inferred_member_reference(
+    member: std::sync::Arc<surge_ts_syntax::ParsedInferredMember>,
+    ctx: &mut CheckerContext,
+) -> Type {
+    let id: std::sync::Arc<str> = std::sync::Arc::from(format!(
+        "{}{INFERRED_MEMBER_ID_TAG}{}.{}\u{0}{}",
+        ctx.file_name, member.class_name, member.member_name, member.member_start
+    ));
+    let display = format!("{}[\"{}\"]", member.class_name, member.member_name);
+    let reference = surge_ts_types::TypeReference::new(
+        id.clone(),
+        display,
+        Vec::new(),
+        std::sync::Arc::new(LazyInferredMember {
+            id,
+            member,
+            file_name: std::sync::Arc::from(ctx.file_name.as_ref()),
+            environment: ctx.declaration_environment(),
+            creation_scope: ctx.type_declaration_scope.clone(),
+            memo: std::sync::OnceLock::new(),
+        }),
+    );
+    Type::Reference(reference.rendered_structurally())
+}
+
 const BODY_RETURN_ID_TAG: &str = "\u{0}body-return\u{0}";
+const INFERRED_MEMBER_ID_TAG: &str = "\u{0}inferred-member\u{0}";
 
 /// What a call through an unannotated declaration evaluates to: the resolved
 /// return type, never the lazy reference standing in for it. Go's
@@ -197,6 +329,7 @@ pub(crate) fn settle_call_result(
     result: InferredExpression,
 ) -> InferredExpression {
     use surge_ts_syntax::ParsedExpression as E;
+    // A read of an inferred class member settles it the same way.
     if !matches!(
         expression,
         E::Call { .. }
@@ -204,6 +337,8 @@ pub(crate) fn settle_call_result(
             | E::OptionalPropertyCall { .. }
             | E::ExpressionCall { .. }
             | E::OptionalCall { .. }
+            | E::PropertyAccess { .. }
+            | E::OptionalPropertyAccess { .. }
     ) {
         return result;
     }
@@ -213,14 +348,22 @@ pub(crate) fn settle_call_result(
     InferredExpression::Known(settle_body_return(ty))
 }
 
+fn is_settled_on_read(reference: &surge_ts_types::TypeReference) -> bool {
+    reference.id.contains(BODY_RETURN_ID_TAG) || reference.id.contains(INFERRED_MEMBER_ID_TAG)
+}
+
+/// A member or body-return type as a read of it sees it: resolved, never the
+/// lazy reference standing in for it.
+pub(crate) fn settle_lazy_read(ty: Type) -> Type {
+    settle_body_return(ty)
+}
+
 fn settle_body_return(ty: Type) -> Type {
     match &ty {
-        Type::Reference(reference) if reference.id.contains(BODY_RETURN_ID_TAG) => {
-            reference.resolve()
-        }
+        Type::Reference(reference) if is_settled_on_read(reference) => reference.resolve(),
         Type::Union(union)
             if union.types().iter().any(|member| {
-                matches!(member, Type::Reference(reference) if reference.id.contains(BODY_RETURN_ID_TAG))
+                matches!(member, Type::Reference(reference) if is_settled_on_read(reference))
             }) =>
         {
             surge_ts_types::union_type(
@@ -294,8 +437,6 @@ fn infer_body_return(
     mut scope: SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    use surge_ts_syntax::ParsedFunctionBodyStatement as BodyStatement;
-
     for (parameter, parameter_type) in function.parameters.iter().zip(parameter_types.iter())
     {
         if let Some(name) = signature::written_binding_names(std::slice::from_ref(parameter))
@@ -313,6 +454,16 @@ fn infer_body_return(
             );
         }
     }
+    infer_statements_return(&function.body, scope, ctx)
+}
+
+/// [`infer_body_return`] over a body with its bindings already in `scope`.
+fn infer_statements_return(
+    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+    mut scope: SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as BodyStatement;
 
     // Deeply concrete: a shallow check passes an object whose *member* is the
     // degradation sentinel, and publishing that as a declaration's return type
@@ -412,7 +563,7 @@ fn infer_body_return(
     }
 
     collect(
-        &function.body,
+        body,
         &mut scope,
         &mut returned,
         &mut usable,

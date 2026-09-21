@@ -335,7 +335,41 @@ pub enum ParsedType {
     /// `asserts x is T`). Resolves to `boolean` in type position; the guard
     /// narrowing consumes the payload to narrow the tested argument.
     Predicate(std::sync::Arc<ParsedPredicateType>),
+    /// An unannotated class member whose type tsc reads from an expression: a
+    /// property's initializer or a getter's body. The checker resolves it on
+    /// first read, with `this` bound to the class instance.
+    InferredMember(std::sync::Arc<ParsedInferredMember>),
 }
+
+/// The source of a [`ParsedType::InferredMember`].
+#[derive(Debug)]
+pub struct ParsedInferredMember {
+    /// The declaring class; its instance is what `this` means in the source.
+    pub class_name: String,
+    /// Where the member is declared, which identifies it: two members compare
+    /// equal exactly when they are the same declaration.
+    pub member_start: usize,
+    pub member_name: String,
+    /// A `readonly` property keeps its initializer's literal type.
+    pub keep_literal: bool,
+    pub source: ParsedInferredMemberSource,
+}
+
+#[derive(Debug)]
+pub enum ParsedInferredMemberSource {
+    Initializer(ParsedExpression),
+    GetterBody(Vec<ParsedFunctionBodyStatement>),
+}
+
+impl PartialEq for ParsedInferredMember {
+    fn eq(&self, other: &Self) -> bool {
+        self.member_start == other.member_start
+            && self.member_name == other.member_name
+            && self.class_name == other.class_name
+    }
+}
+
+impl Eq for ParsedInferredMember {}
 
 /// One element of a [`ParsedType::VariadicTuple`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -390,6 +424,7 @@ impl Clone for ParsedType {
             Self::TemplateLiteral(payload) => Self::TemplateLiteral(payload.clone()),
             Self::Infer(name) => Self::Infer(name.clone()),
             Self::Predicate(payload) => Self::Predicate(payload.clone()),
+            Self::InferredMember(payload) => Self::InferredMember(payload.clone()),
         }
     }
 }
@@ -423,7 +458,7 @@ impl ParsedType {
             Self::TypeOf(_) => 8,
             Self::IndexedAccess(_) => 9,
             Self::Mapped(_) | Self::Conditional(_) => 10,
-            Self::TemplateLiteral(_) | Self::Infer(_) | Self::Predicate(_) => 11,
+            Self::TemplateLiteral(_) | Self::Infer(_) | Self::Predicate(_) | Self::InferredMember(_) => 11,
         }
     }
 }
@@ -1827,6 +1862,7 @@ impl ParsedType {
             | ParsedType::StringLiteral(_)
             | ParsedType::NumberLiteral(_)
             | ParsedType::BooleanLiteral(_)
+            | ParsedType::InferredMember(_)
             | ParsedType::TypeOf(_)
             | ParsedType::Infer(_) => {}
         }

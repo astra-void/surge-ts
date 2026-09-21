@@ -686,6 +686,10 @@ pub(crate) fn resolve_parsed_type(
         // A predicate annotation types the function's return value: `boolean`
         // for `x is T`, `void` for an assertion signature. The predicate payload
         // itself is consumed by guard narrowing, not by type resolution.
+        ParsedType::InferredMember(member) => ResolvedType {
+            ty: crate::checks::function::inferred_member_reference(member, ctx),
+            had_error: false,
+        },
         ParsedType::Predicate(predicate) => ResolvedType {
             ty: if predicate.asserts {
                 Type::Void

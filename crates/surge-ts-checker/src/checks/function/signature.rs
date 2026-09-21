@@ -699,7 +699,8 @@ fn defer_dependency_signature_annotation(annotation: &ParsedType) -> bool {
         | ParsedType::BooleanLiteral(_)
         | ParsedType::Named(_)
         | ParsedType::Infer(_)
-        | ParsedType::Predicate(_) => false,
+        | ParsedType::Predicate(_)
+        | ParsedType::InferredMember(_) => false,
     }
 }
 

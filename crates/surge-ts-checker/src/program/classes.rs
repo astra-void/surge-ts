@@ -30,10 +30,14 @@ pub(crate) fn class_instance_interface_info(
     class: &ParsedClassDeclaration,
     file_name: Arc<str>,
 ) -> InterfaceInfo {
+    // A generic class's `this` needs its own type parameters in scope, which the
+    // member inference does not model yet; those members stay `any`.
+    let infer_members = class.type_parameters.is_empty()
+        && crate::checks::function::lazy_body_returns(&file_name);
     let mut members: Vec<_> = class
         .members
         .iter()
-        .filter_map(|member| class_member_to_interface_member(class, member))
+        .filter_map(|member| class_member_to_interface_member(class, member, infer_members))
         .collect();
     members.extend(constructor_parameter_property_members(class));
 
@@ -61,6 +65,7 @@ pub(crate) fn class_instance_interface_info(
 fn class_member_to_interface_member(
     class: &ParsedClassDeclaration,
     member: &ParsedClassMember,
+    infer_members: bool,
 ) -> Option<ParsedInterfaceMember> {
     match member {
         ParsedClassMember::Property(property) if !property.is_static => {
@@ -70,10 +75,9 @@ fn class_member_to_interface_member(
                 optional: property.optional,
                 is_abstract: property.is_abstract,
                 is_method: false,
-                ty: property
-                    .declared_type
-                    .clone()
-                    .unwrap_or_else(|| initializer_property_type(property)),
+                ty: property.declared_type.clone().unwrap_or_else(|| {
+                    inferred_property_type(class, property, infer_members)
+                }),
                 readonly: property.readonly,
                 write_ty: None,
             })
@@ -95,7 +99,8 @@ fn class_member_to_interface_member(
                 optional: false,
                 is_abstract: accessor.is_abstract,
                 is_method: false,
-                ty: accessor_property_type(accessor),
+                ty: inferred_accessor_type(class, accessor, infer_members)
+                    .unwrap_or_else(|| accessor_property_type(accessor)),
                 // A getter with no setter is read-only, exactly as
                 // `isReadonlySymbol` has it.
                 readonly: accessor.has_getter && !accessor.has_setter,
@@ -171,6 +176,59 @@ fn accessor_write_type(accessor: &ParsedClassAccessor) -> Option<ParsedType> {
 /// return type wins (the read type); a setter-only accessor falls back to its
 /// parameter type. Missing annotations degrade to `any`, matching the implicit
 /// type tsc infers for an un-annotated accessor.
+/// An unannotated property typed by its initializer: the syntactic lowering
+/// when the initializer's type is evident from its syntax, otherwise read from
+/// the expression on first demand.
+fn inferred_property_type(
+    class: &ParsedClassDeclaration,
+    property: &ParsedClassProperty,
+    infer_members: bool,
+) -> ParsedType {
+    let syntactic = property
+        .initializer
+        .as_ref()
+        .and_then(|initializer| syntactic_initializer_type(initializer, property.readonly));
+    match (syntactic, &property.initializer) {
+        (Some(syntactic), _) => syntactic,
+        (None, Some(initializer)) if infer_members => {
+            ParsedType::InferredMember(Arc::new(surge_ts_syntax::ParsedInferredMember {
+                class_name: class.name.clone(),
+                member_start: property.name_span.map_or(0, |span| span.start),
+                member_name: property.name.clone(),
+                keep_literal: property.readonly,
+                source: surge_ts_syntax::ParsedInferredMemberSource::Initializer(
+                    initializer.clone(),
+                ),
+            }))
+        }
+        _ => ParsedType::Any,
+    }
+}
+
+/// A getter with no annotation on either half of the pair takes its body's
+/// return type (tsc's `getTypeOfAccessors`).
+fn inferred_accessor_type(
+    class: &ParsedClassDeclaration,
+    accessor: &ParsedClassAccessor,
+    infer_members: bool,
+) -> Option<ParsedType> {
+    if !infer_members || accessor.getter_return_type.is_some() || accessor.setter_param_type.is_some()
+    {
+        return None;
+    }
+    let getter = accessor
+        .declarations
+        .iter()
+        .find(|declaration| declaration.is_getter && declaration.has_body)?;
+    Some(ParsedType::InferredMember(Arc::new(surge_ts_syntax::ParsedInferredMember {
+        class_name: class.name.clone(),
+        member_start: accessor.name_span.map_or(0, |span| span.start),
+        member_name: accessor.name.clone(),
+        keep_literal: false,
+        source: surge_ts_syntax::ParsedInferredMemberSource::GetterBody(getter.body.clone()),
+    })))
+}
+
 fn accessor_property_type(accessor: &ParsedClassAccessor) -> ParsedType {
     accessor
         .getter_return_type
