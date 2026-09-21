@@ -319,7 +319,7 @@ fn property_path_is_impossible(member: &Type, path: &[String], guard: ReferenceG
 
 /// The declared type at the end of `path`, with an optional slot's `undefined`
 /// put back. `None` when any link is missing or is not an object.
-fn property_path_leaf_type(ty: &Type, path: &[String]) -> Option<Type> {
+pub(super) fn property_path_leaf_type(ty: &Type, path: &[String]) -> Option<Type> {
     let (head, rest) = path.split_first()?;
     let Type::Object(object_type) = ty.peeled() else {
         return None;

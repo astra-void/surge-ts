@@ -459,6 +459,14 @@ pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
                 names[*index] = arm.name();
                 operands[*index] = arm.clone();
             }
+            // tsc builds each arm through the same ordered set as any other
+            // intersection, so `(Date | undefined) & Date` has a `Date` arm, not
+            // a merged `Date & Date` surface.
+            let operands = dedup_identical_operands(operands);
+            if operands.len() == 1 && !dropped_unmodelled_operand {
+                distributed.extend(operands);
+                continue;
+            }
             distributed.push(merge_intersection_members_now(
                 operands,
                 Some(names.join(" & ")),
@@ -712,6 +720,17 @@ fn merge_intersection_members_now(
         return Type::Never;
     }
 
+    // tsc's `getIntersectionTypeEx` empties an intersection holding `never` or
+    // operands from two disjoint primitive domains. Without it a property
+    // declared `string | undefined` on one operand and `string` on another
+    // distributed to `string | undefined` (`undefined & string` kept its first
+    // operand) instead of `string`. A dropped unmodelled operand cannot make a
+    // disjoint pair inhabited, so this holds regardless.
+    if members.iter().any(|ty| matches!(ty, Type::Never)) || has_disjoint_primitive_domains(&members)
+    {
+        return Type::Never;
+    }
+
     // Brand idiom: `string & { _?: never }` (and other `Base & {…all-optional…}`
     // shapes, e.g. `LiteralUnion<L, B> = L | (B & { _?: never })`). When every
     // object operand only contributes optional members, the object side is a
@@ -864,6 +883,28 @@ fn merge_intersection_members_now(
         Some(member) => member,
         None => Type::Unknown,
     }
+}
+
+/// tsc's `TypeFlagsDisjointDomains` partition (types.go:494), for the operands
+/// surge models as primitives. Object types belong to no domain: `string & {…}`
+/// is a brand, not `never`.
+fn primitive_domain(ty: &Type) -> Option<u8> {
+    match ty {
+        Type::String | Type::StringLiteral(_) => Some(0),
+        Type::Number | Type::NumberLiteral(_) => Some(1),
+        Type::BigInt => Some(2),
+        Type::Boolean | Type::BooleanLiteral(_) => Some(3),
+        Type::Symbol => Some(4),
+        Type::Void | Type::Undefined => Some(5),
+        _ => None,
+    }
+}
+
+fn has_disjoint_primitive_domains(members: &[Type]) -> bool {
+    let mut domains = members.iter().filter_map(primitive_domain);
+    domains
+        .next()
+        .is_some_and(|first| domains.any(|domain| domain != first))
 }
 
 /// The set of literals an operand admits, when the operand is a scalar literal,

@@ -232,16 +232,20 @@ pub(crate) fn narrow_by_predicate(
         return Some(predicate.clone());
     }
     // tsc narrows a non-union subject the predicate does not refine to the
-    // intersection of the two (`err: Error` under `x is E` reads as `Error & E`).
-    // Surge has no intersection type, so the holding branch reads the subject
-    // as the degradation sentinel rather than keep a declared type the
-    // predicate has just widened past.
+    // intersection of the two (`getNarrowedTypeWorker`'s last resort, flow.go):
+    // `conn: Connection` under `this is { ws: WebSocket }` reads `conn.ws` as
+    // `WebSocket`.
     if keep_matching
         && matches!(peeled, Type::Object(_))
         && matches!(predicate.peeled(), Type::Object(_))
         && !surge_ts_types::is_assignable_to(&peeled, predicate)
     {
-        return Some(Type::Unknown);
+        return Some(
+            crate::infer::types::merge_intersection_members(vec![
+                ty.clone(),
+                predicate.clone(),
+            ]),
+        );
     }
     None
 }

@@ -603,10 +603,15 @@ pub(super) fn this_predicate_target(
     method: &str,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    let Type::Reference(reference) = receiver_ty else {
-        return None;
+    // A constructed instance (`connection = new Connection()`) is the resolved
+    // object, which keeps its declaration's identity in the same `file\0name`
+    // form a nominal reference id uses.
+    let id = match receiver_ty {
+        Type::Reference(reference) => reference.id.clone(),
+        Type::Object(object) => object.alias_id.clone()?,
+        _ => return None,
     };
-    let id = reference.id.as_ref();
+    let id = id.as_ref();
     let separator = id.rfind('\u{0}')?;
     let (declaring_file, declaration_name) = (&id[..separator], &id[separator + 1..]);
     let declaration_name = declaration_name.to_string();
@@ -648,6 +653,16 @@ pub(super) fn this_predicate_target(
     )
 }
 
+/// The object a `this is T` method is called on: the subject itself, or the
+/// member its path reaches (`this.activeConnection.isOpen()`). tsc narrows
+/// whichever reference the call's receiver is (`getTypePredicateArgument`).
+fn this_predicate_receiver(subject_ty: &Type, path: &[String]) -> Option<Type> {
+    if path.is_empty() {
+        return Some(subject_ty.clone());
+    }
+    super::reference::property_path_leaf_type(subject_ty, path)
+}
+
 /// Narrows `symbols` by a `this is T` method predicate, or `None` when the
 /// condition is not one (or it proves nothing new).
 pub(super) fn narrow_this_predicate_symbol_table(
@@ -657,16 +672,13 @@ pub(super) fn narrow_this_predicate_symbol_table(
     ctx: &mut CheckerContext,
 ) -> Option<SymbolTable> {
     let (subject, path, method) = parse_this_predicate_call(condition)?;
-    if !path.is_empty() {
-        return None;
-    }
     let symbol = symbols.get(&subject)?;
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let target = this_predicate_target(&subject_ty, method, ctx)?;
+    let target = this_predicate_target(&this_predicate_receiver(&subject_ty, &path)?, method, ctx)?;
     let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-        narrow_by_predicate(&subject_ty, &target, branch_is_true)
+        narrowed_predicate_subject(&subject_ty, &path, &target, branch_is_true)
     })?;
     let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
     narrowed_symbols.insert_narrowed(
@@ -691,20 +703,19 @@ pub(super) fn narrow_this_predicate_call_in_scope(
     let Some((subject, path, method)) = parse_this_predicate_call(condition) else {
         return false;
     };
-    if !path.is_empty() {
-        return false;
-    }
     let Some(symbol) = scopes.resolve(&subject) else {
         return false;
     };
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let Some(target) = this_predicate_target(&subject_ty, method, ctx) else {
+    let Some(target) = this_predicate_receiver(&subject_ty, &path)
+        .and_then(|receiver| this_predicate_target(&receiver, method, ctx))
+    else {
         return false;
     };
     let Some(narrowed) = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-        narrow_by_predicate(&subject_ty, &target, branch_is_true)
+        narrowed_predicate_subject(&subject_ty, &path, &target, branch_is_true)
     }) else {
         return true;
     };
