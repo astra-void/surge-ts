@@ -1543,14 +1543,27 @@ pub(super) fn parse_computed_member_expression(
     //
     // Purely numeric keys (e.g. `arr["0"]`) are left on the index-access path so
     // existing array/tuple numeric-index behavior is preserved unchanged.
-    if let Expression::StringLiteral(string_literal) = &member_expression.expression {
-        let key = string_literal.value.as_str();
+    //
+    // A template without substitutions (`` obj[`key`] ``) is the same key: tsc
+    // treats both as string-literal-like.
+    let literal_key = match &member_expression.expression {
+        Expression::StringLiteral(string_literal) => {
+            Some((string_literal.value.to_string(), string_literal.span))
+        }
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+            .quasis
+            .first()
+            .and_then(|quasi| quasi.value.cooked.as_ref())
+            .map(|cooked| (cooked.to_string(), template.span)),
+        _ => None,
+    };
+    if let Some((key, key_span)) = literal_key {
         let is_numeric_index = !key.is_empty() && key.bytes().all(|byte| byte.is_ascii_digit());
 
         if !is_numeric_index {
             let (object, object_span) = parse_expression(&member_expression.object);
-            let property_name = string_literal.value.to_string();
-            let property_span = Some(text_span_from_oxc_span(string_literal.span));
+            let property_name = key;
+            let property_span = Some(text_span_from_oxc_span(key_span));
 
             if member_expression.optional {
                 return Some(ParsedExpression::OptionalPropertyAccess {
