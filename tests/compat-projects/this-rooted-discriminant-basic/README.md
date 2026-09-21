@@ -5,3 +5,7 @@ narrows `p.state`. The nested-discriminant narrower accepted only an
 identifier as the root, so inside a class method (or a function with a `this`
 parameter) the guarded member reads were false TS2339s. The discriminant
 alias (`const kind = this.state.kind`) takes the same root.
+
+A discriminant more than one member down (`p.a.b.kind`,
+`this.state.inner.kind`) narrows along its reference path; only `root.kind`
+and `root.prop.kind` did.

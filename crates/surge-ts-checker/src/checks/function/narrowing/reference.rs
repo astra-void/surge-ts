@@ -53,6 +53,13 @@ pub(super) enum ReferenceGuard<'a> {
         literal: &'a ParsedExpression,
         keep_matching: bool,
     },
+    /// `a.b.c.kind === "x"`: the union at `a.b.c` is filtered by its `kind`
+    /// member, however deep the reference is.
+    Discriminant {
+        property: &'a str,
+        literal: &'a Type,
+        keep_matching: bool,
+    },
 }
 
 impl ReferenceGuard<'_> {
@@ -137,6 +144,16 @@ impl ReferenceGuard<'_> {
             // The complement of a literal test keeps `undefined` (an absent
             // property is not the literal either), and an optional slot stores
             // that `undefined` in its flag, so it is moved back there.
+            Self::Discriminant {
+                property,
+                literal,
+                keep_matching,
+            } => {
+                let effective = Self::effective_leaf_type(ty, optional);
+                let narrowed =
+                    narrow_union_by_discriminant(&effective, property, literal, *keep_matching)?;
+                (optional || narrowed != *ty).then_some((narrowed, false))
+            }
             Self::LiteralEquality {
                 literal,
                 keep_matching,

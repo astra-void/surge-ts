@@ -838,6 +838,25 @@ fn narrow_value_guards_by_guard(
     };
     let keep_matching = branch_is_true == eq;
 
+    // A discriminant more than one member down (`this.state.inner.kind`) is
+    // narrowed along its reference path; the arms below keep the two shallow
+    // shapes they were written for.
+    if let Some((base, path)) = reference_path(discriminant_object)
+        && path.len() > 1
+    {
+        narrow_reference_in_scope(
+            &base,
+            &path,
+            ReferenceGuard::Discriminant {
+                property,
+                literal: &literal,
+                keep_matching,
+            },
+            scopes,
+        );
+        return;
+    }
+
     let (base_name, narrowed_symbol, declared) = match discriminant_object {
         ParsedExpression::Identifier { name, .. } => {
             let Some(symbol) = scopes.resolve(name) else {

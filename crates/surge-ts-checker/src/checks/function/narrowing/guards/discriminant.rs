@@ -117,6 +117,32 @@ pub(crate) fn narrow_discriminant_symbol_table(
         })?;
     let keep_matching = branch_is_true == eq;
 
+    if let Some((base, path)) = super::super::reference_path(discriminant_object)
+        && path.len() > 1
+    {
+        let symbol = symbols.get(&base)?;
+        let narrowed = super::super::narrowed_reference_type(
+            &symbol.ty,
+            &path,
+            super::super::ReferenceGuard::Discriminant {
+                property,
+                literal: &literal,
+                keep_matching,
+            },
+        )?;
+        let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+        narrowed_symbols.insert_narrowed(
+            base,
+            SymbolInfo {
+                ty: narrowed,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            },
+            symbol.ty.clone(),
+        );
+        return Some(narrowed_symbols);
+    }
+
     match discriminant_object {
         ParsedExpression::Identifier { name, .. } => {
             let symbol = symbols.get(name)?;
