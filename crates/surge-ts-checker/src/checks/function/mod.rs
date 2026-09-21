@@ -630,36 +630,27 @@ fn type_is_deeply_concrete(ty: &Type) -> bool {
     !permissive(ty, 0)
 }
 
-/// `SURGE_INFER_DECLARATION_RETURN_TYPES=1`: infer an unannotated function
-/// declaration's return type from its body (see
-/// [`inferred_declaration_return_type`]). Any other non-empty value is a file
-/// substring filter, so the effect can be bisected across the corpus without a
-/// rebuild — which is how the blocker below was found.
+/// How an unannotated declaration's return type (and an unannotated class
+/// member's type) is read from its body, by `SURGE_INFER_DECLARATION_RETURN_TYPES`:
 ///
-/// Still OFF. Measured 2026-09-21 on trpc: false positives are down from 55 to
-/// 17 (the branch-aware collector plus [`type_is_deeply_concrete`]), and zod,
-/// ky, ofetch, ts-pattern, tanstack-query and zustand are all neutral. What
-/// holds it back is no longer a filter: **16 diagnostics surge reports
-/// correctly disappear**, and enabling the inference for that *one* file
-/// reproduces the whole delta, so the loss is self-inflicted. Running
-/// `infer_expression` over a body during signature collection leaves state the
-/// check phase then reuses — in `packages/upgrade/src/transforms/provider.ts`,
-/// `path.node.declarations[0]` stops being `T | undefined` and its TS18048 and
-/// TS2339 both vanish. The body inference needs a shadow context of its own, the
-/// way `collect_exportable_value_symbols` builds one, before this can be
-/// measured on its merits.
-/// `SURGE_INFER_DECLARATION_RETURN_TYPES=lazy`: publish the body return as a
-/// [`LazyBodyReturn`] read on first demand, instead of walking the body during
-/// signature collection. `lazy:<substring>` limits it to files whose name
-/// contains the substring, to bisect which declaration moves a diagnostic.
+/// - unset, empty or `lazy` (the default): a [`LazyBodyReturn`] /
+///   [`LazyInferredMember`] resolved on first demand, as Go's
+///   `getReturnTypeOfSignature` does. `lazy:<substring>` limits it to files
+///   whose name contains the substring, to bisect which declaration moves a
+///   diagnostic.
+/// - `0` or `off`: no inference; the declaration keeps the sentinel and the
+///   member keeps `any`.
+/// - `1`, or any other value as a file substring: the eager walk during
+///   signature collection. Kept for comparison only — running `infer_expression`
+///   there, under module analysis's incomplete scopes, deleted 16 trpc
+///   diagnostics surge otherwise reports (measured 2026-09-21), which is what the
+///   lazy form exists to avoid.
 pub(crate) fn lazy_body_returns(file_name: &str) -> bool {
     static SETTING: std::sync::OnceLock<Option<Option<String>>> = std::sync::OnceLock::new();
     let setting = SETTING.get_or_init(|| {
-        let value = std::env::var("SURGE_INFER_DECLARATION_RETURN_TYPES").ok()?;
-        if value == "lazy" {
-            Some(None)
-        } else {
-            value.strip_prefix("lazy:").map(|filter| Some(filter.to_string()))
+        match std::env::var("SURGE_INFER_DECLARATION_RETURN_TYPES").ok().as_deref() {
+            None | Some("") | Some("lazy") => Some(None),
+            Some(value) => value.strip_prefix("lazy:").map(|filter| Some(filter.to_string())),
         }
     });
     match setting {
@@ -675,7 +666,7 @@ fn infer_declaration_return_types(file_name: &str) -> bool {
         .get_or_init(|| std::env::var("SURGE_INFER_DECLARATION_RETURN_TYPES").ok())
         .as_deref()
     {
-        None | Some("") | Some("lazy") => false,
+        None | Some("") | Some("lazy") | Some("0") | Some("off") => false,
         Some(value) if value.starts_with("lazy:") => false,
         Some("1") => true,
         Some(filter) => file_name.contains(filter),

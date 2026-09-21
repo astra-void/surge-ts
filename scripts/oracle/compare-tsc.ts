@@ -598,6 +598,7 @@ export const fixturePresets: Record<string, string> = {
   'assertion-contextual-object-literal-basic': path.join(workspaceRoot, 'tests/compat-projects/assertion-contextual-object-literal-basic/tsconfig.json'),
   'unannotated-return-jsx-callback-basic': path.join(workspaceRoot, 'tests/compat-projects/unannotated-return-jsx-callback-basic/tsconfig.json'),
   'intersection-disjoint-property-basic': path.join(workspaceRoot, 'tests/compat-projects/intersection-disjoint-property-basic/tsconfig.json'),
+  'lazy-inferred-member-basic': path.join(workspaceRoot, 'tests/compat-projects/lazy-inferred-member-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
