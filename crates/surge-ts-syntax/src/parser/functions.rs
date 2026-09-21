@@ -331,7 +331,11 @@ pub(super) fn parse_member_assignment(
     if value == ParsedExpression::Unknown {
         return None;
     }
-    let target_span = Some(text_span_from_oxc_span(member_span));
+    // The target as written, parentheses included: `(M.y) = ''`.
+    let target_span = Some(crate::TextSpan {
+        start: assignment.span.start as usize,
+        end: member_span.end as usize,
+    });
     let value_span = Some(text_span_from_oxc_span(value_span));
     let value = super::logical_assignment_value(
         assignment.operator,

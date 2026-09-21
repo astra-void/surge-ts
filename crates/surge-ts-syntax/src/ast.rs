@@ -1355,6 +1355,9 @@ pub struct ParsedVariableDeclaration {
 pub struct ParsedAssignment {
     pub target_name: String,
     pub target_span: Option<TextSpan>,
+    /// The target as written, parentheses included (`(x) = v`), which is where
+    /// tsc reports the value not fitting; `target_span` is the name itself.
+    pub written_target_span: Option<TextSpan>,
     pub value: ParsedExpression,
     pub value_span: Option<TextSpan>,
 }

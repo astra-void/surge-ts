@@ -64,10 +64,11 @@ pub(crate) fn check_assignment_with_symbols(
 
     // tsc reports a mismatched write at the assignment target, elaborating into
     // the value only where it can (an object or array literal member).
+    let written_target_span = assignment.written_target_span.unwrap_or(target_span);
     let inferred_value = evaluate_expression_with_expected_type_anchored(
         &assignment.value,
         assignment.value_span,
-        Some(target_span),
+        Some(written_target_span),
         Some(&target_type),
         ExpectedTypeDiagnostic::TypeNotAssignable,
         symbols,
@@ -111,7 +112,7 @@ pub(crate) fn check_assignment_with_symbols(
                     {
                         value_span
                     }
-                    _ => target_span,
+                    _ => written_target_span,
                 };
                 let diagnostic = diagnostic.with_span(convert_span(anchor));
                 ctx.push(diagnostic);
