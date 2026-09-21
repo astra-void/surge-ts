@@ -23,6 +23,71 @@ pub(crate) use body::*;
 pub(crate) use body_statements::*;
 pub(crate) use narrowing::*;
 pub(crate) use signature::*;
+/// A context for inferring a body during *signature collection* whose cache
+/// writes cannot reach the check phase.
+///
+/// The inference resolves expressions with no instantiation in scope, so it
+/// produces types the check phase must never see: on tRPC's `provider.ts` the
+/// `forEach` callback parameter came out as an uninstantiated `NodePath<N, N>`
+/// instead of `ASTPath<namedTypes.VariableDeclaration>`, and because the memo
+/// serving it is keyed without the type-parameter scope, the check phase read
+/// that back — `path.node` went unknown and 16 diagnostics both checkers report
+/// disappeared.
+///
+/// So the shadow shares only what resolution needs to *read*: the declaration
+/// tables and scopes, the ambient globals, the per-file scope and value maps. It
+/// deliberately does not inherit the memo window (its own ordinal) or the
+/// physical-interface instantiation caches. Modelled on the shadow
+/// `collect_exportable_value_symbols` builds for the same reason.
+///
+/// **It does not fix that leak**, and the following were each measured not to
+/// either (gate limited to the one file, so the whole -16/+9 delta is that
+/// file's own inference):
+///
+/// * discarding the inferred type entirely — the delta survives, so it is the
+///   act of inferring, not the type that gets published;
+/// * a fresh program type store around the walk (`with_program_type_store`);
+/// * `SURGE_DISABLE_CANONICAL_TYPE_STORE=1`;
+/// * `SURGE_IFACE_MEMO_PROGRAM=0`, `SURGE_IFACE_MODULE_MEMO=0`,
+///   `SURGE_DISABLE_SIG_CONTEXT_CACHE=1`;
+/// * withholding *every* field this function shares, the scope and both
+///   `Arc<Mutex<…>>` sets included.
+///
+/// Building the shadow but skipping the walk is neutral, so the carrier is
+/// something the walk reaches that none of the above covers — most likely an
+/// ordering or first-wins effect in the analysis pipeline rather than a cache.
+/// Finding it needs a trace of where `ASTPath<namedTypes.VariableDeclaration>`
+/// becomes `NodePath<N, N>`, not another isolation attempt.
+fn body_inference_shadow_context(ctx: &CheckerContext) -> CheckerContext {
+    let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
+    file_kinds.insert(ctx.file_name.to_string(), ctx.current_file_kind);
+    let mut shadow = CheckerContext::new_with_shared_options(
+        ctx.file_name.to_string(),
+        std::sync::Arc::clone(&ctx.options),
+        file_kinds,
+    );
+    shadow.timings = ctx.timings.clone();
+    // Environment identity stays content-stable, as it must for any context that
+    // resolves the same declarations: the deterministic stage counter and attempt
+    // tag are inherited, and the memo map gets its own window ordinal so no entry
+    // it writes can be served to the caller.
+    shadow.resolution_stage_counter = ctx.resolution_stage_counter;
+    shadow.environment_attempt = ctx.environment_attempt;
+    shadow.replace_resolved_named_types(3);
+    shadow.type_declarations = ctx.type_declarations.clone();
+    shadow.type_declaration_scope = ctx.type_declaration_scope.clone();
+    shadow.ambient_global_type_declarations = ctx.ambient_global_type_declarations.clone();
+    shadow.ambient_global_symbols = ctx
+        .ambient_global_symbols
+        .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    shadow.module_scope_by_file = ctx.module_scope_by_file.clone();
+    shadow.module_local_values_by_file = ctx.module_local_values_by_file.clone();
+    shadow.import_type_namespaces = ctx.import_type_namespaces.clone();
+    shadow.import_type_globals = ctx.import_type_globals.clone();
+    shadow.namespace_member_prefix_stack = ctx.namespace_member_prefix_stack.clone();
+    shadow
+}
+
 /// tsc's `getReturnTypeFromBody`, restricted to a body whose `return`s all sit
 /// at the top level.
 ///
@@ -85,7 +150,9 @@ fn inferred_declaration_return_type(
     // condition — it has no sentinel — so this is surge's own guard, and it is
     // what makes inferring a branchy body affordable.
     let usable_type = |ty: &Type| type_is_deeply_concrete(ty);
-    let diagnostics_before = ctx.diagnostics().len();
+    // The whole walk runs against a shadow, so nothing it resolves is published
+    // where the check phase can read it. Its diagnostics die with it.
+    let mut shadow = body_inference_shadow_context(ctx);
     let mut returned: Vec<Type> = Vec::new();
     let mut usable = true;
 
@@ -180,10 +247,9 @@ fn inferred_declaration_return_type(
         &mut returned,
         &mut usable,
         &usable_type,
-        ctx,
+        &mut shadow,
     );
-    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
-
+    drop(shadow);
     // tsc widens the fresh literals a returned expression carries
     // (`getReturnTypeFromBody` runs the result through the widening machinery),
     // so `return { importName: "trpc" }` is `{ importName: string }`. Freezing
