@@ -2,7 +2,7 @@ use super::*;
 
 use surge_ts_types::{ObjectType, PropertyMap};
 
-use crate::metrics::alloc_object_type;
+use crate::metrics::{alloc_function_type, alloc_object_type};
 
 /// Reference-only intersections remain nominal during declaration indexing.
 /// Without this companion to dependency-alias deferral, constructing
@@ -784,9 +784,15 @@ fn merge_intersection_members_now(
                     None => std::sync::Arc::new(object_call_signature.clone()),
                 });
             }
-            if construct_signature.is_none() {
-                construct_signature = object.construct_signature.clone();
-            }
+        }
+        let constructors: Vec<&surge_ts_types::FunctionType> = object_members
+            .iter()
+            .filter_map(|object| object.construct_signature.as_deref())
+            .collect();
+        if let Some(mixed) = mixin_construct_signature(&constructors) {
+            construct_signature = Some(std::sync::Arc::new(mixed));
+        } else if let Some(first) = constructors.first() {
+            construct_signature = Some(std::sync::Arc::new((*first).clone()));
         }
 
         let mut merged = alloc_object_type(properties, string_index_type)
@@ -984,4 +990,70 @@ pub(crate) fn intersection_operand_name(ty: &Type) -> String {
         Type::Union(_) if name.contains(" | ") => format!("({name})"),
         _ => name,
     }
+}
+
+/// tsc's `isMixinConstructorType`: one construct signature taking only
+/// `...args: any[]`.
+fn is_mixin_constructor(signature: &surge_ts_types::FunctionType) -> bool {
+    signature.overloads().is_none()
+        && signature.type_parameter_head().is_none()
+        && signature.is_variadic()
+        && matches!(
+            signature.parameters(),
+            [Type::Any] | [Type::Array(_)]
+        )
+        && match signature.parameters() {
+            [Type::Array(element)] => matches!(element.as_ref(), Type::Any),
+            _ => true,
+        }
+}
+
+/// The construct signature of an intersection that mixes constructors in
+/// (tsc's `resolveIntersectionTypeMembers`): what the first constituent that is
+/// not a mixin takes, returning its own instance type intersected with every
+/// mixin's. With nothing but mixins the first one stands in for it. `None`
+/// when no constituent is a mixin.
+fn mixin_construct_signature(
+    constructors: &[&surge_ts_types::FunctionType],
+) -> Option<surge_ts_types::FunctionType> {
+    let mut is_mixin: Vec<bool> = constructors
+        .iter()
+        .map(|signature| is_mixin_constructor(signature))
+        .collect();
+    if constructors.len() < 2 || !is_mixin.contains(&true) {
+        return None;
+    }
+    if is_mixin.iter().all(|mixin| *mixin) {
+        is_mixin[0] = false;
+    }
+    let base_index = is_mixin.iter().position(|mixin| !mixin)?;
+    let base = constructors[base_index];
+    let with_mixins = |own_return: &Type| -> Type {
+        let mut instances: Vec<Type> = Vec::with_capacity(constructors.len());
+        for (index, signature) in constructors.iter().enumerate() {
+            if index == base_index {
+                instances.push(own_return.clone());
+            } else if is_mixin[index] {
+                instances.push(signature.return_type().clone());
+            }
+        }
+        merge_intersection_members(instances)
+    };
+    let rebuild = |signature: &surge_ts_types::FunctionType| {
+        let rebuilt = alloc_function_type(
+            signature.parameters().to_vec(),
+            with_mixins(signature.return_type()),
+            signature.is_variadic(),
+            signature.required_parameter_count(),
+        );
+        match signature.parameter_names() {
+            Some(names) => rebuilt.with_parameter_names(names.to_vec()),
+            None => rebuilt,
+        }
+    };
+    let mixed = rebuild(base);
+    Some(match base.overloads() {
+        Some(overloads) => mixed.with_overloads(overloads.iter().map(rebuild).collect()),
+        None => mixed,
+    })
 }
