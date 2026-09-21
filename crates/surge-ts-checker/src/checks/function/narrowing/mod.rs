@@ -263,7 +263,12 @@ fn narrow_logical_guard_in_scope(
     // each truthy-tested reference (`o.p && o.p.q`) non-nullish — which
     // `narrow_type_for_identifier` above, keyed on a whole binding, cannot express.
     let mut reference_guards = Vec::new();
-    collect_reference_guards(condition, branch_is_true, &mut reference_guards);
+    collect_reference_guards(
+        condition,
+        branch_is_true,
+        &compared_operand_type(scopes.visible_symbols()),
+        &mut reference_guards,
+    );
     for (base, path, guard) in reference_guards {
         narrow_reference_in_scope(&base, &path, guard, scopes);
     }
@@ -776,6 +781,9 @@ fn narrow_value_guards_by_guard(
     narrow_element_reference_guards_in_scope(condition, scopes, branch_is_true, ctx);
 
     if narrow_logical_guard_in_scope(condition, scopes, branch_is_true, ctx) {
+        return;
+    }
+    if narrow_optional_call_containment_in_scope(condition, scopes, branch_is_true) {
         return;
     }
     if narrow_typeof_in_scope(condition, scopes, branch_is_true) {

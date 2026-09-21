@@ -455,9 +455,127 @@ pub(super) fn narrow_reference_in_scope(
 /// test on a reference, or every reference an `&&` chain proves truthy. Only
 /// truthiness of the true branch is modelled — the falsy complement (`""`, `0`,
 /// …) is not.
+/// tsc's `narrowTypeByOptionalChainContainment`: the reference an optional
+/// chain starts from is not nullish wherever the chain is known not to have
+/// short-circuited — it equals a value that is never `undefined` (`null`
+/// included, for `==`), or it differs from one that always is. `value_type`
+/// answers the compared operand's type.
+fn optional_chain_contained_receiver<'a>(
+    condition: &'a ParsedExpression,
+    branch_is_true: bool,
+    value_type: &dyn Fn(&ParsedExpression) -> Option<Type>,
+) -> Option<&'a ParsedExpression> {
+    use surge_ts_syntax::ParsedBinaryOperator;
+    let ParsedExpression::Binary {
+        operator,
+        left,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let (equals, strict) = match operator {
+        ParsedBinaryOperator::StrictEquals => (true, true),
+        ParsedBinaryOperator::Equals => (true, false),
+        ParsedBinaryOperator::StrictNotEquals => (false, true),
+        ParsedBinaryOperator::NotEquals => (false, false),
+        _ => return None,
+    };
+    let (chain, value) = if left.continues_optional_chain() {
+        (left.as_ref(), right.as_ref())
+    } else if right.continues_optional_chain() {
+        (right.as_ref(), left.as_ref())
+    } else {
+        return None;
+    };
+    let value_type = match value {
+        ParsedExpression::UndefinedLiteral => Type::Undefined,
+        ParsedExpression::NullLiteral => Type::Null,
+        other => value_type(other)?,
+    };
+    let nullable = |ty: &Type| match ty {
+        Type::Undefined | Type::Void => true,
+        Type::Null => !strict,
+        _ => false,
+    };
+    let members: Vec<Type> = match value_type.peeled() {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other],
+    };
+    let removes_nullable = if equals == branch_is_true {
+        members.iter().all(|member| {
+            !nullable(member) && !matches!(member, Type::Any) && !member.is_unknown()
+        })
+    } else {
+        members.iter().all(nullable)
+    };
+    if !removes_nullable {
+        return None;
+    }
+    optional_chain_receiver(chain)
+}
+
+/// The expression written before the chain's innermost `?.`.
+fn optional_chain_receiver(chain: &ParsedExpression) -> Option<&ParsedExpression> {
+    match chain {
+        ParsedExpression::OptionalPropertyAccess { object, .. }
+        | ParsedExpression::OptionalIndexAccess { object, .. }
+        | ParsedExpression::OptionalPropertyCall { object, .. }
+        | ParsedExpression::OptionalCall { callee: object, .. } => Some(object.as_ref()),
+        ParsedExpression::PropertyAccess { object, .. }
+        | ParsedExpression::ElementAccess { object, .. }
+        | ParsedExpression::PropertyCall { object, .. } => optional_chain_receiver(object),
+        _ => None,
+    }
+}
+
+/// The type of an operand a guard compares with, as far as the symbol table
+/// alone answers it: a literal or a binding.
+pub(super) fn compared_operand_type(
+    symbols: &SymbolTable,
+) -> impl Fn(&ParsedExpression) -> Option<Type> + '_ {
+    move |expression| match expression {
+        ParsedExpression::Identifier { name, .. } => {
+            symbols.get(name).map(|symbol| symbol.ty.clone())
+        }
+        other => super::guards::literal_expression_value(other),
+    }
+}
+
+/// The statement form of the containment guard in [`collect_reference_guards`].
+pub(super) fn narrow_optional_call_containment_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    let receiver = {
+        let value_type = compared_operand_type(scopes.visible_symbols());
+        optional_chain_contained_receiver(condition, branch_is_true, &value_type)
+            .or_else(|| match parse_typeof_condition(condition) {
+                Some((operand, tag, eq)) if (branch_is_true == eq) != (tag == "undefined") => {
+                    optional_chain_receiver(operand)
+                }
+                _ => None,
+            })
+            .or_else(|| match parse_instanceof_condition(condition) {
+                Some((operand, _)) if branch_is_true => optional_chain_receiver(operand),
+                _ => None,
+            })
+            .and_then(reference_path)
+    };
+    let Some((base, path)) = receiver else {
+        return false;
+    };
+    narrow_reference_in_scope(&base, &path, ReferenceGuard::Truthy, scopes);
+    // Not the end of it: `o?.kind === "a"` still discriminates `o`.
+    false
+}
+
 pub(super) fn collect_reference_guards<'a>(
     condition: &'a ParsedExpression,
     branch_is_true: bool,
+    value_type: &dyn Fn(&ParsedExpression) -> Option<Type>,
     guards: &mut Vec<(String, Vec<String>, ReferenceGuard<'a>)>,
 ) {
     if let ParsedExpression::Logical {
@@ -468,8 +586,8 @@ pub(super) fn collect_reference_guards<'a>(
     } = condition
     {
         if branch_is_true {
-            collect_reference_guards(left, true, guards);
-            collect_reference_guards(right, true, guards);
+            collect_reference_guards(left, true, value_type, guards);
+            collect_reference_guards(right, true, value_type, guards);
         }
         return;
     }
@@ -483,8 +601,8 @@ pub(super) fn collect_reference_guards<'a>(
     } = condition
     {
         if !branch_is_true {
-            collect_reference_guards(left, false, guards);
-            collect_reference_guards(right, false, guards);
+            collect_reference_guards(left, false, value_type, guards);
+            collect_reference_guards(right, false, value_type, guards);
         }
         return;
     }
@@ -503,7 +621,7 @@ pub(super) fn collect_reference_guards<'a>(
             ..
         } = operand.as_ref()
     {
-        collect_reference_guards(inner, branch_is_true, guards);
+        collect_reference_guards(inner, branch_is_true, value_type, guards);
         return;
     }
     if let ParsedExpression::Unary {
@@ -512,11 +630,27 @@ pub(super) fn collect_reference_guards<'a>(
         ..
     } = condition
     {
-        collect_reference_guards(operand, !branch_is_true, guards);
+        collect_reference_guards(operand, !branch_is_true, value_type, guards);
         return;
     }
 
+    // `o?.f() === value` holds only where `o` is not nullish. The comparison
+    // may narrow further below (`o?.kind === "a"` still discriminates `o`).
+    if let Some(receiver) =
+        optional_chain_contained_receiver(condition, branch_is_true, value_type)
+        && let Some((base, path)) = reference_path(receiver)
+    {
+        guards.push((base, path, ReferenceGuard::Truthy));
+    }
+
     if let Some((operand, tag, eq)) = parse_typeof_condition(condition) {
+        // A chain whose `typeof` is anything but `"undefined"` did not
+        // short-circuit, so what it starts from is present.
+        if (branch_is_true == eq) != (tag == "undefined")
+            && let Some((base, path)) = optional_chain_receiver(operand).and_then(reference_path)
+        {
+            guards.push((base, path, ReferenceGuard::Truthy));
+        }
         if let Some((base, path)) = reference_path(operand) {
             guards.push((
                 base,
@@ -531,6 +665,11 @@ pub(super) fn collect_reference_guards<'a>(
     }
 
     if let Some((operand, ctor_name)) = parse_instanceof_condition(condition) {
+        if branch_is_true
+            && let Some((base, path)) = optional_chain_receiver(operand).and_then(reference_path)
+        {
+            guards.push((base, path, ReferenceGuard::Truthy));
+        }
         if let Some((base, path)) = reference_path(operand) {
             guards.push((
                 base,
@@ -615,7 +754,14 @@ pub(super) fn collect_reference_guards<'a>(
         return;
     }
 
-    if branch_is_true && let Some((base, path)) = reference_path(condition) {
+    // `a?.b()` being truthy proves `a` present: a short-circuited chain is
+    // `undefined`. `reference_path` stops at the call, so test its receiver.
+    let tested = match condition {
+        ParsedExpression::OptionalPropertyCall { object, .. }
+        | ParsedExpression::OptionalCall { callee: object, .. } => object.as_ref(),
+        other => other,
+    };
+    if branch_is_true && let Some((base, path)) = reference_path(tested) {
         guards.push((base, path, ReferenceGuard::Truthy));
     }
 }
@@ -640,7 +786,12 @@ pub(super) fn narrow_reference_guard_symbol_table(
     branch_is_true: bool,
 ) -> Option<SymbolTable> {
     let mut guards = Vec::new();
-    collect_reference_guards(condition, branch_is_true, &mut guards);
+    collect_reference_guards(
+        condition,
+        branch_is_true,
+        &compared_operand_type(symbols),
+        &mut guards,
+    );
     if guards.is_empty() {
         return None;
     }
