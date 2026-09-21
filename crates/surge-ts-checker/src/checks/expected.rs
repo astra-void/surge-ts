@@ -15,11 +15,17 @@ use crate::spans::{choose_span, diagnostic_with_syntax_span};
 use crate::symbols::SymbolTable;
 use surge_ts_types::{TypeCopyReason, with_type_copy_reason};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExpectedTypeDiagnostic {
     TypeNotAssignable,
     ArgumentNotAssignable,
     SatisfiesNotAssignable,
+    /// The expectation types the expression — its callbacks' parameters, its
+    /// methods' — and relates it to nothing. Go gives the operand of `x as T` and
+    /// `<T>x` the asserted type as its contextual type (checker.go:29718) but
+    /// never checks assignability against it: an assertion is related by
+    /// comparability, which TS2352 reports on its own.
+    ContextOnly,
 }
 
 pub(crate) fn evaluate_expression_with_expected_type(
@@ -1993,7 +1999,9 @@ fn evaluate_object_literal_with_expected_type(
                     with_type_copy_reason(TypeCopyReason::ExpectedType, || actual_type.clone()),
                 );
                 record_assignability_check();
-                if !is_assignable_to(&actual_type, &expected_property_type) {
+                if expected_diagnostic != ExpectedTypeDiagnostic::ContextOnly
+                    && !is_assignable_to(&actual_type, &expected_property_type)
+                {
                     // The comparison target carries the optionality-implied
                     // `undefined`, but tsc's elaboration names the property's
                     // written type — a value that is not `undefined` failed
@@ -2058,13 +2066,18 @@ fn evaluate_object_literal_with_expected_type(
                 // The value's own error is already reported and the literal
                 // cannot be compared further, but an excess property is a
                 // separate report tsc still makes.
-                report_excess_property(properties, expected_object_type, fallback_span, ctx);
+                if expected_diagnostic != ExpectedTypeDiagnostic::ContextOnly {
+                    report_excess_property(properties, expected_object_type, fallback_span, ctx);
+                }
                 return InferredExpression::Unknown;
             }
         }
     }
 
-    if report_excess_property(properties, expected_object_type, fallback_span, ctx) {
+    // An assertion is related by comparability, so an extra member is no error.
+    if expected_diagnostic != ExpectedTypeDiagnostic::ContextOnly
+        && report_excess_property(properties, expected_object_type, fallback_span, ctx)
+    {
         return InferredExpression::Unknown;
     }
 
@@ -2082,7 +2095,10 @@ fn evaluate_object_literal_with_expected_type(
             .collect()
     };
 
-    if let Some(property_name) = missing_property_names.first() {
+    // An asserted literal may omit members freely (`{} as Ctx` is not an error).
+    if expected_diagnostic != ExpectedTypeDiagnostic::ContextOnly
+        && let Some(property_name) = missing_property_names.first()
+    {
         // tsc widens a literal member only where its contextual type lets it:
         // `kind: "two"` against a `"one" | "two"` slot stays `"two"`, since the
         // widened `string` would no longer fit.
@@ -2117,7 +2133,7 @@ fn evaluate_object_literal_with_expected_type(
             .map_or(target_type_name, |union| union.name());
         let diagnostic = if expected_object_type.is_intersection || union_target.is_some() {
             match expected_diagnostic {
-                ExpectedTypeDiagnostic::TypeNotAssignable => {
+                ExpectedTypeDiagnostic::TypeNotAssignable | ExpectedTypeDiagnostic::ContextOnly => {
                     Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone())
                 }
                 ExpectedTypeDiagnostic::ArgumentNotAssignable => {
@@ -2471,6 +2487,9 @@ fn push_expected_type_mismatch(
     diagnostic_kind: ExpectedTypeDiagnostic,
     ctx: &mut CheckerContext,
 ) {
+    if diagnostic_kind == ExpectedTypeDiagnostic::ContextOnly {
+        return;
+    }
     // An instantiation over an open argument (`Mock<T>` with `T` bare) is not
     // settled enough to reject; the argument path already declines it.
     if crate::checks::call::is_open_instantiation(source_type) {
@@ -2484,7 +2503,7 @@ fn push_expected_type_mismatch(
         &ctx.file_name,
     );
     let diagnostic = match diagnostic_kind {
-        ExpectedTypeDiagnostic::TypeNotAssignable => {
+        ExpectedTypeDiagnostic::TypeNotAssignable | ExpectedTypeDiagnostic::ContextOnly => {
             crate::checks::expr::type_not_assignable_diagnostic(
                 source_type,
                 expected_type,

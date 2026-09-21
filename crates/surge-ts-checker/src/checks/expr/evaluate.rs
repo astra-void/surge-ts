@@ -1195,12 +1195,33 @@ fn evaluate_type_assertion(
             }
         }
         _ => {
-            let source = evaluate_expression(
-                asserted_expression,
-                expression_span.or(fallback_span),
-                symbols,
-                ctx,
-            );
+            // An object literal takes the asserted type as its contextual type
+            // (Go's `getContextualType`, checker.go:29718), so a method in
+            // `{ handle(x) { … } } as Ctx` is not an implicit `any`. The
+            // expectation only types; the assertion relates nothing. Go gives
+            // every operand that context, but surge's array and tuple
+            // expectations report element mismatches whatever the mode, so
+            // routing those here would add errors an assertion never raises.
+            let source = if matches!(
+                asserted_expression.as_ref(),
+                ParsedExpression::ObjectLiteral { .. }
+            ) {
+                crate::checks::expected::evaluate_expression_with_expected_type(
+                    asserted_expression,
+                    expression_span.or(fallback_span),
+                    Some(&resolved_type),
+                    crate::checks::expected::ExpectedTypeDiagnostic::ContextOnly,
+                    symbols,
+                    ctx,
+                )
+            } else {
+                evaluate_expression(
+                    asserted_expression,
+                    expression_span.or(fallback_span),
+                    symbols,
+                    ctx,
+                )
+            };
             // TS2352 between object types is withheld: the comparable relation
             // is only as good as surge's structural expansion of a library's
             // generic types, and on real code (zod's
