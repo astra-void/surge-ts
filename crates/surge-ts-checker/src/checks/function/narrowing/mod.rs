@@ -586,10 +586,17 @@ fn narrow_condition_symbol_table_by_guard(
 ) -> Option<SymbolTable> {
     // `ok ? a : b` where `ok` is a boolean `const` alias narrows by the
     // condition the alias was written as, not by the opaque identifier.
+    // …and by the alias binding itself, which is what was tested.
     if let ParsedExpression::Identifier { name, .. } = condition
         && let Some(alias) = symbols.alias_condition(name)
     {
-        return narrow_condition_symbol_table(&alias, symbols, branch_is_true);
+        let by_alias = narrow_condition_symbol_table(&alias, symbols, branch_is_true);
+        return narrow_reference_guard_symbol_table(
+            condition,
+            by_alias.as_ref().unwrap_or(symbols),
+            branch_is_true,
+        )
+        .or(by_alias);
     }
     // `!guard` narrows the opposite branch.
     if let ParsedExpression::Unary {

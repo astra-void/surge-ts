@@ -12,6 +12,33 @@ use super::{
     narrow_condition_symbol_table, narrow_reference_in_scope, reference_path,
 };
 
+/// What is left of a type once it is known truthy: tsc drops every member that
+/// is definitely falsy, the literals `false`, `0` and `""` as well as the
+/// nullish ones, so `false | Performance` tested with `perf &&` is a
+/// `Performance`. A named type is opened only when that changes it.
+pub(super) fn remove_definitely_falsy(ty: &Type) -> Type {
+    let is_falsy_literal = |member: &Type| match member {
+        Type::BooleanLiteral(false) => true,
+        Type::StringLiteral(value) => value.is_empty(),
+        Type::NumberLiteral(literal) => literal.value == "0",
+        _ => false,
+    };
+    let narrowed = surge_ts_types::remove_nullish(ty);
+    let members = match narrowed.peeled() {
+        Type::Union(union) => union.types().to_vec(),
+        _ => return narrowed,
+    };
+    if !members.iter().any(is_falsy_literal) {
+        return narrowed;
+    }
+    surge_ts_types::union_type(
+        members
+            .into_iter()
+            .filter(|member| !is_falsy_literal(member))
+            .collect(),
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TruthyGuardTarget {
     Identifier(String),
@@ -38,7 +65,7 @@ pub(crate) fn narrow_truthy_guarded_identifiers(
         let narrowed = match &target {
             TruthyGuardTarget::Identifier(_) => {
                 with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-                    surge_ts_types::remove_nullish(&symbol.ty)
+                    remove_definitely_falsy(&symbol.ty)
                 })
             }
             TruthyGuardTarget::Property { property, .. } => {
@@ -140,7 +167,7 @@ pub(crate) fn truthy_guard_base_identifier(expression: &ParsedExpression) -> Opt
 }
 
 pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type {
-    let narrowed_base = surge_ts_types::remove_nullish(&ty.peeled());
+    let narrowed_base = remove_definitely_falsy(&ty.peeled());
 
     match narrowed_base {
         Type::Object(mut object_type) => {
@@ -149,7 +176,7 @@ pub(crate) fn narrow_truthy_guarded_property(ty: &Type, property: &str) -> Type 
                 properties.insert(
                     property.into(),
                     surge_ts_types::ObjectProperty {
-                        ty: surge_ts_types::remove_nullish(&existing.ty),
+                        ty: remove_definitely_falsy(&existing.ty),
                         optional: false,
                         method: existing.method,
                         readonly: existing.readonly,
@@ -285,7 +312,7 @@ pub(crate) fn narrow_truthy_operand_symbol_table(
         let new_ty = match &target {
             TruthyGuardTarget::Identifier(_) => {
                 with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-                    surge_ts_types::remove_nullish(&symbol.ty)
+                    remove_definitely_falsy(&symbol.ty)
                 })
             }
             TruthyGuardTarget::Property { property, .. } => {
@@ -531,7 +558,7 @@ pub(crate) fn narrow_truthy_guarded_symbol_table(
         let narrowed = match &target {
             TruthyGuardTarget::Identifier(_) => {
                 with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-                    surge_ts_types::remove_nullish(&symbol.ty)
+                    remove_definitely_falsy(&symbol.ty)
                 })
             }
             TruthyGuardTarget::Property { property, .. } => {

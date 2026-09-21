@@ -83,7 +83,7 @@ impl ReferenceGuard<'_> {
     pub(super) fn narrow_leaf(&self, ty: &Type, optional: bool) -> Option<(Type, bool)> {
         match self {
             Self::Truthy => {
-                let narrowed = surge_ts_types::remove_nullish(ty);
+                let narrowed = super::truthy::remove_definitely_falsy(ty);
                 (optional || narrowed != *ty).then_some((narrowed, false))
             }
             // An optional property carries its `undefined` in the `optional` flag

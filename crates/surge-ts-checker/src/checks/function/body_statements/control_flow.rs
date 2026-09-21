@@ -67,8 +67,10 @@ pub(crate) fn check_function_if_statement(
         &visible_symbols(scopes),
         ctx,
     );
-    // `if (ok)` where `ok` is a boolean `const` alias narrows by the condition
-    // the alias was written as, not by the opaque identifier.
+    // `if (ok)` where `ok` is a `const` alias of a condition narrows by the
+    // condition the alias was written as — and, in each branch below, by `ok`
+    // itself as well: `const perf = inBrowser && source; if (perf)` leaves
+    // `perf` truthy, whatever it says about `inBrowser` and `source`.
     let alias_condition = resolved_alias_condition(&if_statement.condition, flow_state);
     let base_condition: &ParsedExpression =
         alias_condition.as_deref().unwrap_or(&if_statement.condition);
@@ -135,6 +137,9 @@ pub(crate) fn check_function_if_statement(
                 true,
                 ctx,
             );
+        if alias_condition.is_some() {
+            narrow_discriminant_in_scope(&if_statement.condition, scopes, true, ctx);
+        }
         flow_state.begin_branch_capture();
         check_function_body(
             if_statement.then_body,
@@ -164,6 +169,9 @@ pub(crate) fn check_function_if_statement(
                 false,
                 ctx,
             );
+            if alias_condition.is_some() {
+                narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
+            }
             flow_state.begin_branch_capture();
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
             let mut else_delta = flow_state.finish_branch_capture();
@@ -183,6 +191,9 @@ pub(crate) fn check_function_if_statement(
                 false,
                 ctx,
             );
+            if alias_condition.is_some() {
+                narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
+            }
             narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
         }
 
@@ -196,6 +207,9 @@ pub(crate) fn check_function_if_statement(
                 true,
                 ctx,
             );
+        if alias_condition.is_some() {
+            narrow_discriminant_in_scope(&if_statement.condition, scopes, true, ctx);
+        }
         check_function_body(
             if_statement.then_body,
             with_type_copy_reason(TypeCopyReason::ReturnChecking, || return_type.clone()),
@@ -218,6 +232,9 @@ pub(crate) fn check_function_if_statement(
                 false,
                 ctx,
             );
+            if alias_condition.is_some() {
+                narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
+            }
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
             let else_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
             scopes.pop_child();
@@ -233,6 +250,9 @@ pub(crate) fn check_function_if_statement(
                 false,
                 ctx,
             );
+            if alias_condition.is_some() {
+                narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
+            }
             narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
         }
     }
@@ -287,6 +307,9 @@ pub(crate) fn check_function_while_statement(
         true,
         ctx,
     );
+    if alias_condition.is_some() {
+        narrow_discriminant_in_scope(&condition, scopes, true, ctx);
+    }
     if flow_state.tracked_local_count() > 0 {
         flow_state.begin_branch_capture();
         check_function_body(body, return_type, scopes, flow_state, ctx);
