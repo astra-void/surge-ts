@@ -229,7 +229,30 @@ fn parse_block_statement_as_function_body(
 fn parse_expression_statement_as_function_body(
     expression_statement: &ExpressionStatement<'_>,
 ) -> Option<Vec<ParsedFunctionBodyStatement>> {
-    let destructured = super::parse_destructuring_assignment(&expression_statement.expression);
+    parse_expression_as_function_body_statements(&expression_statement.expression)
+}
+
+/// The clauses of a `for` header are expressions evaluated for effect, checked
+/// like the statements they would be on their own; a comma list is one per
+/// operand.
+fn parse_for_clause_statements(expression: &Expression<'_>) -> Vec<ParsedFunctionBodyStatement> {
+    match expression {
+        Expression::SequenceExpression(sequence) => sequence
+            .expressions
+            .iter()
+            .flat_map(parse_for_clause_statements)
+            .collect(),
+        Expression::ParenthesizedExpression(parenthesized) => {
+            parse_for_clause_statements(&parenthesized.expression)
+        }
+        _ => parse_expression_as_function_body_statements(expression).unwrap_or_default(),
+    }
+}
+
+fn parse_expression_as_function_body_statements(
+    statement_expression: &Expression<'_>,
+) -> Option<Vec<ParsedFunctionBodyStatement>> {
+    let destructured = super::parse_destructuring_assignment(statement_expression);
     if !destructured.is_empty() {
         return Some(
             destructured
@@ -238,7 +261,7 @@ fn parse_expression_statement_as_function_body(
                 .collect(),
         );
     }
-    match &expression_statement.expression {
+    match statement_expression {
         Expression::AssignmentExpression(assignment) => {
             if let Some(this_assignment) = parse_this_property_assignment(assignment) {
                 return Some(vec![ParsedFunctionBodyStatement::ThisPropertyAssignment(
@@ -259,7 +282,7 @@ fn parse_expression_statement_as_function_body(
             })
         }
         _ => {
-            let (expression, _) = parse_expression(&expression_statement.expression);
+            let (expression, _) = parse_expression(statement_expression);
 
             if expression == ParsedExpression::Unknown {
                 return None;
@@ -593,8 +616,7 @@ fn parse_for_statement(for_statement: &ForStatement<'_>) -> Vec<ParsedFunctionBo
         }
         Some(init) => {
             if let Some(expression) = init.as_expression() {
-                let (expression, _) = parse_expression(expression);
-                block.push(ParsedFunctionBodyStatement::Expression(Box::new(expression)));
+                block.extend(parse_for_clause_statements(expression));
             }
         }
         None => {}
@@ -602,8 +624,13 @@ fn parse_for_statement(for_statement: &ForStatement<'_>) -> Vec<ParsedFunctionBo
 
     let mut body = parse_branch_body(&for_statement.body);
     if let Some(update) = &for_statement.update {
-        let (update, _) = parse_expression(update);
-        body.push(ParsedFunctionBodyStatement::Expression(Box::new(update)));
+        let update = parse_for_clause_statements(update);
+        if !update.is_empty() {
+            // The update clause runs in the header's scope: a `const c` the body
+            // declares does not shadow the header's `c` there.
+            body = vec![ParsedFunctionBodyStatement::Block(body)];
+            body.extend(update);
+        }
     }
 
     // A `for` with no test never falls through on its own, and enters its body

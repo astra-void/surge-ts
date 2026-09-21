@@ -296,9 +296,23 @@ pub(crate) fn check_function_block(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
+    // A bare block always runs, so what it assigns to an outer binding holds
+    // after it; a binding the block declares itself is not the outer one.
+    let mut assigned = Vec::new();
+    branch_assigned_names(&block_body, &mut assigned);
+    assigned.retain(|name| {
+        !block_body.iter().any(|statement| {
+            matches!(
+                statement,
+                ParsedFunctionBodyStatement::VariableDeclaration(variable) if variable.name == *name
+            )
+        })
+    });
     scopes.push_child();
     check_function_body(block_body, return_type, scopes, flow_state, ctx);
+    let assigned_types = branch_assignment_types(&assigned, scopes);
     scopes.pop_child();
+    adopt_branch_assignments(&assigned_types, scopes);
 }
 
 pub(crate) fn check_function_expression_statement(

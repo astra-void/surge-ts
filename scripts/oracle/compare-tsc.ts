@@ -590,6 +590,7 @@ export const fixturePresets: Record<string, string> = {
   'logical-operand-value-basic': path.join(workspaceRoot, 'tests/compat-projects/logical-operand-value-basic/tsconfig.json'),
   'instanceof-constructor-value-basic': path.join(workspaceRoot, 'tests/compat-projects/instanceof-constructor-value-basic/tsconfig.json'),
   'binding-element-default-basic': path.join(workspaceRoot, 'tests/compat-projects/binding-element-default-basic/tsconfig.json'),
+  'for-header-clauses-basic': path.join(workspaceRoot, 'tests/compat-projects/for-header-clauses-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
