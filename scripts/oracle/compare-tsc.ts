@@ -615,6 +615,7 @@ export const fixturePresets: Record<string, string> = {
   'inferred-type-predicate-declaration-basic': path.join(workspaceRoot, 'tests/compat-projects/inferred-type-predicate-declaration-basic/tsconfig.json'),
   'expando-function-member-basic': path.join(workspaceRoot, 'tests/compat-projects/expando-function-member-basic/tsconfig.json'),
   'module-block-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/module-block-scope-basic/tsconfig.json'),
+  'lib-constructor-feature-basic': path.join(workspaceRoot, 'tests/compat-projects/lib-constructor-feature-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

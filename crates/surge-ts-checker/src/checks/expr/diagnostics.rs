@@ -163,9 +163,49 @@ pub(crate) fn lib_feature_of_missing_member(receiver: &Type, member: &str) -> Op
         ("es2022", &["at"]),
         ("esnext", &["isWellFormed", "toWellFormed"]),
     ];
+    // Receivers resolved from the lib itself, keyed — as tsc keys them — by
+    // the name of the interface the member would have been declared on.
+    const OBJECT_CONSTRUCTOR: &[(&str, &[&str])] = &[
+        ("es2015", &["assign", "getOwnPropertySymbols", "keys", "is", "setPrototypeOf"]),
+        ("es2017", &["values", "entries", "getOwnPropertyDescriptors"]),
+        ("es2019", &["fromEntries"]),
+        ("es2022", &["hasOwn"]),
+        ("es2024", &["groupBy"]),
+    ];
+    const ARRAY_CONSTRUCTOR: &[(&str, &[&str])] =
+        &[("es2015", &["from", "of"]), ("esnext", &["fromAsync"])];
+    const NUMBER_CONSTRUCTOR: &[(&str, &[&str])] = &[(
+        "es2015",
+        &["isFinite", "isInteger", "isNaN", "isSafeInteger", "parseFloat", "parseInt"],
+    )];
+    const MATH: &[(&str, &[&str])] = &[
+        (
+            "es2015",
+            &[
+                "clz32", "imul", "sign", "log10", "log2", "log1p", "expm1", "cosh", "sinh", "tanh",
+                "acosh", "asinh", "atanh", "hypot", "trunc", "fround", "cbrt",
+            ],
+        ),
+        ("es2025", &["f16round"]),
+    ];
+    const PROMISE_CONSTRUCTOR: &[(&str, &[&str])] = &[
+        ("es2015", &["all", "race", "reject", "resolve"]),
+        ("es2020", &["allSettled"]),
+        ("es2021", &["any"]),
+        ("es2024", &["withResolvers"]),
+        ("es2025", &["try"]),
+    ];
     let features = match receiver {
         Type::Array(_) | Type::Tuple(_) => ARRAY,
         Type::String | Type::StringLiteral(_) => STRING,
+        Type::Object(_) | Type::Reference(_) => match receiver.name().as_str() {
+            "ObjectConstructor" => OBJECT_CONSTRUCTOR,
+            "ArrayConstructor" => ARRAY_CONSTRUCTOR,
+            "NumberConstructor" => NUMBER_CONSTRUCTOR,
+            "Math" => MATH,
+            "PromiseConstructor" => PROMISE_CONSTRUCTOR,
+            _ => return None,
+        },
         _ => return None,
     };
     features

@@ -1,0 +1,12 @@
+const e = Object.entries({ a: 1 });
+const v = Object.values({ a: 1 });
+const f = Object.fromEntries([["a", 1]]);
+const h = Object.hasOwn({}, "a");
+const k = Object.keys({});
+const a = Array.from([1]);
+const n = Number.isInteger(1);
+const t = Math.trunc(1.5);
+const p = Promise.allSettled([]);
+const q = Promise.resolve(1);
+Object.nope; Math.nope;
+export {};

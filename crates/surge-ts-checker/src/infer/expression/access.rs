@@ -692,9 +692,12 @@ pub(crate) fn lib_lacks_builtin_member(receiver: &Type, name: &str, ctx: &Checke
     {
         return false;
     }
+    // Only the receivers surge answers from its own tables; one resolved from
+    // the lib (`ObjectConstructor`) already lacks what the lib lacks.
     let interface_name = match receiver {
         Type::Array(_) | Type::Tuple(_) => "Array",
-        _ => "String",
+        Type::String | Type::StringLiteral(_) => "String",
+        _ => return false,
     };
     match ctx.lookup_type_declaration(interface_name) {
         Some(crate::symbols::TypeDeclarationInfo::Interface(info)) => {
