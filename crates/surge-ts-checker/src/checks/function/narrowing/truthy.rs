@@ -12,6 +12,52 @@ use super::{
     narrow_condition_symbol_table, narrow_reference_in_scope, reference_path,
 };
 
+/// What is left of a type once it is known falsy (tsc's `TypeFacts.Falsy`): a
+/// primitive keeps its type, since one of its values is falsy, `boolean` is
+/// `false`, the nullish members and the falsy literals stay, and everything
+/// that is always truthy goes — objects, functions, arrays and the other
+/// literals. Nothing left is `never`. `any`, `unknown` and what surge could not
+/// model say nothing and are returned whole, as is an enum, some member of
+/// which may be `0`.
+pub(super) fn keep_possibly_falsy(ty: &Type) -> Type {
+    fn members_of(ty: &Type, out: &mut Vec<Type>) -> bool {
+        match ty {
+            Type::Any | Type::Unknown | Type::GenuineUnknown | Type::ErrorType | Type::TypeParameter(_) => {
+                return false;
+            }
+            Type::String | Type::Number | Type::BigInt | Type::Undefined | Type::Null | Type::Void => {
+                out.push(ty.clone());
+            }
+            Type::Boolean | Type::BooleanLiteral(false) => out.push(Type::BooleanLiteral(false)),
+            Type::StringLiteral(value) if value.is_empty() => out.push(ty.clone()),
+            Type::NumberLiteral(literal) if literal.value == "0" => out.push(ty.clone()),
+            Type::Union(union) => {
+                for member in union.types() {
+                    if !members_of(member, out) {
+                        return false;
+                    }
+                }
+            }
+            Type::Reference(reference) if reference.enum_owner.is_some() => return false,
+            Type::Reference(_) => match ty.peeled() {
+                Type::Reference(_) => return false,
+                peeled => return members_of(&peeled, out),
+            },
+            _ => {}
+        }
+        true
+    }
+    let mut kept = Vec::new();
+    if !members_of(ty, &mut kept) {
+        return ty.clone();
+    }
+    if kept.is_empty() {
+        Type::Never
+    } else {
+        surge_ts_types::union_type(kept)
+    }
+}
+
 /// What is left of a type once it is known truthy: tsc drops every member that
 /// is definitely falsy, the literals `false`, `0` and `""` as well as the
 /// nullish ones, so `false | Performance` tested with `perf &&` is a
@@ -355,6 +401,10 @@ pub(super) fn narrow_truthy_reference_in_scope(
     // nullish the whole chain would short-circuit to `undefined` and the test
     // would be false. `reference_path` stops at the call, so unwrap to its
     // receiver first.
+    let unwrapped_optional_call = matches!(
+        condition,
+        ParsedExpression::OptionalPropertyCall { .. } | ParsedExpression::OptionalCall { .. }
+    );
     let condition = match condition {
         ParsedExpression::OptionalPropertyCall { object, .. }
         | ParsedExpression::OptionalCall { callee: object, .. } => object.as_ref(),
@@ -369,6 +419,10 @@ pub(super) fn narrow_truthy_reference_in_scope(
     narrow_union_by_property_truthiness_in_scope(&base, &path, branch_is_true, scopes);
     if branch_is_true {
         narrow_reference_in_scope(&base, &path, ReferenceGuard::Truthy, scopes);
+    } else if !unwrapped_optional_call {
+        // `a?.b()` being falsy says nothing about `a`; a plain reference being
+        // falsy leaves only what can be.
+        narrow_reference_in_scope(&base, &path, ReferenceGuard::Falsy, scopes);
     }
     true
 }

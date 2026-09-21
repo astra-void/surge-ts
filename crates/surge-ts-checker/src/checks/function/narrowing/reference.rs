@@ -53,6 +53,8 @@ pub(super) enum ReferenceGuard<'a> {
         literal: &'a ParsedExpression,
         keep_matching: bool,
     },
+    /// The reference tested falsy (`if (!x)`, the `else` of `if (x)`).
+    Falsy,
     /// `a.b.c.kind === "x"`: the union at `a.b.c` is filtered by its `kind`
     /// member, however deep the reference is.
     Discriminant {
@@ -82,6 +84,11 @@ impl ReferenceGuard<'_> {
     /// binding's type with `optional = false`. `None` leaves the leaf alone.
     pub(super) fn narrow_leaf(&self, ty: &Type, optional: bool) -> Option<(Type, bool)> {
         match self {
+            Self::Falsy => {
+                let effective = Self::effective_leaf_type(ty, optional);
+                let narrowed = super::truthy::keep_possibly_falsy(&effective);
+                (narrowed != effective).then_some((narrowed, false))
+            }
             Self::Truthy => {
                 let narrowed = super::truthy::remove_definitely_falsy(ty);
                 (optional || narrowed != *ty).then_some((narrowed, false))
@@ -447,6 +454,13 @@ pub(crate) fn narrow_assignment_target_in_scope(
 
 /// Applies `guard` to `base`'s `path` in the *current* scope frame — see the
 /// shadowing note in [`narrow_discriminant_in_scope`].
+/// A function declaration is not a reference tsc narrows — only variables,
+/// parameters and properties are — so `isFoo || isFoo()` still calls a
+/// function, not the `never` a falsy `isFoo` would be.
+fn is_unnarrowable_binding(symbol: &SymbolInfo, path: &[String]) -> bool {
+    path.is_empty() && matches!(symbol.kind, crate::symbols::SymbolKind::Function)
+}
+
 pub(super) fn narrow_reference_in_scope(
     base: &str,
     path: &[String],
@@ -456,6 +470,9 @@ pub(super) fn narrow_reference_in_scope(
     let Some(symbol) = scopes.resolve(base) else {
         return;
     };
+    if is_unnarrowable_binding(symbol, path) {
+        return;
+    }
     let Some(narrowed) = narrowed_reference_type(&symbol.ty, path, guard) else {
         return;
     };
@@ -780,6 +797,8 @@ pub(super) fn collect_reference_guards<'a>(
     };
     if branch_is_true && let Some((base, path)) = reference_path(tested) {
         guards.push((base, path, ReferenceGuard::Truthy));
+    } else if !branch_is_true && let Some((base, path)) = reference_path(condition) {
+        guards.push((base, path, ReferenceGuard::Falsy));
     }
 }
 
@@ -819,6 +838,9 @@ pub(super) fn narrow_reference_guard_symbol_table(
         let Some(symbol) = narrowed_symbols.get(&base) else {
             continue;
         };
+        if is_unnarrowable_binding(symbol, &path) {
+            continue;
+        }
         let Some(narrowed) = narrowed_reference_type(&symbol.ty, &path, guard) else {
             continue;
         };

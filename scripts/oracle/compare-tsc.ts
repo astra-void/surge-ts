@@ -603,6 +603,7 @@ export const fixturePresets: Record<string, string> = {
   'lib-builtin-member-fallback-basic': path.join(workspaceRoot, 'tests/compat-projects/lib-builtin-member-fallback-basic/tsconfig.json'),
   'mixin-constructor-intersection-basic': path.join(workspaceRoot, 'tests/compat-projects/mixin-constructor-intersection-basic/tsconfig.json'),
   'truthy-falsy-literal-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/truthy-falsy-literal-narrowing-basic/tsconfig.json'),
+  'falsy-branch-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/falsy-branch-narrowing-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
