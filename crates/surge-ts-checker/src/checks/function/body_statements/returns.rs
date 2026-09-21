@@ -107,14 +107,23 @@ pub(crate) fn check_function_return_statement(
         // omission in the source (tRPC's `new ReadableStream({ start(c) {…} })`
         // inside a returned object is typed by the constructor, not by the
         // return). Same reasoning as a degraded expectation.
-        ctx.degraded_expected_type_depth += 1;
+        //
+        // Not for an unannotated declaration, though: there the missing
+        // expectation is the source's, exactly as in Go, and suppressing it hid
+        // real implicit-`any` callbacks in returned JSX alongside surge's gaps.
+        let suppress = !ctx.in_unannotated_declaration_body();
+        if suppress {
+            ctx.degraded_expected_type_depth += 1;
+        }
         let inferred = evaluate_expression(
             expression,
             return_statement.expression_span,
             symbols,
             ctx,
         );
-        ctx.degraded_expected_type_depth -= 1;
+        if suppress {
+            ctx.degraded_expected_type_depth -= 1;
+        }
         match inferred {
             InferredExpression::Known(source_type) => ctx.note_contextual_return_type(&source_type),
             // A value surge could not type still counts as returned: tsc knows

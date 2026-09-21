@@ -105,6 +105,13 @@ pub(crate) struct ContextualReturnFrame {
     /// return type admits `undefined` — a falling-through path then returns a
     /// value the type already allows.
     returned_void_like: bool,
+    /// This body's returns have no expectation *by construction*: an
+    /// unannotated declaration or class member, which Go checks only against
+    /// the annotation (`getReturnTypeFromAnnotation`, nil) and never types
+    /// contextually. Distinct from a body whose contextual return merely
+    /// degraded, which also reaches the return check with no expectation but
+    /// where the missing context is surge's own gap.
+    unannotated_declaration: bool,
     /// The types this body's `return <expr>`s produced, for rendering the whole
     /// signature tsc names when a contextually-typed arrow does not fit.
     /// Collected only for an active frame, and capped — the render only needs a
@@ -131,6 +138,20 @@ impl CheckerContext {
     }
 
     /// Whether the body currently being checked owns an active frame.
+    /// Marks the innermost body as an unannotated declaration's (see
+    /// [`ContextualReturnFrame::unannotated_declaration`]).
+    pub(crate) fn mark_unannotated_declaration_body(&mut self) {
+        if let Some(frame) = self.contextual_return_frames.last_mut() {
+            frame.unannotated_declaration = true;
+        }
+    }
+
+    pub(crate) fn in_unannotated_declaration_body(&self) -> bool {
+        self.contextual_return_frames
+            .last()
+            .is_some_and(|frame| frame.unannotated_declaration)
+    }
+
     pub(crate) fn in_contextual_return_body(&self) -> bool {
         self.contextual_return_frames
             .last()

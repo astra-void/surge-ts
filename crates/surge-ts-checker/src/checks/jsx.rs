@@ -172,12 +172,33 @@ fn resolve_props_type(
                 ctx,
             );
             match inferred {
-                InferredExpression::Known(component_type) => component_props_type(&component_type),
-                _ => None,
+                InferredExpression::Known(component_type) => component_props_type(&component_type)
+                    .or_else(|| component_is_unmodelled(&component_type).then_some(Type::Unknown)),
+                // A value surge could not type at all is its own gap: tsc has the
+                // component's props and types the callbacks from them. Answering
+                // the sentinel marks the props unmodelled.
+                InferredExpression::Unknown => Some(Type::Unknown),
+                // An unresolved name or member is tsc's error type. Its
+                // attributes get no contextual signature (`getContextualSignature`
+                // of `any` is undefined), so tsc *does* report a callback in them
+                // as implicit `any` — leave them unsuppressed.
+                InferredExpression::UnresolvedIdentifier { .. }
+                | InferredExpression::MissingProperty { .. } => None,
             }
         }
         None => resolve_intrinsic_props_type(tag_name, element_span.or(fallback_span), ctx),
     }
+}
+
+/// Whether a component that yields no props type is surge's modelling gap
+/// rather than the source's. Only surge's own sentinel and a bare type parameter
+/// qualify — tRPC's `stream.Provider`, read off a `createHydrationStreamProvider<…>()`
+/// surge could not type, where tsc has the props and types every callback in
+/// them. `any` and tsc's error type do not: a callback attribute there has no
+/// contextual signature in tsc either, and it reports the parameter (the
+/// unresolved `Textarea` in tRPC's `next-sse-chat`).
+fn component_is_unmodelled(component_type: &Type) -> bool {
+    matches!(component_type.peeled(), Type::Unknown | Type::TypeParameter(_))
 }
 
 /// The props type for a component value: the first parameter of its call (or, for

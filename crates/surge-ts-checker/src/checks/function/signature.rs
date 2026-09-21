@@ -1559,9 +1559,15 @@ pub(crate) fn check_function_body_with_signature_and_this(
         // its returns are checked. Opening one stops a nested declaration from
         // recording into an enclosing arrow's frame.
         ctx.open_contextual_return_frame();
+        // Every caller is a declaration or a class member, neither of which is
+        // ever contextually typed, so an unannotated one's returns relate to
+        // nothing — Go checks a return only against the annotation.
+        if !has_explicit_return_type {
+            ctx.mark_unannotated_declaration_body();
+        }
         check_function_body(
             body,
-            Some(function_type.return_type()),
+            has_explicit_return_type.then(|| function_type.return_type()),
             &mut scopes,
             &mut flow_state,
             ctx,
