@@ -62,6 +62,18 @@ pub(crate) fn evaluate_expression(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    crate::checks::function::settle_call_result(
+        expression,
+        evaluate_expression_unsettled(expression, fallback_span, symbols, ctx),
+    )
+}
+
+fn evaluate_expression_unsettled(
+    expression: &ParsedExpression,
+    fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
     record_expression_check();
     crate::checks::check_umd_global_value_reference(expression, fallback_span, symbols, ctx);
     match expression {

@@ -107,6 +107,17 @@ pub(crate) fn infer_expression(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    crate::checks::function::settle_call_result(
+        parsed_expression,
+        infer_expression_unsettled(parsed_expression, symbols, ctx),
+    )
+}
+
+fn infer_expression_unsettled(
+    parsed_expression: &ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
     record_expression_infer();
     let infer_start = Instant::now();
     let result = match parsed_expression {

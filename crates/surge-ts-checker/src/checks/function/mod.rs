@@ -104,29 +104,193 @@ fn body_inference_shadow_context(ctx: &CheckerContext) -> CheckerContext {
 /// — and publishing it is strictly worse than the sentinel: `any` is absorbing,
 /// so it silences every downstream check (`noUncheckedIndexedAccess` included)
 /// instead of merely staying unknown.
+thread_local! {
+    /// Body returns being forced on this thread, outermost first. Go's
+    /// `getReturnTypeOfSignature` guards the same re-entry with
+    /// `pushTypeResolution` and answers `any` for the cycle.
+    static BODY_RETURNS_IN_PROGRESS: std::cell::RefCell<Vec<std::sync::Arc<str>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// An unannotated declaration's return type, read from its body on first demand.
+///
+/// Go resolves a signature's return type lazily (`getReturnTypeOfSignature`,
+/// checker.go:20321): the first read runs `getReturnTypeFromBody` and the answer
+/// is cached on the signature, in the one environment the checker has. Walking
+/// the body eagerly during surge's signature collection instead ran it under
+/// module analysis's incomplete scopes, and that walk alone — its result
+/// discarded — deleted diagnostics the check phase reports correctly. A
+/// declaration nothing reads, like a codemod's default export, is now never
+/// walked at all, which is also what Go does.
+struct LazyBodyReturn {
+    id: std::sync::Arc<str>,
+    function: std::sync::Arc<ParsedFunctionDeclaration>,
+    parameter_types: std::sync::Arc<[Type]>,
+    file_name: std::sync::Arc<str>,
+    environment: crate::context::DeclarationEnvironmentHandle,
+    creation_scope: Option<std::sync::Arc<crate::symbols::TypeDeclarationScope>>,
+    memo: std::sync::OnceLock<Type>,
+}
+
+impl surge_ts_types::ResolveReference for LazyBodyReturn {
+    fn resolve(&self) -> Type {
+        if let Some(resolved) = self.memo.get() {
+            return resolved.clone();
+        }
+        let re_entered = BODY_RETURNS_IN_PROGRESS.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if stack.iter().any(|id| **id == *self.id) {
+                return true;
+            }
+            stack.push(self.id.clone());
+            false
+        });
+        if re_entered {
+            return Type::Unknown;
+        }
+        struct PopInProgress;
+        impl Drop for PopInProgress {
+            fn drop(&mut self) {
+                BODY_RETURNS_IN_PROGRESS.with(|stack| {
+                    stack.borrow_mut().pop();
+                });
+            }
+        }
+        let _pop = PopInProgress;
+        let Some(mut ctx) = self.environment.checker_context() else {
+            return Type::Unknown;
+        };
+        ctx.set_file_name(self.file_name.to_string());
+        if self.creation_scope.is_some() {
+            ctx.type_declaration_scope = self.creation_scope.clone();
+        }
+        let scope = ctx
+            .symbols
+            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+        let resolved = infer_body_return(&self.function, &self.parameter_types, scope, &mut ctx)
+            .unwrap_or(Type::Unknown);
+        // A force during module analysis runs with its scopes still incomplete,
+        // so only the check phase's answer is the one every later read may keep.
+        if crate::program::in_check_phase() {
+            let _ = self.memo.set(resolved.clone());
+        }
+        resolved
+    }
+}
+
+const BODY_RETURN_ID_TAG: &str = "\u{0}body-return\u{0}";
+
+/// What a call through an unannotated declaration evaluates to: the resolved
+/// return type, never the lazy reference standing in for it. Go's
+/// `getReturnTypeOfSignature` only ever hands back a settled type, and a
+/// reference that resolves to the sentinel is not recognised as one by the many
+/// sites that test the unpeeled type — destructuring such a result indexed a
+/// receiver rendered `unknown` (TS7053) instead of staying silent.
+pub(crate) fn settle_call_result(
+    expression: &surge_ts_syntax::ParsedExpression,
+    result: InferredExpression,
+) -> InferredExpression {
+    use surge_ts_syntax::ParsedExpression as E;
+    if !matches!(
+        expression,
+        E::Call { .. }
+            | E::PropertyCall { .. }
+            | E::OptionalPropertyCall { .. }
+            | E::ExpressionCall { .. }
+            | E::OptionalCall { .. }
+    ) {
+        return result;
+    }
+    let InferredExpression::Known(ty) = result else {
+        return result;
+    };
+    InferredExpression::Known(settle_body_return(ty))
+}
+
+fn settle_body_return(ty: Type) -> Type {
+    match &ty {
+        Type::Reference(reference) if reference.id.contains(BODY_RETURN_ID_TAG) => {
+            reference.resolve()
+        }
+        Type::Union(union)
+            if union.types().iter().any(|member| {
+                matches!(member, Type::Reference(reference) if reference.id.contains(BODY_RETURN_ID_TAG))
+            }) =>
+        {
+            surge_ts_types::union_type(
+                union.types().iter().cloned().map(settle_body_return).collect(),
+            )
+        }
+        _ => ty,
+    }
+}
+
+fn lazy_body_return_reference(
+    function: &ParsedFunctionDeclaration,
+    parameter_types: &[Type],
+    ctx: &mut CheckerContext,
+) -> Type {
+    let start = function.name_span.map_or(0, |span| span.start);
+    let id: std::sync::Arc<str> = std::sync::Arc::from(format!(
+        "{}{BODY_RETURN_ID_TAG}{}\u{0}{start}",
+        ctx.file_name, function.name
+    ));
+    let display = format!("ReturnType<typeof {}>", function.name);
+    let reference = surge_ts_types::TypeReference::new(
+        id.clone(),
+        display,
+        Vec::new(),
+        std::sync::Arc::new(LazyBodyReturn {
+            id,
+            function: std::sync::Arc::new(function.clone()),
+            parameter_types: std::sync::Arc::from(parameter_types),
+            file_name: std::sync::Arc::from(ctx.file_name.as_ref()),
+            environment: ctx.declaration_environment(),
+            creation_scope: ctx.type_declaration_scope.clone(),
+            memo: std::sync::OnceLock::new(),
+        }),
+    );
+    // tsc renders the inferred type, not a name for it.
+    Type::Reference(reference.rendered_structurally())
+}
+
+/// Whether a declaration's return type comes from its body at all: it is
+/// unannotated, has a body to read, and is not a generator (whose result is a
+/// `Generator`, not what its body completes with).
+fn return_type_comes_from_body(function: &ParsedFunctionDeclaration) -> bool {
+    function.return_type.is_none()
+        && !function.is_declare
+        && function.has_body
+        && !function.is_generator
+        && !function.body.is_empty()
+}
+
 fn inferred_declaration_return_type(
     function: &ParsedFunctionDeclaration,
     function_type: &FunctionType,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    use surge_ts_syntax::ParsedFunctionBodyStatement as BodyStatement;
-
-    if function.return_type.is_some()
-        || function.is_declare
-        || !function.has_body
-        || function.is_generator
-        || function.body.is_empty()
-    {
+    if !return_type_comes_from_body(function) {
         return None;
     }
-
-    let mut scope = ctx
+    let scope = ctx
         .symbols
         .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
-    for (parameter, parameter_type) in function
-        .parameters
-        .iter()
-        .zip(function_type.parameters().iter())
+    infer_body_return(function, function_type.parameters(), scope, ctx)
+}
+
+/// The body walk behind [`inferred_declaration_return_type`] and
+/// [`LazyBodyReturn`]: every reachable `return`, unioned and widened, published
+/// only when it is concrete at every depth.
+fn infer_body_return(
+    function: &ParsedFunctionDeclaration,
+    parameter_types: &[Type],
+    mut scope: SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as BodyStatement;
+
+    for (parameter, parameter_type) in function.parameters.iter().zip(parameter_types.iter())
     {
         if let Some(name) = signature::written_binding_names(std::slice::from_ref(parameter))
             .into_iter()
@@ -327,13 +491,23 @@ fn type_is_deeply_concrete(ty: &Type) -> bool {
 /// TS2339 both vanish. The body inference needs a shadow context of its own, the
 /// way `collect_exportable_value_symbols` builds one, before this can be
 /// measured on its merits.
+/// `SURGE_INFER_DECLARATION_RETURN_TYPES=lazy`: publish the body return as a
+/// [`LazyBodyReturn`] read on first demand, instead of walking the body during
+/// signature collection.
+fn lazy_body_returns() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("SURGE_INFER_DECLARATION_RETURN_TYPES").as_deref() == Ok("lazy")
+    })
+}
+
 fn infer_declaration_return_types(file_name: &str) -> bool {
     static SETTING: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     match SETTING
         .get_or_init(|| std::env::var("SURGE_INFER_DECLARATION_RETURN_TYPES").ok())
         .as_deref()
     {
-        None | Some("") => false,
+        None | Some("") | Some("lazy") => false,
         Some("1") => true,
         Some(filter) => file_name.contains(filter),
     }
@@ -396,9 +570,14 @@ pub(crate) fn collect_function_declaration_signature(
         map_signature(ctx)
     };
 
-    let function_type = match infer_declaration_return_types(&ctx.file_name)
-        .then(|| inferred_declaration_return_type(function, &function_type, ctx))
-        .flatten()
+    let lazy_return = lazy_body_returns() && return_type_comes_from_body(function);
+    let function_type = match lazy_return
+        .then(|| lazy_body_return_reference(function, function_type.parameters(), ctx))
+        .or_else(|| {
+            infer_declaration_return_types(&ctx.file_name)
+                .then(|| inferred_declaration_return_type(function, &function_type, ctx))
+                .flatten()
+        })
     {
         Some(return_type) => FunctionType::new(
             function_type.parameters().to_vec(),
