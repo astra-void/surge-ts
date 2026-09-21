@@ -446,6 +446,31 @@ pub(crate) fn check_property_call_like(
             if union_type.types().iter().any(Type::is_unknown) {
                 return None;
             }
+            // The property is looked up on the union before anything is called:
+            // a member lacking it is the error, whatever the others hold.
+            let lacks_member = |ty: &Type| {
+                !matches!(ty, Type::Undefined | Type::Null)
+                    && ty.get_property_access_type(property_name).is_none()
+                    && !ty.peeled().is_unknown()
+                    && !matches!(ty, Type::Array(_) | Type::Tuple(_))
+            };
+            if union_type.types().iter().any(lacks_member)
+                && !union_type
+                    .types()
+                    .iter()
+                    .any(|ty| crate::checks::expr::carries_leaked_type_parameter(ty, ctx))
+            {
+                ctx.push(diagnostic_with_syntax_span(
+                    crate::checks::expr::missing_property_diagnostic(
+                        property_name,
+                        &Type::Union(union_type.clone()),
+                        symbols,
+                        ctx.file_name.clone(),
+                    ),
+                    crate::spans::choose_span(property_span, object_span),
+                ));
+                return None;
+            }
             let mut result_types = vec![];
             for ty in union_type.types() {
                 if matches!(ty, Type::Undefined | Type::Null) {

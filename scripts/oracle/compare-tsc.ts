@@ -606,6 +606,7 @@ export const fixturePresets: Record<string, string> = {
   'falsy-branch-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/falsy-branch-narrowing-basic/tsconfig.json'),
   'auto-accessor-member-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-accessor-member-basic/tsconfig.json'),
   'constructor-equality-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/constructor-equality-narrowing-basic/tsconfig.json'),
+  'union-receiver-missing-property-basic': path.join(workspaceRoot, 'tests/compat-projects/union-receiver-missing-property-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

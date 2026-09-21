@@ -319,10 +319,12 @@ pub(crate) fn infer_property_access(
                         {
                             return InferredExpression::Unknown;
                         }
+                        // tsc names the union the property was looked up on,
+                        // not the member that happens to lack it.
                         None => {
                             return InferredExpression::MissingProperty {
                                 property_name: property_name.to_string(),
-                                object_type: ty.clone(),
+                                object_type: object_type.clone(),
                                 span: *property_span,
                             };
                         }

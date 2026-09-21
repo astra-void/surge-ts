@@ -192,6 +192,22 @@ const NUMBER_MEMBERS: &[&str] =
 /// the members every constituent shares, which the reported member type does
 /// not say.
 pub(crate) fn property_spelling_suggestion(name: &str, object_type: &Type) -> Option<String> {
+    // A union has the properties every member has, and tsc suggests among
+    // those alone: `u.property1` on `{ property1 } | { property2 }` is a plain
+    // TS2339, not a misspelling of the other member's `property2`.
+    if let Type::Union(union) = object_type {
+        let mut members = union
+            .types()
+            .iter()
+            .filter(|member| !matches!(member, Type::Undefined | Type::Null | Type::Void));
+        let first = members.next()?;
+        let rest: Vec<&Type> = members.collect();
+        let suggestion = property_spelling_suggestion(name, first)?;
+        return rest
+            .iter()
+            .all(|member| member.get_property_access_type(&suggestion).is_some())
+            .then_some(suggestion);
+    }
     let candidates: Vec<String> = match object_type {
         Type::Reference(_) => match object_type.peeled() {
             Type::Reference(_) => return None,
