@@ -55,6 +55,8 @@ pub(super) enum ReferenceGuard<'a> {
     },
     /// The reference tested falsy (`if (!x)`, the `else` of `if (x)`).
     Falsy,
+    /// `x.constructor === C` held: only what `C` itself constructs is left.
+    ConstructedBy { ctor_name: &'a str },
     /// `a.b.c.kind === "x"`: the union at `a.b.c` is filtered by its `kind`
     /// member, however deep the reference is.
     Discriminant {
@@ -84,6 +86,10 @@ impl ReferenceGuard<'_> {
     /// binding's type with `optional = false`. `None` leaves the leaf alone.
     pub(super) fn narrow_leaf(&self, ty: &Type, optional: bool) -> Option<(Type, bool)> {
         match self {
+            Self::ConstructedBy { ctor_name } => {
+                let narrowed = narrow_union_by_constructor(ty, ctor_name)?;
+                (narrowed != *ty).then_some((narrowed, optional))
+            }
             Self::Falsy => {
                 let effective = Self::effective_leaf_type(ty, optional);
                 let narrowed = super::truthy::keep_possibly_falsy(&effective);
@@ -577,6 +583,119 @@ pub(super) fn compared_operand_type(
     }
 }
 
+/// tsc's `narrowTypeByConstructor`, for `x.constructor == C` and
+/// `x["constructor"] == C` written either way round: the reference whose
+/// constructor is compared, the constructor's name, and whether the operator is
+/// an equality. tsc narrows only in the branch where the comparison holds.
+fn parse_constructor_equality(
+    condition: &ParsedExpression,
+) -> Option<((String, Vec<String>), &str, bool)> {
+    use surge_ts_syntax::ParsedBinaryOperator;
+    let ParsedExpression::Binary {
+        operator,
+        left,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let eq = match operator {
+        ParsedBinaryOperator::StrictEquals | ParsedBinaryOperator::Equals => true,
+        ParsedBinaryOperator::StrictNotEquals | ParsedBinaryOperator::NotEquals => false,
+        _ => return None,
+    };
+    let constructor_of = |expression: &ParsedExpression| -> Option<(String, Vec<String>)> {
+        let is_constructor_key =
+            |index: &ParsedExpression| matches!(index, ParsedExpression::StringLiteral(key) if key == "constructor");
+        match expression {
+            ParsedExpression::PropertyAccess {
+                object,
+                property_name,
+                ..
+            } if property_name == "constructor" => reference_path(object),
+            ParsedExpression::ElementAccess { object, index, .. } if is_constructor_key(index) => {
+                reference_path(object)
+            }
+            ParsedExpression::IndexAccess {
+                object_name, index, ..
+            } if is_constructor_key(index) => Some((object_name.clone(), Vec::new())),
+            _ => None,
+        }
+    };
+    fn constructor_name(expression: &ParsedExpression) -> Option<&str> {
+        match expression {
+            ParsedExpression::Identifier { name, .. } => Some(name.as_str()),
+            ParsedExpression::PropertyAccess {
+                object,
+                property_name,
+                ..
+            } if matches!(object.as_ref(), ParsedExpression::Identifier { .. })
+                && property_name != "constructor" =>
+            {
+                Some(property_name.as_str())
+            }
+            _ => None,
+        }
+    }
+    if let (Some(reference), Some(name)) = (constructor_of(left), constructor_name(right)) {
+        return Some((reference, name, eq));
+    }
+    let (reference, name) = (constructor_of(right)?, constructor_name(left)?);
+    Some((reference, name, eq))
+}
+
+/// The members of a union that `ctor_name` itself constructs (tsc's
+/// `isConstructedBy`): a class instance of exactly that class — a subclass has
+/// its own constructor — a primitive for its wrapper, an array for `Array`.
+/// What surge cannot judge stays. `None` when nothing would change, or when
+/// nothing would be left: the match is by name, and an empty result is more
+/// likely a name surge did not recognize than a contradiction in the source.
+fn narrow_union_by_constructor(ty: &Type, ctor_name: &str) -> Option<Type> {
+    let Type::Union(union) = ty.peeled() else {
+        return None;
+    };
+    let constructed_by = |member: &Type| -> bool {
+        match member {
+            Type::Any | Type::Unknown | Type::GenuineUnknown | Type::ErrorType | Type::TypeParameter(_) => true,
+            Type::Number | Type::NumberLiteral(_) => ctor_name == "Number",
+            Type::String | Type::StringLiteral(_) => ctor_name == "String",
+            Type::Boolean | Type::BooleanLiteral(_) => ctor_name == "Boolean",
+            Type::BigInt => ctor_name == "BigInt",
+            Type::Symbol => ctor_name == "Symbol",
+            Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) => ctor_name == "Array",
+            Type::Undefined | Type::Null | Type::Void | Type::Never => false,
+            Type::Function(_) => ctor_name == "Function",
+            other => {
+                let name = other.name();
+                let base = name.split('<').next().unwrap_or(name.as_str());
+                base == ctor_name || base.rsplit('.').next() == Some(ctor_name)
+            }
+        }
+    };
+    let members = union.types();
+    let kept: Vec<Type> = members.iter().filter(|member| constructed_by(member)).cloned().collect();
+    if kept.is_empty() || kept.len() == members.len() {
+        return None;
+    }
+    Some(union_type(kept))
+}
+
+/// The statement form of the constructor guard in [`collect_reference_guards`].
+pub(super) fn narrow_constructor_equality_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    let Some(((base, path), ctor_name, eq)) = parse_constructor_equality(condition) else {
+        return false;
+    };
+    if eq == branch_is_true {
+        narrow_reference_in_scope(&base, &path, ReferenceGuard::ConstructedBy { ctor_name }, scopes);
+    }
+    true
+}
+
 /// The statement form of the containment guard in [`collect_reference_guards`].
 pub(super) fn narrow_optional_call_containment_in_scope(
     condition: &ParsedExpression,
@@ -675,6 +794,13 @@ pub(super) fn collect_reference_guards<'a>(
         && let Some((base, path)) = reference_path(receiver)
     {
         guards.push((base, path, ReferenceGuard::Truthy));
+    }
+
+    if let Some(((base, path), ctor_name, eq)) = parse_constructor_equality(condition) {
+        if eq == branch_is_true {
+            guards.push((base, path, ReferenceGuard::ConstructedBy { ctor_name }));
+        }
+        return;
     }
 
     if let Some((operand, tag, eq)) = parse_typeof_condition(condition) {

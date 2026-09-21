@@ -800,6 +800,9 @@ fn narrow_value_guards_by_guard(
     if narrow_optional_call_containment_in_scope(condition, scopes, branch_is_true) {
         return;
     }
+    if narrow_constructor_equality_in_scope(condition, scopes, branch_is_true) {
+        return;
+    }
     if narrow_typeof_in_scope(condition, scopes, branch_is_true) {
         return;
     }
