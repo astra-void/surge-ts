@@ -590,7 +590,18 @@ pub(crate) fn check_property_call_like(
                 );
             }
 
-            let Some(property_type) = object_ty.get_property_access_type(property_name) else {
+            let property_type =
+                (!crate::infer::expression::lib_lacks_builtin_member(&object_ty, property_name, ctx))
+                    .then(|| object_ty.get_property_access_type(property_name))
+                    .flatten()
+                    .or_else(|| {
+                        crate::infer::expression::lib_builtin_member_type(
+                            &object_ty,
+                            property_name,
+                            ctx,
+                        )
+                    });
+            let Some(property_type) = property_type else {
                 if no_lib_array_member(&object_ty, ctx) {
                     return Some(Type::Any);
                 }
@@ -602,10 +613,18 @@ pub(crate) fn check_property_call_like(
                 {
                     return None;
                 }
+                let lib_feature =
+                    crate::checks::expr::lib_feature_of_missing_member(&object_ty, property_name);
                 let diagnostic = match crate::checks::expr::property_spelling_suggestion(
                     property_name,
                     &object_ty,
                 ) {
+                    _ if lib_feature.is_some() => Diagnostic::ts2550(
+                        property_name,
+                        &object_type_name,
+                        lib_feature.unwrap_or_default(),
+                        ctx.file_name.clone(),
+                    ),
                     Some(suggestion) => Diagnostic::ts2551(
                         property_name,
                         &object_type_name,

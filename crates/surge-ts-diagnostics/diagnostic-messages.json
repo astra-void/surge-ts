@@ -552,6 +552,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2550",
+    "category": "Error",
+    "message": "Property '{0}' does not exist on type '{1}'. Do you need to change your target library? Try changing the 'lib' compiler option to '{2}' or later.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
     "code": "TS2551",
     "category": "Error",
     "message": "Property '{0}' does not exist on type '{1}'. Did you mean '{2}'?",

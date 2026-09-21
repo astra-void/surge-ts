@@ -330,8 +330,10 @@ pub(crate) fn infer_property_access(
                 }
                 InferredExpression::Known(surge_ts_types::union_type(result_types))
             }
-            _ => object_type
-                .get_property_access_type(property_name)
+            _ => (!lib_lacks_builtin_member(&object_type, property_name, ctx))
+                .then(|| object_type.get_property_access_type(property_name))
+                .flatten()
+                .or_else(|| lib_builtin_member_type(&object_type, property_name, ctx))
                 .map(|property_type| {
                     InferredExpression::Known(widen_index_signature_read(
                         &object_type,
@@ -672,6 +674,84 @@ pub(crate) fn infer_property_call(
 /// know is not a real typo here — stay permissive instead of over-reporting
 /// TS2339. Without `noLib` the std array surface is authoritative and a miss is a
 /// genuine error.
+/// A member of a built-in receiver that surge's own member tables do not list
+/// but the configured lib declares on the global interface behind it
+/// (`copyWithin` on `Array<T>`, `anchor` on `String`). What the lib says
+/// follows `target`/`lib`, which the tables cannot. A member whose type does
+/// not resolve, or that is overloaded, still exists, so it reads `any` rather
+/// than as missing.
+/// Whether surge's own member tables offer `name` on this receiver although
+/// the configured lib does not declare it (`xs.at(0)` under `target: es2015`).
+/// Only a member tsc ties to a lib version is judged, and only against a lib
+/// that declares the global interface at all.
+pub(crate) fn lib_lacks_builtin_member(receiver: &Type, name: &str, ctx: &CheckerContext) -> bool {
+    if ctx.options.no_lib
+        || crate::checks::expr::lib_feature_of_missing_member(receiver, name).is_none()
+    {
+        return false;
+    }
+    let interface_name = match receiver {
+        Type::Array(_) | Type::Tuple(_) => "Array",
+        _ => "String",
+    };
+    match ctx.lookup_type_declaration(interface_name) {
+        Some(crate::symbols::TypeDeclarationInfo::Interface(info)) => {
+            ctx.is_library_scoped_file(&info.file_name)
+                && !info.body.members.is_empty()
+                && !info.body.members.iter().any(|member| member.name == name)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn lib_builtin_member_type(
+    receiver: &Type,
+    name: &str,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let (interface_name, element) = match receiver {
+        Type::Array(element) => ("Array", Some(element.as_ref().clone())),
+        Type::Tuple(elements) => ("Array", Some(surge_ts_types::union_type(elements.clone()))),
+        Type::String | Type::StringLiteral(_) => ("String", None),
+        Type::Number | Type::NumberLiteral(_) => ("Number", None),
+        Type::Boolean | Type::BooleanLiteral(_) => ("Boolean", None),
+        Type::BigInt => ("BigInt", None),
+        Type::Function(_) => ("Function", None),
+        _ => return None,
+    };
+    let (member_type, optional, scope) = match ctx.lookup_type_declaration(interface_name)? {
+        crate::symbols::TypeDeclarationInfo::Interface(info) => {
+            let mut declared = info.body.members.iter().filter(|member| member.name == name);
+            let member = declared.next()?;
+            // An overloaded member is not one signature; it exists, and that is
+            // all this answers for it.
+            if declared.next().is_some() {
+                return Some(Type::Any);
+            }
+            (member.ty.clone(), member.optional, info.resolution_scope.clone())
+        }
+        crate::symbols::TypeDeclarationInfo::Alias(_) => return None,
+    };
+    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    if let Some(element) = element {
+        substitution.set("T".to_string(), element, false);
+    }
+    let diagnostics_before = ctx.diagnostics().len();
+    let resolved = crate::infer::with_type_declaration_scope(&scope, ctx, |ctx| {
+        crate::infer::types::resolve_parsed_type(member_type, ctx, &mut Vec::new(), &substitution)
+    });
+    ctx.truncate_diagnostics(diagnostics_before);
+    let had_error = resolved.had_error();
+    let ty = resolved.into_ty();
+    Some(if had_error || ty.is_unknown() {
+        Type::Any
+    } else if optional {
+        surge_ts_types::union_type(vec![ty, Type::Undefined])
+    } else {
+        ty
+    })
+}
+
 fn no_lib_array_member(object_type: &Type, ctx: &CheckerContext) -> bool {
     ctx.options.no_lib && matches!(object_type, Type::Array(_))
 }

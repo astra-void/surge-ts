@@ -600,6 +600,7 @@ export const fixturePresets: Record<string, string> = {
   'optional-chain-containment-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-containment-basic/tsconfig.json'),
   'dependent-object-destructuring-basic': path.join(workspaceRoot, 'tests/compat-projects/dependent-object-destructuring-basic/tsconfig.json'),
   'this-rooted-discriminant-basic': path.join(workspaceRoot, 'tests/compat-projects/this-rooted-discriminant-basic/tsconfig.json'),
+  'lib-builtin-member-fallback-basic': path.join(workspaceRoot, 'tests/compat-projects/lib-builtin-member-fallback-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -553,6 +553,14 @@ message = "Type '{0}' cannot be used as an index type."
 arity = 1
 
 [[diagnostic]]
+code = "TS2550"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' does not exist on type '{1}'. Do you need to change your target library? Try changing the 'lib' compiler option to '{2}' or later."
+arity = 3
+
+[[diagnostic]]
 code = "TS2551"
 category = "Error"
 source = "typescript"

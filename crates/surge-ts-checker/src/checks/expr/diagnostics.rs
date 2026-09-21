@@ -124,10 +124,53 @@ pub(crate) fn missing_property_diagnostic(
         );
     }
 
+    // tsc asks this before looking for a misspelling (`at` is no typo of `map`).
+    if let Some(lib) = lib_feature_of_missing_member(object_type, property_name) {
+        return Diagnostic::ts2550(property_name, &object_type_name, lib, file_name);
+    }
     if let Some(suggestion) = property_spelling_suggestion(property_name, object_type) {
         return Diagnostic::ts2551(property_name, &object_type_name, suggestion, file_name);
     }
     Diagnostic::ts2339(property_name, &object_type_name, file_name)
+}
+
+/// tsc's `getScriptTargetFeatures`, for the receivers surge answers from its
+/// own tables: the lib that first declares `member` on an array or a string.
+/// A member listed here that a receiver lacks is a lib the project did not
+/// ask for, which tsc says (TS2550) instead of calling the member unknown.
+pub(crate) fn lib_feature_of_missing_member(receiver: &Type, member: &str) -> Option<&'static str> {
+    const ARRAY: &[(&str, &[&str])] = &[
+        ("es2015", &["find", "findIndex", "fill", "copyWithin", "entries", "keys", "values"]),
+        ("es2016", &["includes"]),
+        ("es2019", &["flat", "flatMap"]),
+        ("es2022", &["at"]),
+        ("es2023", &["findLast", "findLastIndex", "toReversed", "toSorted", "toSpliced", "with"]),
+    ];
+    const STRING: &[(&str, &[&str])] = &[
+        (
+            "es2015",
+            &[
+                "codePointAt", "includes", "endsWith", "normalize", "repeat", "startsWith", "anchor",
+                "big", "blink", "bold", "fixed", "fontcolor", "fontsize", "italics", "link", "small",
+                "strike", "sub", "sup",
+            ],
+        ),
+        ("es2017", &["padStart", "padEnd"]),
+        ("es2019", &["trimStart", "trimEnd", "trimLeft", "trimRight"]),
+        ("es2020", &["matchAll"]),
+        ("es2021", &["replaceAll"]),
+        ("es2022", &["at"]),
+        ("esnext", &["isWellFormed", "toWellFormed"]),
+    ];
+    let features = match receiver {
+        Type::Array(_) | Type::Tuple(_) => ARRAY,
+        Type::String | Type::StringLiteral(_) => STRING,
+        _ => return None,
+    };
+    features
+        .iter()
+        .find(|(_, members)| members.contains(&member))
+        .map(|(lib, _)| *lib)
 }
 
 /// `String.prototype` members in lib declaration order, which breaks ties
