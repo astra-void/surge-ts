@@ -25,7 +25,8 @@ use super::{
     branch_assignment_types, deep_assigned_names, widen_assigned_bindings,
     loop_join_names, widen_loop_assigned_bindings,
     join_branch_assignments, join_branch_pair, narrow_aliased_guard_after_exit,
-    narrow_condition_and_aliases_in_scope, resolved_alias_condition, rewrite_discriminant_aliases,
+    narrow_condition_and_aliases_in_scope, narrow_tuple_destructure_siblings,
+    resolved_alias_condition, rewrite_discriminant_aliases,
 };
 
 /// TS2774: a condition that tests a function for truthiness, and never calls or
@@ -746,6 +747,7 @@ pub(crate) fn check_function_switch_statement(
             scopes.push_child();
             if let Some((condition, branch_is_true)) = case_group_conditions[case_index].as_ref() {
                 narrow_discriminant_in_scope(condition, scopes, *branch_is_true, ctx);
+                narrow_tuple_destructure_siblings(condition, scopes, *branch_is_true);
             }
             flow_state.begin_branch_capture();
             check_function_body(
@@ -767,6 +769,7 @@ pub(crate) fn check_function_switch_statement(
             scopes.push_child();
             if let Some((condition, branch_is_true)) = case_group_conditions[case_index].as_ref() {
                 narrow_discriminant_in_scope(condition, scopes, *branch_is_true, ctx);
+                narrow_tuple_destructure_siblings(condition, scopes, *branch_is_true);
             }
             check_function_body(
                 switch_case.consequent,
@@ -793,6 +796,7 @@ pub(crate) fn check_function_switch_statement(
             ctx,
         );
         narrow_discriminant_in_scope(condition, scopes, false, ctx);
+        narrow_tuple_destructure_siblings(condition, scopes, false);
     }
 }
 

@@ -9,7 +9,7 @@ use surge_ts_types::Type;
 use crate::context::CheckerContext;
 use crate::flow::FunctionFlowState;
 use crate::infer::InferredExpression;
-use crate::symbols::{ScopeStack, SymbolTable, TupleDestructureBinding};
+use crate::symbols::{DestructureKey, ScopeStack, SymbolTable, TupleDestructureBinding};
 use super::super::{downgrade_genuine_unknown_in_scope, narrow_discriminant_in_scope};
 
 /// Whether an initializer is plainly a boolean condition — a logical chain, a
@@ -44,6 +44,7 @@ pub(crate) fn is_condition_shaped(expression: &ParsedExpression) -> bool {
 pub(super) fn tuple_destructure_binding(
     expression: &ParsedExpression,
     pattern_span: Option<surge_ts_syntax::TextSpan>,
+    from_binding_pattern: bool,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<TupleDestructureBinding> {
@@ -56,9 +57,37 @@ pub(super) fn tuple_destructure_binding(
             object_name, index, ..
         } => Some(TupleDestructureBinding {
             source: object_name.as_str().into(),
-            index: literal_index(index)?,
+            key: DestructureKey::Index(literal_index(index)?),
             source_type: None,
         }),
+        // `const { kind, payload } = action` lowers each binding to a property
+        // read. One written on its own (`const kind = action.kind`) has no
+        // siblings and is the discriminant-alias case instead.
+        ParsedExpression::PropertyAccess {
+            object,
+            object_span,
+            property_name,
+            ..
+        } if from_binding_pattern => match object.as_ref() {
+            ParsedExpression::Identifier { name, .. } => Some(TupleDestructureBinding {
+                source: name.as_str().into(),
+                key: DestructureKey::Property(property_name.as_str().into()),
+                source_type: None,
+            }),
+            source => {
+                let object_span = (*object_span)?;
+                let InferredExpression::Known(source_type) =
+                    crate::infer::infer_expression(source, symbols, ctx)
+                else {
+                    return None;
+                };
+                matches!(source_type.peeled(), Type::Union(_)).then(|| TupleDestructureBinding {
+                    source: format!("\0pattern@{}", object_span.start).into(),
+                    key: DestructureKey::Property(property_name.as_str().into()),
+                    source_type: Some(source_type),
+                })
+            }
+        },
         ParsedExpression::ElementAccess { object, index, .. } => {
             let index = literal_index(index)?;
             let pattern_span = pattern_span?;
@@ -79,7 +108,7 @@ pub(super) fn tuple_destructure_binding(
             }
             Some(TupleDestructureBinding {
                 source: format!("\0pattern@{}", pattern_span.start).into(),
-                index,
+                key: DestructureKey::Index(index),
                 source_type: Some(source_type),
             })
         }

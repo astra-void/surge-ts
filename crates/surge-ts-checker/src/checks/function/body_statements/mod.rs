@@ -82,6 +82,7 @@ pub(crate) fn check_function_variable_declaration(
                 tuple_destructure_binding(
                     initializer,
                     variable.array_pattern_span,
+                    variable.from_binding_pattern,
                     &visible_symbols(scopes),
                     ctx,
                 )

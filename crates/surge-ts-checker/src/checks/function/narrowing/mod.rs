@@ -471,91 +471,98 @@ pub(crate) fn tuple_destructure_sibling_narrowings(
     symbols: &SymbolTable,
     branch_is_true: bool,
 ) -> Vec<(Arc<str>, SymbolInfo, Type)> {
-    let Some((tested, holds)) = truthiness_tested_binding(condition, branch_is_true) else {
-        return Vec::new();
-    };
+    // What the condition proves about one binding, as a test on the type a
+    // source member gives that binding: truthiness keeps the members where it
+    // can (or cannot) be nullish-only, a literal comparison the members that
+    // can (or cannot only) be that literal — the discriminant of
+    // `const { kind, payload } = action`.
+    let (tested, keeps): (&str, Box<dyn Fn(&Type) -> bool>) =
+        if let Some((tested, holds)) = truthiness_tested_binding(condition, branch_is_true) {
+            (
+                tested,
+                Box::new(move |read: &Type| {
+                    matches!(read, Type::Undefined | Type::Void | Type::Never) != holds
+                }),
+            )
+        } else if let Some((tested, literal, eq)) = parse_identifier_literal_equality(condition) {
+            let holds = eq == branch_is_true;
+            (
+                tested,
+                Box::new(move |read: &Type| {
+                    if holds {
+                        surge_ts_types::is_assignable_to(&literal, read)
+                    } else {
+                        *read != literal
+                    }
+                }),
+            )
+        } else {
+            return Vec::new();
+        };
     let Some(binding) = symbols.tuple_destructure(tested) else {
         return Vec::new();
     };
-    let (source, tested_index) = (binding.source, binding.index);
+    let (source, tested_key) = (binding.source, binding.key);
     let Some(source_type) = binding
         .source_type
         .or_else(|| symbols.get(&source).map(|symbol| symbol.ty.clone()))
     else {
         return Vec::new();
     };
-    let Type::Union(union) = source_type.peeled() else {
-        return Vec::new();
+    // A named source the same test already narrowed (it is a discriminant
+    // alias too: `kind` stands for `action.kind`) arrives as the one member
+    // left, and the siblings are simply read off it again.
+    let members: Vec<Type> = match source_type.peeled() {
+        Type::Union(union) => union.types().iter().map(Type::peeled).collect(),
+        narrowed @ (Type::Object(_) | Type::Tuple(_)) => vec![narrowed],
+        _ => return Vec::new(),
     };
-    let members: Vec<Type> = union.types().iter().map(Type::peeled).collect();
-    if !members.iter().all(|member| matches!(member, Type::Tuple(_))) {
-        return Vec::new();
-    }
-    let element_union = |index: usize| -> Option<Type> {
+    let read_union = |key: &crate::symbols::DestructureKey| -> Option<Type> {
         members
             .iter()
-            .map(|member| match member {
-                Type::Tuple(elements) => elements.get(index).cloned(),
-                _ => None,
-            })
+            .map(|member| key.read(member))
             .collect::<Option<Vec<Type>>>()
             .map(union_type)
     };
-    // A binding holds its element or a narrowing of it; anything else is a
+    // A binding holds what it reads or a narrowing of it; anything else is a
     // different declaration under the same name.
-    let still_bound = |name: &str, index: usize| {
+    let still_bound = |name: &str, key: &crate::symbols::DestructureKey| {
         symbols.get(name).is_some_and(|symbol| {
-            element_union(index)
-                .is_some_and(|element| surge_ts_types::is_assignable_to(&symbol.ty, &element))
+            read_union(key).is_some_and(|read| surge_ts_types::is_assignable_to(&symbol.ty, &read))
         })
     };
-    if !still_bound(tested, tested_index) {
+    let already_narrowed = members.len() == 1;
+    if !already_narrowed && !still_bound(tested, &tested_key) {
         return Vec::new();
     }
 
     let kept: Vec<&Type> = members
         .iter()
         .filter(|member| {
-            let Type::Tuple(elements) = member else {
-                return false;
-            };
-            match elements.get(tested_index) {
-                // Truthy rules out an element that can only be nullish; falsy
-                // rules out one that can never be. Anything else stays: this is
-                // a discriminant test, not a general truthiness analysis.
-                Some(element) => {
-                    matches!(element, Type::Undefined | Type::Void | Type::Never) != holds
-                }
-                None => false,
-            }
+            already_narrowed || tested_key.read(member).is_some_and(|read| keeps(&read))
         })
         .collect();
-    if kept.is_empty() || kept.len() == members.len() {
+    if kept.is_empty() || (!already_narrowed && kept.len() == members.len()) {
         return Vec::new();
     }
 
     let mut narrowings = Vec::new();
-    for (name, index) in symbols.tuple_destructure_siblings(&source) {
-        if !still_bound(&name, index) {
+    for (name, key) in symbols.tuple_destructure_siblings(&source) {
+        if !already_narrowed && !still_bound(&name, &key) {
             continue;
         }
         let Some(symbol) = symbols.get(&name) else {
             continue;
         };
-        let selected: Vec<Type> = kept
-            .iter()
-            .filter_map(|member| match member {
-                Type::Tuple(elements) => elements.get(index).cloned(),
-                _ => None,
-            })
-            .collect();
+        let selected: Vec<Type> = kept.iter().filter_map(|member| key.read(member)).collect();
         if selected.len() != kept.len() {
             continue;
         }
         let narrowed = surge_ts_types::with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
             union_type(selected)
         });
-        if narrowed == symbol.ty {
+        // The tested binding keeps what its own guard made of it.
+        if narrowed == symbol.ty || !surge_ts_types::is_assignable_to(&narrowed, &symbol.ty) {
             continue;
         }
         let declared = symbols.declared_type(&name).unwrap_or(&symbol.ty).clone();

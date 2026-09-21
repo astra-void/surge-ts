@@ -91,8 +91,34 @@ pub(crate) struct FunctionSignatureInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TupleDestructureBinding {
     pub(crate) source: Arc<str>,
-    pub(crate) index: usize,
+    pub(crate) key: DestructureKey,
     pub(crate) source_type: Option<Type>,
+}
+
+/// What a destructured binding reads off its source: a tuple element, or a
+/// property of an object pattern (`const { kind, payload } = action`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum DestructureKey {
+    Index(usize),
+    Property(Arc<str>),
+}
+
+impl DestructureKey {
+    /// The type this key reads off one member of the source union.
+    pub(crate) fn read(&self, member: &Type) -> Option<Type> {
+        match (self, member) {
+            (DestructureKey::Index(index), Type::Tuple(elements)) => elements.get(*index).cloned(),
+            (DestructureKey::Property(name), Type::Object(object)) => {
+                let property = object.properties.get(name)?;
+                Some(if property.is_optional() {
+                    surge_ts_types::union_type(vec![property.ty.clone(), Type::Undefined])
+                } else {
+                    property.ty.clone()
+                })
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -420,7 +446,7 @@ impl SymbolTable {
     }
 
     /// Every binding destructured out of `source`, with its index.
-    pub(crate) fn tuple_destructure_siblings(&self, source: &str) -> Vec<(Arc<str>, usize)> {
+    pub(crate) fn tuple_destructure_siblings(&self, source: &str) -> Vec<(Arc<str>, DestructureKey)> {
         let mut names: Vec<Arc<str>> = Vec::new();
         let mut table = Some(self);
         while let Some(current) = table {
@@ -431,14 +457,14 @@ impl SymbolTable {
             }
             table = current.parent.as_deref();
         }
-        let mut siblings: Vec<(Arc<str>, usize)> = names
+        let mut siblings: Vec<(Arc<str>, DestructureKey)> = names
             .into_iter()
             .filter_map(|name| {
                 let binding = self.tuple_destructure(&name)?;
-                (&*binding.source == source).then_some((name, binding.index))
+                (&*binding.source == source).then_some((name, binding.key))
             })
             .collect();
-        siblings.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+        siblings.sort_by(|left, right| left.0.cmp(&right.0));
         siblings
     }
 

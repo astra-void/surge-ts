@@ -376,6 +376,24 @@ pub(crate) fn insert_object_binding_pattern_bindings(
             element_type = surge_ts_types::remove_undefined(&element_type);
         }
         insert_object_binding_element_binding(element, element_type, scopes);
+        // `function f({ kind, payload }: Action)`: the names are dependent when
+        // the parameter is a union, exactly as a destructuring `const` is. A
+        // name with a default is not a plain read of its property.
+        if let (ParsedBindingName::Identifier { name, .. }, false, Some(span)) =
+            (&element.binding_name, element.has_default, pattern.span)
+            && matches!(parameter_type.peeled(), Type::Union(_))
+        {
+            scopes.record_tuple_destructure(
+                name,
+                Some(crate::symbols::TupleDestructureBinding {
+                    source: format!("\0pattern@{}", span.start).into(),
+                    key: crate::symbols::DestructureKey::Property(
+                        element.property_name.as_str().into(),
+                    ),
+                    source_type: Some(parameter_type.clone()),
+                }),
+            );
+        }
     }
     // `{ a, ...rest }` binds `rest` to the remaining properties. The exact
     // `Omit<T, ...>` shape is not modelled; binding it to the source type keeps
