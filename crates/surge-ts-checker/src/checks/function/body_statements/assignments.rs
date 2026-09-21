@@ -573,9 +573,11 @@ fn check_assigned_value(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type(
+    // tsc reports a mismatch of the whole value on the assignment's target.
+    let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
         &assignment.value,
         assignment.value_span,
+        assignment.target_span,
         Some(target_type),
         crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
         symbols,
@@ -865,9 +867,10 @@ pub(crate) fn check_member_assignment(
     let target_unresolved = crate::checks::assign::type_contains_unknown(&target_type);
     let checkpoint = ctx.diagnostics().len();
 
-    let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type(
+    let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
         &assignment.value,
         assignment.value_span,
+        assignment.target_span,
         Some(&target_type),
         crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
         &visible_symbols,

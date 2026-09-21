@@ -455,6 +455,8 @@ fn evaluate_expression_with_expected_type_inner(
             elements,
             expected_elements,
             choose_span(*span, fallback_span),
+            target_span,
+            matches!(_expected_diagnostic, ExpectedTypeDiagnostic::ArgumentNotAssignable),
             symbols,
             ctx,
         );
@@ -1635,6 +1637,8 @@ fn evaluate_tuple_literal_with_expected_type(
     elements: &[surge_ts_syntax::ParsedArrayElement],
     expected_elements: &[Type],
     fallback_span: Option<SyntaxTextSpan>,
+    target_span: Option<SyntaxTextSpan>,
+    is_argument: bool,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
@@ -1648,13 +1652,20 @@ fn evaluate_tuple_literal_with_expected_type(
             let source_type_name =
                 Type::Tuple(literal_element_types(elements, symbols, ctx)).name();
             let target_type_name = Type::Tuple(expected_elements.to_vec()).name();
-            let diagnostic =
-                Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone());
-
-            ctx.push(diagnostic_with_syntax_span(
-                diagnostic,
-                choose_span(element.span, fallback_span),
-            ));
+            // The lengths disagree, so no element is at fault: tsc reports the
+            // whole value, as the argument it is or on the target it initializes.
+            let (diagnostic, span) = if is_argument {
+                (
+                    Diagnostic::ts2345(&source_type_name, &target_type_name, ctx.file_name.clone()),
+                    fallback_span,
+                )
+            } else {
+                (
+                    Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone()),
+                    target_span.or(fallback_span),
+                )
+            };
+            ctx.push(diagnostic_with_syntax_span(diagnostic, span));
             return InferredExpression::Unknown;
         }
 
@@ -1718,12 +1729,20 @@ fn evaluate_tuple_literal_with_expected_type(
         .iter()
         .all(|slot| is_assignable_to(&Type::Undefined, slot));
     if elements.len() != expected_elements.len() && !trailing_optional {
-        let source_type_name = Type::Array(Box::new(Type::Unknown)).name();
+        let source_type_name = Type::Tuple(literal_element_types(elements, symbols, ctx)).name();
         let target_type_name = Type::Tuple(expected_elements.to_vec()).name();
-        let diagnostic =
-            Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone());
-
-        ctx.push(diagnostic_with_syntax_span(diagnostic, fallback_span));
+        let (diagnostic, span) = if is_argument {
+            (
+                Diagnostic::ts2345(&source_type_name, &target_type_name, ctx.file_name.clone()),
+                fallback_span,
+            )
+        } else {
+            (
+                Diagnostic::ts2322(&source_type_name, &target_type_name, ctx.file_name.clone()),
+                target_span.or(fallback_span),
+            )
+        };
+        ctx.push(diagnostic_with_syntax_span(diagnostic, span));
         return InferredExpression::Unknown;
     }
 
