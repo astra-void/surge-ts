@@ -607,7 +607,39 @@ pub(crate) fn check_program_statement(
                 .symbols
                 .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
             let mut scopes = crate::symbols::ScopeStack::from_root(symbols);
+            let receiver = match &assignment.target {
+                surge_ts_syntax::ParsedExpression::PropertyAccess {
+                    object,
+                    property_name,
+                    ..
+                } => match object.as_ref() {
+                    surge_ts_syntax::ParsedExpression::Identifier { name, .. } => {
+                        Some((name.clone(), property_name.clone()))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
             crate::checks::function::check_member_assignment(*assignment, &mut scopes, ctx);
+            // The scope stack is this statement's alone. An expando member the
+            // write *declared* (`fn.x = v`) belongs to the binding, so it is
+            // carried back for the statements that follow; what a write to an
+            // existing member narrowed is not.
+            if let Some((name, property_name)) = receiver
+                && let Some(updated) = scopes.resolve(&name)
+                && let surge_ts_types::Type::Object(object) = &updated.ty
+                && object.call_signature().is_some()
+                && ctx.symbols.get(&name).is_some_and(|current| {
+                    current.ty.get_property_access_type(&property_name).is_none()
+                })
+            {
+                let updated = crate::symbols::SymbolInfo {
+                    ty: updated.ty.clone(),
+                    kind: updated.kind,
+                    function_signature: updated.function_signature.clone(),
+                };
+                let _ = ctx.symbols.insert(name, updated);
+            }
         }
         ParsedStatement::FunctionDeclaration(function) => {
             with_declared_mutable_module_bindings(ctx, |ctx| {

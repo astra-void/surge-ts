@@ -368,6 +368,145 @@ fn apply_merging_namespace_value_members(
     }
 }
 
+/// tsc binds a top-level `fn.x = value` as a declaration of `x` on `fn` when
+/// `fn` is a function declaration or a `const` holding a function (an
+/// *expando*): the value's type is `{ (…): R; x: typeof value }` for every
+/// reader, in this module and in its importers (`Card.Header = Header`, then
+/// `<Card.Header />`). Several writes of one name union their types.
+pub(crate) fn apply_expando_members(
+    statements: &[ParsedStatement],
+    exportable_values: &mut SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let mut assignments = Vec::new();
+    for statement in statements {
+        match statement {
+            ParsedStatement::MemberAssignment(assignment) => assignments.push(assignment.as_ref()),
+            ParsedStatement::If(if_statement) => {
+                collect_nested_member_assignments(&if_statement.then_body, &[], &mut assignments);
+                collect_nested_member_assignments(&if_statement.else_body, &[], &mut assignments);
+            }
+            ParsedStatement::Block(body) => {
+                collect_nested_member_assignments(body, &[], &mut assignments)
+            }
+            _ => {}
+        }
+    }
+    for assignment in assignments {
+        let surge_ts_syntax::ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } = &assignment.target
+        else {
+            continue;
+        };
+        let surge_ts_syntax::ParsedExpression::Identifier { name, .. } = object.as_ref() else {
+            continue;
+        };
+        let Some(symbol) = exportable_values.get_own_shared(name) else {
+            continue;
+        };
+        let (call_signature, mut properties) = match (&symbol.kind, &symbol.ty) {
+            (SymbolKind::Function | SymbolKind::Const, Type::Function(function)) => {
+                (function.clone(), surge_ts_types::PropertyMap::default())
+            }
+            (SymbolKind::Function | SymbolKind::Const, Type::Object(object)) => {
+                let Some(signature) = object.call_signature() else {
+                    continue;
+                };
+                (signature.clone(), (*object.properties).clone())
+            }
+            _ => continue,
+        };
+        let reported = ctx.diagnostics().len();
+        let inferred =
+            crate::infer::infer_expression(&assignment.value, exportable_values, ctx);
+        ctx.truncate_diagnostics(reported);
+        let crate::infer::InferredExpression::Known(value_type) = inferred else {
+            continue;
+        };
+        if value_type.is_unknown() {
+            continue;
+        }
+        let value_type = crate::checks::var::widen_implicit_variable_initializer_type(
+            SymbolKind::Let,
+            &assignment.value,
+            &value_type,
+        );
+        let member_type = match properties.get(property_name.as_str()) {
+            Some(existing) => surge_ts_types::union_type(vec![existing.ty.clone(), value_type]),
+            None => value_type,
+        };
+        properties.insert(
+            property_name.as_str().into(),
+            surge_ts_types::ObjectProperty::required(member_type),
+        );
+        let kind = symbol.kind;
+        let function_signature = symbol.function_signature.clone();
+        let _ = exportable_values.insert(
+            name.clone(),
+            SymbolInfo {
+                ty: Type::Object(
+                    crate::metrics::alloc_object_type(properties, None)
+                        .with_call_signature(call_signature.clone()),
+                ),
+                kind,
+                function_signature,
+            },
+        );
+    }
+}
+
+/// Member writes inside `if` and bare blocks: tsc binds an expando wherever it
+/// sits in its container, not only at the top of it. A block that declares the
+/// receiver's name itself (`const Y = …; Y.test = 42`) writes to its own
+/// binding, which shadows the outer function.
+fn collect_nested_member_assignments<'a>(
+    body: &'a [surge_ts_syntax::ParsedFunctionBodyStatement],
+    shadowed: &[&'a str],
+    assignments: &mut Vec<&'a surge_ts_syntax::ParsedMemberAssignment>,
+) {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+    let mut shadowed = shadowed.to_vec();
+    for statement in body {
+        match statement {
+            Statement::VariableDeclaration(variable) => shadowed.push(variable.name.as_str()),
+            Statement::Function(function) => shadowed.push(function.name.as_str()),
+            Statement::Class(class) => shadowed.push(class.name.as_str()),
+            _ => {}
+        }
+    }
+    for statement in body {
+        match statement {
+            Statement::MemberAssignment(assignment) => {
+                let receiver = match &assignment.target {
+                    surge_ts_syntax::ParsedExpression::PropertyAccess { object, .. } => {
+                        match object.as_ref() {
+                            surge_ts_syntax::ParsedExpression::Identifier { name, .. } => {
+                                Some(name.as_str())
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if receiver.is_some_and(|name| !shadowed.contains(&name)) {
+                    assignments.push(assignment.as_ref());
+                }
+            }
+            Statement::If(if_statement) => {
+                collect_nested_member_assignments(&if_statement.then_body, &shadowed, assignments);
+                collect_nested_member_assignments(&if_statement.else_body, &shadowed, assignments);
+            }
+            Statement::Block(body) => {
+                collect_nested_member_assignments(body, &shadowed, assignments)
+            }
+            _ => {}
+        }
+    }
+}
+
 fn object_with_namespace_members(
     object: &surge_ts_types::ObjectType,
     members: &surge_ts_types::PropertyMap,
@@ -507,6 +646,7 @@ pub(crate) fn collect_exportable_value_symbols(
         );
     }
     apply_merging_namespace_value_members(&merging_namespaces, &mut exportable_values);
+    apply_expando_members(statements, &mut exportable_values, &mut shadow_ctx);
     inherit_base_statics(statements, &mut exportable_values, imported_symbols);
 
     exportable_values

@@ -655,15 +655,95 @@ fn is_expando_receiver(object: &ParsedExpression, symbols: &SymbolTable) -> bool
     let Some(symbol) = symbols.get(name) else {
         return false;
     };
+    let callable = |ty: &Type| match ty.peeled() {
+        Type::Function(_) => true,
+        Type::Object(object) => object.call_signature().is_some(),
+        _ => false,
+    };
     match symbol.kind {
         SymbolKind::Function => true,
-        SymbolKind::Const => match symbol.ty.peeled() {
-            Type::Function(_) => true,
-            Type::Object(object) => object.call_signature().is_some(),
-            _ => false,
+        // A member declared in one branch only leaves the join of the function
+        // with and without it; it is the same expando receiver.
+        SymbolKind::Const => match &symbol.ty {
+            Type::Union(union) => union.types().iter().all(callable),
+            other => callable(other),
         },
         _ => false,
     }
+}
+
+/// Records `fn.x = value` on the binding, so the reads after it see the member
+/// tsc declares there: the function becomes `{ (…): R; x: typeof value }`.
+fn declare_expando_member(
+    object: &ParsedExpression,
+    property_name: &str,
+    assignment: &ParsedMemberAssignment,
+    scopes: &mut ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    let ParsedExpression::Identifier { name, .. } = object else {
+        return;
+    };
+    let symbols = visible_symbols(scopes);
+    let InferredExpression::Known(value_type) =
+        evaluate_expression(&assignment.value, assignment.value_span, &symbols, ctx)
+    else {
+        return;
+    };
+    if value_type.is_unknown() {
+        return;
+    }
+    let Some(symbol) = scopes.resolve(name) else {
+        return;
+    };
+    let members = match &symbol.ty {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other.clone()],
+    };
+    let mut call_signature = None;
+    let mut properties = surge_ts_types::PropertyMap::default();
+    for member in &members {
+        match member.peeled() {
+            Type::Function(function) => {
+                call_signature.get_or_insert(function);
+            }
+            Type::Object(object) => {
+                let Some(signature) = object.call_signature() else {
+                    return;
+                };
+                call_signature.get_or_insert(signature.clone());
+                // A member only some branches declared may be absent.
+                for (name, property) in object.properties.iter() {
+                    properties.entry(name.clone()).or_insert_with(|| {
+                        let mut property = property.clone();
+                        property.optional |= members.len() > 1;
+                        property
+                    });
+                }
+            }
+            _ => return,
+        }
+    }
+    let Some(call_signature) = call_signature else {
+        return;
+    };
+    let value_type = crate::checks::var::widen_implicit_variable_initializer_type(
+        SymbolKind::Let,
+        &assignment.value,
+        &value_type,
+    );
+    properties.insert(
+        property_name.into(),
+        surge_ts_types::ObjectProperty::required(value_type),
+    );
+    let updated = SymbolInfo {
+        ty: Type::Object(
+            crate::metrics::alloc_object_type(properties, None).with_call_signature(call_signature),
+        ),
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+    let _ = scopes.update_visible(name, updated);
 }
 
 pub(crate) fn check_member_assignment(
@@ -825,7 +905,9 @@ pub(crate) fn check_member_assignment(
         // peels to `ComponentType`'s union alone, and reporting off that made
         // `MyApp.getInitialProps = …` a false TS2339.
         let receiver = declared_object_type.as_ref().unwrap_or(&object_type);
-        if let Type::Union(union) = receiver
+        if is_expando_receiver(object, &visible_symbols) {
+            declare_expando_member(object, property_name, &assignment, scopes, ctx);
+        } else if let Type::Union(union) = receiver
             && union.types().iter().all(|member| {
                 matches!(member.peeled(), Type::Object(_))
                     && !crate::checks::expr::carries_leaked_type_parameter(member, ctx)
@@ -843,7 +925,6 @@ pub(crate) fn check_member_assignment(
                 None => diagnostic,
             });
         } else if !*is_bracketed
-            && !is_expando_receiver(object, &visible_symbols)
             && let InferredExpression::MissingProperty {
                 property_name,
                 object_type,
