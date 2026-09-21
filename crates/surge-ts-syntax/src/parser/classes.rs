@@ -422,7 +422,48 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 body_reads: super::reads::collect_statement_reads(&block.body),
             }))
         }
-        // Index signatures and accessor properties are not part of this slice.
-        ClassElement::AccessorProperty(_) | ClassElement::TSIndexSignature(_) => None,
+        // An auto-accessor (`accessor x: T = v`) is a get/set pair over a private
+        // slot: for typing it is the property it looks like. Dropping it made
+        // every use of the member a missing property.
+        ClassElement::AccessorProperty(property) => {
+            let (name, name_span) = if property.computed {
+                (super::types::computed_key_name(&property.key)?, property.key.span())
+            } else {
+                match &property.key {
+                    PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+                    key => (super::types::computed_key_name(key)?, key.span()),
+                }
+            };
+            let declared_type = property
+                .type_annotation
+                .as_ref()
+                .and_then(|annotation| parse_type_annotation(annotation));
+            let (initializer, initializer_span) = match property.value.as_ref() {
+                Some(value) => {
+                    let (expression, span) = parse_expression(value);
+                    (Some(expression), Some(text_span_from_oxc_span(span)))
+                }
+                None => (None, None),
+            };
+            Some(ParsedClassMember::Property(ParsedClassProperty {
+                name,
+                name_span: Some(text_span_from_oxc_span(name_span)),
+                is_static: property.r#static,
+                is_override: property.r#override,
+                is_abstract: matches!(
+                    property.r#type,
+                    oxc_ast::ast::AccessorPropertyType::TSAbstractAccessorProperty
+                ),
+                is_declare: false,
+                has_definite_assertion: property.definite,
+                optional: false,
+                readonly: false,
+                declared_type,
+                initializer,
+                initializer_span,
+            }))
+        }
+        // Index signatures are not part of this slice.
+        ClassElement::TSIndexSignature(_) => None,
     }
 }
