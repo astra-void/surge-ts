@@ -625,6 +625,51 @@ fn evaluate_expression_with_expected_type_inner(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// A literal typed against the union member it belongs to may lack members of
+/// that one constituent. tsc names those beneath the head, which stays the
+/// relation to the union as written: `Argument of type '{ dog: string; }' is not
+/// assignable to parameter of type 'ExoticAnimal'`.
+fn rehead_missing_members_against_union(
+    checkpoint: usize,
+    expression: &ParsedExpression,
+    expected_type: &Type,
+    expected_diagnostic: ExpectedTypeDiagnostic,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    use surge_ts_diagnostics::DiagnosticCode;
+    let Some(index) = ctx.diagnostics[checkpoint..]
+        .iter()
+        .position(|diagnostic| {
+            matches!(diagnostic.code, DiagnosticCode::TypeScript(2741 | 2739 | 2740))
+        })
+        .map(|offset| checkpoint + offset)
+    else {
+        return;
+    };
+    let diagnostics_before = ctx.diagnostics.len();
+    let source = crate::infer::infer_expression(expression, symbols, ctx);
+    ctx.truncate_diagnostics(diagnostics_before);
+    let InferredExpression::Known(source) = source else {
+        return;
+    };
+    let source = crate::checks::expr::widen_type(&source);
+    let is_argument = matches!(expected_diagnostic, ExpectedTypeDiagnostic::ArgumentNotAssignable);
+    let span = ctx.diagnostics[index].span.clone();
+    if is_argument && span.is_some() && span == ctx.suppressed_argument_mismatch_span {
+        ctx.diagnostics.remove(index);
+        return;
+    }
+    let (source_name, target_name) = (source.name(), expected_type.name());
+    let mut replacement = if is_argument {
+        Diagnostic::ts2345(&source_name, &target_name, ctx.file_name.clone())
+    } else {
+        Diagnostic::ts2322(&source_name, &target_name, ctx.file_name.clone())
+    };
+    replacement.span = span;
+    ctx.diagnostics[index] = replacement;
+}
+
 fn object_literal_against_union_members(
     union: &surge_ts_types::UnionType,
     properties: &[ParsedObjectProperty],
@@ -670,7 +715,8 @@ fn object_literal_against_union_members(
             _ => None,
         };
         if let Some(member) = unambiguous {
-            return Some(evaluate_expression_with_expected_type_anchored(
+            let checkpoint = ctx.diagnostics.len();
+            let result = evaluate_expression_with_expected_type_anchored(
                 expression,
                 fallback_span,
                 target_span,
@@ -678,7 +724,16 @@ fn object_literal_against_union_members(
                 _expected_diagnostic,
                 symbols,
                 ctx,
-            ));
+            );
+            rehead_missing_members_against_union(
+                checkpoint,
+                expression,
+                expected_type,
+                _expected_diagnostic,
+                symbols,
+                ctx,
+            );
+            return Some(result);
         }
 
         // Several members declare the written properties, and the one the literal
@@ -700,7 +755,8 @@ fn object_literal_against_union_members(
                 ctx,
             )
         {
-            return Some(evaluate_expression_with_expected_type_anchored(
+            let checkpoint = ctx.diagnostics.len();
+            let result = evaluate_expression_with_expected_type_anchored(
                 expression,
                 fallback_span,
                 target_span,
@@ -708,7 +764,16 @@ fn object_literal_against_union_members(
                 _expected_diagnostic,
                 symbols,
                 ctx,
-            ));
+            );
+            rehead_missing_members_against_union(
+                checkpoint,
+                expression,
+                expected_type,
+                _expected_diagnostic,
+                symbols,
+                ctx,
+            );
+            return Some(result);
         }
 
         // Several members declare the written properties (an overload group's
@@ -918,8 +983,36 @@ fn union_member_for_object_literal(
     let mut narrowed: Vec<&Type> = candidates.clone();
     // One member declaring *every* written property, where several declare some,
     // is already the decision — that is the same evidence the single-match check
-    // above uses, read the strict way round.
+    // above uses, read the strict way round. Unless the literal fits another
+    // member as it stands: tsc keeps the union as the contextual type when no
+    // discriminant picks a constituent, and `{ a: '', b: '' }` is a `Bar` even
+    // though only `Foo` declares both names.
     let mut decided = candidates.len() == 1 && members.len() > 1;
+    // A written discriminant does pick the constituent, whatever else fits.
+    let writes_discriminant = properties_of(expression).iter().any(|property| {
+        !property.is_spread
+            && written_literal_value(&property.value).is_some()
+            && members.iter().any(|member| {
+                matches!(
+                    member.get_property_access_type(property.name.as_str()),
+                    Some(Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_))
+                )
+            })
+    });
+    if decided && !writes_discriminant {
+        let diagnostics_before = ctx.diagnostics.len();
+        let context_free = crate::infer::infer_expression(expression, symbols, ctx);
+        ctx.truncate_diagnostics(diagnostics_before);
+        if let InferredExpression::Known(context_free) = context_free
+            && !context_free.is_unknown()
+            && !crate::checks::function::type_contains_unknown(&context_free)
+            && members.iter().any(|member| {
+                !std::ptr::eq(member, candidates[0]) && is_assignable_to(&context_free, member)
+            })
+        {
+            return None;
+        }
+    }
 
     // Discriminants first, and for free: a property written as a primitive
     // literal has its type without any evaluation, and in a discriminated union
