@@ -311,8 +311,17 @@ pub(super) fn resolve_indexed_access_type(
                     had_error: false,
                 }
             } else if suppress_instantiation_indexed_access(object_is_concrete_substitution) {
+                // A closed receiver that lacks the key is Go's `unknownType`, a
+                // real type (`TOptions['transformer']` for a `create({ isServer:
+                // true })` call decides tRPC's `transformer` flag through it).
+                // An open one has members surge never enumerated.
+                let ty = if object_type.synthetic_open_index {
+                    Type::Unknown
+                } else {
+                    Type::GenuineUnknown
+                };
                 ResolvedType {
-                    ty: Type::Unknown,
+                    ty,
                     had_error: false,
                 }
             } else {

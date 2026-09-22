@@ -2349,6 +2349,23 @@ pub(crate) fn collect_inferred_type_argument(
                 depth,
             );
         }
+        // tsc's `inferToConditionalType`: a source that is not itself a
+        // conditional infers into both branches (`inferToMultipleTypes` over the
+        // true and false types). tRPC's `create(opts?: ValidateShape<TOptions,
+        // …>)` reaches `TOptions` only through the inner conditional's true
+        // branch.
+        ParsedType::Conditional(conditional) if depth < 8 => {
+            for branch in [&conditional.true_type, &conditional.false_type] {
+                collect_inferred_type_argument(
+                    branch,
+                    argument_type,
+                    substitution,
+                    widen_literals,
+                    ctx,
+                    depth + 1,
+                );
+            }
+        }
         ParsedType::Intersection(expected_types) => {
             // An intersection's members all constrain the *same* argument at
             // once, so there is no member to choose between — but inferring
