@@ -49,12 +49,9 @@ pub(crate) fn collect_global_function_signatures(
     function_signatures: &mut HashMap<FunctionDeclarationLocation, FunctionType>,
     ctx: &mut CheckerContext,
 ) {
+    let seeded_names = seed_script_values_for_signatures(parsed_files, global_symbols, ctx);
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
-        if parsed_file.file_kind == FileKind::GeneratedDeclaration {
-            continue;
-        }
-
-        if parsed_file.is_module || parsed_file.file_kind.is_declaration() {
+        if !is_script_source(parsed_file) {
             continue;
         }
 
@@ -68,6 +65,56 @@ pub(crate) fn collect_global_function_signatures(
             ctx,
         );
     }
+    for (name, seeded) in seeded_names {
+        if global_symbols
+            .get_own(&name)
+            .is_some_and(|symbol| std::ptr::eq(symbol, seeded.as_ref()))
+        {
+            global_symbols.remove(&name);
+        }
+    }
+}
+
+fn is_script_source(parsed_file: &ParsedProgramFile) -> bool {
+    parsed_file.file_kind != FileKind::GeneratedDeclaration
+        && !parsed_file.is_module
+        && !parsed_file.file_kind.is_declaration()
+}
+
+/// A script's top-level `var`s are globals the binder declares before any
+/// signature is resolved, so `function f(x: typeof a)` reads `a` wherever it
+/// is written. Signature collection runs before the check phase declares
+/// them; seed their values for it, as module analysis does for a module's
+/// locals. The seed is removed afterwards so the check phase declares each
+/// variable itself.
+fn seed_script_values_for_signatures(
+    parsed_files: &[ParsedProgramFile],
+    global_symbols: &mut SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Vec<(Arc<str>, crate::symbols::SymbolInfoHandle)> {
+    let script_sources = || parsed_files.iter().filter(|parsed_file| is_script_source(parsed_file));
+    if !script_sources().any(|parsed_file| parsed_file.contains_typeof) {
+        return Vec::new();
+    }
+    let mut seeded = Vec::new();
+    for parsed_file in script_sources() {
+        ctx.set_file_name(parsed_file.file_name.clone());
+        let values = crate::modules::collect_exportable_value_symbols(
+            &parsed_file.statements,
+            &ctx.type_declarations,
+            &SymbolTable::new(),
+            None,
+            false,
+            ctx,
+        );
+        for (name, symbol) in values.iter_shared() {
+            if global_symbols.get(name).is_none() {
+                let _ = global_symbols.insert_shared(name.clone(), symbol.clone());
+                seeded.push((name.clone(), symbol.clone()));
+            }
+        }
+    }
+    seeded
 }
 
 pub(crate) fn collect_function_signatures_from_statements(
