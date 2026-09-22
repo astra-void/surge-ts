@@ -1,10 +1,28 @@
-use crate::{ParsedFunctionType, ParsedFunctionTypeParameter};
+use crate::{ParsedFunctionType, ParsedFunctionTypeParameter, ParsedType};
 use oxc_ast::ast::{
     BindingPattern, FormalParameter, FormalParameterRest, TSConstructorType, TSFunctionType,
     TSThisParameter,
 };
 
 use super::spans::text_span_from_oxc_span;
+
+fn pattern_bound_names(pattern: &BindingPattern<'_>) -> Vec<crate::ParsedBoundName> {
+    match pattern {
+        BindingPattern::BindingIdentifier(_) => Vec::new(),
+        pattern => super::functions::parse_binding_name(pattern).bound_names(),
+    }
+}
+
+fn widened_literal_type(initializer: &oxc_ast::ast::Expression<'_>) -> Option<ParsedType> {
+    use oxc_ast::ast::Expression;
+    Some(match initializer {
+        Expression::NumericLiteral(_) => ParsedType::Number,
+        Expression::StringLiteral(_) | Expression::TemplateLiteral(_) => ParsedType::String,
+        Expression::BooleanLiteral(_) => ParsedType::Boolean,
+        Expression::BigIntLiteral(_) => ParsedType::BigInt,
+        _ => return None,
+    })
+}
 use super::types::{parse_type_annotation, parse_type_parameters};
 
 /// Lowers a constructor type (`new (args) => T`, `abstract new (args) => T`) to a
@@ -84,6 +102,7 @@ fn parse_this_parameter(
         optional: false,
         is_this: true,
         rest: false,
+        bound_names: Vec::new(),
     })
 }
 
@@ -103,10 +122,12 @@ pub(crate) fn parse_function_type_rest_parameter(
         _ => (None, None),
     };
 
-    let ty = rest
-        .type_annotation
-        .as_ref()
-        .and_then(|annotation| parse_type_annotation(annotation))?;
+    // An unannotated rest in a signature is `any[]` (TS7019 under
+    // `noImplicitAny`); dropping it dropped the whole signature.
+    let ty = match rest.type_annotation.as_ref() {
+        Some(annotation) => parse_type_annotation(annotation)?,
+        None => ParsedType::Array(std::sync::Arc::new(ParsedType::Any)),
+    };
 
     Some(ParsedFunctionTypeParameter {
         name,
@@ -115,6 +136,7 @@ pub(crate) fn parse_function_type_rest_parameter(
         optional: false,
         is_this: false,
         rest: true,
+        bound_names: pattern_bound_names(&rest.rest.argument),
     })
 }
 
@@ -133,10 +155,18 @@ pub(crate) fn parse_function_type_parameter(
         _ => (None, None),
     };
 
-    let ty = parameter
-        .type_annotation
-        .as_ref()
-        .and_then(|annotation| parse_type_annotation(annotation))?;
+    // A type-level signature has no body, so an unannotated parameter is
+    // `any` (TS7006 under `noImplicitAny`) unless an initializer — itself
+    // TS2371 there — gives it a type. Dropping it dropped the signature, and
+    // with it every construct/call/method signature written that way.
+    let ty = match parameter.type_annotation.as_ref() {
+        Some(annotation) => parse_type_annotation(annotation)?,
+        None => parameter
+            .initializer
+            .as_ref()
+            .and_then(|initializer| widened_literal_type(initializer))
+            .unwrap_or(ParsedType::Any),
+    };
 
     Some(ParsedFunctionTypeParameter {
         name,
@@ -145,5 +175,6 @@ pub(crate) fn parse_function_type_parameter(
         optional: parameter.optional || parameter.initializer.is_some(),
         is_this: false,
         rest: false,
+        bound_names: pattern_bound_names(&parameter.pattern),
     })
 }

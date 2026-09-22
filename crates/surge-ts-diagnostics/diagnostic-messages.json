@@ -1096,6 +1096,22 @@
     "support": "emitted"
   },
   {
+    "code": "TS7013",
+    "category": "Error",
+    "message": "Construct signature, which lacks return-type annotation, implicitly has an 'any' return type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS7020",
+    "category": "Error",
+    "message": "Call signature, which lacks return-type annotation, implicitly has an 'any' return type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS7010",
     "category": "Error",
     "message": "'{0}', which lacks return-type annotation, implicitly has an '{1}' return type.",

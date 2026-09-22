@@ -29,63 +29,48 @@ pub(crate) fn merge_branch_deltas(
         return;
     }
 
-    let mut updates: Vec<(usize, Vec<(Arc<str>, AssignmentState)>)> = Vec::new();
-    let mut total_updates = 0usize;
+    // The only transition is an unassigned local becoming assigned, and only
+    // when every continuing branch assigned it — so it must be in each branch's
+    // delta. Walking the smallest delta instead of every visible local keeps a
+    // merge proportional to what the branches wrote, not to function size.
+    if has_fallthrough_base {
+        record_flow_branch_merge_fast_path_count();
+        return;
+    }
+    let driver = continuing_branches
+        .iter()
+        .min_by_key(|branch| branch.changed_local_count)
+        .expect("checked non-empty above");
 
-    for scope_index in 0..flow_state.scopes.len() {
+    let mut updates: Vec<(usize, Arc<str>)> = Vec::new();
+    for (&scope_index, scope_changes) in &driver.changes {
         let Some(base_scope) = flow_state.scopes.get(scope_index) else {
             continue;
         };
-
-        let mut scope_updates = Vec::new();
-
-        for (name, base_state) in &base_scope.locals {
+        for (name, driver_state) in scope_changes {
             record_flow_branch_merge_local_iteration_count(1);
-
-            let mut assigned_branches = 0usize;
-            for branch in &continuing_branches {
-                let branch_state = branch.get(scope_index, name).unwrap_or(*base_state);
-                if matches!(branch_state, AssignmentState::Assigned) {
-                    assigned_branches += 1;
-                }
+            if *driver_state != AssignmentState::Assigned
+                || base_scope.locals.get(name) != Some(&AssignmentState::DeclaredUnassigned)
+            {
+                continue;
             }
-
-            let merged_state = match base_state {
-                AssignmentState::Assigned => AssignmentState::Assigned,
-                AssignmentState::DeclaredUnassigned => {
-                    if has_fallthrough_base {
-                        AssignmentState::DeclaredUnassigned
-                    } else if continuing_branches.len() >= 1
-                        && assigned_branches == continuing_branches.len()
-                    {
-                        AssignmentState::Assigned
-                    } else {
-                        AssignmentState::DeclaredUnassigned
-                    }
-                }
-            };
-
-            if merged_state != *base_state {
-                total_updates += 1;
-                scope_updates.push((name.clone(), merged_state));
+            let assigned_everywhere = continuing_branches.iter().all(|branch| {
+                branch.get(scope_index, name) == Some(AssignmentState::Assigned)
+            });
+            if assigned_everywhere {
+                updates.push((scope_index, name.clone()));
             }
-        }
-
-        if !scope_updates.is_empty() {
-            updates.push((scope_index, scope_updates));
         }
     }
 
-    if total_updates == 0 {
+    if updates.is_empty() {
         record_flow_branch_merge_fast_path_count();
         return;
     }
 
-    for (scope_index, scope_updates) in updates {
+    for (scope_index, name) in updates {
         if let Some(scope) = flow_state.scopes.get_mut(scope_index) {
-            for (name, merged_state) in scope_updates {
-                scope.locals.insert(name, merged_state);
-            }
+            scope.locals.insert(name, AssignmentState::Assigned);
         }
     }
 }

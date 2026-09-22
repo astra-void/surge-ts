@@ -963,6 +963,19 @@ fn grammar_finding_diagnostic(
         Kind::AlwaysFalsyExpression => Diagnostic::ts2873(ctx.file_name.clone()),
         Kind::NeverNullishCoalesceOperand => Diagnostic::ts2869(ctx.file_name.clone()),
         Kind::AlwaysNullishCoalesceOperand => Diagnostic::ts2871(ctx.file_name.clone()),
+        Kind::ImplicitAnyConstructReturn | Kind::ImplicitAnyCallReturn | Kind::ImplicitAnySignatureParameter
+            if !ctx.options.no_implicit_any =>
+        {
+            return None;
+        }
+        Kind::ImplicitAnyConstructReturn => Diagnostic::ts7013(ctx.file_name.clone()),
+        Kind::ImplicitAnyCallReturn => Diagnostic::ts7020(ctx.file_name.clone()),
+        Kind::ImplicitAnySignatureParameter => {
+            let Some(name) = finding.name.as_deref() else {
+                return None;
+            };
+            Diagnostic::ts7006(name, ctx.file_name.clone())
+        }
         Kind::ImplicitAnyReturn => {
             if !ctx.options.no_implicit_any {
                 return None;

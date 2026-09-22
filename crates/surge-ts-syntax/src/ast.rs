@@ -130,6 +130,14 @@ pub enum ParsedGrammarDiagnosticKind {
     /// A signature with neither a body nor a return type — TS7010, reported
     /// only under `noImplicitAny`.
     ImplicitAnyReturn,
+    /// A construct signature without a return type — TS7013, under
+    /// `noImplicitAny`.
+    ImplicitAnyConstructReturn,
+    /// A call signature without a return type — TS7020, under `noImplicitAny`.
+    ImplicitAnyCallReturn,
+    /// A type-level signature's parameter with neither annotation nor
+    /// initializer — TS7006, under `noImplicitAny`.
+    ImplicitAnySignatureParameter,
     /// Two members of one class, interface, or object literal declaring the
     /// same name where neither is an overload of the other — TS2300.
     DuplicateMember,
@@ -582,6 +590,24 @@ pub struct ParsedFunctionType {
     pub type_parameters: Vec<ParsedTypeParameter>,
 }
 
+/// One step from a destructured parameter's type to a name it binds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedBindingStep {
+    Property(String),
+    Index(usize),
+    ObjectRest,
+    ArrayRest,
+}
+
+/// A name a destructuring pattern binds, with the path that reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedBoundName {
+    pub name: String,
+    pub path: Vec<ParsedBindingStep>,
+    /// The last step carries a default, so the binding is never `undefined`.
+    pub has_default: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedFunctionTypeParameter {
     pub name: Option<String>,
@@ -594,6 +620,58 @@ pub struct ParsedFunctionTypeParameter {
     /// A `...rest: T[]` parameter. Its annotation is the array type; lowering
     /// stores the element type and marks the signature variadic.
     pub rest: bool,
+    /// The names a destructured parameter binds; empty for an identifier.
+    pub bound_names: Vec<ParsedBoundName>,
+}
+
+impl ParsedBindingName {
+    /// Every name this pattern binds, with the path from the bound value.
+    pub fn bound_names(&self) -> Vec<ParsedBoundName> {
+        fn collect(
+            binding: &ParsedBindingName,
+            path: &mut Vec<ParsedBindingStep>,
+            has_default: bool,
+            out: &mut Vec<ParsedBoundName>,
+        ) {
+            match binding {
+                ParsedBindingName::Identifier { name, .. } => out.push(ParsedBoundName {
+                    name: name.clone(),
+                    path: path.clone(),
+                    has_default,
+                }),
+                ParsedBindingName::ObjectPattern(pattern) => {
+                    for element in &pattern.elements {
+                        path.push(ParsedBindingStep::Property(element.property_name.clone()));
+                        collect(&element.binding_name, path, element.has_default, out);
+                        path.pop();
+                    }
+                    if let Some(rest) = &pattern.rest {
+                        path.push(ParsedBindingStep::ObjectRest);
+                        collect(rest, path, false, out);
+                        path.pop();
+                    }
+                }
+                ParsedBindingName::ArrayPattern(pattern) => {
+                    for (index, element) in pattern.elements.iter().enumerate() {
+                        if let Some(element) = element {
+                            path.push(ParsedBindingStep::Index(index));
+                            collect(element, path, false, out);
+                            path.pop();
+                        }
+                    }
+                    if let Some(rest) = &pattern.rest {
+                        path.push(ParsedBindingStep::ArrayRest);
+                        collect(rest, path, false, out);
+                        path.pop();
+                    }
+                }
+                ParsedBindingName::Unsupported { .. } => {}
+            }
+        }
+        let mut out = Vec::new();
+        collect(self, &mut Vec::new(), false, &mut out);
+        out
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

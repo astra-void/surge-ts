@@ -1343,6 +1343,23 @@ impl GrammarCollector {
         }
     }
 
+    /// A type-level signature has no body to infer a parameter from, so an
+    /// unannotated one is `any` unless an (erroneous) initializer types it.
+    fn check_implicit_any_signature_parameters(&mut self, parameters: &FormalParameters<'_>) {
+        for parameter in &parameters.items {
+            if parameter.type_annotation.is_some() || parameter.initializer.is_some() {
+                continue;
+            }
+            if let oxc_ast::ast::BindingPattern::BindingIdentifier(binding) = &parameter.pattern {
+                self.push(
+                    Kind::ImplicitAnySignatureParameter,
+                    binding.span,
+                    Some(binding.name.as_str()),
+                );
+            }
+        }
+    }
+
     /// A signature with neither a body nor a written return type has an
     /// implicit `any` return — the overload signatures of a function that *does*
     /// have an implementation included, which is why this does not look at the
@@ -1889,7 +1906,43 @@ impl<'a> Visit<'a> for GrammarCollector {
         oxc_ast_visit::walk::walk_ts_property_signature(self, property);
     }
 
+    fn visit_ts_call_signature_declaration(
+        &mut self,
+        signature: &oxc_ast::ast::TSCallSignatureDeclaration<'a>,
+    ) {
+        if signature.return_type.is_none() {
+            self.push(Kind::ImplicitAnyCallReturn, signature.span, None);
+        }
+        self.check_signature_parameters(&signature.params, false);
+        self.check_implicit_any_signature_parameters(&signature.params);
+        oxc_ast_visit::walk::walk_ts_call_signature_declaration(self, signature);
+    }
+
+    fn visit_ts_construct_signature_declaration(
+        &mut self,
+        signature: &oxc_ast::ast::TSConstructSignatureDeclaration<'a>,
+    ) {
+        if signature.return_type.is_none() {
+            self.push(Kind::ImplicitAnyConstructReturn, signature.span, None);
+        }
+        self.check_signature_parameters(&signature.params, false);
+        self.check_implicit_any_signature_parameters(&signature.params);
+        oxc_ast_visit::walk::walk_ts_construct_signature_declaration(self, signature);
+    }
+
+    fn visit_ts_function_type(&mut self, function: &oxc_ast::ast::TSFunctionType<'a>) {
+        self.check_implicit_any_signature_parameters(&function.params);
+        oxc_ast_visit::walk::walk_ts_function_type(self, function);
+    }
+
+    fn visit_ts_constructor_type(&mut self, constructor: &oxc_ast::ast::TSConstructorType<'a>) {
+        self.check_implicit_any_signature_parameters(&constructor.params);
+        oxc_ast_visit::walk::walk_ts_constructor_type(self, constructor);
+    }
+
     fn visit_ts_method_signature(&mut self, method: &TSMethodSignature<'a>) {
+        self.check_signature_parameters(&method.params, false);
+        self.check_implicit_any_signature_parameters(&method.params);
         if method.kind == TSMethodSignatureKind::Method
             && method.return_type.is_none()
             && !method.computed

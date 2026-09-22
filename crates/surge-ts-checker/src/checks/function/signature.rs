@@ -275,17 +275,41 @@ pub(crate) fn insert_array_binding_pattern_bindings(
         }
     }
     if let Some(rest) = &pattern.rest {
-        // `[a, ...rest]` binds `rest` to the remaining elements. We model it as
-        // an array of the source element type (or the source as-is) — precise
-        // enough to keep `rest` usable without an exact `slice` shape.
-        let rest_type = match &source_type {
-            Type::Array(_) => source_type.clone(),
-            Type::Tuple(elements) => {
-                Type::Array(Box::new(elements.last().cloned().unwrap_or(Type::Any)))
-            }
-            _ => Type::Any,
+        insert_binding_name(rest, array_rest_binding_type(&source_type), scopes);
+    }
+}
+
+/// `[a, ...rest]` binds `rest` to the remaining elements. We model it as an
+/// array of the source element type (or the source as-is) — precise enough to
+/// keep `rest` usable without an exact `slice` shape.
+fn array_rest_binding_type(source: &Type) -> Type {
+    match source {
+        Type::Array(_) => source.clone(),
+        Type::Tuple(elements) => Type::Array(Box::new(elements.last().cloned().unwrap_or(Type::Any))),
+        _ => Type::Any,
+    }
+}
+
+/// The type a destructured parameter gives one of its names, read from the
+/// parameter's type by the rules the body scope binds it with.
+pub(crate) fn bound_name_type(
+    parameter_type: &Type,
+    bound: &surge_ts_syntax::ParsedBoundName,
+) -> Type {
+    use surge_ts_syntax::ParsedBindingStep;
+    let mut ty = with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || parameter_type.clone());
+    for step in &bound.path {
+        ty = match step {
+            ParsedBindingStep::Property(name) => object_binding_element_type(&ty, name),
+            ParsedBindingStep::Index(index) => array_binding_element_type(&ty, *index),
+            ParsedBindingStep::ObjectRest => ty,
+            ParsedBindingStep::ArrayRest => array_rest_binding_type(&ty),
         };
-        insert_binding_name(rest, rest_type, scopes);
+    }
+    if bound.has_default {
+        surge_ts_types::remove_undefined(&ty)
+    } else {
+        ty
     }
 }
 
@@ -626,6 +650,24 @@ pub(crate) fn map_function_signature(
                 );
             }
             parameter_bindings.push((name.to_string(), parameter_binding_type));
+        } else {
+            // A destructured parameter's names are in scope for the later
+            // parameters and the return type too (`({ a: alias }: T) => typeof alias`).
+            let pattern_type = parameter_scope_type(parameter, &inferred_parameter_type);
+            for bound in parameter.binding_name.bound_names() {
+                let ty = bound_name_type(&pattern_type, &bound);
+                if let Some(parameter_symbols) = parameter_symbols.as_mut() {
+                    let _ = parameter_symbols.insert(
+                        bound.name.clone(),
+                        SymbolInfo {
+                            ty: ty.clone(),
+                            kind: SymbolKind::Parameter,
+                            function_signature: None,
+                        },
+                    );
+                }
+                parameter_bindings.push((bound.name, ty));
+            }
         }
 
         // tsc's `addOptionality`: a parameter with an initializer accepts
