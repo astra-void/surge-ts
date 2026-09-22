@@ -672,6 +672,8 @@ export const fixturePresets: Record<string, string> = {
   'generic-static-class-value-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-static-class-value-basic/tsconfig.json'),
   'conditional-parameter-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/conditional-parameter-inference-basic/tsconfig.json'),
   'falsy-narrowing-filter-predicate-basic': path.join(workspaceRoot, 'tests/compat-projects/falsy-narrowing-filter-predicate-basic/tsconfig.json'),
+  'ambient-block-import-signature-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-block-import-signature-basic/tsconfig.json'),
+  'script-typeof-global-signature-basic': path.join(workspaceRoot, 'tests/compat-projects/script-typeof-global-signature-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
