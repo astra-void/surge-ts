@@ -478,10 +478,28 @@ pub(crate) fn tuple_destructure_sibling_narrowings(
     // `const { kind, payload } = action`.
     let (tested, keeps): (&str, Box<dyn Fn(&Type) -> bool>) =
         if let Some((tested, holds)) = truthiness_tested_binding(condition, branch_is_true) {
+            // A member stays where its read can be what the test found: truthy
+            // (`done: true`, `true | false`) or falsy (`done: false`, a nullish
+            // or empty literal) — so a boolean-literal discriminant partitions
+            // `{ done: false; value: T } | { done: true; value?: undefined }`.
             (
                 tested,
                 Box::new(move |read: &Type| {
-                    matches!(read, Type::Undefined | Type::Void | Type::Never) != holds
+                    let definitely_falsy = |ty: &Type| match ty {
+                        Type::Never
+                        | Type::Undefined
+                        | Type::Null
+                        | Type::Void
+                        | Type::BooleanLiteral(false) => true,
+                        Type::StringLiteral(value) => value.is_empty(),
+                        Type::NumberLiteral(literal) => literal.value == "0",
+                        _ => false,
+                    };
+                    if holds {
+                        !definitely_falsy(&truthy::remove_definitely_falsy(read))
+                    } else {
+                        !matches!(truthy::keep_possibly_falsy(read), Type::Never)
+                    }
                 }),
             )
         } else if let Some((tested, literal, eq)) = parse_identifier_literal_equality(condition) {

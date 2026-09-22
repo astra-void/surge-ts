@@ -622,6 +622,7 @@ export const fixturePresets: Record<string, string> = {
   'try-catch-never-call-basic': path.join(workspaceRoot, 'tests/compat-projects/try-catch-never-call-basic/tsconfig.json'),
   'promise-race-union-basic': path.join(workspaceRoot, 'tests/compat-projects/promise-race-union-basic/tsconfig.json'),
   'interface-method-overload-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-method-overload-basic/tsconfig.json'),
+  'destructured-boolean-discriminant-basic': path.join(workspaceRoot, 'tests/compat-projects/destructured-boolean-discriminant-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
