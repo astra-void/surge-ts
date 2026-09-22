@@ -544,6 +544,11 @@ thread_local! {
     > = std::cell::RefCell::new(surge_ts_types::fx::FxHashMap::default());
 }
 
+thread_local! {
+    static MERGES_IN_PROGRESS: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 #[derive(PartialEq, Eq, Hash)]
 struct DeferredMergeKey {
     resolvers: Vec<usize>,
@@ -605,28 +610,51 @@ impl surge_ts_types::ResolveReference for LazyIntersectionMerge {
     }
 
     fn resolve_arc(&self) -> std::sync::Arc<Type> {
-        self.memo
-            .get_or_init(|| {
-                crate::program::record_program_counter(|c| c.lazy_intersection_peel_count += 1);
-                let display_name = (!self.members.is_empty()).then(|| {
-                    self.members
-                        .iter()
-                        .map(Type::name)
-                        .collect::<Vec<_>>()
-                        .join(" & ")
-                });
-                std::sync::Arc::new(crate::program::with_dts_expansion_reason(
-                    crate::program::DtsExpansionReason::IntersectionMerge,
-                    || {
-                        merge_intersection_members_now(
-                            self.members.clone(),
-                            display_name,
-                            self.dropped_unmodelled_operand,
-                        )
-                    },
-                ))
-            })
-            .clone()
+        if let Some(merged) = self.memo.get() {
+            return merged.clone();
+        }
+        // A member can reach this same intersection again while it is being
+        // merged (`Readonly<Omit<X, K>>` over an operand whose members name the
+        // intersection). Initializing the memo re-entrantly would block on the
+        // `OnceLock` forever, so the back-edge reads the sentinel like a blocked
+        // lazy peel, and anything that consumed it is not memoized.
+        let address = self as *const Self as usize;
+        if MERGES_IN_PROGRESS.with(|merges| merges.borrow().contains(&address)) {
+            crate::program::note_expansion_degradation();
+            crate::program::record_degraded_resolution();
+            crate::infer::types::cache::note_in_flight_degraded_read();
+            return std::sync::Arc::new(Type::Unknown);
+        }
+        crate::program::record_program_counter(|c| c.lazy_intersection_peel_count += 1);
+        let in_flight_before = crate::infer::types::cache::in_flight_degraded_read_epoch();
+        MERGES_IN_PROGRESS.with(|merges| merges.borrow_mut().push(address));
+        let display_name = (!self.members.is_empty()).then(|| {
+            self.members
+                .iter()
+                .map(Type::name)
+                .collect::<Vec<_>>()
+                .join(" & ")
+        });
+        let merged = std::sync::Arc::new(crate::program::with_dts_expansion_reason(
+            crate::program::DtsExpansionReason::IntersectionMerge,
+            || {
+                merge_intersection_members_now(
+                    self.members.clone(),
+                    display_name,
+                    self.dropped_unmodelled_operand,
+                )
+            },
+        ));
+        MERGES_IN_PROGRESS.with(|merges| {
+            let mut merges = merges.borrow_mut();
+            if let Some(position) = merges.iter().rposition(|entry| *entry == address) {
+                merges.remove(position);
+            }
+        });
+        if crate::infer::types::cache::in_flight_degraded_read_epoch() != in_flight_before {
+            return merged;
+        }
+        self.memo.get_or_init(|| merged).clone()
     }
 }
 

@@ -87,6 +87,10 @@ pub(crate) fn in_flight_degraded_read_epoch() -> u64 {
     IN_FLIGHT_DEGRADED_READS.get()
 }
 
+pub(crate) fn note_in_flight_degraded_read() {
+    IN_FLIGHT_DEGRADED_READS.with(|reads| reads.set(reads.get().wrapping_add(1)));
+}
+
 pub(crate) fn get_cached_named_type_resolution(
     ctx: &CheckerContext,
     key: &DeclarationResolutionKey,
@@ -106,7 +110,7 @@ pub(crate) fn get_cached_named_type_resolution(
             if resolving.iter().any(|current| current == key) {
                 None
             } else {
-                IN_FLIGHT_DEGRADED_READS.with(|reads| reads.set(reads.get().wrapping_add(1)));
+                note_in_flight_degraded_read();
                 Some(ResolvedType {
                     ty: Type::Unknown,
                     had_error: true,

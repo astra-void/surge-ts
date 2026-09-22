@@ -602,6 +602,7 @@ export const fixturePresets: Record<string, string> = {
   'interface-method-overload-selection-basic': path.join(workspaceRoot, 'tests/compat-projects/interface-method-overload-selection-basic/tsconfig.json'),
   'recursive-mapped-alias-member-basic': path.join(workspaceRoot, 'tests/compat-projects/recursive-mapped-alias-member-basic/tsconfig.json'),
   'filter-inferred-predicate-basic': path.join(workspaceRoot, 'tests/compat-projects/filter-inferred-predicate-basic/tsconfig.json'),
+  'lazy-intersection-reentry-basic': path.join(workspaceRoot, 'tests/compat-projects/lazy-intersection-reentry-basic/tsconfig.json'),
   'block-arrow-return-basic': path.join(workspaceRoot, 'tests/compat-projects/block-arrow-return-basic/tsconfig.json'),
   'generic-static-class-value-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-static-class-value-basic/tsconfig.json'),
 };
