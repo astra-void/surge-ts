@@ -37,3 +37,14 @@ const connecting = envelopes
   .map((envelope) => envelope.result)
   .filter((result) => result.type === 'state' && result.state === 'connecting');
 export const lastError: string = connecting[0]!.error;
+
+declare const results: { result: Envelope }[];
+const mapped = results.map((entry) => {
+  return entry.result;
+});
+export const mappedType: 'x' = mapped[0]!.type;
+
+declare function run<T>(task: () => T): T;
+export const ran: string = run(() => {
+  return 1;
+});

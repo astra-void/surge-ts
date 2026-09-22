@@ -1714,9 +1714,16 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 // router unmodelled at `createTRPCNext({ config() { … } })`.
                 // A degraded return stays the sentinel: inferring from it would
                 // turn "could not model" into a decision.
+                // A contextual return that says nothing (`any` from a lib helper,
+                // the sentinel, an uninstantiated parameter) leaves the body's
+                // returns to decide, as tsc's `getReturnTypeFromBody` always does.
+                let contextual_return = expected_type.map(|expected| expected.return_type().clone());
+                let contextual_return_is_open = contextual_return.as_ref().is_none_or(|ty| {
+                    matches!(ty, Type::Any | Type::Unknown | Type::TypeParameter(_))
+                });
                 if infer_block_body_return_types()
                     && !has_explicit_return_type
-                    && expected_type.is_none()
+                    && contextual_return_is_open
                 {
                     let returned = ctx.body_return_types().to_vec();
                     if !returned.is_empty()
@@ -1728,7 +1735,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                         // widens (`() => { return 1; }` is `() => number`).
                         let mut members: Vec<Type> = returned
                             .into_iter()
-                            .map(|member| widen_unit_return_type(member, None))
+                            .map(|member| widen_unit_return_type(member, contextual_return.as_ref()))
                             .collect();
                         if !body_flow.guarantees_exit {
                             members.push(Type::Undefined);
