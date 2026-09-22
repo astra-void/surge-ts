@@ -1358,6 +1358,14 @@ pub(crate) fn resolve_interface_declaration(
                     None => merged,
                 }
             };
+            // The fold answers every consumer that wants one signature; the
+            // members ride along, as they do for the interface's own call
+            // signatures, so a call resolves against the candidate whose arity
+            // fits and reports TS2769 when several fit and none accepts it.
+            let mut members = Vec::new();
+            existing_fn.push_overload_members(&mut members);
+            incoming.push_overload_members(&mut members);
+            let merged = merged.with_overloads(members);
             let optional = existing.optional && member.optional;
             properties.insert(
                 member.name.as_str().into(),

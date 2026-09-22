@@ -1512,6 +1512,65 @@ fn construct_signature_of(ty: &Type) -> Option<surge_ts_types::FunctionType> {
     }
 }
 
+/// The first argument `candidate` rejects beyond doubt. Only a primitive or
+/// unit mismatch counts (`true` for a `string` / `number` slot): an object
+/// argument's rejection may be a lib shape surge models partly (`File` against
+/// `Blob`), and reporting it would describe surge rather than the call.
+fn candidate_definitely_rejects(
+    candidate: &FunctionType,
+    argument_types: &[ArgumentShape],
+) -> Option<usize> {
+    argument_types.iter().enumerate().find_map(|(index, shape)| {
+        let argument = shape.ty.as_ref()?;
+        let parameter = effective_parameter_type(candidate, index)?;
+        (!type_contains_unknown(argument)
+            && !names_open_parameter(&parameter)
+            && (crate::checks::assign::definite_unit_member_mismatch(argument, &parameter)
+                || crate::checks::assign::definite_primitive_member_mismatch(argument, &parameter)
+                || (is_primitive_only(argument)
+                    && is_primitive_only(&parameter.peeled())
+                    && !is_assignable_to(argument, &parameter))))
+        .then_some(index)
+    })
+}
+
+/// A type made of primitives and their literals only, whose relations surge
+/// decides without any lib shape.
+fn is_primitive_only(ty: &Type) -> bool {
+    match ty {
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::Null
+        | Type::Undefined
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => true,
+        Type::Union(union) => union.types().iter().all(is_primitive_only),
+        _ => false,
+    }
+}
+
+/// tsc's `reportCallResolutionErrors` re-checks the last candidate and reports
+/// "No overload matches this call" where that candidate rejects its first
+/// argument. `None` when no typed argument is rejected by it (a callback, whose
+/// shape is a wildcard here, may be the one), which leaves the fold's verdict.
+fn last_candidate_rejected_argument(
+    candidate: &FunctionType,
+    argument_types: &[ArgumentShape],
+) -> Option<usize> {
+    argument_types.iter().enumerate().find_map(|(index, shape)| {
+        let argument = shape.ty.as_ref()?;
+        // A generic candidate's own parameters are the sentinel here, which a
+        // relation accepts; what rejects is the rest of the shape (an arity, a
+        // parameter's type), exactly as the candidate itself would.
+        let parameter = effective_parameter_type(candidate, index)?;
+        (!is_assignable_to(argument, &parameter)).then_some(index)
+    })
+}
+
 fn overload_arity_fits(candidate: &FunctionType, argument_count: usize) -> bool {
     let parameters = candidate.parameters();
     let mut required = candidate.required_parameter_count();
@@ -1597,6 +1656,7 @@ pub(crate) fn check_function_type_call(
     // signature arguments are checked against whenever a candidate is not fully
     // modelled, since a sentinel parameter would reject what tsc accepts.
     let mut arity_candidates = 0;
+    let mut fitting_candidates: Vec<FunctionType> = Vec::new();
     if let Some(members) = function_type.overloads()
         && !arguments.iter().any(|argument| argument.spread)
     {
@@ -1605,6 +1665,7 @@ pub(crate) fn check_function_type_call(
             .filter(|member| overload_arity_fits(member, arguments.len()))
             .collect();
         arity_candidates = fitting.len();
+        fitting_candidates = fitting.iter().map(|candidate| (*candidate).clone()).collect();
         if let [chosen] = fitting.as_slice()
             && chosen.overloads().is_none()
             && !chosen
@@ -1627,6 +1688,7 @@ pub(crate) fn check_function_type_call(
     let actual = arguments.len();
     let mut has_unresolved_argument = false;
     let mut mismatch_reported = false;
+    let mut overload_failure_argument: Option<usize> = None;
 
     // A trailing parameter typed `void` (or a union containing `void`) is optional
     // at the call site — `cb()` is valid for `cb: (x: void) => void`, and a
@@ -1904,20 +1966,22 @@ pub(crate) fn check_function_type_call(
                     let parameter_type_name = reported_parameter.name();
                     // Every fitting candidate's parameter at this position is a
                     // member of the fold's, so none of them accepts it either.
-                    let diagnostic = if arity_candidates > 1 {
-                        Diagnostic::ts2769(ctx.file_name.clone())
+                    // Where tsc says so is decided once every argument is typed:
+                    // at the last candidate's first rejected argument.
+                    if arity_candidates > 1 {
+                        // This argument's shape is already recorded.
+                        overload_failure_argument = Some(argument_types.len().saturating_sub(1));
                     } else {
-                        crate::checks::expr::assignability_mismatch_diagnostic(
+                        let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
                             &argument_type,
                             &parameter_type,
                             &argument_type_name,
                             &parameter_type_name,
                             true,
                             ctx.file_name.clone(),
-                        )
-                    };
-
-                    ctx.push(diagnostic_with_syntax_span(diagnostic, argument.span));
+                        );
+                        ctx.push(diagnostic_with_syntax_span(diagnostic, argument.span));
+                    }
                     mismatch_reported = true;
                 }
             }
@@ -1927,6 +1991,43 @@ pub(crate) fn check_function_type_call(
             }
             InferredExpression::Unknown => {}
         }
+    }
+
+    // The fold accepts what no member does when its positions disagree
+    // (`set(key: string, …)` / `set(key: number, …)` fold `key` to the
+    // sentinel). tsc's `chooseOverload` finds no applicable candidate then, so
+    // the call is TS2769 all the same — decided only where every candidate
+    // rejects a typed argument outright.
+    // Explicit type arguments filter the candidates first (a constraint they
+    // violate drops the overload), which this arity-only list does not model.
+    if overload_failure_argument.is_none()
+        && !mismatch_reported
+        && _type_arguments.is_empty()
+        && fitting_candidates.len() > 1
+        && fitting_candidates
+            .iter()
+            .all(|candidate| candidate_definitely_rejects(candidate, &argument_types).is_some())
+    {
+        overload_failure_argument = fitting_candidates
+            .last()
+            .and_then(|last| candidate_definitely_rejects(last, &argument_types));
+    }
+    if let Some(fold_failure) = overload_failure_argument {
+        // With explicit type arguments the candidate list tsc re-checks is not
+        // this arity-only one, so the anchor stays where the fold rejected.
+        let anchor = fitting_candidates
+            .last()
+            .filter(|_| _type_arguments.is_empty())
+            .and_then(|last| last_candidate_rejected_argument(last, &argument_types))
+            .unwrap_or(fold_failure);
+        let span = arguments
+            .get(anchor)
+            .or_else(|| arguments.get(fold_failure))
+            .and_then(|argument| argument.span.or(argument.expression_span));
+        if span.is_some() {
+            ctx.push(diagnostic_with_syntax_span(Diagnostic::ts2769(ctx.file_name.clone()), span));
+        }
+        mismatch_reported = true;
     }
 
     if has_unresolved_argument {
@@ -2067,6 +2168,14 @@ fn select_overload_return_type(
     // `registry.get(schema)?.id` came back as an unbound `$replace<Meta, S>`
     // without this.
     if names_open_parameter(picked.return_type()) {
+        return None;
+    }
+    // A generic member resolved outside a call has its type parameters at
+    // their defaults (`querySelector<E extends Element = Element>` answers
+    // `Element`), where tsc would infer them — from the arguments or from the
+    // contextual return type (`const r: SVGRectElement = q.querySelector(…)!`).
+    // Only the call's own instantiation can answer for it.
+    if picked.type_parameter_head().is_some() {
         return None;
     }
     crate::program::record_overload_selection_pick();
