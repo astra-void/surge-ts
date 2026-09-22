@@ -320,6 +320,14 @@ pub(crate) fn infer_array_literal(
                 }
                 spread_element_types.push(yielded);
             }
+            // Only a fresh literal widens through its members. An element read
+            // from a declared type (`[envelope.result]`) keeps the literal
+            // members its declaration wrote — `{ type: 'started' }` stays a
+            // discriminant — and only a top-level literal widens, which is what
+            // a `const c = 'a'` element does in tsc.
+            InferredExpression::Known(ty) if !is_fresh_literal_expression(&element.expression) => {
+                spread_element_types.push(widen_top_level_literals(&ty));
+            }
             InferredExpression::Known(ty) => element_types.push(ty),
         }
     }
@@ -335,6 +343,8 @@ pub(crate) fn infer_array_literal(
     // where widening made it `string[]` and rejected every use of the copy.
     let element_type = if spread_element_types.is_empty() {
         crate::checks::expr::widen_type(&union_type(element_types))
+    } else if element_types.is_empty() {
+        union_type(spread_element_types)
     } else {
         if !element_types.is_empty() {
             spread_element_types
@@ -343,6 +353,28 @@ pub(crate) fn infer_array_literal(
         union_type(spread_element_types)
     };
     InferredExpression::Known(Type::Array(Box::new(element_type)))
+}
+
+fn is_fresh_literal_expression(expression: &ParsedExpression) -> bool {
+    matches!(
+        expression,
+        ParsedExpression::StringLiteral(_)
+            | ParsedExpression::NumberLiteral(_)
+            | ParsedExpression::BooleanLiteral(_)
+            | ParsedExpression::TemplateLiteral { .. }
+            | ParsedExpression::ObjectLiteral { .. }
+            | ParsedExpression::ArrayLiteral { .. }
+    )
+}
+
+fn widen_top_level_literals(ty: &Type) -> Type {
+    match ty {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => {
+            crate::checks::expr::widen_type(ty)
+        }
+        Type::Union(union) => union_type(union.types().iter().map(widen_top_level_literals).collect()),
+        other => other.clone(),
+    }
 }
 
 pub(crate) fn infer_object_property_value(

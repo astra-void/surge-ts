@@ -244,38 +244,152 @@ fn inferred_predicate_target(
             _ => return None,
         },
     };
-    let bind = |ty: &Type| {
-        let mut scope = symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
-        scope.insert(
-            name.clone(),
-            crate::symbols::SymbolInfo {
-                ty: ty.clone(),
-                kind: crate::symbols::SymbolKind::Parameter,
-                function_signature: None,
-            },
-        );
-        scope
-    };
-    let true_type = crate::checks::function::narrow_condition_symbol_table(
-        condition,
-        &bind(element),
-        true,
-    )?
-    .get(name)?
-    .ty
-    .clone();
+    let true_type = narrow_by_branch(condition, element, name, true, symbols)?;
     if true_type == *element || true_type.is_unknown() {
         return None;
     }
-    let false_type = crate::checks::function::narrow_condition_symbol_table(
-        condition,
-        &bind(&true_type),
-        false,
-    )?
-    .get(name)?
-    .ty
-    .clone();
-    matches!(false_type, Type::Never).then_some(true_type)
+    let false_type = narrow_by_branch(condition, &true_type, name, false, symbols)?;
+    is_never(&false_type).then_some(true_type)
+}
+
+fn is_never(ty: &Type) -> bool {
+    match ty {
+        Type::Never => true,
+        Type::Union(union) => union.types().is_empty(),
+        _ => false,
+    }
+}
+
+/// `name.prop === literal` (or `!==`) decided per union member, as tsc's
+/// `narrowTypeByDiscriminant` does: a member whose `prop` is a literal is kept
+/// exactly when the comparison can hold, and one whose `prop` is anything wider
+/// stays. Unlike the scope narrower this answers `never` when nothing survives,
+/// which is what tells a predicate apart from a plain boolean.
+fn narrow_by_discriminant_leaf(
+    condition: &ParsedExpression,
+    ty: &Type,
+    name: &str,
+    branch_is_true: bool,
+) -> Option<Type> {
+    use surge_ts_syntax::ParsedBinaryOperator;
+    let ParsedExpression::Binary {
+        left,
+        operator,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let equality = match operator {
+        ParsedBinaryOperator::StrictEquals => true,
+        ParsedBinaryOperator::StrictNotEquals => false,
+        _ => return None,
+    };
+    let (access, literal) = match (left.as_ref(), right.as_ref()) {
+        (access @ ParsedExpression::PropertyAccess { .. }, literal)
+        | (literal, access @ ParsedExpression::PropertyAccess { .. }) => (access, literal),
+        _ => return None,
+    };
+    let ParsedExpression::PropertyAccess {
+        object,
+        property_name,
+        ..
+    } = access
+    else {
+        return None;
+    };
+    if !matches!(object.as_ref(), ParsedExpression::Identifier { name: base, .. } if base == name) {
+        return None;
+    }
+    let literal = match literal {
+        ParsedExpression::StringLiteral(value) => Type::StringLiteral(value.clone()),
+        ParsedExpression::BooleanLiteral(value) => Type::BooleanLiteral(*value),
+        _ => return None,
+    };
+    let keep_equal = equality == branch_is_true;
+    let flattened = surge_ts_types::flatten_reference_unions(ty).unwrap_or_else(|| ty.clone());
+    let members: Vec<Type> = match &flattened {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other.clone()],
+    };
+    let kept: Vec<Type> = members
+        .into_iter()
+        .filter(|member| {
+            let Type::Object(object) = member.peeled() else {
+                return true;
+            };
+            match object.properties.get(property_name.as_str()).map(|property| property.ty.peeled()) {
+                Some(value @ (Type::StringLiteral(_) | Type::BooleanLiteral(_))) => {
+                    (value == literal) == keep_equal
+                }
+                _ => true,
+            }
+        })
+        .collect();
+    Some(if kept.is_empty() { Type::Never } else { union_type(kept) })
+}
+
+/// `ty` narrowed by `condition` holding (or failing), composed over `&&`, `||`
+/// and `!` the way control flow composes them: `a && b` fails where `a` fails,
+/// or where `a` holds and `b` fails. A leaf condition is left to the scope
+/// narrower; one it cannot read leaves the type as it was.
+fn narrow_by_branch(
+    condition: &ParsedExpression,
+    ty: &Type,
+    name: &str,
+    branch_is_true: bool,
+    symbols: &SymbolTable,
+) -> Option<Type> {
+    use surge_ts_syntax::{ParsedLogicalOperator, ParsedUnaryOperator};
+    if is_never(ty) {
+        return Some(Type::Never);
+    }
+    match condition {
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => narrow_by_branch(operand, ty, name, !branch_is_true, symbols),
+        ParsedExpression::Logical {
+            left,
+            operator,
+            right,
+            ..
+        } if matches!(operator, ParsedLogicalOperator::And | ParsedLogicalOperator::Or) => {
+            let conjunction = matches!(operator, ParsedLogicalOperator::And);
+            // The side on which the left operand decides the outcome.
+            let left_decides = narrow_by_branch(left, ty, name, !conjunction, symbols)?;
+            let left_passes = narrow_by_branch(left, ty, name, conjunction, symbols)?;
+            let right = narrow_by_branch(right, &left_passes, name, branch_is_true, symbols)?;
+            if branch_is_true == conjunction {
+                return Some(right);
+            }
+            let reachable: Vec<Type> = [left_decides, right]
+                .into_iter()
+                .filter(|member| !is_never(member))
+                .collect();
+            Some(if reachable.is_empty() { Type::Never } else { union_type(reachable) })
+        }
+        _ if let Some(narrowed) = narrow_by_discriminant_leaf(condition, ty, name, branch_is_true) => {
+            Some(narrowed)
+        }
+        _ => {
+            let mut scope = symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+            scope.insert(
+                name.to_string(),
+                crate::symbols::SymbolInfo {
+                    ty: ty.clone(),
+                    kind: crate::symbols::SymbolKind::Parameter,
+                    function_signature: None,
+                },
+            );
+            match crate::checks::function::narrow_condition_symbol_table(condition, &scope, branch_is_true) {
+                Some(narrowed) => Some(narrowed.get(name)?.ty.clone()),
+                None => Some(ty.clone()),
+            }
+        }
+    }
 }
 
 pub(crate) fn check_property_call_like(

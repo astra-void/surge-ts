@@ -1274,27 +1274,22 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
 /// [`check_arrow_function_expression_with_expected_type`] with the span tsc
 /// anchors a whole-signature mismatch on — the assignment target, not the
 /// failing return.
-/// `SURGE_INFER_BLOCK_RETURN_TYPES=1`: infer an unannotated *block* body's
-/// return type from its `return` statements, the way an expression body's
-/// already is (tsc's `getReturnTypeFromBody`).
+/// An unannotated arrow or function expression with a *block* body takes its
+/// return type from its `return` statements, as tsc's `getReturnTypeFromBody`
+/// does. On by default since 2026-09-22; `SURGE_INFER_BLOCK_RETURN_TYPES=0`
+/// turns it off. Before it, every `const f = () => { return … }` was the
+/// sentinel and silenced each use of `f`.
 ///
-/// Measured 2026-09-16. This is the root of tRPC's router cluster, not proxy
-/// modelling: `createTRPCNext({ config() { return opts; } })` cannot infer
-/// `TRouter` because the method hands back the degradation sentinel. With this
-/// on, an isolated probe matches tsc exactly and a directly-typed options value
-/// closes both remaining tRPC false positives.
-///
-/// It is off because it is only half the fix. Function *declarations* infer
-/// their return type on a different path and still degrade, so
-/// `testServerAndClientResource(appRouter)` — and with it the real call site —
-/// stays unresolved; and making the source concrete exposes a latent
-/// false positive where the *target* still carries an unsubstituted type
-/// parameter (`NextComponentType<…, AppPropsType<any, P>>`), which took trpc
-/// from 2 to 33. zod 0/0, the sweep and every other corpus are unchanged.
+/// Turning it on first opened 31 trpc false positives, each a missing tsc rule
+/// the sentinel had hidden: a function against an `any` index signature,
+/// candidate widening that dropped surge's openness marker, filter callbacks'
+/// inferred type predicates, and array elements whose declared literal members
+/// were widened. Only an arrow with no contextual type is inferred here; a
+/// contextually typed block callback still keeps the sentinel.
 fn infer_block_body_return_types() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED
-        .get_or_init(|| std::env::var("SURGE_INFER_BLOCK_RETURN_TYPES").as_deref() == Ok("1"))
+        .get_or_init(|| std::env::var("SURGE_INFER_BLOCK_RETURN_TYPES").as_deref() != Ok("0"))
 }
 
 /// tsc's `getReturnTypeFromBody` widens a single literal return type unless the
@@ -1729,7 +1724,12 @@ pub(crate) fn check_arrow_function_expression_anchored(
                             .iter()
                             .all(|ty| !ty.is_unknown() || matches!(ty, Type::ErrorType))
                     {
-                        let mut members = returned;
+                        // With no contextual return type, a returned literal
+                        // widens (`() => { return 1; }` is `() => number`).
+                        let mut members: Vec<Type> = returned
+                            .into_iter()
+                            .map(|member| widen_unit_return_type(member, None))
+                            .collect();
                         if !body_flow.guarantees_exit {
                             members.push(Type::Undefined);
                         }
