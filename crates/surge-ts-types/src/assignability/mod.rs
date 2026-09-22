@@ -74,22 +74,6 @@ thread_local! {
         const { std::cell::Cell::new(Relation::Assignable) };
 }
 
-static STRICT_NULL_CHECKS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-
-/// `compilerOptions.strictNullChecks` for the program being checked. Without
-/// it `null` and `undefined` are in the domain of every type: tsc's
-/// `isSimpleTypeRelatedTo` relates them to anything but `never`, and
-/// `getUnionType` drops them from a union with any other member. Process-wide
-/// because it is fixed for a whole program and read by the free-function type
-/// engine on every checker thread.
-pub fn set_strict_null_checks(enabled: bool) {
-    STRICT_NULL_CHECKS.store(enabled, std::sync::atomic::Ordering::Relaxed);
-}
-
-pub fn strict_null_checks() -> bool {
-    STRICT_NULL_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
-}
-
 fn current_relation() -> Relation {
     CURRENT_RELATION.with(std::cell::Cell::get)
 }
@@ -359,6 +343,13 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         return true;
     }
 
+    // `any` relates to everything but `never` (`isSimpleTypeRelatedTo`,
+    // relater.go:214). Only tsc's error type takes the rule: surge's own `Any`
+    // is also a modelling placeholder and stays permissive.
+    if matches!(from, Type::ErrorType) && matches!(to, Type::Never) {
+        return false;
+    }
+
     // Only the outermost relation: a promise nested in a member may have been
     // collapsed to its awaited type on one side alone.
     if depth == 1
@@ -386,7 +377,7 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         return true;
     }
     if matches!(from, Type::Null | Type::Undefined)
-        && !strict_null_checks()
+        && !crate::strict_null_checks()
         && !matches!(to, Type::Never)
     {
         return true;
@@ -614,6 +605,16 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         }
     }
 
+    // A unique symbol admits only itself: another unique symbol, or the `symbol`
+    // either one widens to, is not it. A union source is left to the
+    // every-member arm below.
+    if let Type::Reference(target) = to
+        && target.is_unique_symbol()
+        && !matches!(from, Type::Union(_))
+    {
+        return matches!(from, Type::Reference(source) if source.id == target.id);
+    }
+
     // Nominal references compare nominally first (same declaration + arguments is
     // handled by the `from == to` fast path above); anything else falls back to
     // comparing the structural expansion, so a reference stays interchangeable
@@ -778,10 +779,20 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         // cross-realm `cls: {name: string}` idiom that accepts `typeof SomeClass`. A
         // construct-signature or index-signature target is left to the dedicated arms
         // above (or rejected), since a plain function value models neither.
+        // An index signature of type `any` admits every object source,
+        // functions included (tsc's `membersRelatedToIndexer` skips the members
+        // for an `any` indexer); any other index type asks for an index the
+        // function does not have.
         (Type::Function(source), Type::Object(target)) => {
             target.construct_signature().is_none()
-                && target.string_index_type.is_none()
-                && target.number_index_type.is_none()
+                && target
+                    .string_index_type
+                    .as_deref()
+                    .is_none_or(|index| matches!(index, Type::Any))
+                && target
+                    .number_index_type
+                    .as_deref()
+                    .is_none_or(|index| matches!(index, Type::Any))
                 && match target.call_signature() {
                     Some(call_signature) => is_function_assignable_to(source, call_signature),
                     None => true,

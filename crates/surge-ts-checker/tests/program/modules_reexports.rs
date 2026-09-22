@@ -384,9 +384,8 @@ fn module_re_export_type_named_value_only_missing_type() {
 
     // `export type { Foo }` over a value-only export is legal and republishes
     // the symbol, so the re-export itself is not TS2305. Using the value as a
-    // type is the error; tsc 7.0.2 reports TS2749 there, which surge does not
-    // implement yet and reports as TS2304.
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    // type is the error, TS2749.
+    assert_eq!(codes(&diagnostics), vec!["TS2749"]);
 }
 
 #[test]
@@ -445,7 +444,7 @@ fn module_re_export_star_does_not_export_default() {
 }
 
 #[test]
-fn module_re_export_star_conflict_policy_pinned() {
+fn module_re_export_star_conflict_reports_ts2308() {
     let diagnostics = program(&[
         ("a.ts", "export const greeting: string = \"Ada\";"),
         ("b.ts", "export const greeting: number = 1;"),
@@ -456,7 +455,7 @@ fn module_re_export_star_conflict_policy_pinned() {
         ),
     ]);
 
-    assert!(diagnostics.is_empty());
+    assert_eq!(codes(&diagnostics), vec!["TS2308"]);
 }
 
 #[test]

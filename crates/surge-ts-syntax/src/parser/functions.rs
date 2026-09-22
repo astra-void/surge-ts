@@ -679,7 +679,20 @@ fn parse_do_while_statement(
     ))]
 }
 
+fn for_binding_kind(left: &ForStatementLeft<'_>) -> crate::ParsedForBindingKind {
+    match left {
+        ForStatementLeft::VariableDeclaration(declaration)
+            if declaration.kind == oxc_ast::ast::VariableDeclarationKind::Var =>
+        {
+            crate::ParsedForBindingKind::Var
+        }
+        ForStatementLeft::VariableDeclaration(_) => crate::ParsedForBindingKind::BlockScoped,
+        _ => crate::ParsedForBindingKind::ExistingBinding,
+    }
+}
+
 fn parse_for_of_statement(for_of_statement: &ForOfStatement<'_>) -> Option<ParsedForOfStatement> {
+    let binding_kind = for_binding_kind(&for_of_statement.left);
     let binding_name = match &for_of_statement.left {
         ForStatementLeft::VariableDeclaration(declaration) => {
             let declarator = declaration.declarations.first()?;
@@ -699,6 +712,7 @@ fn parse_for_of_statement(for_of_statement: &ForOfStatement<'_>) -> Option<Parse
 
     Some(ParsedForOfStatement {
         binding_name,
+        binding_kind,
         iterable,
         iterable_span: Some(text_span_from_oxc_span(iterable_span)),
         body,
@@ -714,6 +728,7 @@ fn parse_for_of_statement(for_of_statement: &ForOfStatement<'_>) -> Option<Parse
 fn parse_for_in_statement(
     for_in_statement: &ForInStatement<'_>,
 ) -> Option<ParsedForOfStatement> {
+    let binding_kind = for_binding_kind(&for_in_statement.left);
     let binding_name = match &for_in_statement.left {
         ForStatementLeft::VariableDeclaration(declaration) => {
             let declarator = declaration.declarations.first()?;
@@ -730,6 +745,7 @@ fn parse_for_in_statement(
 
     Some(ParsedForOfStatement {
         binding_name,
+        binding_kind,
         iterable,
         iterable_span: Some(text_span_from_oxc_span(iterable_span)),
         body: parse_branch_body(&for_in_statement.body),
@@ -952,7 +968,7 @@ fn parse_object_binding_element(
     let has_default = matches!(&property.value, BindingPattern::AssignmentPattern(_));
     let (default_value, default_span) = match &property.value {
         BindingPattern::AssignmentPattern(assignment) => {
-            let (value, span) = super::expressions::parse_expression(&assignment.right);
+            let (value, span) = parse_expression(&assignment.right);
             (Some(Box::new(value)), Some(text_span_from_oxc_span(span)))
         }
         _ => (None, None),

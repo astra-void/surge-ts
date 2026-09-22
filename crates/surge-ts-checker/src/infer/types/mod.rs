@@ -351,6 +351,10 @@ pub(crate) fn validate_local_type_declaration(
             }
 
             let mut resolving = Vec::new();
+            let outer_class_heritage = std::mem::replace(
+                &mut ctx.resolving_class_heritage,
+                interface.is_class_instance,
+            );
             with_type_declaration_scope(&interface.resolution_scope, ctx, |ctx| {
                 with_file_name(ctx, &interface.file_name, |ctx| {
                     ctx.push_type_parameter_scope(&interface.body.type_parameters, None);
@@ -374,6 +378,7 @@ pub(crate) fn validate_local_type_declaration(
                     ctx.pop_type_parameter_scope();
                 })
             });
+            ctx.resolving_class_heritage = outer_class_heritage;
         }
     }
 }

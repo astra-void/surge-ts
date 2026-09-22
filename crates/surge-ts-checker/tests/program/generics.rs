@@ -152,7 +152,7 @@ fn generic_module_import_valid() {
 }
 
 #[test]
-fn generic_module_private_helper_type_importable_or_pinned() {
+fn generic_module_private_helper_type_not_importable() {
     let diagnostics = program(&[
         (
             "box.ts",
@@ -161,7 +161,7 @@ fn generic_module_private_helper_type_importable_or_pinned() {
         ("index.ts", "import { Internal } from \"./box\";"),
     ]);
 
-    assert!(diagnostics.is_empty());
+    assert_eq!(codes(&diagnostics), vec!["TS2459"]);
 }
 
 #[test]
@@ -331,7 +331,7 @@ fn generic_type_alias_private_helper_generic_not_importable() {
         ("index.ts", "import { Internal } from \"./box\";"),
     ]);
 
-    assert!(diagnostics.is_empty());
+    assert_eq!(codes(&diagnostics), vec!["TS2459"]);
 }
 
 #[test]
@@ -389,7 +389,7 @@ fn generic_interface_multiple_parameters_mismatch() {
         ),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2322", "TS2322"]);
 }
 
 #[test]
@@ -517,13 +517,14 @@ fn generic_constraint_rejects_an_out_of_constraint_argument() {
 }
 
 #[test]
-fn generic_constraint_unknown_type_no_cascade() {
+fn generic_constraint_unknown_type_reports_only_the_name() {
     let diagnostics = program(&[
         ("box.ts", "type Named<T extends Missing> = { name: T };"),
         ("index.ts", "let value: Named<string> = { name: \"ok\" };"),
     ]);
 
-    assert!(diagnostics.is_empty());
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["box.ts"]);
 }
 
 #[test]
@@ -717,13 +718,14 @@ fn generic_default_unknown_no_assignment_cascade() {
 }
 
 #[test]
-fn generic_constraint_unknown_no_assignment_cascade() {
+fn generic_constraint_unknown_reports_only_the_name() {
     let diagnostics = program(&[
         ("box.ts", "type Box<T extends Missing> = { value: T };"),
         ("index.ts", "let box: Box<string> = { value: \"ok\" };"),
     ]);
 
-    assert!(diagnostics.is_empty());
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(file_names(&diagnostics), vec!["box.ts"]);
 }
 
 #[test]
@@ -904,7 +906,7 @@ fn generic_module_private_helper_not_importable() {
         ("index.ts", "import { Internal } from \"./box\";"),
     ]);
 
-    assert!(diagnostics.is_empty());
+    assert_eq!(codes(&diagnostics), vec!["TS2459"]);
 }
 
 #[test]
@@ -1038,13 +1040,13 @@ fn generic_function_body_return_same_type_parameter_valid_or_unknown_pinned() {
 }
 
 #[test]
-fn generic_function_body_return_mismatch_policy_pinned() {
+fn generic_function_body_return_mismatch_reports_ts2322() {
     let diagnostics = program(&[(
         "index.ts",
         "function identity<T>(value: T): T { return 123; }",
     )]);
 
-    assert!(diagnostics.is_empty());
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
 }
 
 #[test]
@@ -1059,8 +1061,8 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,

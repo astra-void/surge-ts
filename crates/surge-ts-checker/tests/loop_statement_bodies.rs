@@ -86,7 +86,7 @@ fn for_in_binds_the_key_as_string() {
          \x20 for (const k in o) { k.toFixed(1); }\n\
          }\n",
     );
-    assert_eq!(codes(&diagnostics), vec!["TS2339"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2551"]);
 }
 
 /// tsc (flow.go): "for (const _ in ref) acts as a nonnull on ref".

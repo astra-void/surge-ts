@@ -144,7 +144,11 @@ pub(crate) fn parse_type_predicate_condition(
         (_, Some(inferred)) => (surge_ts_syntax::ParsedType::Any, inferred.parameter_index),
         _ => return None,
     };
-    let (subject, path) = super::super::reference_path(&arguments.get(index)?.expression)?;
+    let tested = &arguments.get(index)?.expression;
+    // An element access (`node.arguments[0]`) is a reference tsc narrows too;
+    // it is keyed the way the element-reference narrowing records reads.
+    let (subject, path) = super::super::reference_path(tested)
+        .or_else(|| super::super::element_access_parts(tested).map(|key| (key, Vec::new())))?;
     let other_arguments = if signature.type_parameters.is_empty() || !type_arguments.is_empty() {
         Vec::new()
     } else {
@@ -232,16 +236,18 @@ pub(crate) fn narrow_by_predicate(
         return Some(predicate.clone());
     }
     // tsc narrows a non-union subject the predicate does not refine to the
-    // intersection of the two (`err: Error` under `x is E` reads as `Error & E`).
-    // Surge has no intersection type, so the holding branch reads the subject
-    // as the degradation sentinel rather than keep a declared type the
-    // predicate has just widened past.
+    // intersection of the two (`getNarrowedTypeWorker`'s last resort, flow.go):
+    // `conn: Connection` under `this is { ws: WebSocket }` reads `conn.ws` as
+    // `WebSocket`.
     if keep_matching
         && matches!(peeled, Type::Object(_))
         && matches!(predicate.peeled(), Type::Object(_))
         && !surge_ts_types::is_assignable_to(&peeled, predicate)
     {
-        return Some(Type::Unknown);
+        return Some(crate::infer::types::merge_intersection_members(vec![
+            ty.clone(),
+            predicate.clone(),
+        ]));
     }
     None
 }

@@ -11,12 +11,12 @@ fn check(source_text: &str) -> Vec<surge_ts_diagnostics::Diagnostic> {
     check_source(source_text, "example.tsx")
 }
 
-const SETUP: &str = "declare namespace JSX { interface Element {} interface IntrinsicElements { div: {} } }\n\
+const SETUP: &str = "declare global { namespace JSX { interface Element {} interface IntrinsicElements { div: {} } interface IntrinsicAttributes { key?: string | number } } }\n\
      interface Props { task: string }\n\
      declare function Item(props: Props): JSX.Element;\n";
 
-// `key` and `ref` are reserved by the JSX runtime; tsc removes them from the
-// props check rather than treating them as excess.
+// `key` is accepted because `JSX.IntrinsicAttributes` declares it, not because
+// tsc reserves the name: without that interface it is an excess property.
 #[test]
 fn reserved_attributes_are_not_excess_properties() {
     let diagnostics = check(&format!(

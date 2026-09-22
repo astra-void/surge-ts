@@ -41,7 +41,7 @@ pub(crate) fn element_reference_key_named(
     Some(rendered)
 }
 
-pub(super) fn element_access_parts(expression: &ParsedExpression) -> Option<String> {
+pub(crate) fn element_access_parts(expression: &ParsedExpression) -> Option<String> {
     match expression {
         ParsedExpression::ElementAccess { object, index, .. }
         | ParsedExpression::OptionalIndexAccess { object, index, .. } => {
@@ -120,6 +120,7 @@ pub(super) fn narrowed_element_references(
     let mut guards = Vec::new();
     collect_element_reference_guards(condition, branch_is_true, &mut guards);
     let mut narrowed = Vec::new();
+    narrowed_element_predicate_references(condition, branch_is_true, symbols, ctx, &mut narrowed);
     for (access, guard) in guards {
         let Some(key) = element_access_parts(access) else {
             continue;
@@ -140,6 +141,73 @@ pub(super) fn narrowed_element_references(
         narrowed.push((key, narrowed_ty, declared));
     }
     narrowed
+}
+
+/// `isIdentifier(node.arguments[0])`: a type predicate over an element access
+/// narrows that access, as it would a binding.
+fn narrowed_element_predicate_references(
+    condition: &ParsedExpression,
+    branch_is_true: bool,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+    narrowed: &mut Vec<(String, Type, Type)>,
+) {
+    match condition {
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => narrowed_element_predicate_references(operand, !branch_is_true, symbols, ctx, narrowed),
+        ParsedExpression::Logical {
+            left,
+            operator,
+            right,
+            ..
+        } => {
+            if matches!(
+                (operator, branch_is_true),
+                (ParsedLogicalOperator::And, true) | (ParsedLogicalOperator::Or, false)
+            ) {
+                narrowed_element_predicate_references(left, branch_is_true, symbols, ctx, narrowed);
+                narrowed_element_predicate_references(right, branch_is_true, symbols, ctx, narrowed);
+            }
+        }
+        ParsedExpression::Call { arguments, .. }
+        | ParsedExpression::PropertyCall { arguments, .. } => {
+            let Some(guard) = super::guards::parse_type_predicate_condition(condition, &mut |callee| {
+                super::predicate::predicate_callee_signature(callee, |name| symbols.get(name), symbols, ctx)
+            }) else {
+                return;
+            };
+            if !guard.path.is_empty() || !guard.subject.ends_with(']') {
+                return;
+            }
+            let Some(access) = arguments
+                .get(guard.parameter_index)
+                .map(|argument| &argument.expression)
+                .filter(|expression| {
+                    super::element_access_parts(expression).as_deref() == Some(guard.subject.as_str())
+                })
+            else {
+                return;
+            };
+            let declared = match crate::infer::infer_expression(access, symbols, ctx) {
+                crate::infer::InferredExpression::Known(ty) if !ty.is_unknown() => ty,
+                _ => return,
+            };
+            let Some(target) =
+                super::predicate::resolve_predicate_guard_type(&guard, Some(&declared), symbols, ctx)
+            else {
+                return;
+            };
+            let Some(narrowed_ty) = super::guards::narrow_by_predicate(&declared, &target, branch_is_true)
+            else {
+                return;
+            };
+            narrowed.push((guard.subject, narrowed_ty, declared));
+        }
+        _ => {}
+    }
 }
 
 pub(super) fn collect_element_reference_guards<'a>(

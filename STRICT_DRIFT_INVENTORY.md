@@ -1,24 +1,81 @@
 # Strict Drift Inventory
 
 Inventory of the non-gating message-text and span/column drift in the oracle
-preset sweep. **As of 2026-09-03 there is none** — both strict sweeps are green
-across all 122 registered presets. The tables are kept as worked examples of
-what each class of drift looked like and what closed it.
+preset sweep. **As of 2026-09-22 (`7ea0cddb`) 17 of 387 registered presets
+drift** — 16 on message text, 2 on column, one on both. None of them fails the
+normal gate. The 2026-09-03 snapshot, when there was no drift at all, is kept
+below as history together with the worked examples of what closed each class.
 
 Drift, when it exists, is confined to the column and to the message text at an
 already-correct `(file, code, line)`: every entry recorded here still matched
 **code-count and file/code/line** under the normal gate. Drift never implies a
 missing, extra, mis-filed, or mis-lined diagnostic.
 
-> **Document structure.** § "Current snapshot" below is the only section that
-> describes the present state; the drift tables under it are labelled
-> *Historical* and record deltas that no longer reproduce. §§ 1–11 are a **dated historical log** of earlier
+> **Document structure.** § "Current snapshot (2026-09-22)" below is the only
+> section that describes the present state. § "Historical snapshot
+> (2026-09-03)" and the drift tables under it record deltas that no longer
+> reproduce. §§ 1–11 are a **dated historical log** of earlier
 > sweeps (75-preset and 78-preset registries) and the passes that closed them;
 > their counts, tables, and "remaining" lists do **not** describe current
 > behavior. The canonical current-state summary is
 > [CURRENT_STATUS.md](CURRENT_STATUS.md).
 
-## Current snapshot (2026-09-03)
+## Current snapshot (2026-09-22)
+
+- Commit: `7ea0cddb` (release CLI built in a detached worktree at that commit
+  and passed to the sweep with `SURGE_TS_BIN`). The sweep ran from the primary
+  working tree, where exactly one preset, `block-arrow-return-basic`, carried
+  an uncommitted edit; that preset, and every per-location delta in the tables
+  below, come from fixtures extracted with `git archive 7ea0cddb`.
+- TypeScript oracle: 7.0.2 (pinned)
+- Scope: all **387** registered oracle presets, `--maxDiagnostics 200`
+
+| Run | Command flags | Result |
+| --- | --- | --- |
+| Normal gate | (none) | **387 PASS / 0 FAIL** |
+| Strict messages | `--strictMessages` | **371 PASS / 16 FAIL** |
+| Strict spans | `--strictSpans` | **385 PASS / 2 FAIL** |
+| Both | `--strictMessages --strictSpans` | **370 PASS / 17 FAIL** |
+
+Every preset below matches `tsc` at code-count and file/code/line; the delta is
+the message text (or column) at that location.
+
+**Message-text drift (16 presets):**
+
+| Preset | Location | `tsc` says | surge says |
+| --- | --- | --- | --- |
+| `arithmetic-operand-rules-basic` | `index.ts:13:18` TS2365 | `'bigint' and '1n'` | `'bigint' and 'bigint'` |
+| `arrow-unit-return-widening-basic` | `index.ts:11:7` TS2322 | `'"a" \| "b"'` | `'ReturnType<(c: boolean) => "a" \| "b">'` |
+| `block-arrow-return-basic` | `index.ts:28:14` TS2322 | `'{ user: { name: string; } \| null; }'` | `'{ user: any; }'` |
+| `conditional-expression-mismatch-anchor-basic` | `index.ts:15:7` TS2322 | `'{ p: string; } \| { p: number; }'` | `'{ p: "s"; } \| { p: number; }'` |
+| `discriminant-exhaustion-never-basic` | `index.ts:56:13` TS2322 | `'{ kind: "line"; length: number; }'` | `'{ kind: string; length: number; }'` |
+| `filter-inferred-predicate-basic` | `index.ts:11:47` TS2339 | `type 'Event'` | `type '{ type: "started"; }'` |
+| `function-literal-alias-return-inference-basic` | `index.ts:19:14` TS2322 | `'object[]'` | `'any[]'` |
+| `global-this-member-and-inference-basic` | `global-this.ts:9:9` TS2322 | the expanded `fetch` signature | `'Fetch'` |
+| `keyof-union-and-mapped-distribution-basic` | `index.ts:13:7`, `:21:7` TS2322 | `'"kind" \| "shared"'`, `'"x" \| "y"'` | `'ShapeKey'`, `'WithIndex'` |
+| `lookup-error-type-propagation-basic` | `index.ts:14:17`, `:17:21` TS2339 | `'{ $on(): void; }'` | `'{ $on: () => void; }'` |
+| `member-write-missing-property-basic` | `index.ts:25:13` TS2339 | `'() => void'` | `'() => unknown'` |
+| `optional-discriminant-narrowing-basic` | `index.ts:32:9` TS2322 | `'Mixed'` | the expanded union |
+| `recursive-mapped-alias-member-basic` | `index.ts:30:14`, `:31:14` TS2322 | `'number'`; `typeof import("…").$input` | `'Replace'`; `'typeof $input'` |
+| `rest-tuple-literal-context-basic` | `index.ts:17:51`, `:20:14` TS2322 | `'string'`; `'[true]'` | `'"x"'`; `'[boolean]'` |
+| `tuple-literal-length-anchor-basic` | six sites, e.g. `index.ts:8:14` TS2322 | `'[number, (string \| undefined)?]'`; `'number'`; `'[number, string, true]'` | `'[number, string \| undefined]'`; `'2'`; `'[number, string, boolean]'` |
+| `type-only-namespace-export-type-query-basic` | `consumer.ts:7:14` TS2322 | `'(id: number) => boolean'` | `'Create'` |
+
+**Column drift (2 presets):** `block-arrow-return-basic` (one of its six
+diagnostics lands on a different column) and
+`parser-classified-diagnostics-basic` (15 of 20 locations match on column).
+
+The classes, roughly: an alias name where tsc prints the expansion or the
+reverse (`ShapeKey`, `Fetch`, `Create`, `Mixed`, `ReturnType<…>`); a fresh
+literal left unwidened, or widened where tsc keeps it, in the rendered source
+type (`'2'`, `[boolean]`, `{ p: "s" }`, `{ kind: string }`); a member degraded
+to `any`/`unknown` (`{ user: any }`, `() => unknown`, `any[]`); and method-vs-
+property rendering (`$on(): void`). None has been triaged further yet.
+
+## Historical snapshot (2026-09-03)
+
+> **Historical.** This snapshot does not describe current behavior; see
+> § Current snapshot (2026-09-22) above.
 
 - Commit: `b090760` (clean checkout; built and run from a detached worktree)
 - TypeScript oracle: 7.0.2 (pinned)

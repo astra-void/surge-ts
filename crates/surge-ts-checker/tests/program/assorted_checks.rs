@@ -185,9 +185,9 @@ fn namespace_member_generic_call_resolves_through_an_import() {
 }
 
 #[test]
-fn never_parameter_argument_is_not_reported() {
-    // `assertNever`-style exhaustiveness helpers depend on narrowing that surge
-    // only under-approximates, so a residual argument must not report TS2345.
+fn never_parameter_residual_argument_is_reported() {
+    // Only `"a"` is narrowed away, so the residual `"b"` is not assignable to
+    // `never`.
     let source = concat!(
         "export function assertNever(_x: never): never {\n",
         "  throw new Error();\n",
@@ -198,11 +198,7 @@ fn never_parameter_argument_is_not_reported() {
         "}\n",
     );
     let diagnostics = program(&[("a.ts", source)]);
-    assert!(
-        !codes(&diagnostics).iter().any(|code| code == "TS2345"),
-        "{:?}",
-        codes(&diagnostics)
-    );
+    assert_eq!(codes(&diagnostics), vec!["TS2345"]);
 }
 
 /// A JSX component whose props type could not be modelled offers no contextual
@@ -211,7 +207,7 @@ fn never_parameter_argument_is_not_reported() {
 /// `ComponentProps<typeof Primitive.Root>` cluster. A component with a real
 /// props type still reports.
 #[test]
-fn unmodelled_jsx_props_do_not_report_implicit_any() {
+fn jsx_callback_props_report_implicit_any() {
     let mut options = CheckerOptions::default();
     options.no_implicit_any = true;
     let diagnostics = program_with_options(
@@ -223,7 +219,7 @@ fn unmodelled_jsx_props_do_not_report_implicit_any() {
         )],
         options,
     );
-    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
+    assert_eq!(codes(&diagnostics), vec!["TS2322", "TS7006"]);
 
     let mut options = CheckerOptions::default();
     options.no_implicit_any = true;
@@ -1019,7 +1015,7 @@ fn nullish_equality_guard_narrows_the_and_operand() {
          }\n",
         "example.ts",
     );
-    assert_eq!(codes(&diagnostics), vec!["TS2365"]);
+    assert_eq!(codes(&diagnostics), vec!["TS18048"]);
 }
 
 // `+` concatenates a string with a `bigint` (and with a `number | bigint`, the
@@ -1191,5 +1187,235 @@ fn umd_global_is_not_reported_under_allow_umd_global_access() {
         !codes(&diagnostics).iter().any(|code| code == "TS2686"),
         "{:?}",
         codes(&diagnostics)
+    );
+}
+
+#[test]
+fn operator_operands_are_checked_non_null_like_tsc() {
+    let source = concat!(
+        "declare let u: number | undefined;\n",
+        "declare let s: string;\n",
+        "export const a = null * 1;\n",
+        "export const b = 1 - undefined;\n",
+        "export const c = null + 1;\n",
+        "export const d = null < 1;\n",
+        "export const e = -null;\n",
+        "export const f = \"k\" in null;\n",
+        "export const g = u * 1;\n",
+        "export const h = u + 1;\n",
+        "export const i = u in {};\n",
+        "export const j = null + s;\n",
+        "export const k = null == 1;\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    let messages: Vec<String> = diagnostics
+        .iter()
+        .map(|diagnostic| format!("{} {}", diagnostic.code, diagnostic.message))
+        .collect();
+    assert_eq!(
+        messages,
+        vec![
+            "TS18050 The value 'null' cannot be used here.",
+            "TS18050 The value 'undefined' cannot be used here.",
+            "TS18050 The value 'null' cannot be used here.",
+            "TS18050 The value 'null' cannot be used here.",
+            "TS18050 The value 'null' cannot be used here.",
+            "TS18050 The value 'null' cannot be used here.",
+            "TS18048 'u' is possibly 'undefined'.",
+            "TS18048 'u' is possibly 'undefined'.",
+            "TS18048 'u' is possibly 'undefined'.",
+        ],
+    );
+}
+
+fn code_lines(source: &str, diagnostics: &[surge_ts_diagnostics::Diagnostic]) -> Vec<String> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let start = diagnostic.span.as_ref().map_or(0, |span| span.start);
+            let line = source[..start].matches('\n').count() + 1;
+            let column = start - source[..start].rfind('\n').map_or(0, |index| index + 1) + 1;
+            format!("{line}:{column} {}", diagnostic.code)
+        })
+        .collect()
+}
+
+#[test]
+fn parenthesized_operand_is_unnamed_and_anchored_at_the_parentheses() {
+    let source = concat!(
+        "declare let u: number | undefined;\n",
+        "declare let f: (() => void) | undefined;\n",
+        "export const a = (null) * 2;\n",
+        "export const b = (undefined) * 2;\n",
+        "export const c = ((u)) * 2;\n",
+        "export const d = (null).x;\n",
+        "export const e = (u).toFixed();\n",
+        "(null)();\n",
+        "(f)();\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    assert_eq!(
+        code_lines(source, &diagnostics),
+        vec![
+            "3:18 TS2531",
+            "4:18 TS2532",
+            "5:18 TS2532",
+            "6:18 TS2531",
+            "7:18 TS2532",
+            "8:1 TS2721",
+            "9:1 TS2722",
+        ],
+    );
+}
+
+#[test]
+fn invoking_null_or_undefined_uses_the_invocation_wording() {
+    let source = concat!(
+        "declare let f: (() => void) | undefined;\n",
+        "null();\n",
+        "undefined();\n",
+        "f();\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    assert_eq!(codes(&diagnostics), vec!["TS2721", "TS2722", "TS2722"]);
+}
+
+#[test]
+fn for_in_right_operand_must_be_an_object_after_removing_nullish() {
+    let source = concat!(
+        "enum E { A }\n",
+        "declare let u: number | undefined;\n",
+        "declare let o: object | undefined;\n",
+        "declare let s: string;\n",
+        "declare let un: unknown;\n",
+        "for (const k in null) {}\n",
+        "for (const k in undefined) {}\n",
+        "for (const k in u) {}\n",
+        "for (const k in s) {}\n",
+        "for (const k in un) {}\n",
+        "for (const k in o) {}\n",
+        "for (const k in E) {}\n",
+        "for (const k in [1]) {}\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    let messages: Vec<String> = diagnostics
+        .iter()
+        .map(|diagnostic| format!("{} {}", diagnostic.code, diagnostic.message))
+        .collect();
+    let rule = "The right-hand side of a 'for...in' statement must be of type 'any', an object type or a type parameter, but here has type";
+    assert_eq!(
+        messages,
+        vec![
+            format!("TS2407 {rule} 'never'."),
+            format!("TS2407 {rule} 'never'."),
+            format!("TS2407 {rule} 'number'."),
+            format!("TS2407 {rule} 'string'."),
+            format!("TS2407 {rule} 'unknown'."),
+        ],
+    );
+}
+
+#[test]
+fn plus_decides_its_result_kind_before_reporting() {
+    let source = concat!(
+        "declare let su: string | undefined;\n",
+        "declare let o: object;\n",
+        "declare let an: any;\n",
+        "declare let big: bigint;\n",
+        "export const a: string = su + \"x\";\n",
+        "export const b: string = o + \"x\";\n",
+        "export const c: string = an + \"x\";\n",
+        "export const d: string = an * 2;\n",
+        "export const e = big + 1;\n",
+        "export const f = true + 1;\n",
+    );
+    let diagnostics = program(&[("a.ts", source)]);
+    let messages: Vec<String> = diagnostics
+        .iter()
+        .map(|diagnostic| format!("{} {}", diagnostic.code, diagnostic.message))
+        .collect();
+    assert_eq!(
+        messages,
+        vec![
+            "TS2322 Type 'number' is not assignable to type 'string'.",
+            "TS2365 Operator '+' cannot be applied to types 'bigint' and '1'.",
+            "TS2365 Operator '+' cannot be applied to types 'boolean' and 'number'.",
+        ],
+    );
+}
+
+#[test]
+fn new_on_a_call_signature_is_any() {
+    let source = concat!(
+        "declare let f: (() => void) | undefined;\n",
+        "declare let g: () => number;\n",
+        "export const a = new f();\n",
+        "export const b = new g();\n",
+    );
+    // TS18048 on the possibly-`undefined` target; without `noImplicitAny` a
+    // non-`void` call signature is TS2350 rather than TS7009.
+    let diagnostics = program(&[("a.ts", source)]);
+    assert_eq!(codes(&diagnostics), vec!["TS18048", "TS2350"]);
+
+    let mut options = CheckerOptions::default();
+    options.no_implicit_any = true;
+    let diagnostics = program_with_options(&[("a.ts", source)], options);
+    assert_eq!(codes(&diagnostics), vec!["TS18048", "TS7009", "TS7009"]);
+}
+
+#[test]
+fn empty_array_local_evolves_with_its_mutations() {
+    let source = concat!(
+        "declare const names: string[];\n",
+        "export function f() {\n",
+        "  const out = [];\n",
+        "  const early = out.slice();\n",
+        "  for (const name of names) {\n",
+        "    const last = out[0];\n",
+        "    out.push(name);\n",
+        "  }\n",
+        "  const check: number = out;\n",
+        "  return () => out;\n",
+        "}\n",
+    );
+    let mut options = CheckerOptions::default();
+    options.no_implicit_any = true;
+    let diagnostics = program_with_options(&[("a.ts", source)], options);
+    assert_eq!(
+        code_lines(source, &diagnostics),
+        vec!["3:9 TS7034", "4:17 TS7005", "9:9 TS2322", "10:16 TS7005"],
+    );
+
+    // Without `noImplicitAny` the literal is plainly `never[]`.
+    let source = "export function f() { const out = []; out.push(1); }\n";
+    let diagnostics = program(&[("a.ts", source)]);
+    assert_eq!(codes(&diagnostics), vec!["TS2345"]);
+}
+
+#[test]
+fn without_strict_null_checks_undefined_is_in_every_type() {
+    let source = concat!(
+        "declare let maybe: number | undefined;\n",
+        "declare let opaque: unknown;\n",
+        "export const a: number = maybe;\n",
+        "export const b = maybe.toFixed();\n",
+        "export const c: string = undefined;\n",
+        "let d = undefined;\n",
+        "d = 1;\n",
+        "export const e = opaque.name;\n",
+        "export const f = opaque();\n",
+    );
+    let options = CheckerOptions {
+        strict_null_checks: false,
+        ..CheckerOptions::default()
+    };
+    let diagnostics = program_with_options(&[("a.ts", source)], options);
+    assert_eq!(code_lines(source, &diagnostics), vec!["8:25 TS2339", "9:18 TS2349"]);
+
+    // The same program under `strictNullChecks`.
+    let diagnostics = program(&[("a.ts", source)]);
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["TS2322", "TS18048", "TS2322", "TS2322", "TS18046", "TS18046"],
     );
 }

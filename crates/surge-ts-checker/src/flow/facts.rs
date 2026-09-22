@@ -109,6 +109,187 @@ pub(crate) fn collect_function_flow_facts_from_statement(
     }
 }
 
+/// The `var` bindings a flow container hoists: every `var` declared anywhere in
+/// `body` outside nested functions whose type is known to exclude `undefined` —
+/// written, or inferred from an initializer that cannot produce it. tsc analyzes each from the
+/// start of its container, so a read ahead of the declaration, or on a path
+/// that skipped the initializer, is TS2454. An annotation that plainly admits
+/// `undefined` (or is `any`/`unknown`/`void`) is skipped here; one that does so
+/// only through an alias is settled when the declaration is reached.
+pub(crate) fn collect_hoisted_vars(body: &[ParsedFunctionBodyStatement]) -> Vec<Arc<str>> {
+    collect_hoisted_vars_with(body, true)
+}
+
+/// As [`collect_hoisted_vars`]; `with_for_of_elements` also hoists a `for…of`
+/// `var`, whose element type only a type-checking walk can settle. A `for…in`
+/// key is always `string`, so it is hoisted either way.
+pub(crate) fn collect_hoisted_vars_with(
+    body: &[ParsedFunctionBodyStatement],
+    with_for_of_elements: bool,
+) -> Vec<Arc<str>> {
+    fn walk(body: &[ParsedFunctionBodyStatement], elements: bool, names: &mut Vec<Arc<str>>) {
+        for statement in body {
+            match statement {
+                ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
+                    if variable.kind == ParsedVariableKind::Var
+                        && !variable.is_declare
+                        && !variable.has_definite_assertion
+                        && match &variable.declared_type {
+                            Some(declared) => !annotation_admits_undefined(declared),
+                            None => variable
+                                .initializer
+                                .as_ref()
+                                .is_some_and(initializer_is_never_undefined),
+                        }
+                        && !names.iter().any(|name| name.as_ref() == variable.name)
+                    {
+                        names.push(variable.name.as_str().into());
+                    }
+                }
+                ParsedFunctionBodyStatement::Block(block) => walk(block, elements, names),
+                ParsedFunctionBodyStatement::If(if_statement) => {
+                    walk(&if_statement.then_body, elements, names);
+                    walk(&if_statement.else_body, elements, names);
+                }
+                ParsedFunctionBodyStatement::While(while_statement) => {
+                    walk(&while_statement.body, elements, names)
+                }
+                ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
+                    if for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::Var
+                        && (elements || for_of_statement.keys_only)
+                        && let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } =
+                            &for_of_statement.binding_name
+                        && !names.iter().any(|hoisted| hoisted.as_ref() == name)
+                    {
+                        names.push(name.as_str().into());
+                    }
+                    walk(&for_of_statement.body, elements, names)
+                }
+                ParsedFunctionBodyStatement::Switch(switch_statement) => {
+                    for case in &switch_statement.cases {
+                        walk(&case.consequent, elements, names);
+                    }
+                }
+                ParsedFunctionBodyStatement::Try(try_statement) => {
+                    walk(&try_statement.block, elements, names);
+                    if let Some(handler) = &try_statement.handler {
+                        walk(&handler.body, elements, names);
+                    }
+                    walk(&try_statement.finalizer, elements, names);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut names = Vec::new();
+    walk(body, with_for_of_elements, &mut names);
+    names
+}
+
+/// An initializer whose type is never `undefined`, `any` or `unknown`, so the
+/// binding it types is analyzed without resolving it.
+fn initializer_is_never_undefined(initializer: &ParsedExpression) -> bool {
+    matches!(
+        initializer,
+        ParsedExpression::NumberLiteral(_)
+            | ParsedExpression::StringLiteral(_)
+            | ParsedExpression::BooleanLiteral(_)
+            | ParsedExpression::BigIntLiteral(_)
+            | ParsedExpression::TemplateLiteral { .. }
+            | ParsedExpression::ObjectLiteral { .. }
+            | ParsedExpression::ArrayLiteral { .. }
+            | ParsedExpression::New { .. }
+    )
+}
+
+/// Every `var` declared in `body` outside nested functions, typed or not —
+/// including a `for…of`/`for…in` `var` head.
+pub(crate) fn collect_var_names(body: &[ParsedFunctionBodyStatement], names: &mut Vec<String>) {
+    for statement in body {
+        match statement {
+            ParsedFunctionBodyStatement::VariableDeclaration(variable)
+                if variable.kind == ParsedVariableKind::Var =>
+            {
+                names.push(variable.name.clone())
+            }
+            ParsedFunctionBodyStatement::Block(block) => collect_var_names(block, names),
+            ParsedFunctionBodyStatement::If(if_statement) => {
+                collect_var_names(&if_statement.then_body, names);
+                collect_var_names(&if_statement.else_body, names);
+            }
+            ParsedFunctionBodyStatement::While(while_statement) => {
+                collect_var_names(&while_statement.body, names)
+            }
+            ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
+                if for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::Var
+                    && let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } =
+                        &for_of_statement.binding_name
+                {
+                    names.push(name.clone());
+                }
+                collect_var_names(&for_of_statement.body, names)
+            }
+            ParsedFunctionBodyStatement::Switch(switch_statement) => {
+                for case in &switch_statement.cases {
+                    collect_var_names(&case.consequent, names);
+                }
+            }
+            ParsedFunctionBodyStatement::Try(try_statement) => {
+                collect_var_names(&try_statement.block, names);
+                if let Some(handler) = &try_statement.handler {
+                    collect_var_names(&handler.body, names);
+                }
+                collect_var_names(&try_statement.finalizer, names);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Parameter defaults run first, in the function's own flow: an outer binding
+/// they read is judged like a read in the body. They cannot see the body's
+/// hoisted `var`s, so this runs before those are hoisted.
+pub(crate) fn check_parameter_default_flow(
+    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
+    flow_state: &FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    if !flow_state.enabled || flow_state.tracked_local_count == 0 {
+        return;
+    }
+    for parameter in parameters {
+        if let Some(initializer) = &parameter.initializer {
+            let _ = check_expression_flow(initializer, parameter.initializer_span, flow_state, 0, ctx);
+        }
+    }
+}
+
+/// A `var` redeclaring a parameter is the parameter, already assigned.
+pub(crate) fn binds_parameter(
+    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
+    name: &str,
+) -> bool {
+    parameters.iter().any(|parameter| {
+        matches!(&parameter.binding_name,
+            surge_ts_syntax::ParsedBindingName::Identifier { name: parameter_name, .. }
+                if parameter_name == name)
+    })
+}
+
+pub(crate) fn annotation_admits_undefined(declared: &surge_ts_syntax::ParsedType) -> bool {
+    use surge_ts_syntax::ParsedType;
+    match declared {
+        ParsedType::Any
+        | ParsedType::Unknown
+        | ParsedType::UnknownKeyword
+        | ParsedType::Void
+        | ParsedType::Undefined
+        | ParsedType::ErrorType => true,
+        ParsedType::Union(members) => members.iter().any(annotation_admits_undefined),
+        _ => false,
+    }
+}
+
 fn is_always_truthy_condition(condition: &ParsedExpression) -> bool {
     matches!(condition, ParsedExpression::BooleanLiteral(true))
 }
@@ -295,8 +476,12 @@ pub(crate) fn summarize_function_statement_flow(
                 !case.consequent.is_empty()
                     && summarize_function_body_flow(&case.consequent).guarantees_exit
             });
+            // tsc's `isExhaustiveSwitchStatement` stands in for a `default`, but
+            // only on evidence: a discriminant surge could not type proves
+            // nothing, and the end point stays reachable.
+            let exhaustive = has_default || is_known_exhaustive(switch_statement.span);
             let guarantees_exit =
-                has_default && !breaks_out && clauses_terminate && last_clause_terminates;
+                exhaustive && !breaks_out && clauses_terminate && last_clause_terminates;
 
             // Without a `default`, a switch whose clauses all return still falls
             // through unless its cases cover the discriminant's type — which the
@@ -392,13 +577,37 @@ pub(crate) fn report_read_flow(
     statement_index: usize,
     ctx: &mut CheckerContext,
 ) -> FlowCheck {
+    report_read_flow_positioned(name, span, flow_state, statement_index, ctx, false)
+}
+
+/// As [`report_read_flow`]; `substituting_position` is a read tsc gives a
+/// type parameter's union constraint instead (see
+/// [`FunctionFlowState::constraint_exempt`]).
+pub(crate) fn report_read_flow_positioned(
+    name: &str,
+    span: Option<SyntaxTextSpan>,
+    flow_state: &FunctionFlowState,
+    statement_index: usize,
+    ctx: &mut CheckerContext,
+    substituting_position: bool,
+) -> FlowCheck {
     record_flow_identifier_read_count();
+    if substituting_position && flow_state.constraint_exempt.contains(name) {
+        return FlowCheck::Clear;
+    }
     if !flow_state.enabled || flow_state.tracked_local_count == 0 {
         return FlowCheck::Clear;
     }
 
     match flow_state.read_identifier(name, statement_index) {
         FlowReadOutcome::Unresolved | FlowReadOutcome::Declared(AssignmentState::Assigned) => {
+            FlowCheck::Clear
+        }
+        // Without `strictNullChecks` tsc assumes every variable initialized
+        // (`assumeInitialized`), so nothing is used before being assigned.
+        FlowReadOutcome::Declared(AssignmentState::DeclaredUnassigned)
+            if !surge_ts_types::strict_null_checks() =>
+        {
             FlowCheck::Clear
         }
         FlowReadOutcome::Declared(AssignmentState::DeclaredUnassigned) => {
@@ -420,11 +629,13 @@ pub(crate) fn report_read_flow(
             }
             ctx.push(diagnostic);
 
-            let mut diagnostic = Diagnostic::ts2454(name, ctx.file_name.clone());
-            if let Some(span) = span {
-                diagnostic = diagnostic.with_span(convert_span(span));
+            if surge_ts_types::strict_null_checks() {
+                let mut diagnostic = Diagnostic::ts2454(name, ctx.file_name.clone());
+                if let Some(span) = span {
+                    diagnostic = diagnostic.with_span(convert_span(span));
+                }
+                ctx.push(diagnostic);
             }
-            ctx.push(diagnostic);
 
             FlowCheck::Blocked
         }
@@ -434,6 +645,15 @@ pub(crate) fn report_read_flow(
 thread_local! {
     static NON_EXHAUSTIVE_SWITCHES: std::cell::RefCell<Vec<(usize, usize)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    static EXHAUSTIVE_SWITCHES: std::cell::RefCell<Vec<(usize, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn is_known_exhaustive(span: Option<surge_ts_syntax::TextSpan>) -> bool {
+    let Some(span) = span else {
+        return false;
+    };
+    EXHAUSTIVE_SWITCHES.with(|spans| spans.borrow().contains(&(span.start, span.end)))
 }
 
 fn is_known_non_exhaustive(span: Option<surge_ts_syntax::TextSpan>) -> bool {
@@ -443,14 +663,20 @@ fn is_known_non_exhaustive(span: Option<surge_ts_syntax::TextSpan>) -> bool {
     NON_EXHAUSTIVE_SWITCHES.with(|spans| spans.borrow().contains(&(span.start, span.end)))
 }
 
-/// Runs `summarize` with the given `default`-less switches known not to cover
-/// their discriminant. Scoped to the call, so every other flow summary keeps
-/// the syntactic answer.
-pub(crate) fn with_non_exhaustive_switches<R>(spans: &[(usize, usize)], summarize: impl FnOnce() -> R) -> R {
-    NON_EXHAUSTIVE_SWITCHES.with(|installed| {
-        let previous = std::mem::replace(&mut *installed.borrow_mut(), spans.to_vec());
-        let result = summarize();
-        *installed.borrow_mut() = previous;
-        result
-    })
+/// Runs `summarize` with what checking learned about the `default`-less
+/// switches: which do not cover their discriminant and which do. Scoped to the
+/// call, so every other flow summary keeps the syntactic answer.
+pub(crate) fn with_non_exhaustive_switches<R>(
+    non_exhaustive: &[(usize, usize)],
+    exhaustive: &[(usize, usize)],
+    summarize: impl FnOnce() -> R,
+) -> R {
+    let previous_non_exhaustive = NON_EXHAUSTIVE_SWITCHES
+        .with(|installed| std::mem::replace(&mut *installed.borrow_mut(), non_exhaustive.to_vec()));
+    let previous_exhaustive = EXHAUSTIVE_SWITCHES
+        .with(|installed| std::mem::replace(&mut *installed.borrow_mut(), exhaustive.to_vec()));
+    let result = summarize();
+    NON_EXHAUSTIVE_SWITCHES.with(|installed| *installed.borrow_mut() = previous_non_exhaustive);
+    EXHAUSTIVE_SWITCHES.with(|installed| *installed.borrow_mut() = previous_exhaustive);
+    result
 }

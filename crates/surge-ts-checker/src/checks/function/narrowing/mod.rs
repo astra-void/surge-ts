@@ -199,10 +199,16 @@ fn narrow_single_guard_for_identifier(
     {
         return narrow_union_by_nullish(ty, branch_is_true == eq, test);
     }
-    if let Some((name, literal, eq)) = parse_identifier_literal_equality(condition)
+    if let Some((name, literal, eq)) =
+        parse_identifier_literal_equality(condition, scopes.visible_symbols())
         && name == var_name
     {
-        return narrow_by_literal_equality(ty, &literal, branch_is_true == eq);
+        let keep_matching = branch_is_true == eq;
+        // Excluding the one literal the value is already narrowed to leaves
+        // `never`, as `narrow_literal_equality_in_scope` does for a lone `if`:
+        // it is what the `default` of an exhausted `switch (k)` sees.
+        return narrow_by_literal_equality(ty, &literal, keep_matching)
+            .or_else(|| (!keep_matching && *ty == literal).then_some(Type::Never));
     }
     if let Some((ParsedExpression::Identifier { name, .. }, property)) =
         parse_in_condition(condition)
@@ -210,7 +216,151 @@ fn narrow_single_guard_for_identifier(
     {
         return narrow_union_by_property_presence(ty, property, branch_is_true);
     }
+    narrow_by_property_guard(condition, var_name, ty, branch_is_true, &|expression| {
+        const_member_literal_value(expression, scopes.visible_symbols())
+    })
+}
+
+/// tsc's `narrowTypeByDiscriminant` for a guard on a property below `var_name`:
+/// a truthiness test (`if (r.kind)`), a nullish comparison
+/// (`r.kind === undefined`) or a literal comparison (`env.result.kind === "a"`).
+/// The union the property is read from keeps the members whose own property
+/// can pass the test.
+fn narrow_by_property_guard(
+    condition: &ParsedExpression,
+    var_name: &str,
+    ty: &Type,
+    branch_is_true: bool,
+    resolve_literal: &dyn Fn(&ParsedExpression) -> Option<Type>,
+) -> Option<Type> {
+    if let Some((reference, eq, _)) = parse_nullish_equality_condition(condition)
+        && let Some(path) = property_path_below(reference, var_name)
+    {
+        let keep_nullish = branch_is_true == eq;
+        return narrow_union_at_path(ty, &path, &|member, rest| {
+            truthy::path_nullishness(member, rest) != Some(!keep_nullish)
+        });
+    }
+    if let Some((object, property, literal, eq)) =
+        parse_discriminant_condition_with(condition, resolve_literal)
+        && let Some(mut path) = property_path_below(object, var_name)
+    {
+        path.push(property.to_string());
+        let keep_matching = branch_is_true == eq;
+        return narrow_union_at_path(ty, &path, &|member, rest| {
+            match truthy::path_leaf_type(member, rest) {
+                Some(leaf) if keep_matching => may_equal_literal(&leaf, &literal),
+                Some(leaf) => leaf != literal,
+                None => true,
+            }
+        });
+    }
+    let path = property_path_below(condition, var_name)?;
+    narrow_union_at_path(ty, &path, &|member, rest| {
+        truthy::path_truthiness(member, rest) != Some(!branch_is_true)
+    })
+}
+
+/// [`narrow_by_property_guard`] over a symbol table, for the binding the
+/// guarded property hangs off.
+fn narrow_property_guard_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+) -> Option<SymbolTable> {
+    let reference = parse_nullish_equality_condition(condition)
+        .map(|(reference, ..)| reference)
+        .or_else(|| {
+            parse_discriminant_condition_with(condition, &|_| None).map(|(object, ..)| object)
+        })
+        .unwrap_or(condition);
+    let (base, path) = reference::reference_path(reference)?;
+    if path.is_empty() && !matches!(condition, ParsedExpression::Binary { .. }) {
+        return None;
+    }
+    let symbol = symbols.get(&base)?;
+    let narrowed = narrow_by_property_guard(condition, &base, &symbol.ty, branch_is_true, &|expression| {
+        const_member_literal_value(expression, symbols)
+    })?;
+    if narrowed == symbol.ty {
+        return None;
+    }
+    let narrowed_symbol = SymbolInfo {
+        ty: narrowed,
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+    let declared = symbol.ty.clone();
+    let mut table = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    table.insert_narrowed(base, narrowed_symbol, declared);
+    Some(table)
+}
+
+/// Whether a value of type `leaf` can be `===` the unit type `literal`.
+fn may_equal_literal(leaf: &Type, literal: &Type) -> bool {
+    match (leaf.peeled(), literal) {
+        (Type::Union(union), _) => union.types().iter().any(|member| may_equal_literal(member, literal)),
+        (
+            leaf @ (Type::StringLiteral(_)
+            | Type::NumberLiteral(_)
+            | Type::BooleanLiteral(_)
+            | Type::Undefined),
+            _,
+        ) => leaf == *literal,
+        (Type::String, Type::StringLiteral(_))
+        | (Type::Number, Type::NumberLiteral(_))
+        | (Type::Boolean, Type::BooleanLiteral(_)) => true,
+        (Type::String | Type::Number | Type::Boolean, _) => false,
+        _ => true,
+    }
+}
+
+/// The property path from `var_name` down to `reference`, when `reference` is
+/// a non-empty member access rooted at that name (`r.a.b` below `r` is
+/// `["a", "b"]`, below `r.a` it is `["b"]`).
+fn property_path_below(reference: &ParsedExpression, var_name: &str) -> Option<Vec<String>> {
+    let (base, path) = reference::reference_path(reference)?;
+    let mut prefix = base;
+    for (index, segment) in path.iter().enumerate() {
+        if prefix == var_name {
+            return Some(path[index..].to_vec());
+        }
+        prefix.push('.');
+        prefix.push_str(segment);
+    }
     None
+}
+
+/// Filters the union the discriminant `path` is read from — `ty` itself, or
+/// the union some property above the discriminant holds (`env.result` for
+/// `env.result.type`) — and rebuilds the objects around it. `keep` sees each
+/// member with the path that remains below it.
+fn narrow_union_at_path(
+    ty: &Type,
+    path: &[String],
+    keep: &dyn Fn(&Type, &[String]) -> bool,
+) -> Option<Type> {
+    match ty.peeled() {
+        Type::Union(union) => {
+            let kept: Vec<Type> =
+                union.types().iter().filter(|member| keep(member, path)).cloned().collect();
+            (!kept.is_empty()).then(|| union_type(kept))
+        }
+        Type::Object(mut object) if path.len() > 1 => {
+            let (head, rest) = path.split_first()?;
+            let existing = object.properties.get(head.as_str())?.clone();
+            let narrowed = narrow_union_at_path(&existing.ty, rest, keep)?;
+            Arc::make_mut(&mut object.properties).insert(
+                head.as_str().into(),
+                surge_ts_types::ObjectProperty {
+                    ty: narrowed,
+                    ..existing
+                },
+            );
+            Some(Type::Object(object))
+        }
+        _ => None,
+    }
 }
 
 /// Applies `||`/`&&`-composed guard narrowing in place to a `ScopeStack`. Returns
@@ -235,6 +385,7 @@ fn narrow_logical_guard_in_scope(
     collect_guard_operand_identifiers(condition, &mut operand_names);
     collect_predicate_guard_subjects(condition, scopes, &mut operand_names, ctx);
     collect_equality_guard_subjects(condition, scopes, &mut operand_names);
+    collect_property_guard_bases(condition, &mut operand_names);
 
     for name in operand_names {
         let Some(symbol) = scopes.resolve(&name) else {
@@ -273,6 +424,34 @@ fn narrow_logical_guard_in_scope(
         narrow_reference_in_scope(&base, &path, guard, scopes);
     }
     true
+}
+
+/// The bindings whose properties a `||`/`&&`/`!`-composed condition tests for
+/// truthiness or nullishness (`env` in `!env.result.type || …`).
+fn collect_property_guard_bases(condition: &ParsedExpression, names: &mut Vec<String>) {
+    match condition {
+        ParsedExpression::Logical { left, right, .. } => {
+            collect_property_guard_bases(left, names);
+            collect_property_guard_bases(right, names);
+        }
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => collect_property_guard_bases(operand, names),
+        _ => {
+            let reference = parse_nullish_equality_condition(condition)
+                .map(|(reference, ..)| reference)
+                .unwrap_or(condition);
+            if let Some((base, path)) = reference::reference_path(reference)
+                && !path.is_empty()
+                && base != "this"
+                && !names.contains(&base)
+            {
+                names.push(base);
+            }
+        }
+    }
 }
 
 /// Collects the distinct identifiers tested by single guards within a
@@ -320,7 +499,7 @@ pub(crate) fn downgrade_genuine_unknown_in_scope(names: &[String], scopes: &mut 
             })
         });
         if let Some(downgraded) = downgraded {
-            let _ = scopes.insert_current(name.clone(), downgraded);
+            let _ = scopes.insert_current_flow(name.clone(), downgraded);
         }
     }
 }
@@ -502,7 +681,7 @@ pub(crate) fn tuple_destructure_sibling_narrowings(
                     }
                 }),
             )
-        } else if let Some((tested, literal, eq)) = parse_identifier_literal_equality(condition) {
+        } else if let Some((tested, literal, eq)) = parse_identifier_literal_equality(condition, symbols) {
             let holds = eq == branch_is_true;
             (
                 tested,
@@ -686,6 +865,7 @@ fn narrow_condition_symbol_table_by_guard(
         .or_else(|| narrow_array_isarray_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_property_presence_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_nullish_equality_symbol_table(condition, symbols, branch_is_true))
+        .or_else(|| narrow_property_guard_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| {
             // As in `narrow_truthy_reference_in_scope`: the members the test rules
             // out go first, and the reference guard then narrows what is left.

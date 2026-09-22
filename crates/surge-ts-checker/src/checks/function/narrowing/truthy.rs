@@ -43,6 +43,8 @@ pub(super) fn keep_possibly_falsy(ty: &Type) -> Type {
                 Type::Reference(_) => return false,
                 peeled => return members_of(&peeled, out),
             },
+            // A memberless shape (`{}`) admits `""` and `0`.
+            Type::Object(_) if type_truthiness(ty).is_none() => out.push(ty.clone()),
             _ => {}
         }
         true
@@ -61,28 +63,10 @@ pub(super) fn keep_possibly_falsy(ty: &Type) -> Type {
 /// What is left of a type once it is known truthy: tsc drops every member that
 /// is definitely falsy, the literals `false`, `0` and `""` as well as the
 /// nullish ones, so `false | Performance` tested with `perf &&` is a
-/// `Performance`. A named type is opened only when that changes it.
+/// `Performance`. [`surge_ts_types::remove_definitely_falsy`] leaves `null` in
+/// place, so it is removed here with the rest of the nullish members.
 pub(super) fn remove_definitely_falsy(ty: &Type) -> Type {
-    let is_falsy_literal = |member: &Type| match member {
-        Type::BooleanLiteral(false) => true,
-        Type::StringLiteral(value) => value.is_empty(),
-        Type::NumberLiteral(literal) => literal.value == "0",
-        _ => false,
-    };
-    let narrowed = surge_ts_types::remove_nullish(ty);
-    let members = match narrowed.peeled() {
-        Type::Union(union) => union.types().to_vec(),
-        _ => return narrowed,
-    };
-    if !members.iter().any(is_falsy_literal) {
-        return narrowed;
-    }
-    surge_ts_types::union_type(
-        members
-            .into_iter()
-            .filter(|member| !is_falsy_literal(member))
-            .collect(),
-    )
+    surge_ts_types::remove_nullish(&surge_ts_types::remove_definitely_falsy(ty))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -470,7 +454,7 @@ pub(super) fn narrow_union_by_property_truthiness_symbol_table(
 /// Whether the type at `path` inside `member` is always truthy (`Some(true)`),
 /// always falsy (`Some(false)`), or undecidable (`None`). An optional segment
 /// may be absent, so below it only a leaf that is itself falsy decides.
-pub(super) fn path_truthiness(member: &Type, path: &[String]) -> Option<bool> {
+pub(crate) fn path_truthiness(member: &Type, path: &[String]) -> Option<bool> {
     let mut current = member.peeled();
     let mut optional = false;
     for segment in path {
@@ -483,6 +467,72 @@ pub(super) fn path_truthiness(member: &Type, path: &[String]) -> Option<bool> {
     }
     let leaf = type_truthiness(&current)?;
     (!optional || !leaf).then_some(leaf)
+}
+
+/// The type at `path` inside `member`, with an optional segment's `undefined`
+/// put back.
+pub(crate) fn path_leaf_type(member: &Type, path: &[String]) -> Option<Type> {
+    let mut current = member.peeled();
+    let mut optional = false;
+    for segment in path {
+        let Type::Object(object) = &current else {
+            return None;
+        };
+        let property = object.properties.get(segment.as_str())?;
+        optional |= property.is_optional();
+        current = property.ty.peeled();
+    }
+    Some(if optional {
+        union_type(vec![current, Type::Undefined])
+    } else {
+        current
+    })
+}
+
+/// Whether the type at `path` inside `member` is always nullish (`Some(true)`),
+/// never nullish (`Some(false)`), or either (`None`). An optional segment may
+/// be absent, which reads as `undefined`.
+pub(crate) fn path_nullishness(member: &Type, path: &[String]) -> Option<bool> {
+    let mut current = member.peeled();
+    let mut optional = false;
+    for segment in path {
+        let Type::Object(object) = &current else {
+            return None;
+        };
+        let property = object.properties.get(segment.as_str())?;
+        optional |= property.is_optional();
+        current = property.ty.peeled();
+    }
+    let leaf = type_nullishness(&current)?;
+    (!optional || leaf).then_some(leaf)
+}
+
+fn type_nullishness(ty: &Type) -> Option<bool> {
+    match ty {
+        Type::Undefined | Type::Null | Type::Void => Some(true),
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::Function(_)
+        | Type::Object(_)
+        | Type::Array(_)
+        | Type::Tuple(_) => Some(false),
+        Type::Union(union) => {
+            let mut members = union
+                .types()
+                .iter()
+                .map(|member| type_nullishness(&member.peeled()));
+            let first = members.next()??;
+            members.all(|member| member == Some(first)).then_some(first)
+        }
+        Type::Reference(_) => type_nullishness(&ty.peeled()),
+        _ => None,
+    }
 }
 
 /// tsc's truthiness facts for a type: every unit type decides, a callable or a

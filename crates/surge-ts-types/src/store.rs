@@ -131,6 +131,9 @@ struct StoreCounters {
 #[derive(Debug)]
 pub struct ProgramTypeStore {
     owner: u32,
+    /// The program's `strictNullChecks`, installed for the thread by
+    /// [`with_program_type_store`] so type construction can read it.
+    strict_null_checks: std::sync::atomic::AtomicBool,
     next_type_list: AtomicU32,
     next_function: AtomicU32,
     next_union: AtomicU32,
@@ -151,6 +154,7 @@ impl ProgramTypeStore {
         assert_ne!(owner, 0, "program type-store owner space exhausted");
         Arc::new(Self {
             owner,
+            strict_null_checks: std::sync::atomic::AtomicBool::new(true),
             next_type_list: AtomicU32::new(1),
             next_function: AtomicU32::new(1),
             next_union: AtomicU32::new(1),
@@ -880,9 +884,17 @@ fn shard_index(key: u64) -> usize {
 
 thread_local! {
     static ACTIVE_TYPE_STORE: RefCell<Option<Arc<ProgramTypeStore>>> = const { RefCell::new(None) };
+    static STRICT_NULL_CHECKS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+impl ProgramTypeStore {
+    pub fn set_strict_null_checks(&self, strict: bool) {
+        self.strict_null_checks.store(strict, Ordering::Relaxed);
+    }
 }
 
 pub fn with_program_type_store<R>(store: Arc<ProgramTypeStore>, f: impl FnOnce() -> R) -> R {
+    let strict = store.strict_null_checks.load(Ordering::Relaxed);
     let previous = ACTIVE_TYPE_STORE.with(|active| active.replace(Some(store)));
     struct Restore(Option<Arc<ProgramTypeStore>>);
     impl Drop for Restore {
@@ -893,7 +905,26 @@ pub fn with_program_type_store<R>(store: Arc<ProgramTypeStore>, f: impl FnOnce()
         }
     }
     let _restore = Restore(previous);
+    with_strict_null_checks(strict, f)
+}
+
+/// Runs `f` with the thread's `strictNullChecks` set to `strict`.
+pub fn with_strict_null_checks<R>(strict: bool, f: impl FnOnce() -> R) -> R {
+    let previous = STRICT_NULL_CHECKS.with(|flag| flag.replace(strict));
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            STRICT_NULL_CHECKS.with(|flag| flag.set(self.0));
+        }
+    }
+    let _restore = Restore(previous);
     f()
+}
+
+/// Whether the program being checked on this thread has `strictNullChecks`.
+/// Without it `undefined` and `null` are in the domain of every type.
+pub fn strict_null_checks() -> bool {
+    STRICT_NULL_CHECKS.with(std::cell::Cell::get)
 }
 
 pub fn current_program_type_store() -> Option<Arc<ProgramTypeStore>> {

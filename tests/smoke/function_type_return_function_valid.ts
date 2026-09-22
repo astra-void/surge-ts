@@ -1,7 +1,7 @@
-function length(value: string): number {
+function measure(value: string): number {
   return 1;
 }
 
 function make(): (value: string) => number {
-  return length;
+  return measure;
 }

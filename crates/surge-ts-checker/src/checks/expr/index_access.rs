@@ -116,17 +116,29 @@ pub(super) fn evaluate_index_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    if super::check_auto_array_read(object_name, object_span, symbols, ctx).is_some() {
+        return InferredExpression::Known(Type::Any);
+    }
     let Some(symbol) = symbols.get(object_name) else {
-        if object_name == "super" || emit_type_only_as_value_diagnostic(object_name, object_span, ctx) {
-            return InferredExpression::Unknown;
+        if object_name != "super" {
+            report_unresolved_value_name(
+                object_name,
+                choose_span(object_span, fallback_span),
+                UnresolvedNameSite::Reference,
+                symbols,
+                ctx,
+            );
         }
-
-        ctx.push(diagnostic_with_syntax_span(
-            unresolved_name_diagnostic(object_name, symbols, ctx),
-            choose_span(object_span, fallback_span),
-        ));
         return InferredExpression::Unknown;
     };
+    if symbol.ty == Type::GenuineUnknown {
+        let object = ParsedExpression::Identifier {
+            name: object_name.to_string(),
+            span: object_span,
+        };
+        super::report_unknown_operand(&object, choose_span(object_span, fallback_span), ctx);
+        return InferredExpression::Unknown;
+    }
     if let Some(narrowed) = crate::infer::narrowed_element_read_named(object_name, index, symbols)
     {
         return InferredExpression::Known(narrowed);
@@ -149,6 +161,13 @@ pub(super) fn evaluate_index_access(
     // as the query object itself, exactly as a `Promise<T>` reaches it as `T`.
     let receiver_type = crate::checks::call::thenable_awaited_type(&receiver_type)
         .unwrap_or(receiver_type);
+
+    if let ParsedExpression::NumberLiteral(index_value) = index
+        && let Type::OpenTuple(tuple) = receiver_type.peeled()
+        && let Some(element) = tuple.leading_element(index_value)
+    {
+        return InferredExpression::Known(element.clone());
+    }
 
     // A nominal array reference (`Array<number>`, `ReadonlyArray<string>`)
     // indexes like the array it names; left unpeeled it fell through to the
@@ -360,15 +379,20 @@ pub(super) fn evaluate_index_access(
                 // A `string` answers a numeric index and its own members and
                 // nothing else, so any other key is the implicit `any` an
                 // array's non-numeric index already is.
-                if matches!(receiver_type, Type::String | Type::StringLiteral(_))
-                    && !index_is_numeric
-                    && index_key_is_concrete(&index_type)
-                {
-                    report_non_numeric_index(
-                        &index_type,
-                        choose_span(index_span, choose_span(object_span, fallback_span)),
-                        ctx,
-                    );
+                if reads_string_by_number(&receiver_type) {
+                    if index_is_numeric {
+                        return InferredExpression::Known(crate::infer::unchecked_index_read(
+                            Type::String,
+                            ctx,
+                        ));
+                    }
+                    if index_key_is_concrete(&index_type) {
+                        report_non_numeric_index(
+                            &index_type,
+                            choose_span(index_span, choose_span(object_span, fallback_span)),
+                            ctx,
+                        );
+                    }
                 }
                 return InferredExpression::Unknown;
             };
@@ -408,6 +432,15 @@ pub(super) fn evaluate_index_access(
                 }
             }
 
+            // Same numeric index signature `String` declares, reached with a
+            // literal key (`text[0]`).
+            if reads_string_by_number(&receiver_type) && index_is_numeric {
+                return InferredExpression::Known(crate::infer::unchecked_index_read(
+                    Type::String,
+                    ctx,
+                ));
+            }
+
             if receiver_is_object_like {
                 report_missing_element(
                     &key,
@@ -438,6 +471,21 @@ fn tuple_literal_index_value(index_type: &Type) -> Option<i64> {
             value.parse::<i64>().ok()
         }
         _ => None,
+    }
+}
+
+/// A receiver that answers a numeric index with a `string`: `String` declares
+/// `readonly [index: number]: string`, and a union of string literals answers
+/// from every member (`('all' | 'active')[0]`).
+fn reads_string_by_number(receiver_type: &Type) -> bool {
+    match receiver_type {
+        Type::String | Type::StringLiteral(_) => true,
+        Type::Union(union) => union.types().iter().all(reads_string_by_number),
+        Type::Reference(_) => matches!(
+            receiver_type.peeled(),
+            Type::String | Type::StringLiteral(_)
+        ),
+        _ => false,
     }
 }
 

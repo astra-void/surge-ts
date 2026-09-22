@@ -1,5 +1,5 @@
-function length(value: number): number {
+function measure(value: number): number {
   return 1;
 }
 
-let mapper: (value: string) => number = length;
+let mapper: (value: string) => number = measure;

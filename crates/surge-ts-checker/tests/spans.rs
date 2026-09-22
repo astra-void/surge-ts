@@ -63,8 +63,8 @@ fn native_program(files: Vec<SourceFileInput>) -> Vec<Diagnostic> {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -97,8 +97,8 @@ fn span_ts2304_identifier_expression() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -132,8 +132,8 @@ fn span_ts2304_unknown_type_annotation_points_to_type_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -167,8 +167,8 @@ fn span_ts2304_unknown_type_alias_target() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -202,8 +202,8 @@ fn span_ts2304_unknown_interface_property_type() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -237,8 +237,8 @@ fn span_ts2304_unknown_function_parameter_type() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -272,8 +272,8 @@ fn span_ts2304_unknown_function_return_type() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -307,8 +307,8 @@ fn span_ts2304_unknown_tuple_element_type() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -342,8 +342,8 @@ fn span_ts2304_unknown_array_element_type() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -377,8 +377,8 @@ fn span_ts7006_points_to_parameter_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -412,8 +412,8 @@ fn span_ts7031_points_to_binding_element_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -447,8 +447,8 @@ fn span_uninitialized_variable_no_longer_emits_ts7005() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -482,8 +482,8 @@ fn span_ts2451_points_to_duplicate_variable_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -532,8 +532,8 @@ fn span_ts2393_points_to_duplicate_function_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -582,8 +582,8 @@ fn span_ts2300_points_to_duplicate_type_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -601,7 +601,21 @@ fn span_ts2300_points_to_duplicate_type_name() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2300", span_nth(source, "Name", 1));
+    assert_eq!(
+        diagnostic_tuples(&diagnostics),
+        vec![
+            (
+                "TS2300".to_string(),
+                "example.ts".to_string(),
+                Some(span_nth(source, "Name", 0))
+            ),
+            (
+                "TS2300".to_string(),
+                "example.ts".to_string(),
+                Some(span_nth(source, "Name", 1))
+            ),
+        ]
+    );
 }
 
 #[test]
@@ -617,8 +631,8 @@ fn span_ts2588_points_to_assignment_target() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -652,8 +666,8 @@ fn span_ts2322_variable_initializer() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -677,7 +691,7 @@ fn span_ts2322_variable_initializer() {
 }
 
 #[test]
-fn span_ts2322_assignment_rhs() {
+fn span_ts2322_assignment_points_to_target() {
     let source = "let value: number = 1; value = \"a\";";
     let diagnostics = check_source_with_options(
         source,
@@ -689,8 +703,8 @@ fn span_ts2322_assignment_rhs() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -708,11 +722,11 @@ fn span_ts2322_assignment_rhs() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2322", span(source, "\"a\""));
+    assert_single_span(source, diagnostics, "TS2322", span_nth(source, "value", 1));
 }
 
 #[test]
-fn span_ts2322_return_expression() {
+fn span_ts2322_return_points_to_return_keyword() {
     let source = "function f(): number { return \"a\"; }";
     let diagnostics = check_source_with_options(
         source,
@@ -724,8 +738,8 @@ fn span_ts2322_return_expression() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -743,7 +757,7 @@ fn span_ts2322_return_expression() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2322", span(source, "\"a\""));
+    assert_single_span(source, diagnostics, "TS2322", span(source, "return"));
 }
 
 #[test]
@@ -759,8 +773,8 @@ fn span_ts2322_object_property_value() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -796,8 +810,8 @@ fn span_ts2322_array_element() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -831,8 +845,8 @@ fn span_ts2322_tuple_element() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -854,7 +868,7 @@ fn span_ts2322_tuple_element() {
 }
 
 #[test]
-fn span_tuple_length_too_few_points_to_array_literal() {
+fn span_tuple_length_too_few_points_to_declaration_name() {
     let source = "let value: [number, string] = [1];";
     let diagnostics = check_source_with_options(
         source,
@@ -866,8 +880,8 @@ fn span_tuple_length_too_few_points_to_array_literal() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -885,11 +899,11 @@ fn span_tuple_length_too_few_points_to_array_literal() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2322", span(source, "[1]"));
+    assert_single_span(source, diagnostics, "TS2322", span(source, "value"));
 }
 
 #[test]
-fn span_tuple_length_too_many_points_to_extra_element() {
+fn span_tuple_length_too_many_points_to_declaration_name() {
     let source = "let value: [number] = [1, 2];";
     let diagnostics = check_source_with_options(
         source,
@@ -901,8 +915,8 @@ fn span_tuple_length_too_many_points_to_extra_element() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -920,11 +934,11 @@ fn span_tuple_length_too_many_points_to_extra_element() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2322", span(source, "2"));
+    assert_single_span(source, diagnostics, "TS2322", span(source, "value"));
 }
 
 #[test]
-fn span_ts2322_conditional_true_branch() {
+fn span_ts2322_conditional_true_branch_points_to_declaration_name() {
     let source = "let value: number = true ? \"a\" : 1;";
     let diagnostics = check_source_with_options(
         source,
@@ -936,8 +950,8 @@ fn span_ts2322_conditional_true_branch() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -955,11 +969,11 @@ fn span_ts2322_conditional_true_branch() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2322", span(source, "\"a\""));
+    assert_single_span(source, diagnostics, "TS2322", span(source, "value"));
 }
 
 #[test]
-fn span_ts2322_conditional_false_branch() {
+fn span_ts2322_conditional_false_branch_points_to_declaration_name() {
     let source = "let value: number = true ? 1 : \"a\";";
     let diagnostics = check_source_with_options(
         source,
@@ -971,8 +985,8 @@ fn span_ts2322_conditional_false_branch() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -990,12 +1004,12 @@ fn span_ts2322_conditional_false_branch() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2322", span(source, "\"a\""));
+    assert_single_span(source, diagnostics, "TS2322", span(source, "value"));
 }
 
 #[test]
 fn span_ts2322_property_call_return_initializer() {
-    let source = "let store: { getName: () => string }; let value: number = store.getName();";
+    let source = "declare const store: { getName: () => string }; let value: number = store.getName();";
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
@@ -1006,8 +1020,8 @@ fn span_ts2322_property_call_return_initializer() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1041,8 +1055,8 @@ fn span_ts2322_index_access_initializer() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1076,8 +1090,8 @@ fn span_ts2345_identifier_call_argument() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1111,8 +1125,8 @@ fn span_ts2304_call_argument() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1146,8 +1160,8 @@ fn span_ts2304_call_callee() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1181,8 +1195,8 @@ fn span_ts2304_property_call_receiver() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1216,8 +1230,8 @@ fn span_ts2304_index_receiver() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1251,8 +1265,8 @@ fn span_ts2304_index_expression() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1286,8 +1300,8 @@ fn span_ts2345_contextual_object_argument_property_value() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1322,8 +1336,8 @@ fn span_ts2345_contextual_array_argument_element() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1357,8 +1371,8 @@ fn span_ts2345_contextual_tuple_argument_element() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1392,8 +1406,8 @@ fn span_ts2554_identifier_call_arity_points_to_callee() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1416,7 +1430,7 @@ fn span_ts2554_identifier_call_arity_points_to_callee() {
 
 #[test]
 fn span_ts2554_property_call_arity_points_to_property_or_call() {
-    let source = "let store: { getName: (value: number) => void }; store.getName();";
+    let source = "declare const store: { getName: (value: number) => void }; store.getName();";
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
@@ -1427,8 +1441,8 @@ fn span_ts2554_property_call_arity_points_to_property_or_call() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1467,8 +1481,8 @@ fn span_ts2349_identifier_non_callable_points_to_callee() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1491,7 +1505,7 @@ fn span_ts2349_identifier_non_callable_points_to_callee() {
 
 #[test]
 fn span_ts2349_property_non_callable_points_to_property() {
-    let source = "let store: { value: number }; store.value();";
+    let source = "declare const store: { value: number }; store.value();";
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
@@ -1502,8 +1516,8 @@ fn span_ts2349_property_non_callable_points_to_property() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1537,8 +1551,8 @@ fn span_ts2339_property_access_missing_points_to_property_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1572,8 +1586,8 @@ fn span_ts2339_property_call_missing_points_to_property_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1607,8 +1621,8 @@ fn span_ts2536_invalid_generic_indexed_access_points_to_index_type() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1642,8 +1656,8 @@ fn span_ts2339_primitive_receiver_property_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1665,7 +1679,7 @@ fn span_ts2339_primitive_receiver_property_name() {
 }
 
 #[test]
-fn span_ts2339_tuple_out_of_range_index() {
+fn span_ts2493_tuple_out_of_range_index() {
     let source = "let tuple: [string] = [\"a\"]; tuple[1];";
     let diagnostics = check_source_with_options(
         source,
@@ -1677,8 +1691,8 @@ fn span_ts2339_tuple_out_of_range_index() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1696,7 +1710,7 @@ fn span_ts2339_tuple_out_of_range_index() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2339", span(source, "1"));
+    assert_single_span(source, diagnostics, "TS2493", span(source, "1"));
 }
 
 #[test]
@@ -1724,8 +1738,8 @@ fn index_access_primitive_receiver_no_ts2339() {
                 resolved_modules_by_importer: Default::default(),
                 stub_external_modules: false,
                 no_implicit_any: false,
-                strict_property_initialization: false,
                 strict_null_checks: true,
+                strict_property_initialization: false,
                 use_unknown_in_catch_variables: false,
                 no_implicit_returns: false,
                 no_fallthrough_cases_in_switch: false,
@@ -1760,8 +1774,8 @@ fn span_ts2353_excess_property_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1797,8 +1811,8 @@ fn span_ts2739_missing_required_object_literal() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1834,8 +1848,8 @@ fn span_object_literal_unresolved_property_value() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1869,8 +1883,8 @@ fn span_ts2362_left_operand() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1904,8 +1918,8 @@ fn span_ts2363_right_operand() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1928,7 +1942,7 @@ fn span_ts2363_right_operand() {
 
 #[test]
 fn span_ts2365_operator() {
-    let source = "let value = \"a\" + true;";
+    let source = "let value = 1 + true;";
     let diagnostics = check_source_with_options(
         source,
         "example.ts",
@@ -1939,8 +1953,8 @@ fn span_ts2365_operator() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -1958,7 +1972,7 @@ fn span_ts2365_operator() {
             types: Vec::new(),
         },
     );
-    assert_single_span(source, diagnostics, "TS2365", span(source, "\"a\" + true"));
+    assert_single_span(source, diagnostics, "TS2365", span(source, "1 + true"));
 }
 
 #[test]
@@ -1974,8 +1988,8 @@ fn span_ts2367_equality_operator() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -2015,8 +2029,8 @@ fn span_ts2872_truthy_literal() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -2052,8 +2066,8 @@ fn span_ts2873_falsy_literal() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -2616,7 +2630,7 @@ fn span_module_value_export_used_as_type_points_to_type_usage() {
     assert_eq!(
         diagnostic_tuples(&diagnostics),
         vec![(
-            "TS2304".to_string(),
+            "TS2749".to_string(),
             "index.ts".to_string(),
             Some(span_nth(
                 "import { User } from \"./user\"; let value: User = \"Ada\";",
@@ -2715,8 +2729,8 @@ fn span_module_exported_unknown_type_points_to_type_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -2775,11 +2789,18 @@ fn span_cross_file_declaration_error_points_to_declaration_file_token() {
 
     assert_eq!(
         diagnostic_tuples(&diagnostics),
-        vec![(
-            "TS2300".to_string(),
-            "b.ts".to_string(),
-            Some(span("type Name = number;", "Name")),
-        )]
+        vec![
+            (
+                "TS2300".to_string(),
+                "a.ts".to_string(),
+                Some(span("type Name = string;", "Name")),
+            ),
+            (
+                "TS2300".to_string(),
+                "b.ts".to_string(),
+                Some(span("type Name = number;", "Name")),
+            ),
+        ]
     );
 }
 
@@ -2889,8 +2910,8 @@ fn span_generic_arity_missing_points_to_type_reference_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -2932,8 +2953,8 @@ fn span_generic_unknown_type_argument_points_to_type_argument() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -3029,8 +3050,8 @@ fn span_generic_arity_too_many_points_to_type_reference_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -3065,8 +3086,8 @@ fn span_generic_non_generic_type_args_points_to_type_reference_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -3101,8 +3122,8 @@ fn span_invalid_pick_alias_points_to_pick_reference_and_dedupes_usage() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -3137,8 +3158,8 @@ fn span_generic_default_unknown_points_to_default_type_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -3174,8 +3195,8 @@ fn span_generic_constraint_unknown_points_to_constraint_type_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -3194,7 +3215,7 @@ fn span_generic_constraint_unknown_points_to_constraint_type_name() {
         },
     );
 
-    assert!(diagnostics.is_empty());
+    assert_single_span(source, diagnostics, "TS2304", span(source, "Missing"));
 }
 
 #[test]
@@ -3212,8 +3233,8 @@ fn span_generic_duplicate_type_parameter_points_to_duplicate_name() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -3253,8 +3274,8 @@ fn span_generic_function_type_parameter_no_unresolved_span() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
@@ -3284,7 +3305,7 @@ fn examples_assignment_span_baseline() {
 
     assert_eq!(
         tuples(&diagnostics),
-        vec![("TS2322".to_string(), Some(span(&source, "1")))]
+        vec![("TS2322".to_string(), Some(span_nth(&source, "a", 1)))]
     );
 }
 
@@ -3314,7 +3335,7 @@ fn examples_function_return_span_baseline() {
 
     assert_eq!(
         tuples(&diagnostics),
-        vec![("TS2322".to_string(), Some(span(&source, "1")))]
+        vec![("TS2322".to_string(), Some(span(&source, "return")))]
     );
 }
 
@@ -3363,7 +3384,7 @@ fn examples_function_body_local_span_baseline() {
 
     assert_eq!(
         tuples(&diagnostics),
-        vec![("TS2322".to_string(), Some(span_nth(&source, "value", 1)))]
+        vec![("TS2322".to_string(), Some(span(&source, "return")))]
     );
 }
 

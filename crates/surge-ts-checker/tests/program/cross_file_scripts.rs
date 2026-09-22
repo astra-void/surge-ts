@@ -231,7 +231,7 @@ fn malformed_json_module_degrades_without_cascading() {
              export const anything = info.whatever;\n",
         ),
     ];
-    assert!(program(files).is_empty(), "{:?}", codes(&program(files)));
+    assert_eq!(codes(&program(files)), vec!["TS1327"]);
 }
 
 #[test]
@@ -249,8 +249,8 @@ fn program_api_no_lib_hides_generated_default_libs() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: false,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
@@ -329,8 +329,8 @@ fn program_duplicate_type_alias_across_files_ts2300() {
         ("b.ts", "type Name = number; let value: Name = \"Ada\";"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2300"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2300", "TS2300"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "b.ts"]);
 }
 
 #[test]
@@ -353,8 +353,8 @@ fn program_duplicate_alias_interface_across_files_ts2300() {
         ("b.ts", "interface User { name: string; }"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2300"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2300", "TS2300"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "b.ts"]);
 }
 
 #[test]
@@ -364,8 +364,8 @@ fn program_duplicate_interface_alias_across_files_ts2300() {
         ("b.ts", "type User = { name: string };"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2300"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2300", "TS2300"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "b.ts"]);
 }
 
 #[test]
@@ -428,8 +428,8 @@ fn program_duplicate_function_across_files_ts2393() {
         ("b.ts", "function getName(): string { return \"Grace\"; }"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2393"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2393", "TS2393"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "b.ts"]);
 }
 
 #[test]
@@ -510,36 +510,33 @@ fn program_property_call_cross_file_type_valid() {
 }
 
 #[test]
-fn program_top_level_let_not_shared_or_policy_pinned() {
+fn program_top_level_let_is_shared_across_scripts() {
     let diagnostics = program(&[
         ("a.ts", "let greeting = \"Ada\";"),
         ("b.ts", "let value: string = greeting;"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
 #[test]
-fn program_top_level_const_not_shared_or_policy_pinned() {
+fn program_top_level_const_is_shared_across_scripts() {
     let diagnostics = program(&[
         ("a.ts", "const greeting = \"Ada\";"),
         ("b.ts", "let value: string = greeting;"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
 #[test]
-fn program_file_local_variable_does_not_leak() {
+fn program_script_variable_is_visible_in_another_scripts_function() {
     let diagnostics = program(&[
         ("a.ts", "let greeting = \"Ada\";"),
         ("b.ts", "function f(): string { return greeting; }"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
 #[test]
@@ -659,7 +656,7 @@ fn single_file_no_lib_hides_builtins() {
     };
 
     let diagnostics = check_source_with_options(source, "test.ts", options);
-    assert_eq!(codes(&diagnostics), vec!["TS2304", "TS2304", "TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2584", "TS2304", "TS2304"]);
 }
 
 #[test]
@@ -675,8 +672,8 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
@@ -704,8 +701,8 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
@@ -767,8 +764,8 @@ fn program_order_parser_before_type_prepass() {
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
             no_implicit_any: true,
-            strict_property_initialization: false,
             strict_null_checks: true,
+            strict_property_initialization: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
@@ -799,8 +796,8 @@ fn program_order_parser_before_type_prepass() {
 #[test]
 fn program_order_statement_errors_in_input_file_order() {
     let diagnostics = program(&[
-        ("a.ts", "let value: number = \"a\";"),
-        ("b.ts", "let value: number = \"b\";"),
+        ("a.ts", "let first: number = \"a\";"),
+        ("b.ts", "let second: number = \"b\";"),
     ]);
 
     assert_eq!(codes(&diagnostics), vec!["TS2322", "TS2322"]);
@@ -814,8 +811,8 @@ fn program_file_name_duplicate_function() {
         ("b.ts", "function getValue(): number { return \"Ada\"; }"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2393", "TS2322"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts", "b.ts"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2393", "TS2393", "TS2322"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "b.ts", "b.ts"]);
 }
 
 #[test]
@@ -825,31 +822,30 @@ fn program_function_second_body_checked_against_own_signature() {
         ("b.ts", "function getValue(): number { return \"Ada\"; }"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2393", "TS2322"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts", "b.ts"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2393", "TS2393", "TS2322"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "b.ts", "b.ts"]);
 }
 
 #[test]
-fn program_function_first_signature_wins_for_calls() {
+fn program_duplicate_function_call_site_is_not_reported() {
     let diagnostics = program(&[
         ("a.ts", "function getValue(): string { return \"Ada\"; }"),
         ("b.ts", "function getValue(): number { return \"Ada\"; }"),
         ("c.ts", "let value: number = getValue();"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2393", "TS2322", "TS2322"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts", "b.ts", "c.ts"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2393", "TS2393", "TS2322"]);
+    assert_eq!(file_names(&diagnostics), vec!["a.ts", "b.ts", "b.ts"]);
 }
 
 #[test]
-fn program_top_level_variable_not_shared() {
+fn program_top_level_variable_is_shared_across_scripts() {
     let diagnostics = program(&[
         ("a.ts", "let greeting = \"Ada\";"),
         ("b.ts", "let value: string = greeting;"),
     ]);
 
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
-    assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+    assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
 
 #[test]
@@ -896,7 +892,7 @@ fn program_file_name_unknown_type_inside_function_signature_file() {
 fn program_function_body_can_see_same_file_top_level_variables_current_policy() {
     let diagnostics = program(&[(
         "a.ts",
-        "let name = \"Ada\"; function f(): string { return name; }",
+        "let userName = \"Ada\"; function f(): string { return userName; }",
     )]);
 
     assert!(diagnostics.is_empty());

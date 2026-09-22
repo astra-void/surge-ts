@@ -53,7 +53,10 @@ pub(super) enum ReferenceGuard<'a> {
         literal: &'a ParsedExpression,
         keep_matching: bool,
     },
-    /// The reference tested falsy (`if (!x)`, the `else` of `if (x)`).
+    /// The reference tested falsy (`if (!x)`, the `else` of `if (x)`): tsc's
+    /// `getTypeWithFacts(type, TypeFacts.Falsy)`, where members that are always
+    /// truthy go and anything that may be falsy stays (`string` keeps `string`,
+    /// not `""`).
     Falsy,
     /// `x.constructor === C` held: only what `C` itself constructs is left.
     ConstructedBy { ctor_name: &'a str },
@@ -175,10 +178,14 @@ impl ReferenceGuard<'_> {
                 let effective = Self::effective_leaf_type(ty, optional);
                 let narrowed = narrow_by_literal_equality(&effective, &literal, *keep_matching)?;
                 let still_optional = optional && type_includes_undefined_member(&narrowed);
-                let narrowed = if still_optional {
-                    surge_ts_types::remove_undefined(&narrowed)
-                } else {
-                    narrowed
+                let narrowed = match narrowed {
+                    // Nothing but the absent case is left: `tag?: never`.
+                    // `remove_undefined` answers the degradation sentinel for a
+                    // bare `undefined`, which would make the whole object read
+                    // as unresolved and silence every later check on it.
+                    Type::Undefined if still_optional => Type::Never,
+                    narrowed if still_optional => surge_ts_types::remove_undefined(&narrowed),
+                    narrowed => narrowed,
                 };
                 (narrowed != *ty || still_optional != optional).then_some((narrowed, still_optional))
             }
@@ -250,7 +257,7 @@ pub(super) fn reference_path(expression: &ParsedExpression) -> Option<(String, V
         ParsedExpression::NonNullAssertion { expression, .. } => reference_path(expression),
         // tsc's `isMatchingReference`: a comma expression is the reference its
         // right operand is.
-        ParsedExpression::Sequence { expressions, .. } => reference_path(expressions.last()?),
+        ParsedExpression::Sequence { expressions } => reference_path(&expressions.last()?.0),
         _ => None,
     }
 }
@@ -267,7 +274,7 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
             // A name reached only through the string index signature is a
             // reference like any other (`typeof config.works !== "boolean"`);
             // the narrowed slot is recorded as a property marked `index_slot`.
-            let existing = match object_type.properties.get(head.as_str()) {
+            let mut existing = match object_type.properties.get(head.as_str()) {
                 Some(existing) => existing.clone(),
                 None => surge_ts_types::ObjectProperty {
                     index_slot: true,
@@ -276,6 +283,7 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
                     )
                 },
             };
+            existing.ty = crate::checks::function::settle_lazy_read(existing.ty);
             let (narrowed_ty, narrowed_optional) = if rest.is_empty() {
                 match guard.narrow_leaf(&existing.ty, existing.optional) {
                     Some(narrowed) => narrowed,
@@ -461,17 +469,18 @@ fn nullish_discriminant_rules_out(
 
 /// The declared type at the end of `path`, with an optional slot's `undefined`
 /// put back. `None` when any link is missing or is not an object.
-fn property_path_leaf_type(ty: &Type, path: &[String]) -> Option<Type> {
+pub(super) fn property_path_leaf_type(ty: &Type, path: &[String]) -> Option<Type> {
     let (head, rest) = path.split_first()?;
     let Type::Object(object_type) = ty.peeled() else {
         return None;
     };
     let property = object_type.properties.get(head.as_str())?;
-    let effective = ReferenceGuard::effective_leaf_type(&property.ty, property.optional);
+    let property_ty = crate::checks::function::settle_lazy_read(property.ty.clone());
+    let effective = ReferenceGuard::effective_leaf_type(&property_ty, property.optional);
     if rest.is_empty() {
         return Some(effective);
     }
-    property_path_leaf_type(&property.ty, rest)
+    property_path_leaf_type(&property_ty, rest)
 }
 
 /// The narrowed type of `base` under `guard` applied at `path`, or `None` when

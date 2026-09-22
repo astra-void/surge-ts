@@ -230,6 +230,25 @@ impl ObjectType {
         }
     }
 
+    /// The primitive operand of the intersection this object was merged from
+    /// (`number` in `number & { __brand: true }`): the value *is* that
+    /// primitive, with the object's members on top.
+    pub fn intersected_primitive(&self) -> Option<&Type> {
+        self.intersection_operands.as_deref()?.iter().find(|operand| {
+            matches!(
+                operand,
+                Type::String
+                    | Type::Number
+                    | Type::Boolean
+                    | Type::BigInt
+                    | Type::Symbol
+                    | Type::StringLiteral(_)
+                    | Type::NumberLiteral(_)
+                    | Type::BooleanLiteral(_)
+            )
+        })
+    }
+
     /// Declares `[key: number]: T` on this object; see `number_index_type`.
     pub fn with_number_index_type(mut self, number_index_type: Option<Type>) -> Self {
         self.number_index_type = number_index_type.map(Arc::new);

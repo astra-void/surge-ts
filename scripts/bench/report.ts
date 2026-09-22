@@ -75,7 +75,7 @@ const TOOL_COLORS: Record<string, string> = {
   'surge-ts': '#de7a4a',
 };
 
-type DriftStyle = { bg: string; fg: string };
+export type DriftStyle = { bg: string; fg: string };
 
 const DRIFT_STYLES: Record<string, DriftStyle> = {
   'baseline': { bg: '#eceff1', fg: '#546e7a' },
@@ -94,7 +94,7 @@ function driftStyle(drift: string): DriftStyle {
   return DRIFT_STYLES[drift] ?? DRIFT_FALLBACK;
 }
 
-function escapeHtml(unsafe: string): string {
+export function escapeHtml(unsafe: string): string {
   return unsafe
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -203,7 +203,7 @@ export function hasMemoryData(results: BenchReportResult[]): boolean {
   );
 }
 
-type PanelRow = {
+export type PanelRow = {
   label: string;
   color: string;
   value: number;
@@ -213,13 +213,17 @@ type PanelRow = {
   ratioText: string | null;
   ratioGood: boolean;
   drift: string | null;
+  // Overrides the drift-derived pill colors for non-drift badges.
+  pillStyle?: DriftStyle;
   tooltip: string;
 };
 
-type PanelGroup = { project: string; rows: PanelRow[] };
+export type PanelGroup = { project: string; rows: PanelRow[] };
 
-type Panel = {
+export type Panel = {
   title: string;
+  // Rows without a ratio annotation can reclaim its column for the pill.
+  omitRatioColumn?: boolean;
   groups: PanelGroup[];
   maxValue: number;
   tickFormat: (value: number) => string;
@@ -349,10 +353,10 @@ function renderPanel(panel: Panel, yStart: number): { svg: string; yEnd: number 
         body += `
     <text x="${annoX}" y="${centerY + 4}" font-size="11" fill="${ratioColor}">${escapeHtml(row.ratioText)}</text>`;
       }
-      annoX += 84;
+      if (!panel.omitRatioColumn) annoX += 84;
 
       if (row.drift !== null) {
-        const style = driftStyle(row.drift);
+        const style = row.pillStyle ?? driftStyle(row.drift);
         const pillWidth = row.drift.length * 6 + 14;
         body += `
     <rect x="${annoX}" y="${centerY - 9}" width="${pillWidth}" height="18" rx="9" fill="${style.bg}" />
@@ -391,10 +395,26 @@ export function renderBenchmarkSvg(input: BenchReportInput, panels: BenchSvgPane
     if (memory) selected.push(memory);
   }
 
-  const headerHeight = meta ? 64 : 44;
+  return renderPanelsSvg({
+    title: 'TypeScript Compilers Benchmark',
+    subtitleParts: meta ? metaSummaryParts(meta) : undefined,
+    panels: selected,
+    footer: 'Local-machine-relative regression benchmark · bars show medians, whiskers show min–max · not a cross-machine performance claim',
+  });
+}
+
+/// Stacked horizontal-bar panels with a title header and a footnote. A
+/// subtitle array (even empty) reserves the header's second line.
+export function renderPanelsSvg(options: {
+  title: string;
+  subtitleParts?: string[];
+  panels: Panel[];
+  footer: string;
+}): string {
+  const headerHeight = options.subtitleParts ? 64 : 44;
   let y = headerHeight;
   let body = '';
-  for (const panel of selected) {
+  for (const panel of options.panels) {
     const rendered = renderPanel(panel, y);
     body += rendered.svg;
     y = rendered.yEnd + 28;
@@ -403,13 +423,12 @@ export function renderBenchmarkSvg(input: BenchReportInput, panels: BenchSvgPane
   const footerY = y - 8;
   const chartHeight = footerY + 26;
 
-  let header = `<text x="16" y="28" font-size="17" font-weight="700" fill="#102a43">TypeScript Compilers Benchmark</text>\n`;
-  const metaParts = metaSummaryParts(meta);
-  if (metaParts.length > 0) {
-    header += `<text x="16" y="46" font-size="11" fill="#7b8794">${escapeHtml(metaParts.join('  ·  '))}</text>\n`;
+  let header = `<text x="16" y="28" font-size="17" font-weight="700" fill="#102a43">${escapeHtml(options.title)}</text>\n`;
+  if (options.subtitleParts && options.subtitleParts.length > 0) {
+    header += `<text x="16" y="46" font-size="11" fill="#7b8794">${escapeHtml(options.subtitleParts.join('  ·  '))}</text>\n`;
   }
 
-  const footer = `<text x="16" y="${footerY + 8}" font-size="10.5" fill="#9aa5b1">Local-machine-relative regression benchmark · bars show medians, whiskers show min–max · not a cross-machine performance claim</text>`;
+  const footer = `<text x="16" y="${footerY + 8}" font-size="10.5" fill="#9aa5b1">${escapeHtml(options.footer)}</text>`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${CHART_WIDTH}" height="${chartHeight}" viewBox="0 0 ${CHART_WIDTH} ${chartHeight}" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
   <rect width="100%" height="100%" rx="8" fill="#ffffff" stroke="#e4e7eb" />
@@ -435,6 +454,10 @@ function metaTableHtml(meta: BenchReportMeta | undefined): string {
   if (meta.iterations !== undefined) {
     rows.push(['Iterations', `${meta.iterations}${meta.warmup !== undefined ? ` (+${meta.warmup} warmup)` : ''}`]);
   }
+  return metaGridHtml(rows);
+}
+
+export function metaGridHtml(rows: Array<[string, string]>): string {
   if (rows.length === 0) return '';
   const cells = rows
     .map(([key, value]) => `<div class="meta-item"><span class="meta-key">${escapeHtml(key)}</span><span class="meta-value">${escapeHtml(value)}</span></div>`)
@@ -534,12 +557,29 @@ export function renderBenchmarkHtml(input: BenchReportInput): string {
     </div>`
     : timeContent;
 
+  return renderReportPage({
+    title: 'TypeScript Compilers Benchmark',
+    subtitle: 'Wall-clock and peak-memory comparison of no-emit project checking. Bars show medians; whiskers show the min–max run spread.',
+    metaHtml: metaTableHtml(doc.meta),
+    body,
+    disclaimerHtml: "This is a local-machine-relative regression benchmark. Results are highly dependent on the hardware it was run on. These are not cross-machine or marketing performance claims. Non-exact diagnostic drift means the tool's diagnostics differ from the baseline compiler named in the drift label (tsgo, the TypeScript 7 reference, unless it was unavailable); speed is only meaningful alongside a correct diagnostic surface.",
+  });
+}
+
+/// Shared page chrome (styles, meta grid, disclaimer) for the benchmark HTML reports.
+export function renderReportPage(options: {
+  title: string;
+  subtitle: string;
+  metaHtml: string;
+  body: string;
+  disclaimerHtml: string;
+}): string {
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TypeScript Compilers Benchmark</title>
+  <title>${escapeHtml(options.title)}</title>
   <style>
     :root { color-scheme: light; }
     body { font-family: -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 24px; background: #f5f7fa; color: #1f2933; }
@@ -573,12 +613,12 @@ export function renderBenchmarkHtml(input: BenchReportInput): string {
 </head>
 <body>
   <div class="container">
-    <h1>TypeScript Compilers Benchmark</h1>
-    <p class="subtitle">Wall-clock and peak-memory comparison of no-emit project checking. Bars show medians; whiskers show the min–max run spread.</p>
-    ${metaTableHtml(doc.meta)}
-    ${body}
+    <h1>${escapeHtml(options.title)}</h1>
+    <p class="subtitle">${escapeHtml(options.subtitle)}</p>
+    ${options.metaHtml}
+    ${options.body}
     <div class="disclaimer">
-      <strong>Disclaimer:</strong> This is a local-machine-relative regression benchmark. Results are highly dependent on the hardware it was run on. These are not cross-machine or marketing performance claims. Non-exact diagnostic drift means the tool's diagnostics differ from the baseline compiler named in the drift label (tsgo, the TypeScript 7 reference, unless it was unavailable); speed is only meaningful alongside a correct diagnostic surface.
+      <strong>Disclaimer:</strong> ${options.disclaimerHtml}
     </div>
   </div>
 </body>

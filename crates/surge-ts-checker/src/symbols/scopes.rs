@@ -6,7 +6,8 @@ use surge_ts_syntax::ParsedExpression;
 use surge_ts_types::Type;
 
 use crate::symbols::{
-    SymbolInfo, SymbolInfoHandle, SymbolTable, TupleDestructureBinding, clone_symbol_info_handle,
+    AutoArrayBinding, SymbolInfo, SymbolInfoHandle, SymbolTable, TupleDestructureBinding,
+    clone_symbol_info_handle,
 };
 
 #[derive(Debug, Clone)]
@@ -27,6 +28,14 @@ pub(crate) struct ScopeFrame {
     /// `pop_child` like `declared_shadows`.
     alias_shadows: HashMap<Arc<str>, Option<Arc<ParsedExpression>>>,
     destructure_shadows: HashMap<Arc<str>, Option<TupleDestructureBinding>>,
+    /// Names this frame *declares*, as opposed to bindings of an enclosing
+    /// frame it only flow-narrowed. `else { const v = … }` shadows a narrowed
+    /// `v`, and that local must not be mistaken for the outer binding's state.
+    declared_here: std::collections::HashSet<Arc<str>>,
+    /// Evolving-array entries this frame's declarations shadowed. Only a
+    /// declaration writes here; the mutations that grow an entry later persist
+    /// past the frame, as element types only ever grow along the flow.
+    auto_shadows: HashMap<Arc<str>, Option<AutoArrayBinding>>,
     /// A function body's own frame, which `var` hoisting stops at. Every other
     /// frame is a block (`{}`, an `if` branch, a loop or a `switch` case), and a
     /// `var` declared there stays visible after it.
@@ -52,6 +61,8 @@ impl ScopeStack {
                 declared_shadows: HashMap::new(),
                 alias_shadows: HashMap::new(),
                 destructure_shadows: HashMap::new(),
+                declared_here: std::collections::HashSet::new(),
+                auto_shadows: HashMap::new(),
                 is_function_scope: true,
             }],
         }
@@ -104,7 +115,17 @@ impl ScopeStack {
             Arc::clone(&name),
             Some(previous_declared.unwrap_or(declared)),
         );
-        self.insert_current(name, symbol)
+        self.insert_frame_entry(name, Arc::new(symbol))
+    }
+
+    /// Replaces a binding's flow type without declaring anything: what an
+    /// assignment or a guard does to a binding some enclosing frame declared.
+    pub(crate) fn insert_current_flow(
+        &mut self,
+        name: impl Into<Arc<str>>,
+        symbol: SymbolInfo,
+    ) -> Option<SymbolInfoHandle> {
+        self.insert_frame_entry(name.into(), Arc::new(symbol))
     }
 
     /// Declares `name` in the current frame with `declared` as its declaration
@@ -178,13 +199,49 @@ impl ScopeStack {
         self.visible_symbols.set_tuple_destructure(name, binding);
     }
 
+    /// Records whether the binding just declared as `name` is an evolving
+    /// array, hiding any outer entry of the same name until the frame pops.
+    pub(crate) fn declare_auto_array(&mut self, name: &str, binding: Option<AutoArrayBinding>) {
+        if binding.is_none() && !self.visible_symbols.has_auto_arrays() {
+            return;
+        }
+        let name: Arc<str> = name.into();
+        let previous = self
+            .visible_symbols
+            .set_auto_array(Arc::clone(&name), binding);
+        let current_frame = self
+            .frames
+            .last_mut()
+            .expect("scope stack must contain at least one frame");
+        current_frame.auto_shadows.entry(name).or_insert(previous);
+    }
+
+    pub(crate) fn auto_array_mut(&mut self, name: &str) -> Option<&mut AutoArrayBinding> {
+        self.visible_symbols.auto_array_mut(name)
+    }
+
     pub(crate) fn insert_current_handle(
         &mut self,
         name: impl Into<Arc<str>>,
         symbol: SymbolInfoHandle,
     ) -> Option<SymbolInfoHandle> {
         let name = name.into();
-        let previous_visible = self.visible_symbols.get_handle(&name);
+        if let Some(frame) = self.frames.last_mut() {
+            frame.declared_here.insert(Arc::clone(&name));
+        }
+        self.insert_frame_entry(name, symbol)
+    }
+
+    fn insert_frame_entry(
+        &mut self,
+        name: Arc<str>,
+        symbol: SymbolInfoHandle,
+    ) -> Option<SymbolInfoHandle> {
+        // The displaced entry is the visible table's *own* one: a binding it
+        // only reaches through its parent (a closure over the enclosing scope)
+        // is restored by removing the copy, which leaves the parent's entry —
+        // and the declared type recorded beside it — in charge again.
+        let previous_visible = self.visible_symbols.get_own_shared(&name);
         let current_frame = self
             .frames
             .last_mut()
@@ -236,6 +293,12 @@ impl ScopeStack {
             .is_some_and(|frame| frame.symbols.contains_let_or_const(name))
     }
 
+    /// Marks this stack as a function body's, whose reads of an enclosing
+    /// binding leave its flow.
+    pub(crate) fn mark_function_boundary(&mut self) {
+        self.visible_symbols.mark_function_boundary();
+    }
+
     pub(crate) fn push_child(&mut self) {
         self.frames.push(ScopeFrame::default());
     }
@@ -249,6 +312,32 @@ impl ScopeStack {
         });
     }
 
+    /// The bindings the current frame flow-narrowed — not the ones it declared —
+    /// with the type each was narrowed from. When this frame is the only branch
+    /// of an `if` that can complete, they are what the code after it sees.
+    pub(crate) fn current_frame_narrowings(&self) -> Vec<(Arc<str>, SymbolInfoHandle, Type)> {
+        let Some(frame) = self.frames.last() else {
+            return Vec::new();
+        };
+        frame
+            .declared_shadows
+            .keys()
+            .filter(|name| !frame.declared_here.contains(*name))
+            .filter_map(|name| {
+                let symbol = self.visible_symbols.get_handle(name)?;
+                let declared = self.visible_symbols.declared_type(name)?.clone();
+                Some((Arc::clone(name), symbol, declared))
+            })
+            .collect()
+    }
+
+    /// Installs narrowings taken from a branch frame into the current one.
+    pub(crate) fn adopt_narrowings(&mut self, narrowings: Vec<(Arc<str>, SymbolInfoHandle, Type)>) {
+        for (name, symbol, declared) in narrowings {
+            let _ = self.insert_current_narrowed(name, (*symbol).clone(), declared);
+        }
+    }
+
     pub(crate) fn pop_child(&mut self) {
         assert!(
             !self.frames.is_empty(),
@@ -258,6 +347,9 @@ impl ScopeStack {
         for (name, previous_declared) in frame.declared_shadows {
             self.visible_symbols
                 .set_declared_type(name, previous_declared);
+        }
+        for (name, previous_binding) in frame.auto_shadows {
+            self.visible_symbols.set_auto_array(name, previous_binding);
         }
         for (name, previous_condition) in frame.alias_shadows {
             self.visible_symbols

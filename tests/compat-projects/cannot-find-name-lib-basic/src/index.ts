@@ -1,0 +1,12 @@
+export const map = new Map();
+export const promise = Promise;
+export const symbol = Symbol;
+export const reflect = Reflect;
+export const bigint = BigInt;
+export let set: Set<string>;
+export let iterable: Iterable<number>;
+console.log(document);
+export const nodeGlobal = process;
+describe("suite", () => {});
+export const jquery = $;
+export const bunGlobal = Bun;

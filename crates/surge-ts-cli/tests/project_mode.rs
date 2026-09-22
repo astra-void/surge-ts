@@ -1280,7 +1280,7 @@ fn project_mode_regular_type_export_value_usage_unresolved() {
 }
 
 #[test]
-fn project_mode_regular_value_export_type_usage_unresolved() {
+fn project_mode_regular_value_export_used_as_type_reports_ts2749() {
     let root = temp_dir("project-regular-value-export-type-usage");
     write_file(
         &root,
@@ -1299,7 +1299,7 @@ fn project_mode_regular_value_export_type_usage_unresolved() {
     let (stdout, stderr) = run_cli(&["--project", project.as_str()]);
 
     assert!(stderr.is_empty());
-    assert!(stdout.contains("TS2304"));
+    assert!(stdout.contains("TS2749"));
     assert!(stdout.contains("src/index.ts"));
 }
 

@@ -15,6 +15,7 @@ pub(crate) use counters::*;
 pub(crate) use dts_expansion::*;
 pub(crate) use retention_census::*;
 pub(crate) use rss::{current_footprint_bytes, peak_footprint_bytes};
+pub use timings::last_rss_stage_label;
 pub(crate) use timings::*;
 pub(crate) use type_graph_census::*;
 
@@ -23,7 +24,8 @@ pub(crate) use type_graph_census::*;
 /// carrier. Gated on the same `SURGE_RSS`/`SURGE_TIMINGS` opt-in as the stage
 /// table and emitted immediately to stderr; `SURGE_RSS_JSON` additionally emits
 /// one machine-readable JSON line per probe.
-pub fn record_loader_rss_stage(label: &str) {
+pub fn record_loader_rss_stage(label: &'static str) {
+    publish_rss_stage(label);
     if !rss_stages_enabled() {
         return;
     }

@@ -2699,3 +2699,79 @@ divergence before and after) and the pinned counter invariant
 `any_member_produces_no_degraded_interface_resolutions` (3 degraded of 14
 attempts, byte-identical before and after). Neither is a merge regression, and
 neither is fixed here.
+
+## Snapshot at `7ea0cddb` (2026-09-22)
+
+All nine corpora re-measured one at a time from a frozen release binary built in
+a detached worktree at `7ea0cddb`; the counts are in
+[CURRENT_STATUS.md § Real-project compatibility](CURRENT_STATUS.md#real-project-compatibility).
+What that table does not say:
+
+### trpc `tsc`-only: 89 → 34 between 2026-09-13 and 2026-09-22
+
+Surge-only stayed within 0–10 across the whole run and is 8 at the snapshot.
+The per-commit deltas below are the ones each commit message recorded against
+its predecessor, on the tree the author measured; only the endpoint (34 / 8)
+was re-measured clean for the snapshot.
+
+| Commit | Change | Recorded trpc tsc-only / surge-only |
+| --- | --- | --- |
+| `d59dfd52` | tsc's error type carried through the value path; a missing member no longer silences everything downstream of it | 52 → 48 / 10 → 8 |
+| `9074303f`, `d220201d` | a string's numeric index read through its index signature; an ambient `declare module` beats a package of the same name | 48 → 45 |
+| `f7edf0fb` | implicit any reported in an unannotated declaration's returns | 45 → 43 |
+| `d8e156eb` | unannotated returns and class members inferred lazily, by default | 43 → 41 |
+| `2a22babc` | overload selection for interface and class method groups | 41 → 39 |
+| `ca66c582` | generic aliases that recurse through mapped members resolve; `unique symbol` is nominal | 39 → 35 |
+| `7ea0cddb` | block-bodied arrow returns inferred, by default | 35 → 34 |
+
+The 34 that remain are almost all under `examples/`: `TS2883` ×10 and `TS7006`
+×10 lead. `6dda508d` corrected an earlier claim that
+`SURGE_VALUE_EXPORT_REFINEMENT` closed six of the `TS7006`; those were an
+artifact of a missed relative-import dependency, and what actually blocks them
+is the router's root types (`ctx`, `errorShape`, `transformer`), which surge
+still resolves to the sentinel.
+
+### Two regressions the seven-corpus checks did not cover
+
+The commits above each reported "the other six corpora byte-identical". That
+set is zod, ky, ofetch, tanstack-query, ts-pattern and zustand. **unnamed and
+drizzle-orm were in none of them**, and both moved:
+
+- **unnamed: 1 → 11 surge-only** (last recorded 2026-09-14 at `a78ea118`). The
+  checkout (`a5ece30` plus three local edits) has not changed since
+  2026-09-01, so all ten new reports are surge's. `TS2532` ×4 in
+  `components/ui/sidebar.tsx` (lines 166, 261, 283, 512), `TS2339` ×4 in
+  `app/[locale]/application/data-table.tsx` (137, 141, 146, 167),
+  `TS2339` in `components/ui/input-otp.tsx:47` and `TS2344` in
+  `components/ui/pagination.tsx:41`. Not yet attributed to a commit. The ceiling
+  gate (34) still passes, which is why it went unnoticed.
+- **drizzle-orm: deadlock.** The `surge` process stops using CPU a few seconds in and never
+  exits (killed after 11 minutes; 90 s timeouts in the bisect). A stack sample
+  shows the check thread inside `analyze_module` →
+  `collect_exportable_value_symbols` → `Type::peeled` of a lazy declaration
+  annotation, then ~60 frames of alias/mapped/intersection resolution through
+  `Readonly<…>` and `Omit<…>`, reaching `LazyIntersectionMerge::resolve` for an
+  intersection whose `OnceLock::get_or_init` is already running further up the
+  same stack. std's `Once` blocks on itself rather than panicking, so the run
+  hangs silently instead of failing. `git bisect run` between `f0eb22cb` (good)
+  and `2a22babc` (bad) names `2c25f3f4`, the 2026-09-17 landing of the tsc
+  check-porting and error-type provenance work (148 files), as the first bad
+  commit; its parent `e66c2d32` finishes. Turning
+  `SURGE_EARLY_MODULE_LOCAL_VALUES` off, which that commit made the default,
+  does not avoid it.
+
+  **Fixed by `8f46a6d8` (2026-09-22).** The merge runs outside the lock with a
+  per-thread in-progress set; the back-edge reads the degradation sentinel and
+  counts as an in-flight degraded read, so a merge that consumed it is not
+  memoized. Only `xata-http` hung: a type-only import of `@xata.io/client` is
+  enough, and delta-debugging the 11,498-line declaration file down to 37 lines
+  gave the `lazy-intersection-reentry-basic` preset (the trigger is
+  `BaseClient extends BaseClient_base<…>`, a construct signature returning
+  `Omit<{ search: … }> & {}`). It needs the bundled lib, so the in-memory
+  checker API does not reproduce it; the regression test runs the CLI against
+  the preset with a deadline, and fails at that deadline without the fix. With
+  the fix, drizzle finishes in about 6 s and reports roughly 170 surge
+  diagnostics against `tsc`'s 16 — mostly codes the checks landed since
+  2026-09-13 began reporting (`TS7006`, `TS2339`, `TS2345`, `TS2344`, `TS4114`,
+  `TS2564`), which the hang had kept out of view. The other eight corpora are
+  byte-identical across the fix.

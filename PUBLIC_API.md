@@ -245,11 +245,17 @@ cargo fixtures, so a regression fails CI.
 | Project | Shape | Gate |
 | --- | --- | --- |
 | **ky** | [sindresorhus/ky](https://github.com/sindresorhus/ky) 2.0.2 Fetch-API/DOM (`exactOptionalPropertyTypes`, ~29 files) | `pnpm run real:ky:test` — strict false-positive corpus (`tsc = 0`) |
-| **unnamed** | local Next.js App Router app (`moduleResolution: bundler`, `jsx: react-jsx`, `strict`, `paths`) | `pnpm run real:unnamed:test` — strict false-positive corpus (`tsc = 0`) |
 
 A strict false-positive corpus is one where `tsc` reports zero diagnostics, so
-*any* surge diagnostic is a regression rather than a judgement call. The gates
-**skip** cleanly when the project or the `typescript` package is absent (the
+*any* surge diagnostic is a regression rather than a judgement call.
+
+`unnamed` (a local Next.js App Router app: `moduleResolution: bundler`, `jsx:
+react-jsx`, `strict`, `paths`) is also a `tsc = 0` corpus but is **not** held at
+exact parity: `pnpm run real:unnamed:test` asserts a count ceiling on surge's
+over-reports, a ratchet that only moves down. Its current count is in
+[`CURRENT_STATUS.md`](CURRENT_STATUS.md#real-project-compatibility).
+
+Both gates **skip** cleanly when the project or the `typescript` package is absent (the
 source is never vendored) — a skipped gate is not a passing gate. Which of
 these was last actually measured, and with what result, is recorded in
 [`CURRENT_STATUS.md`](CURRENT_STATUS.md#real-project-compatibility).

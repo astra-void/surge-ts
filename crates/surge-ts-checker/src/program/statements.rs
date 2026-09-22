@@ -1,5 +1,6 @@
 //! Per-statement program checking and unsupported-declaration diagnostics.
 
+use crate::checks::function::body_statements::evolving_arrays;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -34,6 +35,7 @@ pub(crate) fn check_program_file_statements(
             ctx,
         );
     }
+    crate::flow::check_module_definite_assignment(statements, ctx);
 }
 
 /// tsc's `isImplementationCompatibleWithOverload` for a module-level function
@@ -339,6 +341,10 @@ pub(crate) fn check_module_assignment(
     let inferred = expr::evaluate_expression(&value, value_span, &symbols, ctx);
     ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
 
+    if evolving_arrays::assign_module_evolving_array(&target_name, &value, &inferred, ctx) {
+        return;
+    }
+
     let mut scopes = crate::symbols::ScopeStack::from_root(symbols);
     check_function::update_assigned_symbol_type(&target_name, inferred, &mut scopes);
     let Some(updated) = scopes.resolve(&target_name) else {
@@ -547,7 +553,29 @@ fn check_statements_over_module_scope(
     let mut flow_state = crate::flow::FunctionFlowState::new(
         flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
     );
-    crate::checks::function::check_function_body(statements, None, &mut scopes, &mut flow_state, ctx);
+    let mut var_names = Vec::new();
+    crate::flow::collect_var_names(&statements, &mut var_names);
+    crate::checks::function::check_function_body(
+        statements,
+        None,
+        &mut scopes,
+        &mut flow_state,
+        ctx,
+    );
+    // A `var` is function-scoped, so one declared in a module-level block,
+    // branch or loop is a module binding once the statement has run.
+    for name in var_names {
+        if let Some(symbol) = scopes.visible_symbols().get(&name)
+            && matches!(symbol.kind, crate::symbols::SymbolKind::Var)
+            && ctx
+                .symbols
+                .get(&name)
+                .is_none_or(|existing| matches!(existing.kind, crate::symbols::SymbolKind::Var))
+        {
+            let symbol = symbol.clone();
+            let _ = ctx.symbols.insert(name, symbol);
+        }
+    }
     names
         .iter()
         .map(|name| scopes.resolve(name).map(|symbol| symbol.ty.clone()))
@@ -588,7 +616,78 @@ fn join_module_branch_assignments(
     }
 }
 
+fn with_module_export(ctx: &mut CheckerContext, check: impl FnOnce(&mut CheckerContext)) {
+    ctx.module_export_depth += 1;
+    check(ctx);
+    ctx.module_export_depth -= 1;
+}
+
+fn with_module_declared_only(ctx: &mut CheckerContext, check: impl FnOnce(&mut CheckerContext)) {
+    ctx.module_declared_only_depth += 1;
+    check(ctx);
+    ctx.module_declared_only_depth -= 1;
+}
+
+/// A module-level `[]` binding tsc types as an evolving array (`autoArrayType`)
+/// under `noImplicitAny`. An exported one is not flow-typed: other modules can
+/// mutate it, so tsc keeps its declared type.
+fn module_auto_array(
+    variable: &surge_ts_syntax::ParsedVariableDeclaration,
+    ctx: &CheckerContext,
+) -> Option<(std::sync::Arc<str>, crate::symbols::AutoArrayBinding)> {
+    let name_span = variable.name_span?;
+    if !var::is_auto_array_candidate(variable, ctx) || ctx.module_export_depth > 0 {
+        return None;
+    }
+    let is_let = matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Let);
+    Some((
+        variable.name.as_str().into(),
+        crate::symbols::AutoArrayBinding {
+            name_span: Some(name_span),
+            is_const: matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const),
+            declared_array: true,
+            is_let,
+            initialized: true,
+            assignments: is_let
+                .then(|| ctx.let_assignment(name_span.start))
+                .flatten(),
+            evolving: true,
+            elements: surge_ts_types::Type::Never,
+            unsettled: false,
+            pending_loops: 0,
+            declared_only: false,
+            module_level: true,
+        },
+    ))
+}
+
 pub(crate) fn check_program_statement(
+    statement: ParsedStatement,
+    file_index: usize,
+    statement_index: usize,
+    function_signatures: &HashMap<FunctionDeclarationLocation, FunctionType>,
+    ctx: &mut CheckerContext,
+) {
+    // Collected before the statement is consumed and applied once it is
+    // checked, where tsc's flow places an array mutation.
+    let mutations = if ctx.auto_arrays_declared && ctx.symbols.has_auto_arrays() {
+        evolving_arrays::collect_module_mutations(&statement, &ctx.symbols)
+    } else {
+        Vec::new()
+    };
+    check_program_statement_itself(
+        statement,
+        file_index,
+        statement_index,
+        function_signatures,
+        ctx,
+    );
+    if !mutations.is_empty() {
+        evolving_arrays::apply_module_mutations(mutations, ctx);
+    }
+}
+
+fn check_program_statement_itself(
     statement: ParsedStatement,
     file_index: usize,
     statement_index: usize,
@@ -598,7 +697,12 @@ pub(crate) fn check_program_statement(
     match statement {
         ParsedStatement::VariableDeclaration(variable) => {
             let start = Instant::now();
+            let auto_array = module_auto_array(&variable, ctx);
             var::check_variable_declaration(*variable, ctx);
+            if let Some((name, binding)) = auto_array {
+                ctx.auto_arrays_declared = true;
+                ctx.symbols.set_auto_array(name, Some(binding));
+            }
             record_program_timing(ctx.timings.as_ref(), |timings| {
                 timings.variable_declaration_checking += start.elapsed()
             });
@@ -646,14 +750,16 @@ pub(crate) fn check_program_statement(
             }
         }
         ParsedStatement::FunctionDeclaration(function) => {
-            with_declared_mutable_module_bindings(ctx, |ctx| {
-                check_program_function_declaration(
-                    *function,
-                    file_index,
-                    statement_index,
-                    function_signatures,
-                    ctx,
-                );
+            with_module_declared_only(ctx, |ctx| {
+                with_declared_mutable_module_bindings(ctx, |ctx| {
+                    check_program_function_declaration(
+                        *function,
+                        file_index,
+                        statement_index,
+                        function_signatures,
+                        ctx,
+                    );
+                });
             });
         }
         ParsedStatement::Call(call) => {
@@ -668,39 +774,53 @@ pub(crate) fn check_program_statement(
         }
         ParsedStatement::If(if_statement) => check_module_if_statement(&if_statement, ctx),
         ParsedStatement::Block(statements) => check_module_block(statements, ctx),
-        ParsedStatement::TypeAliasDeclaration(_) => {}
+        ParsedStatement::TypeAliasDeclaration(alias) => {
+            crate::checks::function::check_type_parameter_declarations(&alias.type_parameters, ctx);
+        }
         ParsedStatement::InterfaceDeclaration(interface) => {
+            crate::checks::function::check_type_parameter_declarations(
+                &interface.type_parameters,
+                ctx,
+            );
             super::heritage::check_interface_heritage(&interface, ctx);
         }
         ParsedStatement::ClassDeclaration(class) => {
-            super::check_class_declaration(&class, ctx);
+            with_module_declared_only(ctx, |ctx| super::check_class_declaration(&class, ctx));
         }
         ParsedStatement::ImportDeclaration(_) => {}
         ParsedStatement::ExportDeclaration(export) => match *export {
-            ParsedExportDeclaration::Statement { declaration, .. } => check_program_statement(
-                *declaration,
-                file_index,
-                statement_index,
-                function_signatures,
-                ctx,
-            ),
-            ParsedExportDeclaration::Named { .. } => {}
-            ParsedExportDeclaration::Namespace { .. } => {}
-            ParsedExportDeclaration::Default { declaration, .. } => match declaration {
-                ParsedDefaultExportDeclaration::Function(function) => {
-                    check_program_function_declaration(
-                        function,
+            ParsedExportDeclaration::Statement { declaration, .. } => {
+                with_module_export(ctx, |ctx| {
+                    check_program_statement(
+                        *declaration,
                         file_index,
                         statement_index,
                         function_signatures,
                         ctx,
                     );
+                });
+            }
+            ParsedExportDeclaration::Named { .. } => {}
+            ParsedExportDeclaration::Namespace { .. } => {}
+            ParsedExportDeclaration::Default { declaration, .. } => match declaration {
+                ParsedDefaultExportDeclaration::Function(function) => {
+                    with_module_declared_only(ctx, |ctx| {
+                        check_program_function_declaration(
+                            function,
+                            file_index,
+                            statement_index,
+                            function_signatures,
+                            ctx,
+                        );
+                    });
                 }
                 ParsedDefaultExportDeclaration::Expression(expression) => {
-                    expr::check_expression_statement(expression, ctx);
+                    check_export_assignment_expression(expression, ctx);
                 }
                 ParsedDefaultExportDeclaration::Class(class) => {
-                    super::check_class_declaration(&class, ctx);
+                    with_module_declared_only(ctx, |ctx| {
+                        super::check_class_declaration(&class, ctx);
+                    });
                 }
                 ParsedDefaultExportDeclaration::Unsupported { span } => {
                     let mut diagnostic =
@@ -715,7 +835,22 @@ pub(crate) fn check_program_statement(
             },
             ParsedExportDeclaration::All { .. } => {}
             ParsedExportDeclaration::Empty { .. } => {}
-            ParsedExportDeclaration::Equals { .. } => {}
+            ParsedExportDeclaration::Equals {
+                exported_name,
+                exported_name_span,
+                ..
+            } => {
+                check_export_assignment_expression(
+                    surge_ts_syntax::ParsedExpression::Identifier {
+                        name: exported_name,
+                        span: exported_name_span,
+                    },
+                    ctx,
+                );
+            }
+            ParsedExportDeclaration::EqualsExpression { expression, .. } => {
+                check_export_assignment_expression(*expression, ctx);
+            }
             ParsedExportDeclaration::NamespaceExport { .. } => {}
             ParsedExportDeclaration::Unsupported { span } => {
                 let mut diagnostic =
@@ -864,6 +999,19 @@ fn ambient_namespace(
     ambient
 }
 
+/// The target of `export =` / `export default <expression>`, which tsc checks
+/// as an ordinary expression except that its root name may name a type or a
+/// namespace.
+fn check_export_assignment_expression(
+    expression: surge_ts_syntax::ParsedExpression,
+    ctx: &mut CheckerContext,
+) {
+    if crate::checks::expr::export_assignment_target_is_exempt(&expression, ctx) {
+        return;
+    }
+    expr::check_expression_statement(expression, ctx);
+}
+
 pub(crate) fn emit_unsupported_declaration_diagnostics(
     statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
@@ -893,7 +1041,8 @@ pub(crate) fn emit_unsupported_declaration_diagnostic_from_statement(
             );
         }
         ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
-            ParsedExportDeclaration::Unsupported { span } => {
+            ParsedExportDeclaration::Unsupported { span }
+            | ParsedExportDeclaration::EqualsExpression { span, .. } => {
                 emit_unsupported_declaration_diagnostic(ctx, *span);
             }
             ParsedExportDeclaration::Default {
@@ -947,6 +1096,7 @@ pub(crate) fn check_program_function_declaration(
     };
 
     let type_parameters = function.type_parameters.clone();
+    check_function::check_type_parameter_declarations(&type_parameters, ctx);
     check_function::check_function_declaration_body(function, function_type, &type_parameters, ctx);
     ctx.symbols = saved_symbols;
 }

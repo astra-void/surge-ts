@@ -127,6 +127,10 @@ pub(super) fn display_fingerprint_walk(ty: &Type, hasher: &mut impl Hasher, budg
             hasher.write_u64(fingerprint);
         }
         Type::Reference(reference) => {
+            // The display alone is not an identity: two files each declaring
+            // `type Context = …` render alike, and a memo keyed without the id
+            // handed one file's expansion to the other.
+            reference.id.hash(hasher);
             reference.display.hash(hasher);
             for argument in reference.arguments.iter() {
                 display_fingerprint_walk(argument, hasher, budget);

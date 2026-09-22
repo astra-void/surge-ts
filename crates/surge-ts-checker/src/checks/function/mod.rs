@@ -15,7 +15,7 @@ use crate::program::record_program_timing;
 use crate::symbols::{ScopeStack, SymbolTable};
 
 mod body;
-mod body_statements;
+pub(crate) mod body_statements;
 mod narrowing;
 mod signature;
 
@@ -23,6 +23,71 @@ pub(crate) use body::*;
 pub(crate) use body_statements::*;
 pub(crate) use narrowing::*;
 pub(crate) use signature::*;
+/// A context for inferring a body during *signature collection* whose cache
+/// writes cannot reach the check phase.
+///
+/// The inference resolves expressions with no instantiation in scope, so it
+/// produces types the check phase must never see: on tRPC's `provider.ts` the
+/// `forEach` callback parameter came out as an uninstantiated `NodePath<N, N>`
+/// instead of `ASTPath<namedTypes.VariableDeclaration>`, and because the memo
+/// serving it is keyed without the type-parameter scope, the check phase read
+/// that back — `path.node` went unknown and 16 diagnostics both checkers report
+/// disappeared.
+///
+/// So the shadow shares only what resolution needs to *read*: the declaration
+/// tables and scopes, the ambient globals, the per-file scope and value maps. It
+/// deliberately does not inherit the memo window (its own ordinal) or the
+/// physical-interface instantiation caches. Modelled on the shadow
+/// `collect_exportable_value_symbols` builds for the same reason.
+///
+/// **It does not fix that leak**, and the following were each measured not to
+/// either (gate limited to the one file, so the whole -16/+9 delta is that
+/// file's own inference):
+///
+/// * discarding the inferred type entirely — the delta survives, so it is the
+///   act of inferring, not the type that gets published;
+/// * a fresh program type store around the walk (`with_program_type_store`);
+/// * `SURGE_DISABLE_CANONICAL_TYPE_STORE=1`;
+/// * `SURGE_IFACE_MEMO_PROGRAM=0`, `SURGE_IFACE_MODULE_MEMO=0`,
+///   `SURGE_DISABLE_SIG_CONTEXT_CACHE=1`;
+/// * withholding *every* field this function shares, the scope and both
+///   `Arc<Mutex<…>>` sets included.
+///
+/// Building the shadow but skipping the walk is neutral, so the carrier is
+/// something the walk reaches that none of the above covers — most likely an
+/// ordering or first-wins effect in the analysis pipeline rather than a cache.
+/// Finding it needs a trace of where `ASTPath<namedTypes.VariableDeclaration>`
+/// becomes `NodePath<N, N>`, not another isolation attempt.
+fn body_inference_shadow_context(ctx: &CheckerContext) -> CheckerContext {
+    let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
+    file_kinds.insert(ctx.file_name.to_string(), ctx.current_file_kind);
+    let mut shadow = CheckerContext::new_with_shared_options(
+        ctx.file_name.to_string(),
+        std::sync::Arc::clone(&ctx.options),
+        file_kinds,
+    );
+    shadow.timings = ctx.timings.clone();
+    // Environment identity stays content-stable, as it must for any context that
+    // resolves the same declarations: the deterministic stage counter and attempt
+    // tag are inherited, and the memo map gets its own window ordinal so no entry
+    // it writes can be served to the caller.
+    shadow.resolution_stage_counter = ctx.resolution_stage_counter;
+    shadow.environment_attempt = ctx.environment_attempt;
+    shadow.replace_resolved_named_types(3);
+    shadow.type_declarations = ctx.type_declarations.clone();
+    shadow.type_declaration_scope = ctx.type_declaration_scope.clone();
+    shadow.ambient_global_type_declarations = ctx.ambient_global_type_declarations.clone();
+    shadow.ambient_global_symbols = ctx
+        .ambient_global_symbols
+        .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    shadow.module_scope_by_file = ctx.module_scope_by_file.clone();
+    shadow.module_local_values_by_file = ctx.module_local_values_by_file.clone();
+    shadow.import_type_namespaces = ctx.import_type_namespaces.clone();
+    shadow.import_type_globals = ctx.import_type_globals.clone();
+    shadow.namespace_member_prefix_stack = ctx.namespace_member_prefix_stack.clone();
+    shadow
+}
+
 /// tsc's `getReturnTypeFromBody`, restricted to a body whose `return`s all sit
 /// at the top level.
 ///
@@ -39,30 +104,344 @@ pub(crate) use signature::*;
 /// — and publishing it is strictly worse than the sentinel: `any` is absorbing,
 /// so it silences every downstream check (`noUncheckedIndexedAccess` included)
 /// instead of merely staying unknown.
+thread_local! {
+    /// Body returns being forced on this thread, outermost first. Go's
+    /// `getReturnTypeOfSignature` guards the same re-entry with
+    /// `pushTypeResolution` and answers `any` for the cycle.
+    static BODY_RETURNS_IN_PROGRESS: std::cell::RefCell<Vec<std::sync::Arc<str>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// An unannotated declaration's return type, read from its body on first demand.
+///
+/// Go resolves a signature's return type lazily (`getReturnTypeOfSignature`,
+/// checker.go:20321): the first read runs `getReturnTypeFromBody` and the answer
+/// is cached on the signature, in the one environment the checker has. Walking
+/// the body eagerly during surge's signature collection instead ran it under
+/// module analysis's incomplete scopes, and that walk alone — its result
+/// discarded — deleted diagnostics the check phase reports correctly. A
+/// declaration nothing reads, like a codemod's default export, is now never
+/// walked at all, which is also what Go does.
+struct LazyBodyReturn {
+    id: std::sync::Arc<str>,
+    function: std::sync::Arc<ParsedFunctionDeclaration>,
+    parameter_types: std::sync::Arc<[Type]>,
+    file_name: std::sync::Arc<str>,
+    environment: crate::context::DeclarationEnvironmentHandle,
+    creation_scope: Option<std::sync::Arc<crate::symbols::TypeDeclarationScope>>,
+    memo: std::sync::OnceLock<Type>,
+}
+
+impl surge_ts_types::ResolveReference for LazyBodyReturn {
+    fn resolve(&self) -> Type {
+        if let Some(resolved) = self.memo.get() {
+            return resolved.clone();
+        }
+        let re_entered = BODY_RETURNS_IN_PROGRESS.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if stack.iter().any(|id| **id == *self.id) {
+                return true;
+            }
+            stack.push(self.id.clone());
+            false
+        });
+        if re_entered {
+            return Type::Unknown;
+        }
+        struct PopInProgress;
+        impl Drop for PopInProgress {
+            fn drop(&mut self) {
+                BODY_RETURNS_IN_PROGRESS.with(|stack| {
+                    stack.borrow_mut().pop();
+                });
+            }
+        }
+        let _pop = PopInProgress;
+        let Some(mut ctx) = self.environment.checker_context() else {
+            return Type::Unknown;
+        };
+        ctx.set_file_name(self.file_name.to_string());
+        if self.creation_scope.is_some() {
+            ctx.type_declaration_scope = self.creation_scope.clone();
+        }
+        // An environment holds no value table, so the body's calls into its own
+        // module (`prepareUrl` awaiting the imported `resultOf`) resolve against
+        // the declaring module's values as the program holds them now.
+        let scope = match self
+            .environment
+            .current_module_local_values(&self.file_name)
+        {
+            Some(values) => values.as_ref().clone(),
+            None => ctx
+                .symbols
+                .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+        };
+        let resolved = infer_body_return(&self.function, &self.parameter_types, scope, &mut ctx)
+            .unwrap_or(Type::Unknown);
+        // A force during module analysis runs with its scopes still incomplete,
+        // so only the check phase's answer is the one every later read may keep.
+        if crate::program::in_check_phase() {
+            let _ = self.memo.set(resolved.clone());
+        }
+        resolved
+    }
+}
+
+/// An unannotated class member's type, read from its initializer or getter
+/// body on first demand, with `this` bound to the class instance — tsc's
+/// `getWidenedTypeForVariableLikeDeclaration` for a property and the getter's
+/// `getReturnTypeFromBody`. Whatever cannot be typed cleanly stays `any`, which
+/// is what the member was before this inference existed.
+struct LazyInferredMember {
+    id: std::sync::Arc<str>,
+    member: std::sync::Arc<surge_ts_syntax::ParsedInferredMember>,
+    file_name: std::sync::Arc<str>,
+    environment: crate::context::DeclarationEnvironmentHandle,
+    creation_scope: Option<std::sync::Arc<crate::symbols::TypeDeclarationScope>>,
+    memo: std::sync::OnceLock<Type>,
+}
+
+impl surge_ts_types::ResolveReference for LazyInferredMember {
+    fn resolve(&self) -> Type {
+        if let Some(resolved) = self.memo.get() {
+            return resolved.clone();
+        }
+        let re_entered = BODY_RETURNS_IN_PROGRESS.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if stack.iter().any(|id| **id == *self.id) {
+                return true;
+            }
+            stack.push(self.id.clone());
+            false
+        });
+        // tsc answers a member whose type depends on itself with `any`.
+        if re_entered {
+            return Type::Any;
+        }
+        struct PopInProgress;
+        impl Drop for PopInProgress {
+            fn drop(&mut self) {
+                BODY_RETURNS_IN_PROGRESS.with(|stack| {
+                    stack.borrow_mut().pop();
+                });
+            }
+        }
+        let _pop = PopInProgress;
+        let Some(mut ctx) = self.environment.checker_context() else {
+            return Type::Any;
+        };
+        ctx.set_file_name(self.file_name.to_string());
+        if self.creation_scope.is_some() {
+            ctx.type_declaration_scope = self.creation_scope.clone();
+        }
+        let resolved =
+            infer_member_type(&self.member, &self.file_name, &self.environment, &mut ctx)
+                .unwrap_or(Type::Any);
+        if crate::program::in_check_phase() {
+            let _ = self.memo.set(resolved.clone());
+        }
+        resolved
+    }
+}
+
+fn infer_member_type(
+    member: &surge_ts_syntax::ParsedInferredMember,
+    file_name: &str,
+    environment: &crate::context::DeclarationEnvironmentHandle,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    // A script's declarations are globals, which lookup reaches without a table.
+    let mut scope = match environment.current_module_local_values(file_name) {
+        Some(values) => values.as_ref().clone(),
+        None => ctx
+            .symbols
+            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+    };
+    let instance = crate::infer::types::map_parsed_type(
+        surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            name: member.class_name.clone(),
+            span: None,
+            type_arguments: Vec::new(),
+        })),
+        ctx,
+    );
+    scope.insert(
+        "this".to_string(),
+        crate::symbols::SymbolInfo {
+            ty: instance,
+            kind: crate::symbols::SymbolKind::Const,
+            function_signature: None,
+        },
+    );
+    match &member.source {
+        surge_ts_syntax::ParsedInferredMemberSource::GetterBody(body) => {
+            infer_statements_return(body, scope, ctx)
+        }
+        surge_ts_syntax::ParsedInferredMemberSource::Initializer(initializer) => {
+            let mut shadow = body_inference_shadow_context(ctx);
+            let crate::infer::InferredExpression::Known(ty) =
+                crate::infer::infer_expression(initializer, &scope, &mut shadow)
+            else {
+                return None;
+            };
+            let ty = if member.keep_literal {
+                ty
+            } else {
+                crate::checks::expr::widen_type(&ty)
+            };
+            type_is_deeply_concrete(&ty).then_some(ty)
+        }
+    }
+}
+
+pub(crate) fn inferred_member_reference(
+    member: std::sync::Arc<surge_ts_syntax::ParsedInferredMember>,
+    ctx: &mut CheckerContext,
+) -> Type {
+    let id: std::sync::Arc<str> = std::sync::Arc::from(format!(
+        "{}{INFERRED_MEMBER_ID_TAG}{}.{}\u{0}{}",
+        ctx.file_name, member.class_name, member.member_name, member.member_start
+    ));
+    let display = format!("{}[\"{}\"]", member.class_name, member.member_name);
+    let reference = surge_ts_types::TypeReference::new(
+        id.clone(),
+        display,
+        Vec::new(),
+        std::sync::Arc::new(LazyInferredMember {
+            id,
+            member,
+            file_name: std::sync::Arc::from(ctx.file_name.as_ref()),
+            environment: ctx.declaration_environment(),
+            creation_scope: ctx.type_declaration_scope.clone(),
+            memo: std::sync::OnceLock::new(),
+        }),
+    );
+    Type::Reference(reference.rendered_structurally())
+}
+
+const BODY_RETURN_ID_TAG: &str = "\u{0}body-return\u{0}";
+const INFERRED_MEMBER_ID_TAG: &str = "\u{0}inferred-member\u{0}";
+
+/// What a call through an unannotated declaration evaluates to: the resolved
+/// return type, never the lazy reference standing in for it. Go's
+/// `getReturnTypeOfSignature` only ever hands back a settled type, and a
+/// reference that resolves to the sentinel is not recognised as one by the many
+/// sites that test the unpeeled type — destructuring such a result indexed a
+/// receiver rendered `unknown` (TS7053) instead of staying silent.
+pub(crate) fn settle_call_result(
+    expression: &surge_ts_syntax::ParsedExpression,
+    result: InferredExpression,
+) -> InferredExpression {
+    use surge_ts_syntax::ParsedExpression as E;
+    // A read of an inferred class member settles it the same way.
+    if !matches!(
+        expression,
+        E::Call { .. }
+            | E::PropertyCall { .. }
+            | E::OptionalPropertyCall { .. }
+            | E::ExpressionCall { .. }
+            | E::OptionalCall { .. }
+            | E::PropertyAccess { .. }
+            | E::OptionalPropertyAccess { .. }
+    ) {
+        return result;
+    }
+    let InferredExpression::Known(ty) = result else {
+        return result;
+    };
+    InferredExpression::Known(settle_body_return(ty))
+}
+
+fn is_settled_on_read(reference: &surge_ts_types::TypeReference) -> bool {
+    reference.id.contains(BODY_RETURN_ID_TAG) || reference.id.contains(INFERRED_MEMBER_ID_TAG)
+}
+
+/// A member or body-return type as a read of it sees it: resolved, never the
+/// lazy reference standing in for it.
+pub(crate) fn settle_lazy_read(ty: Type) -> Type {
+    settle_body_return(ty)
+}
+
+fn settle_body_return(ty: Type) -> Type {
+    match &ty {
+        Type::Reference(reference) if is_settled_on_read(reference) => reference.resolve(),
+        Type::Union(union)
+            if union.types().iter().any(|member| {
+                matches!(member, Type::Reference(reference) if is_settled_on_read(reference))
+            }) =>
+        {
+            surge_ts_types::union_type(
+                union.types().iter().cloned().map(settle_body_return).collect(),
+            )
+        }
+        _ => ty,
+    }
+}
+
+fn lazy_body_return_reference(
+    function: &ParsedFunctionDeclaration,
+    parameter_types: &[Type],
+    ctx: &mut CheckerContext,
+) -> Type {
+    let start = function.name_span.map_or(0, |span| span.start);
+    let id: std::sync::Arc<str> = std::sync::Arc::from(format!(
+        "{}{BODY_RETURN_ID_TAG}{}\u{0}{start}",
+        ctx.file_name, function.name
+    ));
+    let display = format!("ReturnType<typeof {}>", function.name);
+    let reference = surge_ts_types::TypeReference::new(
+        id.clone(),
+        display,
+        Vec::new(),
+        std::sync::Arc::new(LazyBodyReturn {
+            id,
+            function: std::sync::Arc::new(function.clone()),
+            parameter_types: std::sync::Arc::from(parameter_types),
+            file_name: std::sync::Arc::from(ctx.file_name.as_ref()),
+            environment: ctx.declaration_environment(),
+            creation_scope: ctx.type_declaration_scope.clone(),
+            memo: std::sync::OnceLock::new(),
+        }),
+    );
+    // tsc renders the inferred type, not a name for it.
+    Type::Reference(reference.rendered_structurally())
+}
+
+/// Whether a declaration's return type comes from its body at all: it is
+/// unannotated, has a body to read, and is not a generator (whose result is a
+/// `Generator`, not what its body completes with).
+fn return_type_comes_from_body(function: &ParsedFunctionDeclaration) -> bool {
+    function.return_type.is_none()
+        && !function.is_declare
+        && function.has_body
+        && !function.is_generator
+        && !function.body.is_empty()
+}
+
 fn inferred_declaration_return_type(
     function: &ParsedFunctionDeclaration,
     function_type: &FunctionType,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    use surge_ts_syntax::ParsedFunctionBodyStatement as BodyStatement;
-
-    if function.return_type.is_some()
-        || function.is_declare
-        || !function.has_body
-        || function.is_generator
-        || function.body.is_empty()
-    {
+    if !return_type_comes_from_body(function) {
         return None;
     }
-
-    let mut scope = ctx
+    let scope = ctx
         .symbols
         .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
-    for (parameter, parameter_type) in function
-        .parameters
-        .iter()
-        .zip(function_type.parameters().iter())
-    {
+    infer_body_return(function, function_type.parameters(), scope, ctx)
+}
+
+/// The body walk behind [`inferred_declaration_return_type`] and
+/// [`LazyBodyReturn`]: every reachable `return`, unioned and widened, published
+/// only when it is concrete at every depth.
+fn infer_body_return(
+    function: &ParsedFunctionDeclaration,
+    parameter_types: &[Type],
+    mut scope: SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    for (parameter, parameter_type) in function.parameters.iter().zip(parameter_types.iter()) {
         if let Some(name) = signature::written_binding_names(std::slice::from_ref(parameter))
             .into_iter()
             .flatten()
@@ -78,57 +457,156 @@ fn inferred_declaration_return_type(
             );
         }
     }
+    infer_statements_return(&function.body, scope, ctx)
+}
 
-    let usable_type = |ty: &Type| !ty.is_unknown() && !matches!(ty, Type::Any);
-    let diagnostics_before = ctx.diagnostics().len();
+/// [`infer_body_return`] over a body with its bindings already in `scope`.
+fn infer_statements_return(
+    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+    mut scope: SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as BodyStatement;
+
+    // Deeply concrete: a shallow check passes an object whose *member* is the
+    // degradation sentinel, and publishing that as a declaration's return type
+    // hands every consumer a shape that silences its own checks. tsc has no such
+    // condition — it has no sentinel — so this is surge's own guard, and it is
+    // what makes inferring a branchy body affordable.
+    let usable_type = |ty: &Type| type_is_deeply_concrete(ty);
+    // The whole walk runs against a shadow, so nothing it resolves is published
+    // where the check phase can read it. Its diagnostics die with it.
+    let mut shadow = body_inference_shadow_context(ctx);
     let mut returned: Vec<Type> = Vec::new();
     let mut usable = true;
-    for statement in &function.body {
-        match statement {
-            BodyStatement::VariableDeclaration(variable) => {
-                if variable.declared_type.is_none()
-                    && let Some(initializer) = variable.initializer.as_ref()
-                    && let crate::infer::InferredExpression::Known(ty) =
-                        crate::infer::infer_expression(initializer, &scope, ctx)
-                {
-                    scope.insert(
-                        variable.name.clone(),
-                        crate::symbols::SymbolInfo {
-                            ty,
-                            kind: crate::symbols::SymbolKind::Const,
-                            function_signature: None,
-                        },
-                    );
-                }
+
+    // Every `return` the body can reach, branches included: tsc's
+    // `getReturnTypeFromBody` unions them all, and stopping at the first
+    // statement that carries control flow left an early return
+    // (`if (!opts.connectionParams) return url;`) — the shape tRPC's
+    // `prepareUrl` has — with no inferred type at all.
+    fn collect(
+        body: &[BodyStatement],
+        scope: &mut crate::symbols::SymbolTable,
+        returned: &mut Vec<Type>,
+        usable: &mut bool,
+        usable_type: &impl Fn(&Type) -> bool,
+        ctx: &mut CheckerContext,
+    ) {
+        for statement in body {
+            if !*usable {
+                return;
             }
-            BodyStatement::Return(statement) => match statement.expression.as_ref() {
-                Some(expression) => {
-                    match crate::infer::infer_expression(expression, &scope, ctx) {
-                        crate::infer::InferredExpression::Known(ty) if usable_type(&ty) => {
-                            returned.push(ty)
-                        }
-                        _ => usable = false,
+            match statement {
+                BodyStatement::VariableDeclaration(variable) => {
+                    if variable.declared_type.is_none()
+                        && let Some(initializer) = variable.initializer.as_ref()
+                        && let crate::infer::InferredExpression::Known(ty) =
+                            crate::infer::infer_expression(initializer, scope, ctx)
+                    {
+                        scope.insert(
+                            variable.name.clone(),
+                            crate::symbols::SymbolInfo {
+                                ty,
+                                kind: crate::symbols::SymbolKind::Const,
+                                function_signature: None,
+                            },
+                        );
                     }
                 }
-                None => returned.push(Type::Undefined),
-            },
-            BodyStatement::Throw(_)
-            | BodyStatement::Assignment(_)
-            | BodyStatement::ThisPropertyAssignment(_)
-            | BodyStatement::MemberAssignment(_)
-            | BodyStatement::Expression(_)
-            | BodyStatement::Function(_)
-            | BodyStatement::TypeAlias(_)
-            | BodyStatement::Continue
-            | BodyStatement::Break => {}
-            _ => usable = false,
-        }
-        if !usable {
-            break;
+                BodyStatement::Return(statement) => match statement.expression.as_ref() {
+                    Some(expression) => {
+                        match crate::infer::infer_expression(expression, scope, ctx) {
+                            crate::infer::InferredExpression::Known(ty) if usable_type(&ty) => {
+                                returned.push(ty)
+                            }
+                            _ => *usable = false,
+                        }
+                    }
+                    None => returned.push(Type::Undefined),
+                },
+                BodyStatement::Block(block) => {
+                    collect(block, scope, returned, usable, usable_type, ctx)
+                }
+                BodyStatement::If(if_statement) => {
+                    collect(
+                        &if_statement.then_body,
+                        scope,
+                        returned,
+                        usable,
+                        usable_type,
+                        ctx,
+                    );
+                    collect(
+                        &if_statement.else_body,
+                        scope,
+                        returned,
+                        usable,
+                        usable_type,
+                        ctx,
+                    );
+                }
+                BodyStatement::While(while_statement) => collect(
+                    &while_statement.body,
+                    scope,
+                    returned,
+                    usable,
+                    usable_type,
+                    ctx,
+                ),
+                BodyStatement::ForOf(for_of) => {
+                    collect(&for_of.body, scope, returned, usable, usable_type, ctx)
+                }
+                BodyStatement::Switch(switch_statement) => {
+                    for case in &switch_statement.cases {
+                        collect(&case.consequent, scope, returned, usable, usable_type, ctx);
+                    }
+                }
+                BodyStatement::Try(try_statement) => {
+                    collect(
+                        &try_statement.block,
+                        scope,
+                        returned,
+                        usable,
+                        usable_type,
+                        ctx,
+                    );
+                    if let Some(handler) = &try_statement.handler {
+                        collect(&handler.body, scope, returned, usable, usable_type, ctx);
+                    }
+                    collect(
+                        &try_statement.finalizer,
+                        scope,
+                        returned,
+                        usable,
+                        usable_type,
+                        ctx,
+                    );
+                }
+                BodyStatement::Throw(_)
+                | BodyStatement::Assignment(_)
+                | BodyStatement::ThisPropertyAssignment(_)
+                | BodyStatement::MemberAssignment(_)
+                | BodyStatement::Expression(_)
+                | BodyStatement::Function(_)
+                | BodyStatement::TypeAlias(_)
+                | BodyStatement::Interface(_)
+                | BodyStatement::Class(_)
+                | BodyStatement::Continue
+                | BodyStatement::Break => {}
+            }
         }
     }
-    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
 
+    collect(
+        body,
+        &mut scope,
+        &mut returned,
+        &mut usable,
+        &usable_type,
+        &mut shadow,
+    );
+    drop(shadow);
     // tsc widens the fresh literals a returned expression carries
     // (`getReturnTypeFromBody` runs the result through the widening machinery),
     // so `return { importName: "trpc" }` is `{ importName: string }`. Freezing
@@ -140,18 +618,102 @@ fn inferred_declaration_return_type(
     Some(inferred)
 }
 
-/// `SURGE_INFER_DECLARATION_RETURN_TYPES=1`: infer an unannotated function
-/// declaration's return type from its body (see
-/// [`inferred_declaration_return_type`]). Any other non-empty value is a file
-/// substring filter, so the effect can be bisected across the corpus without a
-/// rebuild.
+/// Whether a type carries no permissive or unresolved part anywhere: neither
+/// surge's degradation sentinel nor `any`, at any depth.
+///
+/// Both halves are load-bearing for publishing an *inferred* return type. The
+/// sentinel silences a consumer's own checks, and so does a nested `any`: on
+/// tRPC's `packages/upgrade` the shallow check let through object returns whose
+/// members were `any`, and 16 diagnostics surge reported correctly — and tsc
+/// reports too — disappeared, because the consumer's receiver started answering
+/// every member. When the body cannot be typed this cleanly the declaration keeps
+/// the sentinel, which is the behavior without this inference at all.
+fn type_is_deeply_concrete(ty: &Type) -> bool {
+    fn permissive(ty: &Type, depth: usize) -> bool {
+        if depth > 8 {
+            return true;
+        }
+        match ty {
+            Type::Any | Type::Unknown | Type::GenuineUnknown | Type::ErrorType => true,
+            Type::TypeParameter(_) => true,
+            Type::Array(element) => permissive(element, depth + 1),
+            Type::Tuple(elements) => elements
+                .iter()
+                .any(|element| permissive(element, depth + 1)),
+            Type::Union(union) => union
+                .types()
+                .iter()
+                .any(|member| permissive(member, depth + 1)),
+            Type::Reference(reference) => reference
+                .arguments
+                .iter()
+                .any(|argument| permissive(argument, depth + 1)),
+            Type::Function(function) => {
+                function
+                    .parameters()
+                    .iter()
+                    .any(|parameter| permissive(parameter, depth + 1))
+                    || permissive(function.return_type(), depth + 1)
+            }
+            Type::Object(object) => {
+                object
+                    .properties
+                    .values()
+                    .any(|property| permissive(&property.ty, depth + 1))
+                    || object
+                        .string_index_type
+                        .as_deref()
+                        .is_some_and(|index| permissive(index, depth + 1))
+            }
+            _ => false,
+        }
+    }
+    !permissive(ty, 0)
+}
+
+/// How an unannotated declaration's return type (and an unannotated class
+/// member's type) is read from its body, by `SURGE_INFER_DECLARATION_RETURN_TYPES`:
+///
+/// - unset, empty or `lazy` (the default): a [`LazyBodyReturn`] /
+///   [`LazyInferredMember`] resolved on first demand, as Go's
+///   `getReturnTypeOfSignature` does. `lazy:<substring>` limits it to files
+///   whose name contains the substring, to bisect which declaration moves a
+///   diagnostic.
+/// - `0` or `off`: no inference; the declaration keeps the sentinel and the
+///   member keeps `any`.
+/// - `1`, or any other value as a file substring: the eager walk during
+///   signature collection. Kept for comparison only — running `infer_expression`
+///   there, under module analysis's incomplete scopes, deleted 16 trpc
+///   diagnostics surge otherwise reports (measured 2026-09-21), which is what the
+///   lazy form exists to avoid.
+pub(crate) fn lazy_body_returns(file_name: &str) -> bool {
+    static SETTING: std::sync::OnceLock<Option<Option<String>>> = std::sync::OnceLock::new();
+    let setting = SETTING.get_or_init(|| {
+        match std::env::var("SURGE_INFER_DECLARATION_RETURN_TYPES")
+            .ok()
+            .as_deref()
+        {
+            None | Some("") | Some("lazy") => Some(None),
+            Some(value) => value
+                .strip_prefix("lazy:")
+                .map(|filter| Some(filter.to_string())),
+        }
+    });
+    match setting {
+        None => false,
+        Some(None) => true,
+        Some(Some(filter)) => file_name.contains(filter.as_str()),
+    }
+}
+
 fn infer_declaration_return_types(file_name: &str) -> bool {
     static SETTING: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     match SETTING
         .get_or_init(|| std::env::var("SURGE_INFER_DECLARATION_RETURN_TYPES").ok())
         .as_deref()
     {
-        None | Some("") => false,
+        None | Some("") | Some("lazy") | Some("0") | Some("off") => false,
+        Some(value) if value.starts_with("lazy:") => false,
         Some("1") => true,
         Some(filter) => file_name.contains(filter),
     }
@@ -214,10 +776,28 @@ pub(crate) fn collect_function_declaration_signature(
         map_signature(ctx)
     };
 
-    let function_type = match infer_declaration_return_types(&ctx.file_name)
-        .then(|| inferred_declaration_return_type(function, &function_type, ctx))
-        .flatten()
-    {
+    // A declaration whose body can mention a type parameter is left out — its
+    // own, or an enclosing generic's. Go computes such a return once and
+    // instantiates it per call (`instantiateType(getReturnTypeOfSignature(
+    // sig.target), sig.mapper)`); a `LazyBodyReturn` is opaque to that
+    // substitution. `createDeferred<TValue>()` called where the context supplies
+    // `TValue` came back with a bare `TValue` and assignment narrowing dropped
+    // the member it should have kept; a component declared inside
+    // `createHydrationStreamProvider<TShape>` kept a bare `TShape` in its props.
+    let lazy_return = lazy_body_returns(&ctx.file_name)
+        && function.type_parameters.is_empty()
+        && ctx
+            .type_parameter_scopes
+            .iter()
+            .all(|scope| scope.is_empty())
+        && return_type_comes_from_body(function);
+    let function_type = match lazy_return
+        .then(|| lazy_body_return_reference(function, function_type.parameters(), ctx))
+        .or_else(|| {
+            infer_declaration_return_types(&ctx.file_name)
+                .then(|| inferred_declaration_return_type(function, &function_type, ctx))
+                .flatten()
+        }) {
         Some(return_type) => FunctionType::new(
             function_type.parameters().to_vec(),
             return_type,
@@ -242,6 +822,9 @@ pub(crate) fn collect_function_declaration_signature(
         symbols,
         false,
         function.has_body,
+        // `allow_lazy_dependency_signature` is "the file declares this name
+        // once"; a body beside other declarations is their implementation.
+        function.has_body && !allow_lazy_dependency_signature,
     );
 
     if duplicate {
@@ -285,6 +868,7 @@ pub(crate) fn check_function_declaration(
         is_async,
         ..
     } = function;
+    check_type_parameter_declarations(&type_parameters, ctx);
 
     with_type_parameter_scope(&type_parameters, ctx, |ctx| {
         let signature_info = function_signature_info(
@@ -320,6 +904,7 @@ pub(crate) fn check_function_declaration(
                 symbols,
                 first_registration,
                 has_body,
+                has_body && !first_registration,
             )
         };
 
@@ -372,12 +957,130 @@ pub(crate) fn check_function_declaration(
     });
 }
 
+/// Every non-arrow function body binds `arguments` (tsc's `argumentsSymbol`,
+/// typed by the global `IArguments`); an arrow sees its enclosing one.
+pub(crate) fn bind_arguments_object(scopes: &mut ScopeStack, ctx: &mut CheckerContext) {
+    let ty = crate::infer::map_parsed_type(
+        surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            name: "IArguments".to_string(),
+            span: None,
+            type_arguments: Vec::new(),
+        })),
+        ctx,
+    );
+    scopes.insert_current(
+        "arguments",
+        crate::symbols::SymbolInfo {
+            ty,
+            kind: crate::symbols::SymbolKind::Const,
+            function_signature: None,
+        },
+    );
+}
+
+/// A `function` declared inside another function's body, checked the way a
+/// module-level one is but over the scope that encloses it. It binds its own
+/// `this`, so the enclosing method's does not leak in.
+pub(crate) fn check_nested_function_declaration(
+    function: ParsedFunctionDeclaration,
+    enclosing: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    if function.is_declare || !function.has_body {
+        return;
+    }
+    let mut symbols = enclosing.clone_with_reason(TypeCopyReason::FunctionBodySetup);
+    if !function.has_this_parameter {
+        let _ = symbols.insert(
+            "this",
+            crate::symbols::SymbolInfo {
+                ty: Type::Any,
+                kind: crate::symbols::SymbolKind::Const,
+                function_signature: None,
+            },
+        );
+    }
+    let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+    let ParsedFunctionDeclaration {
+        has_this_parameter,
+        this_parameter_type,
+        name,
+        name_span,
+        type_parameters,
+        parameters,
+        return_type,
+        return_type_span,
+        body,
+        body_reads,
+        is_generator,
+        is_async,
+        ..
+    } = function;
+    check_type_parameter_declarations(&type_parameters, ctx);
+    with_type_parameter_scope(&type_parameters, ctx, |ctx| {
+        let signature_info = function_signature_info(
+            &type_parameters,
+            &parameters,
+            return_type.as_ref(),
+            &ctx.file_name,
+        );
+        let function_type = map_function_signature(
+            &parameters,
+            return_type.as_ref(),
+            &type_parameters,
+            None,
+            ctx,
+        );
+        ctx.nested_function_scope = Some(std::sync::Arc::new(symbols));
+        check_function_body_with_signature(
+            name,
+            parameters,
+            body,
+            &function_type,
+            &type_parameters,
+            Some(signature_info),
+            return_type.is_some(),
+            return_type_span.or(name_span),
+            Some(body_reads.as_slice()),
+            is_generator,
+            is_async,
+            has_this_parameter,
+            this_parameter_type,
+            ctx,
+        );
+    });
+    ctx.symbols = saved_symbols;
+}
+
 pub(crate) fn check_function_declaration_body(
     function: ParsedFunctionDeclaration,
     function_type: &FunctionType,
     type_parameters: &[ParsedTypeParameter],
     ctx: &mut CheckerContext,
 ) {
+    // A return type read from the body is not an annotation, and Go checks a
+    // return statement only against the annotation (`checkReturnStatement` via
+    // `getReturnTypeFromAnnotation`, nil here). Handing the body its own
+    // `LazyBodyReturn` as the expectation lifted the degraded-expectation
+    // suppression the plain sentinel gives: a component's returned JSX then
+    // reported its callback props as implicit `any`.
+    let settled_signature;
+    let function_type = if function.return_type.is_none()
+        && matches!(
+            function_type.return_type(),
+            Type::Reference(reference) if reference.id.contains(BODY_RETURN_ID_TAG)
+        ) {
+        settled_signature = FunctionType::new(
+            function_type.parameters().to_vec(),
+            Type::Unknown,
+            function_type.is_variadic(),
+            function_type.required_parameter_count(),
+        )
+        .with_parameter_names(signature::written_binding_names(&function.parameters));
+        &settled_signature
+    } else {
+        function_type
+    };
     let start = Instant::now();
     let ParsedFunctionDeclaration {
         has_this_parameter,
@@ -484,7 +1187,11 @@ fn contextual_rest_parameter_type(expected_type: &FunctionType, position: usize)
         });
     }
 
-    let fixed_end = if rest_and_element.is_some() { count - 1 } else { count };
+    let fixed_end = if rest_and_element.is_some() {
+        count - 1
+    } else {
+        count
+    };
     if position >= fixed_end {
         return Some(Type::Tuple(Vec::new()));
     }
@@ -506,7 +1213,9 @@ fn contextual_rest_parameter_type(expected_type: &FunctionType, position: usize)
         .collect::<Vec<_>>();
     Some(match rest_and_element {
         None => Type::Tuple(leading),
-        Some((Type::Tuple(elements), _)) => Type::Tuple(leading.into_iter().chain(elements).collect()),
+        Some((Type::Tuple(elements), _)) => {
+            Type::Tuple(leading.into_iter().chain(elements).collect())
+        }
         Some((Type::OpenTuple(open), _)) => Type::OpenTuple(surge_ts_types::OpenTupleType {
             leading: leading.into_iter().chain(open.leading).collect(),
             rest: open.rest,
@@ -522,14 +1231,16 @@ fn contextual_rest_parameter_type(expected_type: &FunctionType, position: usize)
 
 fn without_undefined(ty: Type) -> Type {
     match &ty {
-        Type::Union(union) if union.types().contains(&Type::Undefined) => surge_ts_types::union_type(
-            union
-                .types()
-                .iter()
-                .filter(|member| !matches!(member, Type::Undefined))
-                .cloned()
-                .collect(),
-        ),
+        Type::Union(union) if union.types().contains(&Type::Undefined) => {
+            surge_ts_types::union_type(
+                union
+                    .types()
+                    .iter()
+                    .filter(|member| !matches!(member, Type::Undefined))
+                    .cloned()
+                    .collect(),
+            )
+        }
         _ => ty,
     }
 }
@@ -675,41 +1386,40 @@ pub(crate) fn check_arrow_function_expression_with_expected_type(
 /// [`check_arrow_function_expression_with_expected_type`] with the span tsc
 /// anchors a whole-signature mismatch on — the assignment target, not the
 /// failing return.
-/// `SURGE_INFER_BLOCK_RETURN_TYPES=1`: infer an unannotated *block* body's
-/// return type from its `return` statements, the way an expression body's
-/// already is (tsc's `getReturnTypeFromBody`).
+/// An unannotated arrow or function expression with a *block* body takes its
+/// return type from its `return` statements, as tsc's `getReturnTypeFromBody`
+/// does. On by default since 2026-09-22; `SURGE_INFER_BLOCK_RETURN_TYPES=0`
+/// turns it off. Before it, every `const f = () => { return … }` was the
+/// sentinel and silenced each use of `f`.
 ///
-/// Measured 2026-09-16. This is the root of tRPC's router cluster, not proxy
-/// modelling: `createTRPCNext({ config() { return opts; } })` cannot infer
-/// `TRouter` because the method hands back the degradation sentinel. With this
-/// on, an isolated probe matches tsc exactly and a directly-typed options value
-/// closes both remaining tRPC false positives.
-///
-/// It is off because it is only half the fix. Function *declarations* infer
-/// their return type on a different path and still degrade, so
-/// `testServerAndClientResource(appRouter)` — and with it the real call site —
-/// stays unresolved; and making the source concrete exposes a latent
-/// false positive where the *target* still carries an unsubstituted type
-/// parameter (`NextComponentType<…, AppPropsType<any, P>>`), which took trpc
-/// from 2 to 33. zod 0/0, the sweep and every other corpus are unchanged.
+/// Turning it on first opened 31 trpc false positives, each a missing tsc rule
+/// the sentinel had hidden: a function against an `any` index signature,
+/// candidate widening that dropped surge's openness marker, filter callbacks'
+/// inferred type predicates, and array elements whose declared literal members
+/// were widened. Only an arrow with no contextual type is inferred here; a
+/// contextually typed block callback still keeps the sentinel.
 fn infer_block_body_return_types() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED
-        .get_or_init(|| std::env::var("SURGE_INFER_BLOCK_RETURN_TYPES").as_deref() == Ok("1"))
+    *ENABLED.get_or_init(|| std::env::var("SURGE_INFER_BLOCK_RETURN_TYPES").as_deref() != Ok("0"))
 }
 
 /// tsc's `getReturnTypeFromBody` widens a single literal return type unless the
 /// contextual return type is literal-like for it (`isLiteralOfContextualType`),
 /// so `() => 1` returns `number` while `(): 1 => 1` and `c ? "a" : "b"` keep
 /// their literals. A contextual type surge could not settle keeps the literal.
-fn widen_unit_return_type(body_type: Type, contextual_return_type: Option<&Type>) -> Type {
+pub(crate) fn widen_unit_return_type(
+    body_type: Type,
+    contextual_return_type: Option<&Type>,
+) -> Type {
     if !matches!(
         body_type,
         Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
     ) {
         return body_type;
     }
-    if contextual_return_type.is_some_and(|contextual| is_literal_of_contextual_type(&body_type, contextual)) {
+    if contextual_return_type
+        .is_some_and(|contextual| is_literal_of_contextual_type(&body_type, contextual))
+    {
         return body_type;
     }
     crate::checks::expr::widen_type(&body_type)
@@ -718,7 +1428,9 @@ fn widen_unit_return_type(body_type: Type, contextual_return_type: Option<&Type>
 fn is_literal_of_contextual_type(candidate: &Type, contextual: &Type) -> bool {
     match contextual {
         Type::Unknown | Type::TypeParameter(_) => true,
-        Type::Reference(reference) => is_literal_of_contextual_type(candidate, &reference.resolve()),
+        Type::Reference(reference) => {
+            is_literal_of_contextual_type(candidate, &reference.resolve())
+        }
         Type::Union(union) => union
             .types()
             .iter()
@@ -788,11 +1500,13 @@ pub(crate) fn check_arrow_function_expression_anchored(
         span: arrow_span,
     } = arrow;
     let is_argument = std::mem::take(&mut ctx.next_arrow_is_argument);
+    check_type_parameter_declarations(&type_parameters, ctx);
 
     // An arrow does not bind `this`, so it keeps whatever the enclosing function
     // established; a `function` expression and an object-literal method both
     // lower to this shape but bind their own.
     let outer_this_is_implicitly_any = ctx.this_is_implicitly_any;
+    let outer_constructor_writable_members = ctx.constructor_writable_members.take();
     match this_binding {
         surge_ts_syntax::ParsedThisBinding::Inherited => {}
         surge_ts_syntax::ParsedThisBinding::Own => ctx.this_is_implicitly_any = false,
@@ -877,14 +1591,21 @@ pub(crate) fn check_arrow_function_expression_anchored(
 
         let mut scopes =
             ScopeStack::from_root(symbols.clone_with_reason(TypeCopyReason::FunctionBodySetup));
+        scopes.mark_function_boundary();
         scopes.push_function_scope();
+        if !matches!(this_binding, surge_ts_syntax::ParsedThisBinding::Inherited) {
+            bind_arguments_object(&mut scopes, ctx);
+        }
         // A `function` expression binds its own `this`; without a `this`
         // parameter it has no type, so the enclosing scope's `this` must not
         // leak in. tsc takes `this` from the contextual signature here — surge
         // does not model that, and reading the enclosing class instead reported
         // its members missing (`ws.addEventListener('message', function () {
         // this.send(…) })` inside a class).
-        if matches!(this_binding, surge_ts_syntax::ParsedThisBinding::ImplicitAny) {
+        if matches!(
+            this_binding,
+            surge_ts_syntax::ParsedThisBinding::ImplicitAny
+        ) {
             scopes.insert_current(
                 "this",
                 crate::symbols::SymbolInfo {
@@ -906,22 +1627,22 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 .unwrap_or_else(|| parameter_types.get(index).unwrap_or(&Type::Any));
             insert_parameter_bindings(parameter, parameter_type, &mut scopes);
         }
+        crate::checks::function::with_type_parameter_scope(&type_parameters, ctx, |ctx| {
+            for (index, parameter) in parameters.iter().enumerate() {
+                check_binding_pattern_defaults(
+                    &parameter.binding_name,
+                    parameter_types.get(index),
+                    &scopes,
+                    ctx,
+                );
+            }
+        });
 
         if should_track_unused_parameters(ctx) {
             emit_unused_parameters(&parameters, &body_reads, ctx);
         }
 
         let visible_symbols = visible_symbols(&scopes);
-        for (index, parameter) in parameters.iter().enumerate() {
-            if let Some(parameter_type) = parameter_types.get(index) {
-                check_binding_pattern_defaults(
-                    &parameter.binding_name,
-                    parameter_type,
-                    &visible_symbols,
-                    ctx,
-                );
-            }
-        }
         // tsc's `unwrapReturnType`: an async body is typed against the awaited
         // return type (`async (): Promise<R> => ({ … })` reads the literal
         // against `R`).
@@ -930,14 +1651,26 @@ pub(crate) fn check_arrow_function_expression_anchored(
         } else {
             return_type.clone()
         };
+        let saved_never_initialized = ctx.inherited_never_initialized.clone();
         match body {
             ParsedArrowFunctionBody::Expression(expression) => {
+                // An expression body is a flow container of its own; only a
+                // never-initialized outer `let` can be unassigned in it.
+                if let Some(own_flow) = crate::flow::expression_container_flow(&parameters, ctx) {
+                    crate::flow::check_parameter_default_flow(&parameters, &own_flow, ctx);
+                    let _ =
+                        crate::flow::check_expression_flow(&expression, None, &own_flow, 0, ctx);
+                }
+                ctx.inherited_never_initialized
+                    .retain(|name| !crate::flow::binds_parameter(&parameters, name));
                 let return_type_for_body = match &body_return_type {
-                    Type::Any
-                    | Type::Unknown
-                    | Type::GenuineUnknown
-                    | Type::TypeParameter(_)
-                    | Type::Void => None,
+                    Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+                        None
+                    }
+                    // A *contextual* `void` accepts any return (`cb: () => void`
+                    // takes `() => 1`); a written `: void` is an annotation like
+                    // any other and tsc checks the returned value against it.
+                    Type::Void if !has_explicit_return_type => None,
                     ty => Some(ty),
                 };
                 let inferred_body = match return_type_for_body {
@@ -956,14 +1689,15 @@ pub(crate) fn check_arrow_function_expression_anchored(
                         )
                     }
                     Some(return_type_for_body) => {
-                        let inferred = crate::checks::expected::evaluate_return_expression_with_expected_type(
-                            &expression,
-                            body_span,
-                            None,
-                            return_type_for_body,
-                            &visible_symbols,
-                            ctx,
-                        );
+                        let inferred =
+                            crate::checks::expected::evaluate_return_expression_with_expected_type(
+                                &expression,
+                                body_span,
+                                None,
+                                return_type_for_body,
+                                &visible_symbols,
+                                ctx,
+                            );
                         // tsc's `checkReturnExpression` relates an expression body
                         // to the annotation as a whole, at the body — awaited on
                         // both sides for an async one (`unwrapReturnType`).
@@ -991,8 +1725,10 @@ pub(crate) fn check_arrow_function_expression_anchored(
                                 body_type,
                                 return_type_for_body,
                             );
-                            let source_name =
-                                crate::checks::expr::source_display_name(body_type, &reported_target);
+                            let source_name = crate::checks::expr::source_display_name(
+                                body_type,
+                                &reported_target,
+                            );
                             let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
                                 body_type,
                                 &reported_target,
@@ -1000,18 +1736,24 @@ pub(crate) fn check_arrow_function_expression_anchored(
                                 &reported_target.name(),
                                 ctx.file_name.clone(),
                             );
-                            ctx.push(crate::spans::diagnostic_with_syntax_span(diagnostic, body_span));
+                            ctx.push(crate::spans::diagnostic_with_syntax_span(
+                                diagnostic, body_span,
+                            ));
                         }
                         inferred
                     }
                 };
 
                 if !has_explicit_return_type {
-                    if let InferredExpression::Known(body_type) = inferred_body {
-                        if !body_type.is_unknown() {
+                    if let Some(body_type) = inferred_body.flowing_type() {
+                        if matches!(body_type, Type::ErrorType) {
+                            return_type = Type::ErrorType;
+                        } else if !body_type.is_unknown() {
                             if expected_type.is_some()
                                 && !is_async
-                                && parameters.iter().all(|parameter| parameter.declared_type.is_none())
+                                && parameters
+                                    .iter()
+                                    .all(|parameter| parameter.declared_type.is_none())
                                 && report_contextual_body_mismatch(
                                     &body_type,
                                     &return_type,
@@ -1028,7 +1770,8 @@ pub(crate) fn check_arrow_function_expression_anchored(
                                     expected_type.map(|expected| expected.return_type()),
                                 );
                                 if is_async && !is_generator {
-                                    return_type = crate::checks::call::promise_of(&return_type, ctx);
+                                    return_type =
+                                        crate::checks::call::promise_of(&return_type, ctx);
                                 }
                             }
                         }
@@ -1041,13 +1784,35 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 let mut flow_state = FunctionFlowState::new(
                     flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
                 );
+                let _ = crate::flow::enter_container(
+                    &type_parameters,
+                    &parameters,
+                    &statements,
+                    &mut flow_state,
+                    ctx,
+                );
+                crate::flow::check_parameter_default_flow(&parameters, &flow_state, ctx);
+                flow_state.hoist_vars(
+                    crate::flow::collect_hoisted_vars(&statements)
+                        .into_iter()
+                        .filter(|name| !crate::flow::binds_parameter(&parameters, name))
+                        .collect(),
+                );
                 let body_flow = analyze_function_body_flow(&statements);
+                // Whether a `default`-less switch covers its discriminant is only
+                // known once the body is checked.
+                let recheck_body = (body_flow.guarantees_value_return || body_flow.guarantees_exit)
+                    .then(|| body_has_defaultless_switch(&statements).then(|| statements.clone()))
+                    .flatten();
+                let tail_call = crate::checks::expr::tail_call_key(&statements);
                 let return_type_for_body = match &return_type {
-                    Type::Any
-                    | Type::Unknown
-                    | Type::GenuineUnknown
-                    | Type::TypeParameter(_)
-                    | Type::Void => None,
+                    Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+                        None
+                    }
+                    // A *contextual* `void` accepts any return (`cb: () => void`
+                    // takes `() => 1`); a written `: void` is an annotation like
+                    // any other and tsc checks the returned value against it.
+                    Type::Void if !has_explicit_return_type => None,
                     ty => Some(ty),
                 };
                 // A contextual return type this arrow did not annotate is not a
@@ -1070,6 +1835,19 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     ctx,
                 );
                 ctx.in_async_body = outer_async_body;
+                let body_flow = match recheck_body {
+                    Some(body)
+                        if !ctx.non_exhaustive_switches.is_empty()
+                            || !ctx.exhaustive_switches.is_empty() =>
+                    {
+                        crate::flow::with_non_exhaustive_switches(
+                            &ctx.non_exhaustive_switches,
+                            &ctx.exhaustive_switches,
+                            || analyze_function_body_flow(&body),
+                        )
+                    }
+                    _ => body_flow,
+                };
                 // The flow verdict is checked first: the return-type gate walks
                 // the whole type, which on a large annotation is far costlier
                 // than the body it guards.
@@ -1077,6 +1855,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     && !is_generator
                     && !body_flow.guarantees_exit
                     && !body_flow.guarantees_value_return
+                    && !tail_call.is_some_and(|key| ctx.never_returning_calls.contains(&key))
                     && should_check_missing_return(&body_return_type)
                 {
                     emit_missing_return_diagnostic(
@@ -1114,13 +1893,32 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 // router unmodelled at `createTRPCNext({ config() { … } })`.
                 // A degraded return stays the sentinel: inferring from it would
                 // turn "could not model" into a decision.
+                // A contextual return that says nothing (`any` from a lib helper,
+                // the sentinel, an uninstantiated parameter) leaves the body's
+                // returns to decide, as tsc's `getReturnTypeFromBody` always does.
+                let contextual_return =
+                    expected_type.map(|expected| expected.return_type().clone());
+                let contextual_return_is_open = contextual_return.as_ref().is_none_or(|ty| {
+                    matches!(ty, Type::Any | Type::Unknown | Type::TypeParameter(_))
+                });
                 if infer_block_body_return_types()
                     && !has_explicit_return_type
-                    && expected_type.is_none()
+                    && contextual_return_is_open
                 {
                     let returned = ctx.body_return_types().to_vec();
-                    if !returned.is_empty() && returned.iter().all(|ty| !ty.is_unknown()) {
-                        let mut members = returned;
+                    if !returned.is_empty()
+                        && returned
+                            .iter()
+                            .all(|ty| !ty.is_unknown() || matches!(ty, Type::ErrorType))
+                    {
+                        // With no contextual return type, a returned literal
+                        // widens (`() => { return 1; }` is `() => number`).
+                        let mut members: Vec<Type> = returned
+                            .into_iter()
+                            .map(|member| {
+                                widen_unit_return_type(member, contextual_return.as_ref())
+                            })
+                            .collect();
                         if !body_flow.guarantees_exit {
                             members.push(Type::Undefined);
                         }
@@ -1132,6 +1930,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 let contextually_void = expected_type
                     .is_some_and(|expected_type| matches!(expected_type.return_type(), Type::Void));
                 if !has_explicit_return_type
+                    && !is_generator
                     && !contextually_void
                     && !returned_void_like
                     && ctx.options.no_implicit_returns
@@ -1142,6 +1941,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 }
             }
         }
+        ctx.inherited_never_initialized = saved_never_initialized;
 
         if expected_type
             .is_some_and(|expected_type| matches!(expected_type.return_type(), Type::Void))
@@ -1160,5 +1960,6 @@ pub(crate) fn check_arrow_function_expression_anchored(
     });
 
     ctx.this_is_implicitly_any = outer_this_is_implicitly_any;
+    ctx.constructor_writable_members = outer_constructor_writable_members;
     result
 }

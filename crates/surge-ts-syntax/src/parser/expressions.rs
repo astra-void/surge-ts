@@ -96,18 +96,6 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         Expression::ParenthesizedExpression(parenthesized_expression) => {
             return parse_expression(&parenthesized_expression.expression);
         }
-        Expression::SequenceExpression(sequence) => ParsedExpression::Sequence {
-            expressions: sequence
-                .expressions
-                .iter()
-                .map(|expression| parse_expression(expression).0)
-                .collect(),
-            expression_spans: sequence
-                .expressions
-                .iter()
-                .map(|expression| Some(text_span_from_oxc_span(expression.span())))
-                .collect(),
-        },
         Expression::AwaitExpression(await_expression) => {
             let (operand, operand_span) = parse_expression(&await_expression.argument);
             return (
@@ -122,6 +110,16 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
             parse_conditional_expression(conditional_expression)
                 .unwrap_or(ParsedExpression::Unknown)
         }
+        Expression::SequenceExpression(sequence) => ParsedExpression::Sequence {
+            expressions: sequence
+                .expressions
+                .iter()
+                .map(|expression| {
+                    let (expression, span) = parse_expression(expression);
+                    (expression, Some(text_span_from_oxc_span(span)))
+                })
+                .collect(),
+        },
         Expression::CallExpression(call_expression) => {
             parse_call_expression_expression(call_expression).unwrap_or(ParsedExpression::Unknown)
         }
@@ -183,7 +181,8 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
             span: Some(text_span_from_oxc_span(this_expression.span)),
         },
         // `super.member`: the checker binds `super` to the base class in a class
-        // member's body. A `super(...)` call keeps its own lowering.
+        // member's body. A `super(...)` call has the same callee, which the call
+        // check resolves to the base constructor instead.
         Expression::Super(super_keyword) => ParsedExpression::Identifier {
             name: "super".to_string(),
             span: Some(text_span_from_oxc_span(super_keyword.span)),
@@ -230,6 +229,9 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
                 .collect(),
             is_tagged: true,
         },
+        Expression::AssignmentExpression(assignment) => {
+            parse_assignment_value(assignment).unwrap_or(ParsedExpression::Unknown)
+        }
         _ => ParsedExpression::Unknown,
     };
 
@@ -504,7 +506,8 @@ fn parse_call_expression_expression(
     }
 
     match &call_expression.callee {
-        Expression::Identifier(callee) => Some(ParsedExpression::Call {
+        // `undefined()` invokes the value, not a binding named `undefined`.
+        Expression::Identifier(callee) if callee.name != "undefined" => Some(ParsedExpression::Call {
             callee_name: callee.name.to_string(),
             callee_span: Some(text_span_from_oxc_span(callee.span)),
             type_arguments,
@@ -536,7 +539,10 @@ fn parse_call_expression_expression(
             }
         }
         Expression::Super(super_keyword) => Some(ParsedExpression::ExpressionCall {
-            callee: Box::new(ParsedExpression::Unknown),
+            callee: Box::new(ParsedExpression::Identifier {
+                name: "super".to_string(),
+                span: Some(text_span_from_oxc_span(super_keyword.span)),
+            }),
             callee_span: Some(text_span_from_oxc_span(super_keyword.span)),
             type_arguments,
             arguments,
@@ -567,6 +573,9 @@ fn parse_call_expression_parts(
     let Expression::Identifier(callee) = &call_expression.callee else {
         return None;
     };
+    if callee.name == "undefined" {
+        return None;
+    }
 
     let arguments = call_expression
         .arguments
@@ -677,7 +686,7 @@ fn parse_call_expression_expression_with_type_arguments(
     }
 
     match &call_expression.callee {
-        Expression::Identifier(callee) => Some(ParsedExpression::Call {
+        Expression::Identifier(callee) if callee.name != "undefined" => Some(ParsedExpression::Call {
             callee_name: callee.name.to_string(),
             callee_span: Some(text_span_from_oxc_span(callee.span)),
             type_arguments,
@@ -709,7 +718,10 @@ fn parse_call_expression_expression_with_type_arguments(
             }
         }
         Expression::Super(super_keyword) => Some(ParsedExpression::ExpressionCall {
-            callee: Box::new(ParsedExpression::Unknown),
+            callee: Box::new(ParsedExpression::Identifier {
+                name: "super".to_string(),
+                span: Some(text_span_from_oxc_span(super_keyword.span)),
+            }),
             callee_span: Some(text_span_from_oxc_span(super_keyword.span)),
             type_arguments,
             arguments,
@@ -786,12 +798,10 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
                 expressions: sequence
                     .expressions
                     .iter()
-                    .map(|expression| parse_expression(expression).0)
-                    .collect(),
-                expression_spans: sequence
-                    .expressions
-                    .iter()
-                    .map(|expression| Some(text_span_from_oxc_span(expression.span())))
+                    .map(|expression| {
+                        let (expression, span) = parse_expression(expression);
+                        (expression, Some(text_span_from_oxc_span(span)))
+                    })
                     .collect(),
             },
             argument.span(),
@@ -1009,13 +1019,25 @@ fn parse_binary_expression(binary_expression: &BinaryExpression<'_>) -> Option<P
     let (left, left_span) = parse_expression(&binary_expression.left);
     let (right, right_span) = parse_expression(&binary_expression.right);
 
+    // Only the operators TS2447 is about: every other operator diagnostic is
+    // anchored on the expression, which is what an absent span falls back to.
+    let operator_byte = match operator {
+        ParsedBinaryOperator::BitwiseAnd => Some(b'&'),
+        ParsedBinaryOperator::BitwiseOR => Some(b'|'),
+        ParsedBinaryOperator::BitwiseXOR => Some(b'^'),
+        _ => None,
+    };
+    let operator_span = operator_byte.and_then(|byte| {
+        super::spans::operator_token_span(left_span.end, right_span.start, byte)
+    });
+
     Some(ParsedExpression::Binary {
         left: Box::new(left),
         left_span: Some(text_span_from_oxc_span(left_span)),
         operator,
         right: Box::new(right),
         right_span: Some(text_span_from_oxc_span(right_span)),
-        operator_span: None,
+        operator_span,
     })
 }
 
@@ -1153,6 +1175,7 @@ pub(crate) fn parse_object_properties(
                         is_shorthand: false,
                         computed_key: None,
                         paired_setter: None,
+                        unnamed_key_value: None,
                     });
                 }
             };
@@ -1221,12 +1244,42 @@ pub(crate) fn parse_object_properties(
             // it silently removed the member from the literal's type, so a
             // fully-quoted literal (Prisma's generated client config) inferred as
             // `{}` and reported every required property as missing.
+            let computed_key = || {
+                property
+                    .computed
+                    .then(|| property.key.as_expression())
+                    .flatten()
+                    .map(|key| Box::new(parse_expression(key).0))
+            };
+            let bracketed_span = Span::new(property.span.start, property.key.span().end + 1);
             let (name, key_span) = match &property.key {
                 // tsc's name node for `[key]` is the whole bracketed name.
-                _ if property.computed => (
-                    super::types::computed_key_name(&property.key)?,
-                    Span::new(property.span.start, property.key.span().end + 1),
-                ),
+                _ if property.computed => match super::types::computed_key_name(&property.key) {
+                    Some(name) => (name, bracketed_span),
+                    // A key no member name can model (`[f()]`, `` [`k${x}`] ``)
+                    // contributes nothing to the literal's type, but its key and
+                    // value are still checked; an empty spread carries them
+                    // without adding a member.
+                    None => {
+                        return Some(ParsedObjectProperty {
+                            name: String::new(),
+                            name_span: Some(text_span_from_oxc_span(bracketed_span)),
+                            value: ParsedExpression::ObjectLiteral {
+                                properties: Vec::new(),
+                                span: None,
+                            },
+                            value_span: None,
+                            span: Some(text_span_from_oxc_span(property.span)),
+                            is_method: false,
+                            is_spread: true,
+                            is_accessor: false,
+                            is_shorthand: false,
+                            computed_key: computed_key(),
+                            paired_setter: None,
+                            unnamed_key_value: Some(Box::new(parse_expression(&property.value).0)),
+                        });
+                    }
+                },
                 PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
                 PropertyKey::StringLiteral(literal) => (literal.value.to_string(), literal.span),
                 PropertyKey::NumericLiteral(literal) => {
@@ -1247,20 +1300,9 @@ pub(crate) fn parse_object_properties(
                 is_spread: false,
                 is_accessor: false,
                 is_shorthand: property.shorthand,
-                computed_key: property
-                    .computed
-                    .then(|| property.key.as_expression())
-                    .flatten()
-                    .filter(|key| {
-                        matches!(
-                            key,
-                            Expression::Identifier(_)
-                                | Expression::StaticMemberExpression(_)
-                                | Expression::UnaryExpression(_)
-                        )
-                    })
-                    .map(|key| Box::new(parse_expression(key).0)),
+                computed_key: computed_key(),
                 paired_setter: None,
+                unnamed_key_value: None,
             })
         })
         .collect()
@@ -1312,6 +1354,7 @@ fn parse_object_method_shorthand_named(
         is_shorthand: false,
         computed_key: None,
         paired_setter: None,
+        unnamed_key_value: None,
     })
 }
 
@@ -1616,5 +1659,29 @@ pub(super) fn parse_computed_member_expression(
         object_span: Some(text_span_from_oxc_span(object_span)),
         index: Box::new(index),
         index_span,
+    })
+}
+
+fn parse_assignment_value(
+    assignment: &oxc_ast::ast::AssignmentExpression<'_>,
+) -> Option<ParsedExpression> {
+    let oxc_ast::ast::AssignmentTarget::AssignmentTargetIdentifier(identifier) = &assignment.left
+    else {
+        return None;
+    };
+    let target_span = Some(text_span_from_oxc_span(identifier.span));
+    let (value, value_span) = parse_expression(&assignment.right);
+    let value_span = Some(text_span_from_oxc_span(value_span));
+    let target = ParsedExpression::Identifier {
+        name: identifier.name.to_string(),
+        span: target_span,
+    };
+    let value =
+        super::logical_assignment_value(assignment.operator, target, target_span, value, value_span)?;
+    Some(ParsedExpression::Assignment {
+        target_name: identifier.name.to_string(),
+        target_span,
+        value: Box::new(value),
+        value_span,
     })
 }

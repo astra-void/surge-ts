@@ -239,7 +239,14 @@ pub(crate) struct DeclarationEnvironmentStore {
     /// `type_declarations` capture. Environments are interned in bursts between
     /// table mutations, so one snapshot serves the whole burst.
     pub(super) type_declarations_snapshot: Mutex<Option<((u64, u64), Arc<TypeDeclarationTable>)>>,
+    /// The program's current module-local value tables. An environment snapshots
+    /// the table it was captured under, and one captured during module analysis
+    /// predates the final table; a lazy body return forced in the check phase
+    /// reads the current one here. `Weak`, so the store never extends its life.
+    pub(super) module_local_values: Mutex<ModuleLocalValuesByFile>,
 }
+
+type ModuleLocalValuesByFile = Weak<FxHashMap<Arc<str>, Arc<SymbolTable>>>;
 
 #[derive(Debug, Default)]
 pub(super) struct DeclarationEnvironmentEntries {
@@ -278,7 +285,18 @@ impl DeclarationEnvironmentStore {
             hits: AtomicU64::new(0),
             entries: Mutex::new(DeclarationEnvironmentEntries::default()),
             type_declarations_snapshot: Mutex::new(None),
+            module_local_values: Mutex::new(Weak::new()),
         })
+    }
+
+    pub(super) fn publish_module_local_values(
+        &self,
+        values: &Arc<FxHashMap<Arc<str>, Arc<SymbolTable>>>,
+    ) {
+        *self
+            .module_local_values
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Arc::downgrade(values);
     }
 
     /// Returns a shared immutable snapshot of `ctx.type_declarations`, reusing
@@ -449,6 +467,17 @@ impl DeclarationEnvironmentHandle {
             .get(self.id.index())
             .cloned()?;
         Some(CheckerContext::from_declaration_environment(&data, store))
+    }
+
+    /// The declaring file's module-local values as the program holds them now.
+    pub(crate) fn current_module_local_values(&self, file_name: &str) -> Option<Arc<SymbolTable>> {
+        let store = self.store.upgrade()?;
+        let values = store
+            .module_local_values
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .upgrade()?;
+        values.get(file_name).cloned()
     }
 
     pub(crate) fn canonicalization_discriminator(&self) -> u64 {

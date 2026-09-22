@@ -30,10 +30,14 @@ pub(crate) fn class_instance_interface_info(
     class: &ParsedClassDeclaration,
     file_name: Arc<str>,
 ) -> InterfaceInfo {
+    // A generic class's `this` needs its own type parameters in scope, which the
+    // member inference does not model yet; those members stay `any`.
+    let infer_members =
+        class.type_parameters.is_empty() && crate::checks::function::lazy_body_returns(&file_name);
     let mut members: Vec<_> = class
         .members
         .iter()
-        .filter_map(class_member_to_interface_member)
+        .filter_map(|member| class_member_to_interface_member(class, member, infer_members))
         .collect();
     members.extend(constructor_parameter_property_members(class));
 
@@ -52,13 +56,18 @@ pub(crate) fn class_instance_interface_info(
         None,
     );
     info.is_abstract_class = class.is_abstract;
+    info.is_class_instance = true;
     if !class.restricted_members.is_empty() {
         Arc::make_mut(&mut info.body).restricted_members = class.restricted_members.clone();
     }
     info
 }
 
-fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<ParsedInterfaceMember> {
+fn class_member_to_interface_member(
+    class: &ParsedClassDeclaration,
+    member: &ParsedClassMember,
+    infer_members: bool,
+) -> Option<ParsedInterfaceMember> {
     match member {
         ParsedClassMember::Property(property) if !property.is_static => {
             Some(ParsedInterfaceMember {
@@ -70,7 +79,7 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
                 ty: property
                     .declared_type
                     .clone()
-                    .unwrap_or_else(|| initializer_property_type(property)),
+                    .unwrap_or_else(|| inferred_property_type(class, property, infer_members)),
                 readonly: property.readonly,
                 write_ty: None,
             })
@@ -81,7 +90,7 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
             optional: false,
             is_abstract: method.is_abstract,
             is_method: true,
-            ty: method_function_type(method),
+            ty: method_function_type(class, method),
             readonly: false,
             write_ty: None,
         }),
@@ -92,7 +101,8 @@ fn class_member_to_interface_member(member: &ParsedClassMember) -> Option<Parsed
                 optional: false,
                 is_abstract: accessor.is_abstract,
                 is_method: false,
-                ty: accessor_property_type(accessor),
+                ty: inferred_accessor_type(class, accessor, infer_members)
+                    .unwrap_or_else(|| accessor_property_type(accessor)),
                 // A getter with no setter is read-only, exactly as
                 // `isReadonlySymbol` has it.
                 readonly: accessor.has_getter && !accessor.has_setter,
@@ -168,6 +178,63 @@ fn accessor_write_type(accessor: &ParsedClassAccessor) -> Option<ParsedType> {
 /// return type wins (the read type); a setter-only accessor falls back to its
 /// parameter type. Missing annotations degrade to `any`, matching the implicit
 /// type tsc infers for an un-annotated accessor.
+/// An unannotated property typed by its initializer: the syntactic lowering
+/// when the initializer's type is evident from its syntax, otherwise read from
+/// the expression on first demand.
+fn inferred_property_type(
+    class: &ParsedClassDeclaration,
+    property: &ParsedClassProperty,
+    infer_members: bool,
+) -> ParsedType {
+    let syntactic = property
+        .initializer
+        .as_ref()
+        .and_then(|initializer| syntactic_initializer_type(initializer, property.readonly));
+    match (syntactic, &property.initializer) {
+        (Some(syntactic), _) => syntactic,
+        (None, Some(initializer)) if infer_members => {
+            ParsedType::InferredMember(Arc::new(surge_ts_syntax::ParsedInferredMember {
+                class_name: class.name.clone(),
+                member_start: property.name_span.map_or(0, |span| span.start),
+                member_name: property.name.clone(),
+                keep_literal: property.readonly,
+                source: surge_ts_syntax::ParsedInferredMemberSource::Initializer(
+                    initializer.clone(),
+                ),
+            }))
+        }
+        _ => ParsedType::Any,
+    }
+}
+
+/// A getter with no annotation on either half of the pair takes its body's
+/// return type (tsc's `getTypeOfAccessors`).
+fn inferred_accessor_type(
+    class: &ParsedClassDeclaration,
+    accessor: &ParsedClassAccessor,
+    infer_members: bool,
+) -> Option<ParsedType> {
+    if !infer_members
+        || accessor.getter_return_type.is_some()
+        || accessor.setter_param_type.is_some()
+    {
+        return None;
+    }
+    let getter = accessor
+        .declarations
+        .iter()
+        .find(|declaration| declaration.is_getter && declaration.has_body)?;
+    Some(ParsedType::InferredMember(Arc::new(
+        surge_ts_syntax::ParsedInferredMember {
+            class_name: class.name.clone(),
+            member_start: accessor.name_span.map_or(0, |span| span.start),
+            member_name: accessor.name.clone(),
+            keep_literal: false,
+            source: surge_ts_syntax::ParsedInferredMemberSource::GetterBody(getter.body.clone()),
+        },
+    )))
+}
+
 fn accessor_property_type(accessor: &ParsedClassAccessor) -> ParsedType {
     accessor
         .getter_return_type
@@ -176,7 +243,7 @@ fn accessor_property_type(accessor: &ParsedClassAccessor) -> ParsedType {
         .unwrap_or(ParsedType::Any)
 }
 
-fn method_function_type(method: &ParsedClassMethod) -> ParsedType {
+fn method_function_type(class: &ParsedClassDeclaration, method: &ParsedClassMethod) -> ParsedType {
     // tsc's `addOptionality`, as `build_function_type` applies it to a
     // declaration: a defaulted parameter a required one follows is written
     // `T | undefined` for its callers.
@@ -205,7 +272,7 @@ fn method_function_type(method: &ParsedClassMethod) -> ParsedType {
             method
                 .return_type
                 .clone()
-                .or_else(|| syntactic_method_return_type(method))
+                .or_else(|| syntactic_method_return_type(class, method))
                 .unwrap_or(ParsedType::Any),
         ),
         type_parameters: method.type_parameters.clone(),
@@ -216,12 +283,49 @@ fn method_function_type(method: &ParsedClassMethod) -> ParsedType {
 /// `return` in it hands back a literal: the widened union of those literals'
 /// primitives, as `getReturnTypeFromBody` gives it, `void` when no `return`
 /// carries a value, and either wrapped in `Promise` for an `async` method.
+/// A `return new C<…>()` of the enclosing class with its type arguments written
+/// out is that instantiation, whatever the constructor takes — the builder
+/// shape (`context<T>() { return new Builder<T, TMeta>() }`) whose result every
+/// later link of the chain is typed from.
 /// Anything else — another kind of returned value, a bare `return` beside a
 /// valued one, a generator — is left for inference surge does not do here.
-fn syntactic_method_return_type(method: &ParsedClassMethod) -> Option<ParsedType> {
+fn syntactic_method_return_type(
+    class: &ParsedClassDeclaration,
+    method: &ParsedClassMethod,
+) -> Option<ParsedType> {
     use surge_ts_syntax::{ParsedExpression, ParsedFunctionBodyStatement as Statement};
 
-    fn collect(body: &[Statement], kinds: &mut Vec<ParsedType>, bare_return: &mut bool) -> Option<()> {
+    fn own_instantiation(
+        class: &ParsedClassDeclaration,
+        expression: &ParsedExpression,
+    ) -> Option<ParsedType> {
+        let ParsedExpression::New {
+            callee,
+            type_arguments,
+            ..
+        } = expression
+        else {
+            return None;
+        };
+        let ParsedExpression::Identifier { name, .. } = callee.as_ref() else {
+            return None;
+        };
+        if *name != class.name || type_arguments.len() != class.type_parameters.len() {
+            return None;
+        }
+        Some(ParsedType::Named(Arc::new(ParsedNamedType {
+            name: name.clone(),
+            span: None,
+            type_arguments: type_arguments.clone(),
+        })))
+    }
+
+    fn collect(
+        class: &ParsedClassDeclaration,
+        body: &[Statement],
+        kinds: &mut Vec<ParsedType>,
+        bare_return: &mut bool,
+    ) -> Option<()> {
         for statement in body {
             match statement {
                 Statement::Return(return_statement) => {
@@ -238,30 +342,32 @@ fn syntactic_method_return_type(method: &ParsedClassMethod) -> Option<ParsedType
                         }
                         ParsedExpression::NumberLiteral(_) => ParsedType::Number,
                         ParsedExpression::BooleanLiteral(_) => ParsedType::Boolean,
-                        _ => return None,
+                        other => own_instantiation(class, other)?,
                     };
                     if !kinds.contains(&kind) {
                         kinds.push(kind);
                     }
                 }
-                Statement::Block(block) => collect(block, kinds, bare_return)?,
+                Statement::Block(block) => collect(class, block, kinds, bare_return)?,
                 Statement::If(if_statement) => {
-                    collect(&if_statement.then_body, kinds, bare_return)?;
-                    collect(&if_statement.else_body, kinds, bare_return)?;
+                    collect(class, &if_statement.then_body, kinds, bare_return)?;
+                    collect(class, &if_statement.else_body, kinds, bare_return)?;
                 }
-                Statement::While(while_statement) => collect(&while_statement.body, kinds, bare_return)?,
-                Statement::ForOf(for_of) => collect(&for_of.body, kinds, bare_return)?,
+                Statement::While(while_statement) => {
+                    collect(class, &while_statement.body, kinds, bare_return)?
+                }
+                Statement::ForOf(for_of) => collect(class, &for_of.body, kinds, bare_return)?,
                 Statement::Switch(switch_statement) => {
                     for case in &switch_statement.cases {
-                        collect(&case.consequent, kinds, bare_return)?;
+                        collect(class, &case.consequent, kinds, bare_return)?;
                     }
                 }
                 Statement::Try(try_statement) => {
-                    collect(&try_statement.block, kinds, bare_return)?;
+                    collect(class, &try_statement.block, kinds, bare_return)?;
                     if let Some(handler) = &try_statement.handler {
-                        collect(&handler.body, kinds, bare_return)?;
+                        collect(class, &handler.body, kinds, bare_return)?;
                     }
-                    collect(&try_statement.finalizer, kinds, bare_return)?;
+                    collect(class, &try_statement.finalizer, kinds, bare_return)?;
                 }
                 _ => {}
             }
@@ -274,7 +380,7 @@ fn syntactic_method_return_type(method: &ParsedClassMethod) -> Option<ParsedType
     }
     let mut kinds = Vec::new();
     let mut bare_return = false;
-    collect(&method.body, &mut kinds, &mut bare_return)?;
+    collect(class, &method.body, &mut kinds, &mut bare_return)?;
     let returned = match kinds.len() {
         // No value is returned anywhere: the method is `void`.
         0 => ParsedType::Void,
@@ -346,7 +452,10 @@ fn collect_static_members(
                 } else {
                     ObjectProperty::required(property_type)
                 };
-                properties.insert(property.name.as_str().into(), object_property);
+                properties.insert(
+                    property.name.as_str().into(),
+                    object_property.with_readonly(property.readonly),
+                );
             }
             ParsedClassMember::Method(method) if method.is_static => {
                 let mut function_type = map_function_signature(
@@ -383,7 +492,8 @@ fn collect_static_members(
                 let property_type = map_parsed_type(accessor_property_type(accessor), ctx);
                 properties.insert(
                     accessor.name.as_str().into(),
-                    ObjectProperty::required(property_type),
+                    ObjectProperty::required(property_type)
+                        .with_readonly(accessor.has_getter && !accessor.has_setter),
                 );
             }
             _ => {}
@@ -464,7 +574,7 @@ pub(crate) fn build_class_value_symbol_with_scope(
     }
 
     let instance_type = class_instance_type(class, ctx);
-    let construct_signature = class_construct_signature(class, instance_type.clone(), ctx);
+    let construct_signature = class_construct_signature(class, instance_type.clone(), scope, ctx);
 
     // Statics are inherited: `class D extends B {}` makes every static of `B`
     // reachable as `D.x`. The base's static side is a value, not part of the
@@ -503,28 +613,55 @@ fn inherited_static_properties(
     scope: Option<&SymbolTable>,
     ctx: &CheckerContext,
 ) -> PropertyMap {
-    let Some(base) = class.extends.first() else {
-        return PropertyMap::default();
-    };
+    base_static_side(class, scope, ctx)
+        .map(|base_static| base_static.properties.as_ref().clone())
+        .unwrap_or_default()
+}
+
+fn base_static_side(
+    class: &ParsedClassDeclaration,
+    scope: Option<&SymbolTable>,
+    ctx: &CheckerContext,
+) -> Option<ObjectType> {
+    let base = class.extends.first()?;
     // A base bound by an import is not in the scope being built: inside
     // `declare module "stream"`, `class Stream extends EventEmitter` names the
     // block's `import { EventEmitter } from "node:events"`, which the export
     // table build seeds as the value fallback.
-    let Some(base_symbol) = scope
+    let base_symbol = scope
         .and_then(|scope| scope.get(&base.name))
         .or_else(|| ctx.symbols.get(&base.name))
         .or_else(|| {
             ctx.module_value_fallback
                 .as_ref()
                 .and_then(|fallback| fallback.get(&base.name))
-        })
-    else {
-        return PropertyMap::default();
+        })?;
+    match base_symbol.ty.peeled() {
+        Type::Object(base_static) => Some(base_static),
+        _ => None,
+    }
+}
+
+/// tsc's `getDefaultConstructSignatures`: a derived class that declares no
+/// constructor takes the base's construct signatures, returning itself.
+fn inherited_construct_signature(base: &FunctionType, instance_type: &Type) -> FunctionType {
+    let retarget = |signature: &FunctionType| {
+        let retargeted = FunctionType::new(
+            signature.parameters().to_vec(),
+            instance_type.clone(),
+            signature.is_variadic(),
+            signature.required_parameter_count(),
+        );
+        match signature.parameter_names() {
+            Some(names) => retargeted.with_parameter_names(names.to_vec()),
+            None => retargeted,
+        }
     };
-    let Type::Object(base_static) = base_symbol.ty.peeled() else {
-        return PropertyMap::default();
-    };
-    base_static.properties.as_ref().clone()
+    let retargeted = retarget(base);
+    match base.overloads() {
+        Some(overloads) => retargeted.with_overloads(overloads.iter().map(retarget).collect()),
+        None => retargeted,
+    }
 }
 
 fn static_property_type(property: &ParsedClassProperty, ctx: &mut CheckerContext) -> Type {
@@ -609,6 +746,7 @@ fn syntactic_initializer_type(initializer: &surge_ts_syntax::ParsedExpression, k
                 call_signature_overloads: Vec::new(),
                 construct_signature: None,
                 non_primitive: false,
+                display_name: None,
             }))
         }
         _ => return None,
@@ -629,6 +767,7 @@ fn class_instance_type(class: &ParsedClassDeclaration, ctx: &mut CheckerContext)
 fn class_construct_signature(
     class: &ParsedClassDeclaration,
     instance_type: Type,
+    scope: Option<&SymbolTable>,
     ctx: &mut CheckerContext,
 ) -> FunctionType {
     let named_instance = ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
@@ -670,11 +809,16 @@ fn class_construct_signature(
     }
 
     if !class.extends.is_empty() {
-        // The constructor is inherited from the base class, whose declaration is
-        // not reachable from here (classes are bound as instance-side interfaces,
-        // which exclude the constructor). Accept any argument list rather than
-        // report the base's arity as zero: `new ZodString({ … })` on a derived
-        // class was TS2554 "Expected 0 arguments".
+        if let Some(base_signature) = base_static_side(class, scope, ctx)
+            .and_then(|base_static| base_static.construct_signature().cloned())
+        {
+            return inherited_construct_signature(&base_signature, &instance_type);
+        }
+        // A base whose value is not an object here — a generic class, an
+        // expression, one not bound yet — has no signature to inherit. Accept
+        // any argument list rather than report the base's arity as zero:
+        // `new ZodString({ … })` on a derived class was TS2554 "Expected 0
+        // arguments".
         return FunctionType::new(vec![Type::Any], instance_type, true, 0);
     }
 
@@ -873,6 +1017,12 @@ fn check_extended_base_class(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
         if !base.type_arguments.is_empty() {
             continue;
         }
+        // A base that names nothing is already reported, at its own span.
+        if ctx.lookup_type_declaration(&base.name).is_none()
+            && ctx.symbols.get(&base.name).is_none()
+        {
+            continue;
+        }
         super::heritage::report_incompatible_heritage_members(class, &base.name, ctx);
     }
 }
@@ -996,6 +1146,17 @@ fn declared_member_name(member: &ParsedClassMember) -> Option<String> {
 }
 
 pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    crate::checks::function::check_type_parameter_declarations(&class.type_parameters, ctx);
+    crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
+        for member in &class.members {
+            if let ParsedClassMember::Method(method) = member {
+                crate::checks::function::check_type_parameter_declarations(
+                    &method.type_parameters,
+                    ctx,
+                );
+            }
+        }
+    });
     // Everything checked from here on is lexically inside the class, which is
     // what decides whether its `private`/`protected` members are reachable.
     let lineage = crate::checks::expr::enclosing_class_lineage(class, ctx);
@@ -1004,7 +1165,75 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
     ctx.enclosing_classes.pop();
 }
 
+/// tsc's `isAssignmentToReadonlyEntity` lets a constructor write the `readonly`
+/// members its own class declares — a property declaration or a parameter
+/// property — and nothing inherited.
+fn constructor_writable_members(
+    class: &ParsedClassDeclaration,
+    constructor: &surge_ts_syntax::ParsedClassConstructor,
+) -> Vec<String> {
+    let properties = class.members.iter().filter_map(|member| match member {
+        ParsedClassMember::Property(property) if !property.is_static => Some(property.name.clone()),
+        _ => None,
+    });
+    let parameter_properties =
+        constructor
+            .parameters
+            .iter()
+            .filter_map(|parameter| match &parameter.binding_name {
+                surge_ts_syntax::ParsedBindingName::Identifier { name, .. }
+                    if parameter.is_parameter_property =>
+                {
+                    Some(name.clone())
+                }
+                _ => None,
+            });
+    properties.chain(parameter_properties).collect()
+}
+
+/// A class base is an expression: tsc resolves `extends X` as a value, so the
+/// name is unresolved only when it is neither a type surge bound the class to
+/// nor a value in scope. Signature collection leaves this report to here,
+/// where every value declared before the class is bound.
+fn check_heritage_base_resolves(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    for base in &class.extends {
+        if base.name.contains('.')
+            || base.name == surge_ts_syntax::EXPRESSION_HERITAGE_BASE
+            || ctx.symbols.get(&base.name).is_some()
+        {
+            continue;
+        }
+        match ctx.lookup_type_declaration(&base.name) {
+            // tsc's `checkAndReportErrorForExtendingInterface`: the base
+            // expression names an interface and no value.
+            Some(TypeDeclarationInfo::Interface(info)) if !info.is_class_instance => {
+                let diagnostic = Diagnostic::ts2689(&base.name, ctx.file_name.clone());
+                let diagnostic = match base.span {
+                    Some(span) => diagnostic.with_span(convert_span(span)),
+                    None => diagnostic,
+                };
+                ctx.push(diagnostic);
+            }
+            Some(_) => {}
+            None => {
+                let _ = crate::infer::types::emit_unknown_type_name(base, ctx);
+            }
+        }
+    }
+    // An `implements` clause is a type reference, resolved (and reported) as
+    // one.
+    crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
+        for implemented in &class.implements {
+            let _ = crate::infer::map_parsed_type(
+                ParsedType::Named(Arc::new(implemented.clone())),
+                ctx,
+            );
+        }
+    });
+}
+
 fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    check_heritage_base_resolves(class, ctx);
     check_inherited_abstract_members(class, ctx);
     check_extended_base_class(class, ctx);
     check_implemented_interfaces(class, ctx);
@@ -1012,14 +1241,38 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
     super::forward_references::check_class_property_initializers(class, ctx);
     check_override_modifiers(class, ctx);
 
-    // Ambient classes have no bodies; generic classes are out of scope and would
-    // resolve member/`this` types against unbound type parameters.
-    if class.is_declare || !class.type_parameters.is_empty() {
+    // Ambient classes have no bodies. Definite assignment needs no member
+    // types, so they still get it.
+    if class.is_declare {
+        crate::flow::check_class_member_flow(class, ctx);
         return;
     }
 
+    // A class type parameter is in scope throughout its members, so the bodies
+    // are checked under it; without the scope every annotation naming one
+    // resolves to nothing.
+    crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
+        check_class_member_bodies(class, ctx)
+    });
+}
+
+fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    // Building the class's own instance and static types is this check's
+    // lookup, not a use of the class: a generic class referred to without
+    // arguments here would report TS2314 against its own declaration.
+    let checkpoint = ctx.diagnostics().len();
     let instance_type = class_instance_type(class, ctx);
     let static_value = build_class_value_symbol(class, ctx);
+    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    // Signature collection built this class's value before its file's `const`s
+    // were bound, so a base that is one of them left the instance open and the
+    // constructor unknown. Here the base is bound: the value built now is the
+    // one later statements should read.
+    if class.extends.first().is_some_and(|base| {
+        ctx.lookup_type_declaration(&base.name).is_none() && ctx.symbols.get(&base.name).is_some()
+    }) {
+        let _ = ctx.symbols.insert(class.name.clone(), static_value.clone());
+    }
     let static_type = static_value.ty;
 
     if ctx.options.no_implicit_override && !class.extends.is_empty() {
@@ -1038,16 +1291,42 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
             .then_some((instance, constructor))
     });
     let previous_super = ctx.symbols.remove("super");
+    ctx.enclosing_class_members
+        .push(crate::checks::expr::EnclosingClassMembers {
+            class_name: class.name.clone(),
+            instance_type: instance_type.clone(),
+            static_type: static_type.clone(),
+        });
+
+    let class_type_parameter_depth = ctx
+        .type_parameter_scopes
+        .len()
+        .saturating_sub(usize::from(!class.type_parameters.is_empty()));
+    let class_type_parameter_names: Vec<String> = class
+        .type_parameters
+        .iter()
+        .map(|type_parameter| type_parameter.name.clone())
+        .collect();
 
     for member in &class.members {
+        let static_span = match member {
+            ParsedClassMember::Method(method) => method.is_static.then_some(method.span),
+            ParsedClassMember::Property(property) => property.is_static.then_some(property.span),
+            ParsedClassMember::Accessor(accessor) => accessor.is_static.then_some(accessor.span),
+            ParsedClassMember::StaticBlock(block) => Some(block.span),
+            ParsedClassMember::Constructor(_) => None,
+        };
+        let is_static = static_span.is_some();
+        ctx.static_member_type_parameters = static_span
+            .filter(|_| !class_type_parameter_names.is_empty())
+            .map(|span| {
+                (
+                    span,
+                    class_type_parameter_depth,
+                    class_type_parameter_names.clone(),
+                )
+            });
         if let Some((instance, constructor)) = &super_types {
-            let is_static = match member {
-                ParsedClassMember::Method(method) => method.is_static,
-                ParsedClassMember::Property(property) => property.is_static,
-                ParsedClassMember::Accessor(accessor) => accessor.is_static,
-                ParsedClassMember::StaticBlock(_) => true,
-                ParsedClassMember::Constructor(_) => false,
-            };
             let _ = ctx.symbols.insert(
                 "super",
                 SymbolInfo {
@@ -1061,6 +1340,14 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
             ParsedClassMember::Constructor(constructor) => {
                 let function_type =
                     map_function_signature(&constructor.parameters, None, &[], None, ctx);
+                ctx.constructor_writable_members =
+                    Some(constructor_writable_members(class, constructor));
+                let outer_super_constructor = std::mem::replace(
+                    &mut ctx.super_constructor_type,
+                    super_types
+                        .as_ref()
+                        .map(|(_, constructor)| constructor.clone()),
+                );
                 check_function_body_with_signature_and_this(
                     None,
                     constructor.parameters.clone(),
@@ -1078,6 +1365,8 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
                     false,
                     ctx,
                 );
+                ctx.constructor_writable_members = None;
+                ctx.super_constructor_type = outer_super_constructor;
             }
             ParsedClassMember::Method(method) => {
                 let function_type = map_function_signature(
@@ -1127,6 +1416,26 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
                 } else {
                     instance_type.clone()
                 };
+                // A static property's annotation is not resolved anywhere else
+                // on this path; resolving it here is only for the type
+                // parameters it may not name, so nothing else it reports is
+                // kept (the annotation is checked with the class's own types).
+                if property.is_static
+                    && !class_type_parameter_names.is_empty()
+                    && let Some(declared) = property.declared_type.clone()
+                {
+                    let checkpoint = ctx.diagnostics().len();
+                    let _ = map_parsed_type(declared, ctx);
+                    let static_parameter_errors: Vec<_> = ctx.diagnostics()[checkpoint..]
+                        .iter()
+                        .filter(|diagnostic| diagnostic.code.to_string() == "TS2302")
+                        .cloned()
+                        .collect();
+                    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+                    for diagnostic in static_parameter_errors {
+                        ctx.push(diagnostic);
+                    }
+                }
                 check_class_property_initializer(property, this_type, ctx);
             }
             ParsedClassMember::Accessor(accessor) => {
@@ -1154,6 +1463,8 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
             }
         }
     }
+    ctx.static_member_type_parameters = None;
+    ctx.enclosing_class_members.pop();
     let _ = ctx.symbols.remove("super");
     if let Some(previous) = previous_super {
         let _ = ctx.symbols.insert_handle("super", previous);

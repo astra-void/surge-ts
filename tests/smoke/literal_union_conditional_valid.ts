@@ -1,1 +1,1 @@
-let status: "idle" | "done" = true ? "idle" : "done";
+let state: "idle" | "done" = true ? "idle" : "done";

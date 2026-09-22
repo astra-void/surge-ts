@@ -344,6 +344,8 @@ fn analyze_module(
     local_type_declarations_by_module: &[Option<Arc<TypeDeclarationTable>>],
     preliminary_module_import_bindings: &[Option<ModuleImportBindings>],
     lower_global_augmentation_values: bool,
+    thin_value_collection: bool,
+    values_resolve_through_module_scopes: bool,
     analysis_round: u64,
     memory_trace_threshold: Option<u64>,
     ctx: &mut CheckerContext,
@@ -439,7 +441,11 @@ fn analyze_module(
     // fallback live they eagerly materialize every exported initializer of a
     // large cyclic program (zod: +11s/+380MB), and their degraded shapes are
     // re-resolved lazily by the check phase anyway.
-    let saved_module_scope_by_file = std::mem::take(&mut ctx.module_scope_by_file);
+    let saved_module_scope_by_file = if values_resolve_through_module_scopes {
+        ctx.module_scope_by_file.clone()
+    } else {
+        std::mem::take(&mut ctx.module_scope_by_file)
+    };
     let mut signature_env = SymbolTable::new();
     let mut seeded_names: std::collections::HashSet<Arc<str>> = std::collections::HashSet::new();
     if !parsed_file.file_kind.is_declaration() {
@@ -458,7 +464,7 @@ fn analyze_module(
             || statements_declare_class_with_heritage(&parsed_file.statements);
         let value_env = if seed_needed {
             let split_start = analyze_split_enabled().then(Instant::now);
-            ctx.thin_superseded_value_collection = !lower_global_augmentation_values;
+            ctx.thin_superseded_value_collection = thin_value_collection;
             let value_env = crate::modules::collect_exportable_value_symbols(
                 &parsed_file.statements,
                 local_type_declarations.as_ref(),
@@ -499,7 +505,11 @@ fn analyze_module(
     analyze_split_record(1, split_start);
     let signature_scope_consults =
         super::scope_fallback_consult_count() - consults_before_signatures;
-    let saved_module_scope_by_file = std::mem::take(&mut ctx.module_scope_by_file);
+    let saved_module_scope_by_file = if values_resolve_through_module_scopes {
+        ctx.module_scope_by_file.clone()
+    } else {
+        std::mem::take(&mut ctx.module_scope_by_file)
+    };
     let mut local_symbols = SymbolTable::new();
     for (name, symbol) in signature_env.iter_shared() {
         if !seeded_names.contains(name) {
@@ -523,7 +533,7 @@ fn analyze_module(
         .map(|bindings| &bindings.symbols);
     let empty_imported_symbols = SymbolTable::new();
     let split_start = analyze_split_enabled().then(Instant::now);
-    ctx.thin_superseded_value_collection = !lower_global_augmentation_values;
+    ctx.thin_superseded_value_collection = thin_value_collection;
     let export_table =
         with_dts_expansion_reason(DtsExpansionReason::ModuleExportCollection, || {
             build_module_export_table(
@@ -624,6 +634,8 @@ pub(crate) fn collect_module_analyses_with_bindings(
             local_type_declarations_by_module,
             preliminary_module_import_bindings,
             lower_global_augmentation_values,
+            !lower_global_augmentation_values,
+            false,
             analysis_round,
             memory_trace_threshold,
             ctx,
@@ -1007,6 +1019,8 @@ fn run_analysis_workers(
                                         local_type_declarations_by_module,
                                         preliminary_module_import_bindings,
                                         false,
+                                        true,
+                                        false,
                                         analysis_round,
                                         memory_trace_threshold,
                                         &mut local_ctx,
@@ -1193,6 +1207,9 @@ fn commit_module_analyses(
                     let mut fresh_ctx = worker_seed.clone();
                     if std::env::var_os("SURGE_ANALYSIS_FRESH_STORE").is_some() {
                         fresh_ctx.program_type_store = surge_ts_types::ProgramTypeStore::new();
+                        fresh_ctx
+                            .program_type_store
+                            .set_strict_null_checks(fresh_ctx.options.strict_null_checks);
                     }
                     let fresh_store = fresh_ctx.program_type_store.clone();
                     outcome_analysis = with_program_type_store(fresh_store, || {
@@ -1204,6 +1221,8 @@ fn commit_module_analyses(
                                 local_type_declarations_by_module,
                                 preliminary_module_import_bindings,
                                 lower_global_augmentation_values,
+                                !lower_global_augmentation_values,
+                                false,
                                 analysis_round,
                                 memory_trace_threshold,
                                 &mut fresh_ctx,
@@ -1258,6 +1277,8 @@ fn commit_module_analyses(
                                 local_type_declarations_by_module,
                                 preliminary_module_import_bindings,
                                 lower_global_augmentation_values,
+                                !lower_global_augmentation_values,
+                                false,
                                 analysis_round,
                                 memory_trace_threshold,
                                 ctx,
@@ -1966,6 +1987,280 @@ pub(crate) fn collect_module_import_bindings(
     }
 
     module_import_bindings
+}
+
+/// `SURGE_VALUE_EXPORT_REFINEMENT=1`: settle exported values whose initializer
+/// reads an imported value, by re-analyzing a module once its imports have
+/// types (see [`refine_imported_value_exports`]).
+///
+/// OFF by default: correct, but no gain yet, and costly. A module is re-offered
+/// when its own value imports improved *or* any file it imports from — value or
+/// type-only — changed; the type-only half is what reaches tRPC's
+/// `utils/trpc.ts`, whose `import type { AppRouter }` carries no value symbol.
+/// With it, the exported `createTRPCNext<AppRouter>` client is the right
+/// `CreateTRPCNextBase & DecorateRouterRecord` intersection (verified by probe),
+/// and trpc's diagnostics are byte-identical to the pass being off.
+///
+/// An earlier measurement credited this pass with 6 closed false negatives. That
+/// was an artifact: its dependency map missed relative imports, so the client
+/// was still published as tRPC's "collides with a built-in method" error string,
+/// every `trpc.todo` read off it was a false TS2339, and error-type propagation
+/// turned those into TS7006 reports that happened to land on tsc's lines.
+///
+/// What actually blocks those TS7006 is the router's root types, which surge has
+/// as `{ ctx: unknown; errorShape: unknown; transformer: unknown }` where tsc has
+/// a real context, `DefaultErrorShape` and `true` — `Unwrap<T>`'s `Awaited<R>`
+/// leaking `R`, and `TOptions` not inferred through `create(opts?:
+/// ValidateShape<TOptions, …>)` — plus `useQuery` itself degrading. Measured
+/// cost on zod: about 7s to 53s wall, from re-analyzing its module graph.
+fn value_export_refinement_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SURGE_VALUE_EXPORT_REFINEMENT").as_deref() == Ok("1"))
+}
+
+/// How many value hops past the first an exported initializer is followed
+/// through. Each round settles the exports one import further from a module
+/// whose values were already known; a chain longer than this keeps the sentinel.
+const MAX_VALUE_EXPORT_REFINEMENT_ROUNDS: usize = 8;
+
+/// The program files each module reads from, through any import — value or
+/// type-only — or `export … from`. A type-only import still carries a type
+/// whose meaning can change when its source settles: `import type { AppRouter }`
+/// of a `typeof appRouter` alias has no value symbol at all, yet the client
+/// built from it is decided by that router's key set.
+fn module_dependency_indices(
+    parsed_files: &[ParsedProgramFile],
+    ctx: &CheckerContext,
+) -> Vec<Vec<usize>> {
+    use surge_ts_syntax::ParsedExportDeclaration;
+    parsed_files
+        .iter()
+        .map(|parsed_file| {
+            let mut dependencies: Vec<usize> = Vec::new();
+            // Resolved the way `try_resolve_module` does: a relative specifier
+            // is resolved on the fly against the program's files, a bare one
+            // through the resolver's per-importer map.
+            let mut add = |specifier: &str| {
+                let index = crate::modules::resolve_relative_module(
+                    &parsed_file.file_name,
+                    specifier,
+                    parsed_files,
+                    &ctx.module_file_index_by_identity,
+                )
+                .map(|resolution| resolution.resolved_file_index)
+                .or_else(|| {
+                    let resolved = ctx
+                        .options
+                        .resolved_module_for(&parsed_file.file_name, specifier)?;
+                    let identity = crate::modules::canonical_file_identity(resolved);
+                    ctx.module_file_index_by_identity
+                        .get(identity.as_str())
+                        .copied()
+                });
+                if let Some(index) = index
+                    && !dependencies.contains(&index)
+                {
+                    dependencies.push(index);
+                }
+            };
+            for statement in &parsed_file.statements {
+                match statement {
+                    ParsedStatement::ImportDeclaration(import) => add(&import.module_specifier),
+                    ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                        ParsedExportDeclaration::Named {
+                            module_specifier: Some(specifier),
+                            ..
+                        }
+                        | ParsedExportDeclaration::All {
+                            module_specifier: specifier,
+                            ..
+                        }
+                        | ParsedExportDeclaration::Namespace {
+                            module_specifier: specifier,
+                            ..
+                        } => add(specifier),
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+            dependencies
+        })
+        .collect()
+}
+
+/// Whether two export tables publish the same value surface. Display-inclusive
+/// so a type that only *renders* differently still counts as a change; it is the
+/// loop's termination test, so equality must mean "nothing left to settle".
+fn module_export_tables_agree(published: &ModuleExportTable, refined: &ModuleExportTable) -> bool {
+    fn value_fingerprint(symbols: &SymbolTable) -> Vec<(Arc<str>, u64)> {
+        let mut entries: Vec<(Arc<str>, u64)> = symbols
+            .iter()
+            .map(|(name, symbol)| {
+                (
+                    name.clone(),
+                    crate::speculative::display_type_fingerprint(&symbol.ty),
+                )
+            })
+            .collect();
+        entries.sort_unstable();
+        entries
+    }
+    value_fingerprint(&published.symbols) == value_fingerprint(&refined.symbols)
+        && published.default_symbol.as_ref().map(|s| {
+            crate::speculative::display_type_fingerprint(&s.ty)
+        }) == refined.default_symbol.as_ref().map(|s| {
+            crate::speculative::display_type_fingerprint(&s.ty)
+        })
+}
+
+fn degraded_value_count(symbols: &SymbolTable) -> usize {
+    symbols
+        .iter()
+        .filter(|(_, symbol)| matches!(symbol.ty, Type::Unknown))
+        .count()
+}
+
+/// Settles exported values whose initializer reads an *imported* value.
+///
+/// The final analysis round binds a module's imports from the preliminary
+/// export tables, and those carry no initializer types, so
+/// `export const procedure = t.procedure` — with `t` built from an import — is
+/// published at the sentinel, and so is everything downstream of it
+/// (`router({ … })`, `typeof appRouter`, the client built from that). tsc types
+/// a symbol on demand and has no such horizon.
+///
+/// Only a source module that exports a sentinel-typed value *and* whose imports
+/// lost sentinels since it was last analyzed is re-analyzed, and only its
+/// sentinel-typed exports are replaced: the type surface, the signatures and
+/// every export that already had a type stay exactly what the final round
+/// produced.
+pub(crate) fn refine_imported_value_exports(
+    parsed_files: &[ParsedProgramFile],
+    local_type_declarations_by_module: &[Option<Arc<TypeDeclarationTable>>],
+    analyzed_import_bindings: &[Option<ModuleImportBindings>],
+    module_analyses: &mut [Option<ModuleAnalysis>],
+    module_export_tables: &mut Vec<Option<ModuleExportTable>>,
+    module_import_bindings: &mut Vec<Option<ModuleImportBindings>>,
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
+    ctx: &mut CheckerContext,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+) {
+    let mut degraded_imports_when_analyzed: Vec<usize> = analyzed_import_bindings
+        .iter()
+        .map(|bindings| {
+            bindings
+                .as_ref()
+                .map_or(0, |bindings| degraded_value_count(&bindings.symbols))
+        })
+        .collect();
+    if !value_export_refinement_enabled() {
+        return;
+    }
+    let dependencies = module_dependency_indices(parsed_files, ctx);
+    let mut changed_last_round: Vec<bool> = vec![false; parsed_files.len()];
+    let saved_file_name = ctx.file_name.clone();
+
+    for _ in 0..MAX_VALUE_EXPORT_REFINEMENT_ROUNDS {
+        let analysis_round = next_analysis_round();
+        let mut refined_any = false;
+        let mut changed_this_round: Vec<bool> = vec![false; parsed_files.len()];
+        for file_index in 0..parsed_files.len() {
+            let parsed_file = &parsed_files[file_index];
+            if !parsed_file.is_module || parsed_file.file_kind.is_declaration() {
+                continue;
+            }
+            if module_analyses[file_index].is_none() {
+                continue;
+            }
+            let degraded_imports = module_import_bindings[file_index]
+                .as_ref()
+                .map_or(0, |bindings| degraded_value_count(&bindings.symbols));
+            let imports_improved = degraded_imports < degraded_imports_when_analyzed[file_index];
+            let dependency_changed = dependencies[file_index]
+                .iter()
+                .any(|dependency| changed_last_round[*dependency]);
+            if !imports_improved && !dependency_changed {
+                continue;
+            }
+            degraded_imports_when_analyzed[file_index] = degraded_imports;
+
+            let diagnostics_before = ctx.diagnostics().len();
+            let refined = crate::modules::exports::with_source_exports_sharing_environment_store(|| {
+                analyze_module(
+                    file_index,
+                    parsed_file,
+                    local_type_declarations_by_module,
+                    module_import_bindings,
+                    false,
+                    false,
+                    true,
+                    analysis_round,
+                    None,
+                    ctx,
+                    timings,
+                )
+            });
+            ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+            let Some(refined) = refined else {
+                continue;
+            };
+            let Some(analysis) = module_analyses[file_index].as_mut() else {
+                continue;
+            };
+            // The whole table is installed, not just the exports that were at
+            // the sentinel: a value can be published with a *wrong* type rather
+            // than no type, because a conditional decided from an import that
+            // had none (tRPC's `createTRPCNext<AppRouter>` publishes the
+            // "your router collides with a built-in method" error string when
+            // the router's key set is unknown). This round's inputs are
+            // strictly better than the ones that produced the table it
+            // replaces, so its answer is the better answer.
+            if module_export_tables_agree(&analysis.local_export_table, &refined.local_export_table)
+            {
+                continue;
+            }
+            analysis.local_export_table = refined.local_export_table;
+            changed_this_round[file_index] = true;
+            refined_any = true;
+        }
+        if !refined_any {
+            break;
+        }
+        changed_last_round = changed_this_round;
+
+        let local_module_export_tables = module_analyses
+            .iter()
+            .map(|analysis| {
+                analysis
+                    .as_ref()
+                    .map(|analysis| analysis.local_export_table.clone())
+            })
+            .collect::<Vec<_>>();
+        ctx.begin_resolution_stage();
+        *module_export_tables =
+            resolve_module_export_tables(parsed_files, &local_module_export_tables, ctx);
+        refresh_reexported_namespace_objects(parsed_files, module_export_tables);
+        *module_import_bindings = collect_module_import_bindings(
+            parsed_files,
+            module_analyses,
+            module_export_tables,
+            module_resolution_scopes,
+            ctx,
+        );
+        // `typeof <value>` in a consumer resolves through this map, so a module
+        // whose exports just settled must be visible in it before the next
+        // round reads them — a type-only import of a `typeof`-backed alias
+        // (`import type { AppRouter }`) reaches the value this way and by no
+        // other.
+        super::build_module_local_values(
+            parsed_files,
+            module_analyses,
+            module_import_bindings,
+            ctx,
+        );
+    }
+    ctx.set_file_name(saved_file_name.to_string());
 }
 
 pub(crate) fn should_replay_preliminary_diagnostic(

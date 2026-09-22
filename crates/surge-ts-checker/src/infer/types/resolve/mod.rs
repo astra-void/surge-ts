@@ -91,6 +91,7 @@ thread_local! {
 fn resolve_import_type_query(
     specifier: &str,
     members: &[String],
+    member_spans: &[surge_ts_syntax::TextSpan],
     ctx: &mut CheckerContext,
 ) -> ResolvedType {
     let unknown = ResolvedType {
@@ -126,10 +127,49 @@ fn resolve_import_type_query(
     let Some(mut ty) = found else {
         return unknown;
     };
-    for member in members {
+    let module_path = match &ty {
+        Type::Object(namespace) if !namespace.synthetic_open_index => namespace
+            .alias_name
+            .as_deref()
+            .and_then(|alias| alias.strip_prefix("typeof import(\""))
+            .and_then(|rest| rest.strip_suffix("\")"))
+            .map(str::to_string),
+        _ => None,
+    };
+    for (index, member) in members.iter().enumerate() {
         match ty.get_property_access_type(member) {
             Some(member_ty) => ty = member_ty,
-            None => return unknown,
+            None => {
+                // The module namespace object lists every value export, and a
+                // namespace the module declares lists its own, so a qualifier
+                // either lacks is tsc's TS2694 on it.
+                let reported_namespace = module_path.as_deref().and_then(|path| {
+                    if index == 0 {
+                        return Some(format!("\"{path}\""));
+                    }
+                    let inner = members[..index].join(".");
+                    ctx.namespace_registry
+                        .info_in_module(path, &inner)
+                        .filter(|info| info.complete)
+                        .map(|_| format!("\"{path}\".{inner}"))
+                });
+                if let Some(namespace_name) = reported_namespace {
+                    let mut diagnostic = Diagnostic::ts2694(
+                        namespace_name,
+                        member,
+                        ctx.file_name.clone(),
+                    );
+                    if let Some(span) = member_spans.get(index) {
+                        diagnostic = diagnostic.with_span(convert_span(*span));
+                    }
+                    ctx.push_utility_diagnostic_once(diagnostic);
+                    return ResolvedType {
+                        ty: Type::Unknown,
+                        had_error: true,
+                    };
+                }
+                return unknown;
+            }
         }
     }
     ResolvedType {
@@ -268,7 +308,12 @@ pub(crate) fn resolve_parsed_type(
         }
         ParsedType::TypeOf(type_of) => {
             if let Some(specifier) = &type_of.import_specifier {
-                return resolve_import_type_query(specifier, &type_of.members, ctx);
+                return resolve_import_type_query(
+                    specifier,
+                    &type_of.members,
+                    &type_of.member_spans,
+                    ctx,
+                );
             }
             // A type query reads the value, so a UMD-global name reports here the
             // same way it would in an expression.
@@ -342,9 +387,16 @@ pub(crate) fn resolve_parsed_type(
                 // symbol for it: the reference already reported as TS2686, so a
                 // TS2304 on top would be a second diagnostic tsc never emits.
                 if type_of.name == "globalThis" || umd_global {
+                    // A *member* of it (`typeof globalThis.fetch`) is degraded,
+                    // not clean: the miss is a timing gap — the global object is
+                    // installed after every ambient global is collected, so an
+                    // interface member written this way resolves before it
+                    // exists — and a clean answer would be interned as
+                    // `unknown` for the whole run, as it is for any other base
+                    // still standing at the sentinel below.
                     return ResolvedType {
                         ty: Type::Unknown,
-                        had_error: false,
+                        had_error: !type_of.members.is_empty(),
                     };
                 }
                 // A class reached through `import type { Class }`, or named
@@ -406,7 +458,8 @@ pub(crate) fn resolve_parsed_type(
                         had_error: true,
                     };
                 }
-                let mut diagnostic = Diagnostic::ts2304(&type_of.name, ctx.file_name.clone());
+                let mut diagnostic =
+                    crate::checks::expr::unresolved_type_query_diagnostic(&type_of.name, ctx);
                 if let Some(span) = type_of.name_span {
                     diagnostic = diagnostic.with_span(convert_span(span));
                 }
@@ -651,6 +704,14 @@ pub(crate) fn resolve_parsed_type(
         // A predicate annotation types the function's return value: `boolean`
         // for `x is T`, `void` for an assertion signature. The predicate payload
         // itself is consumed by guard narrowing, not by type resolution.
+        ParsedType::UniqueSymbol(name) => ResolvedType {
+            ty: surge_ts_types::unique_symbol_type(&ctx.file_name, &name),
+            had_error: false,
+        },
+        ParsedType::InferredMember(member) => ResolvedType {
+            ty: crate::checks::function::inferred_member_reference(member, ctx),
+            had_error: false,
+        },
         ParsedType::Predicate(predicate) => ResolvedType {
             ty: if predicate.asserts {
                 Type::Void

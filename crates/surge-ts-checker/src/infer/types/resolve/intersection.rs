@@ -56,8 +56,16 @@ pub(crate) fn resolve_intersection_type(
                 had_error: true,
             };
         }
+        // The failed operand's members are unknown, not absent: keep the
+        // merge open so a read of one is not reported missing.
+        let lost_operand = resolved_types.iter().any(Type::is_unknown);
+        let merged = merge_intersection_members(resolved_types);
         return ResolvedType {
-            ty: merge_intersection_members(resolved_types),
+            ty: if lost_operand {
+                open_object_arms(merged)
+            } else {
+                merged
+            },
             had_error: true,
         };
     }
@@ -65,6 +73,26 @@ pub(crate) fn resolve_intersection_type(
     ResolvedType {
         ty: merge_intersection_members(resolved_types),
         had_error: false,
+    }
+}
+
+fn open_object_arms(ty: Type) -> Type {
+    match ty {
+        Type::Object(mut object) => {
+            if object.string_index_type.is_none() {
+                object.string_index_type = Some(std::sync::Arc::new(Type::Unknown));
+            }
+            Type::Object(object.with_open_index_marker())
+        }
+        Type::Union(union) => surge_ts_types::union_type(
+            union
+                .types()
+                .iter()
+                .cloned()
+                .map(open_object_arms)
+                .collect(),
+        ),
+        other => other,
     }
 }
 
@@ -440,6 +468,14 @@ pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
                 names[*index] = intersection_operand_name(arm);
                 operands[*index] = arm.clone();
             }
+            // tsc builds each arm through the same ordered set as any other
+            // intersection, so `(Date | undefined) & Date` has a `Date` arm, not
+            // a merged `Date & Date` surface.
+            let operands = dedup_identical_operands(operands);
+            if operands.len() == 1 && !dropped_unmodelled_operand {
+                distributed.extend(operands);
+                continue;
+            }
             distributed.push(merge_intersection_members_now(
                 operands,
                 Some(names.join(" & ")),
@@ -517,6 +553,11 @@ thread_local! {
     > = std::cell::RefCell::new(surge_ts_types::fx::FxHashMap::default());
 }
 
+thread_local! {
+    static MERGES_IN_PROGRESS: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 #[derive(PartialEq, Eq, Hash)]
 struct DeferredMergeKey {
     resolvers: Vec<usize>,
@@ -578,28 +619,51 @@ impl surge_ts_types::ResolveReference for LazyIntersectionMerge {
     }
 
     fn resolve_arc(&self) -> std::sync::Arc<Type> {
-        self.memo
-            .get_or_init(|| {
-                crate::program::record_program_counter(|c| c.lazy_intersection_peel_count += 1);
-                let display_name = (!self.members.is_empty()).then(|| {
-                    self.members
-                        .iter()
-                        .map(intersection_operand_name)
-                        .collect::<Vec<_>>()
-                        .join(" & ")
-                });
-                std::sync::Arc::new(crate::program::with_dts_expansion_reason(
-                    crate::program::DtsExpansionReason::IntersectionMerge,
-                    || {
-                        merge_intersection_members_now(
-                            self.members.clone(),
-                            display_name,
-                            self.dropped_unmodelled_operand,
-                        )
-                    },
-                ))
-            })
-            .clone()
+        if let Some(merged) = self.memo.get() {
+            return merged.clone();
+        }
+        // A member can reach this same intersection again while it is being
+        // merged (`Readonly<Omit<X, K>>` over an operand whose members name the
+        // intersection). Initializing the memo re-entrantly would block on the
+        // `OnceLock` forever, so the back-edge reads the sentinel like a blocked
+        // lazy peel, and anything that consumed it is not memoized.
+        let address = self as *const Self as usize;
+        if MERGES_IN_PROGRESS.with(|merges| merges.borrow().contains(&address)) {
+            crate::program::note_expansion_degradation();
+            crate::program::record_degraded_resolution();
+            crate::infer::types::cache::note_in_flight_degraded_read();
+            return std::sync::Arc::new(Type::Unknown);
+        }
+        crate::program::record_program_counter(|c| c.lazy_intersection_peel_count += 1);
+        let in_flight_before = crate::infer::types::cache::in_flight_degraded_read_epoch();
+        MERGES_IN_PROGRESS.with(|merges| merges.borrow_mut().push(address));
+        let display_name = (!self.members.is_empty()).then(|| {
+            self.members
+                .iter()
+                .map(intersection_operand_name)
+                .collect::<Vec<_>>()
+                .join(" & ")
+        });
+        let merged = std::sync::Arc::new(crate::program::with_dts_expansion_reason(
+            crate::program::DtsExpansionReason::IntersectionMerge,
+            || {
+                merge_intersection_members_now(
+                    self.members.clone(),
+                    display_name,
+                    self.dropped_unmodelled_operand,
+                )
+            },
+        ));
+        MERGES_IN_PROGRESS.with(|merges| {
+            let mut merges = merges.borrow_mut();
+            if let Some(position) = merges.iter().rposition(|entry| *entry == address) {
+                merges.remove(position);
+            }
+        });
+        if crate::infer::types::cache::in_flight_degraded_read_epoch() != in_flight_before {
+            return merged;
+        }
+        self.memo.get_or_init(|| merged).clone()
     }
 }
 
@@ -689,6 +753,18 @@ fn merge_intersection_members_now(
     if !dropped_unmodelled_operand
         && !object_members.is_empty()
         && members.iter().any(|ty| matches!(ty, Type::Undefined | Type::Null))
+    {
+        return Type::Never;
+    }
+
+    // tsc's `getIntersectionTypeEx` empties an intersection holding `never` or
+    // operands from two disjoint primitive domains. Without it a property
+    // declared `string | undefined` on one operand and `string` on another
+    // distributed to `string | undefined` (`undefined & string` kept its first
+    // operand) instead of `string`. A dropped unmodelled operand cannot make a
+    // disjoint pair inhabited, so this holds regardless.
+    if members.iter().any(|ty| matches!(ty, Type::Never))
+        || has_disjoint_primitive_domains(&members)
     {
         return Type::Never;
     }
@@ -853,6 +929,28 @@ fn merge_intersection_members_now(
         Some(member) => member,
         None => Type::Unknown,
     }
+}
+
+/// tsc's `TypeFlagsDisjointDomains` partition (types.go:494), for the operands
+/// surge models as primitives. Object types belong to no domain: `string & {…}`
+/// is a brand, not `never`.
+fn primitive_domain(ty: &Type) -> Option<u8> {
+    match ty {
+        Type::String | Type::StringLiteral(_) => Some(0),
+        Type::Number | Type::NumberLiteral(_) => Some(1),
+        Type::BigInt => Some(2),
+        Type::Boolean | Type::BooleanLiteral(_) => Some(3),
+        Type::Symbol => Some(4),
+        Type::Void | Type::Undefined => Some(5),
+        _ => None,
+    }
+}
+
+fn has_disjoint_primitive_domains(members: &[Type]) -> bool {
+    let mut domains = members.iter().filter_map(primitive_domain);
+    domains
+        .next()
+        .is_some_and(|first| domains.any(|domain| domain != first))
 }
 
 /// The set of literals an operand admits, when the operand is a scalar literal,

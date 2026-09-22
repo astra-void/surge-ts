@@ -15,50 +15,32 @@ pub(crate) fn report_inferred_expression(
         InferredExpression::UnresolvedIdentifier { name, span } => {
             // `super` outside a class body with a resolvable base is left to
             // the grammar; there is nothing to look it up in.
-            if name == "super" || emit_type_only_as_value_diagnostic(&name, span, ctx) {
+            if name == "super" {
                 return;
             }
-
-            // The name is unresolved *here* but a UMD global resolves it for
-            // tsc, so the reference reports as TS2686 rather than as a missing
-            // name.
-            if crate::checks::emit_value_position_reference_diagnostic(
+            report_unresolved_value_name(
                 &name,
                 choose_span(span, fallback_span),
+                UnresolvedNameSite::Reference,
+                symbols,
                 ctx,
-            ) {
-                return;
-            }
-
-            if is_missing_node_like_global(&name, ctx) {
-                let diagnostic = if ctx.options.types_uses_wildcard() {
-                    Diagnostic::ts2580(&name, ctx.file_name.clone())
-                } else {
-                    Diagnostic::ts2591(&name, ctx.file_name.clone())
-                };
-                ctx.push(diagnostic_with_syntax_span(
-                    diagnostic,
-                    choose_span(span, fallback_span),
-                ));
-                return;
-            }
-
-            ctx.push(diagnostic_with_syntax_span(
-                unresolved_name_diagnostic(&name, symbols, ctx),
-                choose_span(span, fallback_span),
-            ));
+            );
         }
         InferredExpression::MissingProperty {
             property_name,
             object_type,
             span,
         } => {
-            let diagnostic = missing_property_diagnostic(
-                &property_name,
-                &object_type,
-                symbols,
-                ctx.file_name.clone(),
-            );
+            let diagnostic = match global_this_missing_member(&property_name, &object_type, ctx) {
+                Some(None) => return,
+                Some(Some(diagnostic)) => diagnostic,
+                None => missing_property_diagnostic(
+                    &property_name,
+                    &object_type,
+                    symbols,
+                    ctx.file_name.clone(),
+                ),
+            };
             ctx.push(diagnostic_with_syntax_span(
                 diagnostic,
                 choose_span(span, fallback_span),
@@ -85,14 +67,7 @@ pub(crate) fn check_property_receiver(
         return;
     };
     if *object_type == Type::GenuineUnknown {
-        let diagnostic = match nameable_receiver(object) {
-            Some(name) => Diagnostic::ts18046(name, ctx.file_name.clone()),
-            None => Diagnostic::ts2571(ctx.file_name.clone()),
-        };
-        ctx.push(diagnostic_with_syntax_span(
-            diagnostic,
-            choose_span(object_span, fallback_span),
-        ));
+        report_unknown_operand(object, choose_span(object_span, fallback_span), ctx);
         return;
     }
     maybe_emit_possibly_undefined_receiver(
@@ -144,10 +119,12 @@ pub(crate) fn maybe_emit_possibly_undefined_receiver(
     // two apart with a marker; surge re-derives the link without it.
     // A `null` keyword names a value, like `undefined` below: TS18050.
     if matches!(object, ParsedExpression::NullLiteral) {
-        ctx.push(diagnostic_with_syntax_span(
-            Diagnostic::ts18050("null", ctx.file_name.clone()),
+        push_nullish_operand_diagnostic(
+            object,
+            (true, false),
             choose_span(object_span, fallback_span),
-        ));
+            ctx,
+        );
         return true;
     }
     let receiver_type = if object.continues_optional_chain() {
@@ -161,28 +138,98 @@ pub(crate) fn maybe_emit_possibly_undefined_receiver(
     let Some((null, undefined)) = receiver_nullability(&receiver_type) else {
         return false;
     };
-    // `undefined` names a value rather than a possibly-`undefined` place, so
-    // tsc answers it with TS18050 before the possibly-`undefined` wording.
-    // Otherwise `reportObjectPossiblyNullOrUndefinedError` picks the code by
-    // which nullish values the receiver admits and whether it has a name.
+    push_nullish_operand_diagnostic(
+        object,
+        (null, undefined),
+        choose_span(object_span, fallback_span),
+        ctx,
+    );
+    true
+}
+
+/// tsc's `checkNonNullType` on an operator operand. Unlike a member receiver,
+/// an optional chain's own `undefined` counts here. Returns the type the
+/// operator goes on with when it reported: the non-nullish part, or `any`
+/// (tsc's error type) when nothing is left.
+pub(crate) fn check_non_null_operand(
+    operand: &ParsedExpression,
+    operand_type: &Type,
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    if *operand_type == Type::GenuineUnknown {
+        return report_unknown_operand(operand, span, ctx).then_some(Type::Any);
+    }
+    if matches!(operand, ParsedExpression::NullLiteral) {
+        push_nullish_operand_diagnostic(operand, (true, false), span, ctx);
+        return Some(Type::Any);
+    }
+    let nullability = receiver_nullability(operand_type)?;
+    push_nullish_operand_diagnostic(operand, nullability, span, ctx);
+    Some(match operand_type.peeled() {
+        Type::Undefined | Type::Null => Type::Any,
+        _ => surge_ts_types::remove_nullish(operand_type),
+    })
+}
+
+/// The `unknown` branch of `checkNonNullType`: under `strictNullChecks` an
+/// `unknown` operand is TS18046 named and TS2571 otherwise, and goes on as the
+/// error type. Without it `unknown` is an ordinary type the operation then
+/// rejects in its own terms. Returns whether it reported.
+pub(crate) fn report_unknown_operand(
+    operand: &ParsedExpression,
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) -> bool {
+    if !surge_ts_types::strict_null_checks() {
+        return false;
+    }
     let file_name = ctx.file_name.clone();
-    let diagnostic = if matches!(object, ParsedExpression::UndefinedLiteral) {
-        Diagnostic::ts18050("undefined", file_name)
-    } else {
-        match (nameable_receiver(object), null, undefined) {
+    let (diagnostic, span) = match span.and_then(|span| ctx.parenthesized_outer_span(span)) {
+        Some(outer) => (Diagnostic::ts2571(file_name), Some(outer)),
+        None => match nameable_receiver(operand) {
+            Some(name) => (Diagnostic::ts18046(name, file_name), span),
+            None => (Diagnostic::ts2571(file_name), span),
+        },
+    };
+    ctx.push(diagnostic_with_syntax_span(diagnostic, span));
+    true
+}
+
+/// `reportObjectPossiblyNullOrUndefinedError` for an operand that admits the
+/// given `(null, undefined)` values. The `null` keyword and the identifier
+/// `undefined` name values rather than possibly-nullish places, so they are
+/// TS18050; an entity name picks TS18047/TS18048/TS18049 by which nullish
+/// values it admits, and anything else TS2531/TS2532/TS2533. A parenthesized
+/// operand is not an entity name to tsc, so it is unnamed, anchored at the
+/// parentheses.
+fn push_nullish_operand_diagnostic(
+    operand: &ParsedExpression,
+    (null, undefined): (bool, bool),
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    let file_name = ctx.file_name.clone();
+    let unnamed = |file_name: String| match (null, undefined) {
+        (true, true) => Diagnostic::ts2533(file_name),
+        (true, false) => Diagnostic::ts2531(file_name),
+        _ => Diagnostic::ts2532(file_name),
+    };
+    if let Some(outer) = span.and_then(|span| ctx.parenthesized_outer_span(span)) {
+        ctx.push(diagnostic_with_syntax_span(unnamed(file_name), Some(outer)));
+        return;
+    }
+    let diagnostic = match operand {
+        ParsedExpression::NullLiteral => Diagnostic::ts18050("null", file_name),
+        ParsedExpression::UndefinedLiteral => Diagnostic::ts18050("undefined", file_name),
+        _ => match (nameable_receiver(operand), null, undefined) {
             (Some(name), true, true) => Diagnostic::ts18049(name, file_name),
             (Some(name), true, false) => Diagnostic::ts18047(name, file_name),
             (Some(name), _, _) => Diagnostic::ts18048(name, file_name),
-            (None, true, true) => Diagnostic::ts2533(file_name),
-            (None, true, false) => Diagnostic::ts2531(file_name),
-            (None, _, _) => Diagnostic::ts2532(file_name),
-        }
+            (None, _, _) => unnamed(file_name),
+        },
     };
-    ctx.push(diagnostic_with_syntax_span(
-        diagnostic,
-        choose_span(object_span, fallback_span),
-    ));
-    true
+    ctx.push(diagnostic_with_syntax_span(diagnostic, span));
 }
 
 /// The type of an optional-chain link with the chain's own `undefined` left
@@ -249,7 +296,7 @@ fn property_type_on(base: &Type, name: &str) -> Option<Type> {
 /// read on it is a missing property, reported elsewhere.
 /// Which nullish values a receiver admits, as `(null, undefined)`; `None` when
 /// it admits neither, or when part of it is unmodelled.
-fn receiver_nullability(ty: &Type) -> Option<(bool, bool)> {
+pub(crate) fn receiver_nullability(ty: &Type) -> Option<(bool, bool)> {
     let (null, undefined) = match ty.peeled() {
         Type::Undefined => (false, true),
         Type::Null => (true, false),
@@ -302,30 +349,11 @@ fn property_receiver_name(expression: &ParsedExpression) -> Option<String> {
     }
 }
 
-/// TS2304 for an unresolved value name, or TS2552 when a close in-scope name
-/// suggests a typo.
-pub(crate) fn unresolved_name_diagnostic(
-    name: &str,
-    symbols: &SymbolTable,
-    ctx: &CheckerContext,
-) -> Diagnostic {
-    match suggested_unresolved_name(name, symbols, ctx) {
-        Some(suggestion) => Diagnostic::ts2552(name, suggestion, ctx.file_name.clone()),
-        // A shorthand property names the value it reads, so tsc's message says
-        // what to do about it instead of reporting a bare missing name. A
-        // spelling suggestion still wins, as it does for any other reference.
-        None if ctx.shorthand_property_depth > 0 => {
-            Diagnostic::ts18004(name, ctx.file_name.clone())
-        }
-        None => Diagnostic::ts2304(name, ctx.file_name.clone()),
-    }
-}
-
 /// tsc's `getSpellingSuggestion`: the closest in-scope value name within an
 /// edit distance of `floor(len * 0.4)`, skipping candidates whose length
 /// differs by more than `max(2, floor(len * 0.34))`. A case-only difference
 /// costs a tenth of an edit, so it beats any real edit.
-fn suggested_unresolved_name(
+pub(super) fn suggested_value_name(
     name: &str,
     symbols: &SymbolTable,
     ctx: &CheckerContext,
@@ -334,10 +362,10 @@ fn suggested_unresolved_name(
     let mut best_distance = (name.len() * 4 / 10) as f64 + 1.0;
     let mut best: Option<&str> = None;
     let mut candidates: Vec<&str> = symbols
-        .iter()
-        .chain(ctx.symbols.iter())
-        .chain(ctx.ambient_global_symbols.iter())
-        .map(|(candidate, _)| candidate.as_ref())
+        .visible_names()
+        .chain(ctx.symbols.visible_names())
+        .chain(ctx.ambient_global_symbols.visible_names())
+        .map(|candidate| candidate.as_ref())
         // Globals the lib does not declare as bindings.
         .chain(["undefined", "globalThis"])
         .collect();
@@ -453,10 +481,81 @@ fn levenshtein_with_max(source: &str, target: &str, max: f64) -> Option<f64> {
     (result <= max).then_some(result)
 }
 
-fn is_missing_node_like_global(name: &str, ctx: &CheckerContext) -> bool {
-    if ctx.options.types.iter().any(|ty| ty == "node") {
-        return false;
+/// tsc's `checkIdentifier` for a binding it types by control flow (`autoType`,
+/// `autoArrayType`). The receiver of `push`/`unshift`/`length`/`x[n] = v` is
+/// `any[]` and unreported. In its own function a read sees the flow; only an
+/// array with no element type yet is an implicit `any[]`. A closure sees the
+/// flow only for a `let` past its last assignment, and otherwise the declared
+/// type — an implicit `any` (or `any[]`) unless the `let` is never initialized,
+/// which reads as `undefined`. An implicit read is TS7005, with TS7034 on the
+/// declaration. `None` leaves the read to the binding's ordinary type.
+pub(crate) fn check_auto_array_read(
+    name: &str,
+    span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    if !ctx.auto_arrays_declared {
+        return None;
     }
+    let (binding, from_enclosing_function) = symbols.auto_array(name)?;
+    // A module-level binding evolves in the module table; the scope stack a
+    // statement is checked through only holds a snapshot of it.
+    let binding = match binding.module_level {
+        true => ctx
+            .symbols
+            .auto_array(name)
+            .map_or(binding, |(current, _)| current),
+        false => binding,
+    };
+    let any_array = Type::Array(Box::new(Type::Any));
+    if binding.evolving && span.is_some() && ctx.evolving_array_operation_target == span {
+        ctx.evolving_array_operation_target = None;
+        return Some(any_array);
+    }
+    let position = span.map_or(0, |span| span.start);
+    // A top-level function or class declaration never continues the module's flow.
+    let declared_only = binding.module_level && ctx.module_declared_only_depth > 0;
+    let sees_flow =
+        !declared_only && (!from_enclosing_function || binding.closure_sees_flow(position));
+    let never_initialized = binding.never_initialized();
+    let declared_array = binding.declared_array;
+    let element_less = binding.is_element_less();
+    let name_span = binding.name_span;
+    let implicit = if sees_flow {
+        element_less.then(|| any_array.clone())
+    } else if never_initialized {
+        return Some(Type::Undefined);
+    } else if declared_array {
+        Some(any_array.clone())
+    } else {
+        Some(Type::Any)
+    };
+    let implicit = implicit?;
+    let type_name = if implicit == Type::Any {
+        "any"
+    } else {
+        "any[]"
+    };
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts7034(name, type_name, ctx.file_name.clone()),
+        name_span,
+    ));
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts7005(name, type_name, ctx.file_name.clone()),
+        span,
+    ));
+    Some(implicit)
+}
 
-    matches!(name, "Buffer" | "process")
+/// Marks `object` as the receiver of an evolving-array operation, for
+/// [`check_auto_array_read`] to recognize when it evaluates it.
+pub(crate) fn mark_evolving_array_operation(object: &ParsedExpression, ctx: &mut CheckerContext) {
+    if ctx.auto_arrays_declared
+        && let ParsedExpression::Identifier {
+            span: Some(span), ..
+        } = object
+    {
+        ctx.evolving_array_operation_target = Some(*span);
+    }
 }

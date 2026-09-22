@@ -36,11 +36,23 @@ pub(crate) fn const_member_literal_value(
     // A bare `const CACHE_VERSION = 1` keeps its literal type, so it
     // discriminates like the member form.
     if let ParsedExpression::Identifier { name, .. } = expression {
-        let ty = symbols.get(name)?.ty.peeled();
-        return matches!(
-            ty,
-            Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
-        )
+        let symbol = symbols.get(name)?;
+        // A declared `unique symbol` is its own unit type; the equality test
+        // removes exactly that member.
+        if matches!(&symbol.ty, Type::Reference(reference) if reference.is_unique_symbol()) {
+            return Some(symbol.ty.clone());
+        }
+        let ty = symbol.ty.peeled();
+        // A `const` of type `symbol` is a `unique symbol` to tsc — a unit type
+        // an equality test can remove (`fn !== skipToken`). surge types it as
+        // `symbol`, so the whole `symbol` member stands in for it.
+        let unique_symbol =
+            ty == Type::Symbol && matches!(symbol.kind, crate::symbols::SymbolKind::Const);
+        return (unique_symbol
+            || matches!(
+                ty,
+                Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
+            ))
         .then_some(ty);
     }
     let ParsedExpression::PropertyAccess {
@@ -80,7 +92,11 @@ pub(super) fn discriminant_match(member: &Type, property: &str, literal: &Type) 
     };
     // The discriminant is often written as `typeof Codes.a`, which resolves to a
     // lazy reference around the literal rather than the literal itself.
-    discriminant_type_match(&property_type.ty, literal)
+    match discriminant_type_match(&property_type.ty, literal) {
+        // `tag?: "a"` may be absent, so the member also survives `tag !== "a"`.
+        DiscriminantMatch::Yes if property_type.optional => DiscriminantMatch::Unknown,
+        matched => matched,
+    }
 }
 
 /// Whether a discriminant of type `property_ty` can hold `literal`.
@@ -154,8 +170,17 @@ pub(crate) fn narrow_union_by_discriminant(
     literal: &Type,
     keep_matching: bool,
 ) -> Option<Type> {
+    // An alias reached through a lazy reference is the same union: whether it
+    // was expanded already depends on the scope the annotation resolved in (a
+    // generic class body leaves it deferred), and narrowing must not.
+    let peeled = matches!(ty, Type::Reference(_)).then(|| ty.peeled());
+    let ty = peeled.as_ref().unwrap_or(ty);
     let Type::Union(union) = ty else {
-        return None;
+        // The last member left by earlier tests: excluding the one literal its
+        // discriminant can be leaves nothing, which is what makes
+        // `const unreachable: never = shape` after the final `case` type-check.
+        return (!keep_matching && discriminant_is_exactly(ty, property, literal))
+            .then_some(Type::Never);
     };
     let kept: Vec<Type> = union
         .types()
@@ -171,10 +196,32 @@ pub(crate) fn narrow_union_by_discriminant(
         .cloned()
         .collect();
 
-    if kept.is_empty() || kept.len() == union.types().len() {
+    if kept.is_empty() {
+        let exhausted = !keep_matching
+            && union
+                .types()
+                .iter()
+                .all(|member| discriminant_is_exactly(member, property, literal));
+        return exhausted.then_some(Type::Never);
+    }
+    if kept.len() == union.types().len() {
         return None;
     }
     Some(union_type(kept))
+}
+
+/// Whether `member` is an object whose *required* `property` is exactly
+/// `literal`, so that `member.property !== literal` cannot hold. An optional
+/// discriminant may be absent, and anything surge could not read as an object
+/// proves nothing — both keep the member.
+fn discriminant_is_exactly(member: &Type, property: &str, literal: &Type) -> bool {
+    let Type::Object(object) = &member.peeled() else {
+        return false;
+    };
+    object
+        .properties
+        .get(property)
+        .is_some_and(|declared| !declared.optional && declared.ty.peeled() == *literal)
 }
 
 /// Parses `value === "lit"` / `value !== 3` on a bare identifier — the
@@ -182,9 +229,10 @@ pub(crate) fn narrow_union_by_discriminant(
 /// (`value.kind === "lit"`) [`parse_discriminant_condition_with`] handles.
 /// Returns the identifier, the literal type, and whether the operator is an
 /// equality test.
-pub(crate) fn parse_identifier_literal_equality(
-    condition: &'_ ParsedExpression,
-) -> Option<(&'_ str, Type, bool)> {
+pub(crate) fn parse_identifier_literal_equality<'a>(
+    condition: &'a ParsedExpression,
+    symbols: &SymbolTable,
+) -> Option<(&'a str, Type, bool)> {
     use surge_ts_syntax::ParsedBinaryOperator;
     let ParsedExpression::Binary {
         left,
@@ -201,13 +249,19 @@ pub(crate) fn parse_identifier_literal_equality(
         _ => return None,
     };
 
+    // The compared value may be a `const` holding a unit type
+    // (`fn !== skipToken`, `status === DONE`).
+    let literal_of = |expression: &ParsedExpression| {
+        literal_expression_value(expression)
+            .or_else(|| const_member_literal_value(expression, symbols))
+    };
     if let ParsedExpression::Identifier { name, .. } = left.as_ref()
-        && let Some(literal) = literal_expression_value(right)
+        && let Some(literal) = literal_of(right)
     {
         return Some((name.as_str(), literal, eq));
     }
     if let ParsedExpression::Identifier { name, .. } = right.as_ref()
-        && let Some(literal) = literal_expression_value(left)
+        && let Some(literal) = literal_of(left)
     {
         return Some((name.as_str(), literal, eq));
     }
@@ -262,6 +316,9 @@ pub(super) fn literal_base_primitive(literal: &Type) -> Option<Type> {
         Type::StringLiteral(_) => Some(Type::String),
         Type::NumberLiteral(_) => Some(Type::Number),
         Type::BooleanLiteral(_) => Some(Type::Boolean),
+        // The `unique symbol` stand-in above, and a declared one.
+        Type::Symbol => Some(Type::Symbol),
+        Type::Reference(reference) if reference.is_unique_symbol() => Some(Type::Symbol),
         _ => None,
     }
 }

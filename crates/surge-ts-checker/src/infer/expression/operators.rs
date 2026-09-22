@@ -231,8 +231,6 @@ pub(crate) fn infer_binary_expression(
             let right_type = infer_expression(right, symbols, ctx);
 
             match (left_type, right_type) {
-                (InferredExpression::Known(Type::Any), _)
-                | (_, InferredExpression::Known(Type::Any)) => InferredExpression::Known(Type::Any),
                 // One string operand makes `+` a concatenation whatever the
                 // other side is, which is what keeps `'data' + String(x)` a
                 // string when the other operand is one this pass cannot type.
@@ -249,6 +247,8 @@ pub(crate) fn infer_binary_expression(
                 {
                     InferredExpression::Known(Type::String)
                 }
+                (InferredExpression::Known(Type::Any), _)
+                | (_, InferredExpression::Known(Type::Any)) => InferredExpression::Known(Type::Any),
                 (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty))
                     if matches!(left_ty.base_primitive(), Some(Type::Number))
                         && matches!(right_ty.base_primitive(), Some(Type::Number)) =>

@@ -230,7 +230,9 @@ pub(super) fn narrow_literal_equality_in_scope(
     scopes: &mut ScopeStack,
     branch_is_true: bool,
 ) -> bool {
-    let Some((name, literal, eq)) = parse_identifier_literal_equality(condition) else {
+    let Some((name, literal, eq)) =
+        parse_identifier_literal_equality(condition, scopes.visible_symbols())
+    else {
         return false;
     };
     let Some(symbol) = scopes.resolve(name) else {
@@ -393,7 +395,7 @@ pub(super) fn narrow_literal_equality_symbol_table(
     symbols: &SymbolTable,
     branch_is_true: bool,
 ) -> Option<SymbolTable> {
-    let (name, literal, eq) = parse_identifier_literal_equality(condition)?;
+    let (name, literal, eq) = parse_identifier_literal_equality(condition, symbols)?;
     let symbol = symbols.get(name)?;
     let narrowed = narrow_by_literal_equality(&symbol.ty, &literal, branch_is_true == eq)?;
     let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
@@ -444,7 +446,8 @@ pub(super) fn collect_equality_guard_subjects(
                 Some((ParsedExpression::Identifier { name, .. }, _, _, _)) => Some(name.as_str()),
                 _ => match parse_nullish_equality_condition(condition) {
                     Some((ParsedExpression::Identifier { name, .. }, _, _)) => Some(name.as_str()),
-                    _ => parse_identifier_literal_equality(condition).map(|(name, _, _)| name),
+                    _ => parse_identifier_literal_equality(condition, scopes.visible_symbols())
+                        .map(|(name, _, _)| name),
                 },
             };
             if let Some(name) = subject

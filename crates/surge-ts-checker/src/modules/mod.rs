@@ -149,8 +149,11 @@ mod tests {
                     import_call_specifiers: parsed.import_call_specifiers,
                     file_kind: FileKind::RootSource,
                     module_reads: parsed.module_reads,
+                definite_writes: parsed.definite_writes,
                     suppressed_ranges: parsed.suppressed_ranges,
                     grammar_diagnostics: parsed.grammar_diagnostics,
+                    parenthesized_expressions: parsed.parenthesized_expressions.into(),
+                    let_assignments: parsed.let_assignments.into(),
                     json_module_type: parsed.json_module_type,
                 }
             })

@@ -105,6 +105,13 @@ pub(crate) struct ContextualReturnFrame {
     /// return type admits `undefined` — a falling-through path then returns a
     /// value the type already allows.
     returned_void_like: bool,
+    /// This body's returns have no expectation *by construction*: an
+    /// unannotated declaration or class member, which Go checks only against
+    /// the annotation (`getReturnTypeFromAnnotation`, nil) and never types
+    /// contextually. Distinct from a body whose contextual return merely
+    /// degraded, which also reaches the return check with no expectation but
+    /// where the missing context is surge's own gap.
+    unannotated_declaration: bool,
     /// The types this body's `return <expr>`s produced, for rendering the whole
     /// signature tsc names when a contextually-typed arrow does not fit.
     /// Collected only for an active frame, and capped — the render only needs a
@@ -131,6 +138,20 @@ impl CheckerContext {
     }
 
     /// Whether the body currently being checked owns an active frame.
+    /// Marks the innermost body as an unannotated declaration's (see
+    /// [`ContextualReturnFrame::unannotated_declaration`]).
+    pub(crate) fn mark_unannotated_declaration_body(&mut self) {
+        if let Some(frame) = self.contextual_return_frames.last_mut() {
+            frame.unannotated_declaration = true;
+        }
+    }
+
+    pub(crate) fn in_unannotated_declaration_body(&self) -> bool {
+        self.contextual_return_frames
+            .last()
+            .is_some_and(|frame| frame.unannotated_declaration)
+    }
+
     pub(crate) fn in_contextual_return_body(&self) -> bool {
         self.contextual_return_frames
             .last()
@@ -383,6 +404,12 @@ pub(crate) struct CheckerContext {
     /// X`). Referencing one as a value from a module file is TS2686; from a
     /// script file it is legal. Program-lifetime, written once before checking.
     pub(crate) umd_global_names: Arc<FxHashSet<Arc<str>>>,
+    /// Every namespace in the program, by scope. See
+    /// [`crate::program::NamespaceRegistry`].
+    pub(crate) namespace_registry: Arc<crate::program::NamespaceRegistry>,
+    /// Global `let`/`const` names: bindings in the global scope that are not
+    /// properties of the global object.
+    pub(crate) block_scoped_globals: Arc<FxHashSet<Arc<str>>>,
     /// The subset of [`Self::umd_global_names`] the file under check actually
     /// reaches through the global scope: the file is a module and nothing local
     /// or imported shadows the name. Empty for script files, for files that
@@ -460,6 +487,17 @@ pub(crate) struct CheckerContext {
     /// import it synthesizes.
     pub(crate) jsx_intrinsic_elements_declarer: Option<(Arc<TypeDeclarationTable>, String)>,
     pub(crate) type_parameter_scopes: Vec<HashMap<String, Type>>,
+    /// The current file's definite-assignment targets
+    /// ([`surge_ts_syntax::ParsedSource::definite_writes`]).
+    pub(crate) definite_writes: Arc<HashSet<String>>,
+    /// Never-initialized `let` bindings of enclosing flow containers that a
+    /// nested container reading them reports as TS2454 (tsc's
+    /// `isNeverInitialized`); see `flow::never_initialized`.
+    pub(crate) inherited_never_initialized: Vec<Arc<str>>,
+    /// The never-initialized bindings typed by a type parameter whose
+    /// constraint carries `undefined`: a read of one where tsc substitutes the
+    /// constraint is not reported (see `FunctionFlowState::constraint_exempt`).
+    pub(crate) never_initialized_constraint_exempt: HashSet<Arc<str>>,
     // Parallel to `type_parameter_scopes`: the declared constraint (if any) for
     // each in-scope type parameter, used to recognize `K extends keyof T` so a
     // generic `T[K]` is not falsely reported as an invalid index (TS2536).
@@ -514,6 +552,30 @@ pub(crate) struct CheckerContext {
     /// inherits it (that is what makes `function f() { return () => this }`
     /// report), while a class method or an object-literal method clears it.
     pub(crate) this_is_implicitly_any: bool,
+    /// The members the constructor being checked may initialize even when they
+    /// are `readonly`: its class's own instance properties and parameter
+    /// properties. `None` everywhere else — tsc allows the write only when the
+    /// control-flow container is that constructor, so a nested function, an
+    /// arrow included, clears it.
+    pub(crate) constructor_writable_members: Option<Vec<String>>,
+    /// The base class's constructor value while a derived constructor is
+    /// checked: what a `super(…)` call resolves its arguments against. The
+    /// `super` symbol itself is the base *instance*, for `super.member`.
+    pub(crate) super_constructor_type: Option<Type>,
+    /// Set while a file's function and class signatures are collected, which
+    /// runs before its `const`s are bound. A class base that names no type may
+    /// be one of those values (`class D extends Mixed`), so the miss is not
+    /// reported from here; the class's own check reports a base that names
+    /// nothing at all.
+    pub(crate) collecting_signatures: bool,
+    /// Whether the declaration whose heritage is being resolved is a class
+    /// instance. See [`Self::collecting_signatures`].
+    pub(crate) resolving_class_heritage: bool,
+    /// The union an object literal is being checked against, while it is
+    /// evaluated against the one member picked for it. The literal's evaluator
+    /// takes it: a missing property is then the union's assignability failure,
+    /// not the member's TS2741.
+    pub(crate) union_literal_target: Option<Type>,
     pub(crate) shorthand_property_depth: usize,
     /// How deep the per-property union-member probe is nested. It types a
     /// literal's properties against a candidate union, and a nested literal
@@ -544,6 +606,8 @@ pub(crate) struct CheckerContext {
     /// Spans of the `default`-less switches checked in this file whose cases do
     /// not cover their discriminant, which the missing-return check needs.
     pub(crate) non_exhaustive_switches: Vec<(usize, usize)>,
+    /// `default`-less switches whose cases are known to cover the discriminant.
+    pub(crate) exhaustive_switches: Vec<(usize, usize)>,
     /// Set by the arrow path just before it checks a block body, consumed by
     /// the frame that body opens.
     pub(crate) next_body_frame_active: bool,
@@ -562,6 +626,45 @@ pub(crate) struct CheckerContext {
     /// so a `private` member is accessible when its declaring class heads an
     /// entry and a `protected` one when it appears anywhere in one.
     pub(crate) enclosing_classes: Vec<Vec<crate::checks::expr::ClassIdentity>>,
+    /// The classes whose member bodies enclose the code being checked,
+    /// innermost last, with the types an unresolved name is looked up on for
+    /// tsc's "did you mean `this.x` / `C.x`" hint.
+    pub(crate) enclosing_class_members: Vec<crate::checks::expr::EnclosingClassMembers>,
+    /// The calls whose return type is `never`, keyed by the call's own span:
+    /// tsc ends the flow after one (`util.assertNever(x)`), so the function's
+    /// end point is not reachable through it.
+    pub(crate) never_returning_calls: FxHashSet<(usize, usize)>,
+    /// The class type parameters that are out of scope because a *static*
+    /// member is being checked: the member's source range, the depth of the
+    /// scope that binds them (a nearer scope — a static method's own
+    /// parameters — shadows them), and their names.
+    pub(crate) static_member_type_parameters:
+        Option<(Option<surge_ts_syntax::TextSpan>, usize, Vec<String>)>,
+    /// The scope enclosing a nested `function` declaration whose body is
+    /// about to be checked. It already chains to the module and the ambient
+    /// globals, so it replaces the usual module-over-ambient body root.
+    pub(crate) nested_function_scope: Option<Arc<SymbolTable>>,
+    /// The file's parenthesized expressions (see
+    /// [`surge_ts_syntax::ParsedSource::parenthesized_expressions`]). Per-file:
+    /// cleared by `begin_file_check`, set when the file's check starts.
+    pub(crate) parenthesized_expressions: Arc<[surge_ts_syntax::ParenthesizedExpressionSpan]>,
+    /// The receiver of a `push`/`unshift`/`length`/`x[n] = v` about to be
+    /// evaluated: an evolving array read there is typed `any[]` and is not a
+    /// read tsc reports.
+    pub(crate) evolving_array_operation_target: Option<SyntaxTextSpan>,
+    /// Whether this file declared an evolving array at all, so every other
+    /// file skips the per-identifier lookup. Per-file: cleared by
+    /// `begin_file_check`.
+    pub(crate) auto_arrays_declared: bool,
+    /// The file's flow-typed `let` assignment summaries (see
+    /// [`surge_ts_syntax::ParsedSource::let_assignments`]). Per-file.
+    pub(crate) let_assignments: Arc<[surge_ts_syntax::LetAssignmentSummary]>,
+    /// Nesting depth of top-level function and class declaration checks,
+    /// which read module-level auto arrays by their declared type.
+    pub(crate) module_declared_only_depth: u32,
+    /// Nesting depth of `export` declaration checks, whose bindings other
+    /// modules can reach, so tsc does not type them by this module's flow.
+    pub(crate) module_export_depth: u32,
     /// Lowest `resolving`-stack index that any cycle truncation has re-entered
     /// since this field was last reset. A resolution that pushed its declaration
     /// at stack depth `floor` is independent of the enclosing `resolving` context
@@ -658,9 +761,14 @@ impl CheckerContext {
             module_augmentations: Arc::new(FxHashMap::default()),
             ambient_global_symbols: SymbolTable::new(),
             umd_global_names: Arc::new(FxHashSet::default()),
+            namespace_registry: Arc::default(),
+            block_scoped_globals: Arc::default(),
             file_umd_global_names: FxHashSet::default(),
             file_umd_global_names_owner: None,
             merge_script_interfaces_with_globals: false,
+            definite_writes: Arc::default(),
+            inherited_never_initialized: Vec::new(),
+            never_initialized_constraint_exempt: HashSet::new(),
             file_type_only_import_names: FxHashSet::default(),
             file_import_names: FxHashSet::default(),
             file_namespace_import_names: FxHashSet::default(),
@@ -682,6 +790,11 @@ impl CheckerContext {
             instantiation_depth: 0,
             unmodelled_jsx_props_depth: 0,
             this_is_implicitly_any: false,
+            constructor_writable_members: None,
+            super_constructor_type: None,
+            collecting_signatures: false,
+            resolving_class_heritage: false,
+            union_literal_target: None,
             shorthand_property_depth: 0,
             degraded_expected_type_depth: 0,
             genuine_any_bindings: HashSet::default(),
@@ -693,10 +806,21 @@ impl CheckerContext {
             split_returned_conditional: false,
             allow_missing_tuple_element: false,
             non_exhaustive_switches: Vec::new(),
+            exhaustive_switches: Vec::new(),
             next_body_frame_active: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
             enclosing_classes: Vec::new(),
+            enclosing_class_members: Vec::new(),
+            never_returning_calls: FxHashSet::default(),
+            static_member_type_parameters: None,
+            nested_function_scope: None,
+            parenthesized_expressions: Arc::from([]),
+            evolving_array_operation_target: None,
+            auto_arrays_declared: false,
+            let_assignments: Arc::from([]),
+            module_declared_only_depth: 0,
+            module_export_depth: 0,
             lowest_cycle_target_index: usize::MAX,
             structural_resolution_frames: Vec::new(),
             type_literal_member_frames: Vec::new(),
@@ -806,9 +930,14 @@ impl CheckerContext {
             // A declaration environment only re-resolves types; it never runs the
             // expression checks that report TS2686, so it carries no UMD state.
             umd_global_names: Arc::new(FxHashSet::default()),
+            namespace_registry: Arc::default(),
+            block_scoped_globals: Arc::default(),
             file_umd_global_names: FxHashSet::default(),
             file_umd_global_names_owner: None,
             merge_script_interfaces_with_globals: false,
+            definite_writes: Arc::default(),
+            inherited_never_initialized: Vec::new(),
+            never_initialized_constraint_exempt: HashSet::new(),
             file_type_only_import_names: FxHashSet::default(),
             file_import_names: FxHashSet::default(),
             file_namespace_import_names: FxHashSet::default(),
@@ -830,6 +959,11 @@ impl CheckerContext {
             instantiation_depth: 0,
             unmodelled_jsx_props_depth: 0,
             this_is_implicitly_any: false,
+            constructor_writable_members: None,
+            super_constructor_type: None,
+            collecting_signatures: false,
+            resolving_class_heritage: false,
+            union_literal_target: None,
             shorthand_property_depth: 0,
             degraded_expected_type_depth: 0,
             genuine_any_bindings: HashSet::default(),
@@ -841,10 +975,21 @@ impl CheckerContext {
             split_returned_conditional: false,
             allow_missing_tuple_element: false,
             non_exhaustive_switches: Vec::new(),
+            exhaustive_switches: Vec::new(),
             next_body_frame_active: false,
             cross_file_resolution_depth: 0,
             namespace_member_prefix_stack: Vec::new(),
             enclosing_classes: Vec::new(),
+            enclosing_class_members: Vec::new(),
+            never_returning_calls: FxHashSet::default(),
+            static_member_type_parameters: None,
+            nested_function_scope: None,
+            parenthesized_expressions: Arc::from([]),
+            evolving_array_operation_target: None,
+            auto_arrays_declared: false,
+            let_assignments: Arc::from([]),
+            module_declared_only_depth: 0,
+            module_export_depth: 0,
             lowest_cycle_target_index: usize::MAX,
             structural_resolution_frames: Vec::new(),
             type_literal_member_frames: Vec::new(),
@@ -971,6 +1116,38 @@ impl CheckerContext {
             })
     }
 
+    /// tsc's name resolver (`nameresolver.go`): a class type parameter is not
+    /// in scope in a static member, unless a nearer declaration rebinds the
+    /// name.
+    pub(crate) fn names_static_forbidden_type_parameter(
+        &self,
+        name: &str,
+        span: Option<surge_ts_syntax::TextSpan>,
+        written_here: bool,
+    ) -> bool {
+        let Some((member_span, depth, names)) = self.static_member_type_parameters.as_ref() else {
+            return false;
+        };
+        // Only a reference written inside the member is out of scope: resolving
+        // its annotations expands the class's own declaration, whose other
+        // members name the parameter legitimately. A reference that carries no
+        // span is judged by whether it is being resolved on its own rather
+        // than beneath such an expansion.
+        match member_span.zip(span) {
+            Some((member_span, span)) => {
+                if span.start < member_span.start || span.end > member_span.end {
+                    return false;
+                }
+            }
+            None if !written_here => return false,
+            None => {}
+        }
+        names.iter().any(|forbidden| forbidden == name)
+            && !self.type_parameter_scopes[(*depth + 1).min(self.type_parameter_scopes.len())..]
+                .iter()
+                .any(|scope| scope.contains_key(name))
+    }
+
     /// Whether an enclosing declaration currently binds `name` as a type
     /// parameter; a `Type::TypeParameter` that none does is one that leaked
     /// out of an instantiation.
@@ -1052,6 +1229,13 @@ impl CheckerContext {
     /// fully resolve; tsc validates the access against that constraint, so an
     /// indexed access through a constrained parameter must not cascade into a
     /// `TS2536`/`TS2538` false positive.
+    pub(crate) fn type_parameter_constraint(&self, name: &str) -> Option<&ParsedType> {
+        self.type_parameter_constraint_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+    }
+
     pub(crate) fn type_parameter_has_constraint(&self, name: &str) -> bool {
         self.type_parameter_constraint_scopes
             .iter()
@@ -1158,10 +1342,57 @@ impl CheckerContext {
     /// The import must actually name something with a value meaning: importing
     /// a *type* with `import type` and using it as a value is TS2693 in tsc
     /// ("only refers to a type"), not TS1361.
+    /// A type-only import whose target has a value side: tsc resolves the
+    /// alias and reports the use (TS1361). A target that is only a type is the
+    /// plain type-as-value error instead; a class is both.
     pub(crate) fn is_type_only_import_value_reference(&self, name: &str) -> bool {
         self.file_type_only_import_names_owner.as_deref() == Some(self.file_name.as_str())
             && self.file_type_only_import_names.contains(name)
-            && self.lookup_type_declaration(name).is_none()
+            && match self.lookup_type_declaration(name) {
+                None => true,
+                Some(TypeDeclarationInfo::Interface(info)) => info.is_class_instance,
+                Some(TypeDeclarationInfo::Alias(_)) => false,
+            }
+    }
+
+    /// `Some(instantiated)` when `name` is a namespace visible here, looking
+    /// through the namespaces whose members are being resolved.
+    pub(crate) fn namespace_meaning(&self, name: &str) -> Option<bool> {
+        let registry = &self.namespace_registry;
+        self.namespace_member_prefix_stack
+            .iter()
+            .rev()
+            .find_map(|prefix| registry.lookup(&self.file_name, &format!("{prefix}.{name}")))
+            .or_else(|| registry.lookup(&self.file_name, name))
+    }
+
+    /// The namespace `name` names here, looking through the namespaces whose
+    /// members are being resolved.
+    pub(crate) fn namespace_info(
+        &self,
+        name: &str,
+    ) -> Option<(String, &crate::program::NamespaceInfo)> {
+        let registry = &self.namespace_registry;
+        self.namespace_member_prefix_stack
+            .iter()
+            .rev()
+            .find_map(|prefix| {
+                let qualified = format!("{prefix}.{name}");
+                registry
+                    .info(&self.file_name, &qualified)
+                    .map(|info| (qualified, info))
+            })
+            .or_else(|| {
+                registry
+                    .info(&self.file_name, name)
+                    .map(|info| (name.to_string(), info))
+            })
+    }
+
+    /// Whether the per-file import sets describe the file under check. While a
+    /// declaration from another file is being resolved they do not.
+    pub(crate) fn knows_file_imports(&self) -> bool {
+        self.file_type_only_import_names_owner.as_deref() == Some(self.file_name.as_str())
     }
 
     pub(crate) fn is_import_binding(&self, name: &str) -> bool {
@@ -1222,6 +1453,25 @@ impl CheckerContext {
         }
     }
 
+    /// The outermost parentheses around the expression spanning `inner`, which
+    /// is where tsc anchors a diagnostic on that operand.
+    pub(crate) fn parenthesized_outer_span(&self, inner: SyntaxTextSpan) -> Option<SyntaxTextSpan> {
+        let key = (inner.start, inner.end);
+        self.parenthesized_expressions
+            .binary_search_by_key(&key, |span| (span.inner.start, span.inner.end))
+            .ok()
+            .map(|index| self.parenthesized_expressions[index].outer)
+    }
+
+    /// How the flow-typed `let` whose name starts at `name_start` is assigned.
+    pub(crate) fn let_assignment(&self, name_start: usize) -> Option<surge_ts_syntax::LetAssignmentSummary> {
+        let key = u32::try_from(name_start).ok()?;
+        self.let_assignments
+            .binary_search_by_key(&key, |summary| summary.name_start)
+            .ok()
+            .map(|index| self.let_assignments[index])
+    }
+
     pub(crate) fn begin_file_check(&mut self, file_name: String) {
         self.set_file_name(file_name);
         self.type_declaration_scope = None;
@@ -1242,11 +1492,30 @@ impl CheckerContext {
         self.file_type_only_import_names.clear();
         self.file_type_only_import_names_owner = None;
         self.checked_function_declaration_names.clear();
+        self.definite_writes = Arc::default();
+        self.inherited_never_initialized.clear();
+        self.never_initialized_constraint_exempt.clear();
         self.non_exhaustive_switches.clear();
+        self.exhaustive_switches.clear();
         self.genuine_any_bindings.clear();
         self.this_is_implicitly_any = false;
+        self.constructor_writable_members = None;
+        self.super_constructor_type = None;
+        self.collecting_signatures = false;
+        self.resolving_class_heritage = false;
+        self.union_literal_target = None;
         self.shorthand_property_depth = 0;
         self.enclosing_classes.clear();
+        self.enclosing_class_members.clear();
+        self.static_member_type_parameters = None;
+        self.never_returning_calls.clear();
+        self.nested_function_scope = None;
+        self.parenthesized_expressions = Default::default();
+        self.evolving_array_operation_target = None;
+        self.auto_arrays_declared = false;
+        self.let_assignments = Default::default();
+        self.module_declared_only_depth = 0;
+        self.module_export_depth = 0;
         debug_assert!(
             self.diagnostics.is_empty(),
             "begin_file_check: previous file's diagnostics were not taken"
@@ -1635,6 +1904,8 @@ impl CheckerContext {
         module_local_values_by_file: FxHashMap<Arc<str>, Arc<SymbolTable>>,
     ) {
         self.module_local_values_by_file = Arc::new(module_local_values_by_file);
+        self.declaration_environment_store
+            .publish_module_local_values(&self.module_local_values_by_file);
         self.declaration_environment_generation =
             self.declaration_environment_generation.wrapping_add(1);
     }
@@ -1836,6 +2107,11 @@ impl CheckerContext {
 
     pub(crate) fn finish_with_stats(self) -> (Vec<Diagnostic>, CompatibilityStats) {
         (self.diagnostics, self.stats)
+    }
+
+    /// Whether `diagnostic` would reach the user from the file being checked.
+    pub(crate) fn reports_diagnostic(&self, diagnostic: &Diagnostic) -> bool {
+        !self.should_suppress(diagnostic)
     }
 
     fn should_suppress(&self, diagnostic: &Diagnostic) -> bool {

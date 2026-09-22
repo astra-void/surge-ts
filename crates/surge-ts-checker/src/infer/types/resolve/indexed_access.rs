@@ -77,6 +77,22 @@ fn select_indexed_property_no_cascade(object: &Type, index: &Type) -> Option<Typ
     }
 }
 
+/// Whether the written index is a key of `object_name` on its face: `T[keyof T]`
+/// or an intersection that includes `keyof T` (`Ms['length' & keyof Ms]` —
+/// zustand's `Mutate`), which is assignable to `keyof T` and so a valid key.
+fn index_narrows_to_keyof(index: &ParsedType, object_name: &str) -> bool {
+    match index {
+        ParsedType::KeyOf(inner) => matches!(
+            inner.as_ref(),
+            ParsedType::Named(named_type) if named_type.name == object_name
+        ),
+        ParsedType::Intersection(members) => members
+            .iter()
+            .any(|member| index_narrows_to_keyof(member, object_name)),
+        _ => false,
+    }
+}
+
 pub(super) fn resolve_indexed_access_type(
     indexed_access: ParsedIndexedAccessType,
     ctx: &mut CheckerContext,
@@ -97,19 +113,11 @@ pub(super) fn resolve_indexed_access_type(
         || index_placeholder_name.is_some()
         || object_is_concrete_substitution
         || index_is_concrete_substitution;
-    let index_is_keyof_same_placeholder = matches!(
-        (
-            object_placeholder_name.as_deref(),
-            indexed_access.index_type.as_ref()
-        ),
-        (
-            Some(object_name),
-            ParsedType::KeyOf(inner)
-        ) if matches!(
-            inner.as_ref(),
-            ParsedType::Named(named_type) if named_type.name == object_name
-        )
-    );
+    let index_is_keyof_same_placeholder = object_placeholder_name
+        .as_deref()
+        .is_some_and(|object_name| {
+            index_narrows_to_keyof(indexed_access.index_type.as_ref(), object_name)
+        });
     // `K extends keyof T` makes the generic `T[K]` a valid index even though
     // neither side is concrete yet, so it must not cascade into TS2536.
     let index_constraint_satisfies_object = match (
@@ -303,8 +311,17 @@ pub(super) fn resolve_indexed_access_type(
                     had_error: false,
                 }
             } else if suppress_instantiation_indexed_access(object_is_concrete_substitution) {
+                // A closed receiver that lacks the key is Go's `unknownType`, a
+                // real type (`TOptions['transformer']` for a `create({ isServer:
+                // true })` call decides tRPC's `transformer` flag through it).
+                // An open one has members surge never enumerated.
+                let ty = if object_type.synthetic_open_index {
+                    Type::Unknown
+                } else {
+                    Type::GenuineUnknown
+                };
                 ResolvedType {
-                    ty: Type::Unknown,
+                    ty,
                     had_error: false,
                 }
             } else {
@@ -647,11 +664,18 @@ pub(super) fn resolve_indexed_access_type(
                     had_error: !generic_indexed_access,
                 };
             }
-            let mut diagnostic = Diagnostic::ts2538(&invalid_index.name(), ctx.file_name.clone());
-            if let Some(span) = indexed_access.span {
-                diagnostic = diagnostic.with_span(convert_span(span));
+            // An unresolved index name was already reported (TS2304); the native
+            // profile does not cascade a second diagnostic off it.
+            let cascades_from_unresolved_name = matches!(invalid_index, Type::ErrorType)
+                && ctx.options.diagnostic_profile == crate::context::DiagnosticProfile::Native;
+            if !cascades_from_unresolved_name {
+                let mut diagnostic =
+                    Diagnostic::ts2538(&invalid_index.name(), ctx.file_name.clone());
+                if let Some(span) = indexed_access.span {
+                    diagnostic = diagnostic.with_span(convert_span(span));
+                }
+                ctx.push(diagnostic);
             }
-            ctx.push(diagnostic);
             if generic_indexed_access {
                 record_generic_indexed_access_unknown_fallback();
             }

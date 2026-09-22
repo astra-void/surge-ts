@@ -110,7 +110,7 @@ fn generic_method_infers_through_a_union_alias_parameter() {
 fn optional_call_on_an_open_reference_is_silent() {
     let diagnostics = program(&[(
         "a.ts",
-        "type Setdown<C1 extends object = object> = (context: Partial<C1>) => void; declare function run<T>(cb: Setdown<T>): void; run<any>(async (ctx) => { await ctx?.close?.(); });",
+        "type Setdown<C1 extends object = object> = (context: Partial<C1>) => void; declare function run<T extends object>(cb: Setdown<T>): void; run<any>(async (ctx) => { await ctx?.close?.(); });",
     )]);
     assert_eq!(codes(&diagnostics), Vec::<String>::new());
 }
@@ -269,7 +269,7 @@ fn an_object_literal_against_a_union_is_typed_by_the_per_property_unions() {
         "a.ts",
         "interface A { body?: string; headers?: [string, string][] | Record<string, string>; method?: string } interface B { body?: string | null; headers?: [string, string][] | Record<string, string>; method?: string; extra?: number } declare function f(init?: A | B): void; f({ body: '', headers: Math.random() > 0.5 ? [['a', 'b']] : { a: 'b' }, method: 'GET' }); f({ body: '', headers: 1 });",
     )]);
-    assert_eq!(codes(&diagnostics), vec!["TS2345"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2322"]);
 }
 
 #[test]
@@ -278,7 +278,7 @@ fn a_type_parameter_bound_to_any_makes_the_extends_side_indeterminate() {
         "a.ts",
         "type Trouble<M extends string> = M & { _: symbol }; interface Inferrable { _config: unknown } declare function hook<T extends Inferrable>(opts: Inferrable extends T ? Trouble<'missing'> : { links: unknown[] }): void; declare const real: Inferrable & { x: 1 }; hook<typeof real>({ links: [] }); hook<typeof real>({ nope: [] }); declare const loose: any; hook<typeof loose>({ links: [] }); type Direct = Inferrable extends any ? 'yes' : 'no'; const s: number = null as unknown as Direct;",
     )]);
-    assert_eq!(codes(&diagnostics), vec!["TS2353", "TS2322"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2353", "TS2345", "TS2322"]);
 }
 
 #[test]

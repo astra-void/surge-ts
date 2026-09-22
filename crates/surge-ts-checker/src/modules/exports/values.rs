@@ -17,6 +17,21 @@ pub(crate) fn thin_prelim_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("SURGE_THIN_PRELIM").as_deref() != Ok("0"))
 }
 
+thread_local! {
+    static SOURCE_EXPORTS_SHARE_ENVIRONMENT_STORE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` with source-file value collection interning its lazy references
+/// into the caller's persistent declaration-environment store (see the store
+/// comment in [`collect_exportable_value_symbols`]).
+pub(crate) fn with_source_exports_sharing_environment_store<R>(f: impl FnOnce() -> R) -> R {
+    let previous = SOURCE_EXPORTS_SHARE_ENVIRONMENT_STORE.with(|flag| flag.replace(true));
+    let result = f();
+    SOURCE_EXPORTS_SHARE_ENVIRONMENT_STORE.with(|flag| flag.set(previous));
+    result
+}
+
 /// The thin variant of [`collect_exportable_value_symbols`]: same symbol name
 /// surface (variables degrade to `Unknown`, namespace value objects keep their
 /// permissive member sets), no shadow context, no annotation resolution, no
@@ -56,7 +71,9 @@ fn collect_exportable_value_symbols_thin(
                 }
             }
             ParsedStatement::NamespaceDeclaration(namespace) => {
-                if exportable_values.get_own(&namespace.name).is_none() {
+                if exportable_values.get_own(&namespace.name).is_none()
+                    && crate::program::is_instantiated_namespace(namespace)
+                {
                     let _ = exportable_values.insert(
                         namespace.name.clone(),
                         SymbolInfo {
@@ -433,6 +450,7 @@ pub(crate) fn apply_expando_members(
             SymbolKind::Let,
             &assignment.value,
             &value_type,
+            false,
         );
         let member_type = match properties.get(property_name.as_str()) {
             Some(existing) => surge_ts_types::union_type(vec![existing.ty.clone(), value_type]),
@@ -597,6 +615,15 @@ pub(crate) fn collect_exportable_value_symbols(
         // measured +180 MB peak RSS (585 -> 766 MB) for eight diagnostics, so the
         // references those files leave behind are handled where they are read
         // instead — a receiver that peels to the sentinel reports nothing.
+        shadow_ctx.declaration_environment_store = ctx.declaration_environment_store.clone();
+    } else if SOURCE_EXPORTS_SHARE_ENVIRONMENT_STORE.with(std::cell::Cell::get) {
+        // Except for the value-export refinement rounds: the tables they
+        // install are the ones consumers read, and a refined value is exactly
+        // what peels its references. A recursive alias's back-edge there
+        // (tRPC's `DecoratedProcedureUtilsRecord<TRoot, $Value>` behind
+        // `useUtils().todo`) forced through a dead store turns the member
+        // intersection into its `DecorateRouter` half alone, and every
+        // procedure read off it into a TS2339.
         shadow_ctx.declaration_environment_store = ctx.declaration_environment_store.clone();
     }
     shadow_ctx.type_declaration_scope = ctx.type_declaration_scope.clone();
@@ -1013,9 +1040,12 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
             let existing = exportable_values
                 .get_own(&namespace.name)
                 .map(|symbol| symbol.ty.clone());
-            let merges = existing
-                .as_ref()
-                .is_none_or(|ty| matches!(ty, Type::Object(_)));
+            // A namespace of types alone has no value side (tsc's
+            // `NamespaceModule`); a reference to it as a value is TS2708.
+            let merges = crate::program::is_instantiated_namespace(namespace)
+                && existing
+                    .as_ref()
+                    .is_none_or(|ty| matches!(ty, Type::Object(_)));
             if merges {
                 let ty = namespace_value_object_type_resolved(namespace, ctx);
                 let ty = match existing {
@@ -1066,6 +1096,10 @@ fn publishable_member_signature<'a>(
     // The second exception is a callback parameter (`ts.findConfigFile(dir,
     // (fileName) => …)`): the permissive member types every argument as
     // `any`, so the callback's own parameters become a false implicit-any.
+    // The third exception is a `never` return (`util.assertNever(x)`): the
+    // permissive member returns `any`, so the call no longer ends the flow and
+    // the function it closes reports a missing return.
+    let returns_never = matches!(return_type, Some(surge_ts_syntax::ParsedType::Never));
     let is_type_predicate = matches!(return_type, Some(surge_ts_syntax::ParsedType::Predicate(_)));
     let mut scan = SignatureNameScan::default();
     let mut takes_callback = false;
@@ -1073,7 +1107,7 @@ fn publishable_member_signature<'a>(
         takes_callback |= parameter_type_is_callback(parameter_type);
         collect_signature_type_names(parameter_type, &mut scan);
     }
-    if type_parameters.is_empty() && !is_type_predicate && !takes_callback {
+    if type_parameters.is_empty() && !is_type_predicate && !takes_callback && !returns_never {
         return false;
     }
     if let Some(return_type) = return_type {

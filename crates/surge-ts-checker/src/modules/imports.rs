@@ -385,10 +385,18 @@ pub(crate) fn resolved_file_yields_to_ambient_module(
     resolved_index: usize,
     module_specifier: &str,
 ) -> bool {
-    program_files
-        .get(resolved_index)
-        .is_some_and(|file| !file.is_module)
-        && ctx.ambient_modules.contains_key(module_specifier)
+    // Go's `resolveExternalModule` (checker.go:15369) consults
+    // `tryFindAmbientModule` *before* any file resolution, so an ambient
+    // `declare module "querystring"` wins over a node_modules package of that
+    // name whether or not the package's entry point is a module. Requiring the
+    // resolved file to be a script bound every Node builtin type import in a
+    // project that also installs the userland polyfill (`querystring@0.2.1`
+    // ships `decode.d.ts` as a module) to the polyfill, which declares none of
+    // the types — so `ParsedUrlQuery` read as "no exported member" and
+    // `NextRouter.query` degraded with it. An augmentation is not an ambient
+    // module and is applied separately (`module_augmentations`).
+    let _ = (program_files, resolved_index);
+    ctx.ambient_modules.contains_key(module_specifier)
 }
 
 pub(crate) fn try_resolve_module(
@@ -1600,17 +1608,18 @@ fn resolve_named_import(
                 continue;
             }
 
-            // A type-only namespace exports only qualified `ns.Member` entries.
-            if has_qualified_type_exports {
-                continue;
-            }
-
             // `import type { f }` imports the SYMBOL, so a value-only export
             // (function/const) is a legal target — it is usable in type
             // position through `typeof f`. Binding the value here is what makes
-            // that query resolve instead of cascading TS2304.
+            // that query resolve instead of cascading TS2304. That holds for an
+            // `export * as ns` namespace too, whose types are only qualified
+            // `ns.Member` entries: `typeof ns.member` still reads its value side.
             if let Some(value_export) = value_export {
                 symbols.insert_shared(specifier.local_name.clone(), value_export);
+                continue;
+            }
+
+            if has_qualified_type_exports {
                 continue;
             }
 

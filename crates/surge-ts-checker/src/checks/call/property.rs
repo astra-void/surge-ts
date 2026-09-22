@@ -84,6 +84,22 @@ pub(super) fn evaluate_arguments_context_free(
     ctx.degraded_expected_type_depth = saved_depth;
 }
 
+/// Arguments of a call on tsc's error type. `resolveErrorCall` checks each one
+/// with no contextual type, so a callback's parameters are implicit `any`
+/// whatever suppression an enclosing expression set up.
+pub(super) fn evaluate_arguments_on_error_type(
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let saved_depth = ctx.degraded_expected_type_depth;
+    ctx.degraded_expected_type_depth = 0;
+    for argument in arguments {
+        let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+    }
+    ctx.degraded_expected_type_depth = saved_depth;
+}
+
 /// Whether an `any`-typed receiver is `any` because the *source* says so, rather
 /// than because surge gave up partway along the chain.
 ///
@@ -161,8 +177,8 @@ fn name_is_genuine_any(name: &str, symbols: &SymbolTable, ctx: &CheckerContext) 
 /// argument's collected signature, not on its resolved callable type, so it is
 /// read from there; anything else falls through to the ordinary `filter` model.
 fn filtered_element_type(
-    arguments: &[ParsedCallArgument],
     element: &Type,
+    arguments: &[ParsedCallArgument],
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
@@ -173,11 +189,14 @@ fn filtered_element_type(
         ParsedExpression::Identifier { name, .. } => {
             crate::checks::function::predicate_target_of_value(name, symbols, ctx)
         }
+        ParsedExpression::ArrowFunction(arrow) if arrow.return_type.is_none() => {
+            inferred_predicate_target(arrow, element, symbols)
+        }
         // An inline `(x): x is T => …` carries its predicate on the arrow's
         // written return type.
         ParsedExpression::ArrowFunction(arrow) => {
             let Some(ParsedType::Predicate(predicate)) = &arrow.return_type else {
-                return inferred_predicate_target(arrow, element, symbols);
+                return None;
             };
             if predicate.asserts || !arrow.type_parameters.is_empty() {
                 return None;
@@ -197,10 +216,13 @@ fn filtered_element_type(
     }
 }
 
-/// tsc's `getTypePredicateFromBody`: a callback with no return annotation that
-/// does nothing but narrow its own parameter *is* a type predicate, so
+/// tsc's `getTypePredicateFromBody`: a callback with no return annotation
+/// whose body is one boolean expression is a type predicate when that
+/// expression narrows its first parameter in its true branch and the narrowed
+/// type cannot survive the false branch (`(op) => op.type === 'state'`), so
 /// `xs.filter(x => x !== null)` yields `number[]` (TS 5.5). Only the first
 /// parameter is read, which is the one `filter`'s predicate overload tests.
+/// The predicate's target is the true-branch type.
 fn inferred_predicate_target(
     arrow: &surge_ts_syntax::ParsedArrowFunction,
     element: &Type,
@@ -221,30 +243,31 @@ fn inferred_predicate_target(
     else {
         return None;
     };
-    let returned = single_returned_expression(&arrow.body)?;
-
-    let mut scope = symbols.clone();
-    scope.insert(
-        name.clone(),
-        crate::symbols::SymbolInfo {
-            ty: element.clone(),
-            kind: crate::symbols::SymbolKind::Parameter,
-            function_signature: None,
-        },
-    );
-    let narrowed_type = |branch_is_true: bool| {
-        crate::checks::function::narrow_condition_symbol_table(returned, &scope, branch_is_true)
-            .and_then(|narrowed| narrowed.get(name).map(|symbol| symbol.ty.clone()))
-    };
-    let target = narrowed_type(true)?;
-    let rejected = narrowed_type(false)?;
-    // The false branch has to be exactly what the true branch leaves out:
-    // `x => !!x` narrows `number | null` to `number` when true but proves
-    // nothing when false (`0` is falsy), and tsc infers no predicate from it.
-    if target.is_unknown() || !crate::checks::function::predicate_partitions(element, &target, &rejected) {
+    let condition = single_returned_expression(&arrow.body)?;
+    // tsc requires the body to be boolean-typed: `(x) => x` narrows `x` in its
+    // true branch but returns `x`, not a boolean, so it is no predicate.
+    if !is_boolean_shaped(condition) {
         return None;
     }
-    Some(target)
+    let true_type = narrow_by_branch(condition, element, name, true, symbols)?;
+    if true_type == *element || true_type.is_unknown() {
+        return None;
+    }
+    let false_type = narrow_by_branch(condition, &true_type, name, false, symbols)?;
+    if is_never(&false_type) {
+        return Some(true_type);
+    }
+    // The shared narrowers only split unions, so a lone `{ a: 1 }` that the
+    // false branch of `x !== undefined` cannot reach comes back unchanged.
+    // Narrowing the element instead asks the same question through the union
+    // split: the predicate holds when no true-branch member survives the false
+    // branch.
+    let element_false = narrow_by_branch(condition, element, name, false, symbols)?;
+    let false_members = union_members(&element_false);
+    union_members(&true_type)
+        .iter()
+        .all(|member| !false_members.contains(member))
+        .then_some(true_type)
 }
 
 /// The one expression a predicate body can consist of: an expression body, or a
@@ -264,6 +287,210 @@ fn single_returned_expression(
     }
 }
 
+fn is_boolean_shaped(expression: &ParsedExpression) -> bool {
+    use surge_ts_syntax::{ParsedBinaryOperator as Op, ParsedLogicalOperator, ParsedUnaryOperator};
+    match expression {
+        ParsedExpression::BooleanLiteral(_)
+        | ParsedExpression::Call { .. }
+        | ParsedExpression::PropertyCall { .. }
+        | ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            ..
+        } => true,
+        ParsedExpression::Binary { operator, .. } => matches!(
+            operator,
+            Op::StrictEquals
+                | Op::StrictNotEquals
+                | Op::Equals
+                | Op::NotEquals
+                | Op::LessThan
+                | Op::LessThanEquals
+                | Op::GreaterThan
+                | Op::GreaterThanEquals
+                | Op::In
+                | Op::Instanceof
+        ),
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::And | ParsedLogicalOperator::Or,
+            right,
+            ..
+        } => is_boolean_shaped(left) && is_boolean_shaped(right),
+        _ => false,
+    }
+}
+
+fn union_members(ty: &Type) -> Vec<Type> {
+    match ty {
+        Type::Union(union) => union.types().to_vec(),
+        _ if is_never(ty) => Vec::new(),
+        _ => vec![ty.clone()],
+    }
+}
+
+fn is_never(ty: &Type) -> bool {
+    match ty {
+        Type::Never => true,
+        Type::Union(union) => union.types().is_empty(),
+        _ => false,
+    }
+}
+
+/// `name.prop === literal` (or `!==`) decided per union member, as tsc's
+/// `narrowTypeByDiscriminant` does: a member whose `prop` is a literal is kept
+/// exactly when the comparison can hold, and one whose `prop` is anything wider
+/// stays. Unlike the scope narrower this answers `never` when nothing survives,
+/// which is what tells a predicate apart from a plain boolean.
+fn narrow_by_discriminant_leaf(
+    condition: &ParsedExpression,
+    ty: &Type,
+    name: &str,
+    branch_is_true: bool,
+) -> Option<Type> {
+    use surge_ts_syntax::ParsedBinaryOperator;
+    let ParsedExpression::Binary {
+        left,
+        operator,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let equality = match operator {
+        ParsedBinaryOperator::StrictEquals => true,
+        ParsedBinaryOperator::StrictNotEquals => false,
+        _ => return None,
+    };
+    let (access, literal) = match (left.as_ref(), right.as_ref()) {
+        (access @ ParsedExpression::PropertyAccess { .. }, literal)
+        | (literal, access @ ParsedExpression::PropertyAccess { .. }) => (access, literal),
+        _ => return None,
+    };
+    let ParsedExpression::PropertyAccess {
+        object,
+        property_name,
+        ..
+    } = access
+    else {
+        return None;
+    };
+    if !matches!(object.as_ref(), ParsedExpression::Identifier { name: base, .. } if base == name) {
+        return None;
+    }
+    let literal = match literal {
+        ParsedExpression::StringLiteral(value) => Type::StringLiteral(value.clone()),
+        ParsedExpression::BooleanLiteral(value) => Type::BooleanLiteral(*value),
+        _ => return None,
+    };
+    let keep_equal = equality == branch_is_true;
+    let flattened = surge_ts_types::flatten_reference_unions(ty).unwrap_or_else(|| ty.clone());
+    let members: Vec<Type> = match &flattened {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other.clone()],
+    };
+    let kept: Vec<Type> = members
+        .into_iter()
+        .filter(|member| {
+            let Type::Object(object) = member.peeled() else {
+                return true;
+            };
+            match object
+                .properties
+                .get(property_name.as_str())
+                .map(|property| property.ty.peeled())
+            {
+                Some(value @ (Type::StringLiteral(_) | Type::BooleanLiteral(_))) => {
+                    (value == literal) == keep_equal
+                }
+                _ => true,
+            }
+        })
+        .collect();
+    Some(if kept.is_empty() {
+        Type::Never
+    } else {
+        union_type(kept)
+    })
+}
+
+/// `ty` narrowed by `condition` holding (or failing), composed over `&&`, `||`
+/// and `!` the way control flow composes them: `a && b` fails where `a` fails,
+/// or where `a` holds and `b` fails. A leaf condition is left to the scope
+/// narrower; one it cannot read leaves the type as it was.
+fn narrow_by_branch(
+    condition: &ParsedExpression,
+    ty: &Type,
+    name: &str,
+    branch_is_true: bool,
+    symbols: &SymbolTable,
+) -> Option<Type> {
+    use surge_ts_syntax::{ParsedLogicalOperator, ParsedUnaryOperator};
+    if is_never(ty) {
+        return Some(Type::Never);
+    }
+    match condition {
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => narrow_by_branch(operand, ty, name, !branch_is_true, symbols),
+        ParsedExpression::Logical {
+            left,
+            operator,
+            right,
+            ..
+        } if matches!(
+            operator,
+            ParsedLogicalOperator::And | ParsedLogicalOperator::Or
+        ) =>
+        {
+            let conjunction = matches!(operator, ParsedLogicalOperator::And);
+            // The side on which the left operand decides the outcome.
+            let left_decides = narrow_by_branch(left, ty, name, !conjunction, symbols)?;
+            let left_passes = narrow_by_branch(left, ty, name, conjunction, symbols)?;
+            let right = narrow_by_branch(right, &left_passes, name, branch_is_true, symbols)?;
+            if branch_is_true == conjunction {
+                return Some(right);
+            }
+            let reachable: Vec<Type> = [left_decides, right]
+                .into_iter()
+                .filter(|member| !is_never(member))
+                .collect();
+            Some(if reachable.is_empty() {
+                Type::Never
+            } else {
+                union_type(reachable)
+            })
+        }
+        _ if let Some(narrowed) =
+            narrow_by_discriminant_leaf(condition, ty, name, branch_is_true) =>
+        {
+            Some(narrowed)
+        }
+        _ => {
+            let mut scope =
+                symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+            scope.insert(
+                name.to_string(),
+                crate::symbols::SymbolInfo {
+                    ty: ty.clone(),
+                    kind: crate::symbols::SymbolKind::Parameter,
+                    function_signature: None,
+                },
+            );
+            match crate::checks::function::narrow_condition_symbol_table(
+                condition,
+                &scope,
+                branch_is_true,
+            ) {
+                Some(narrowed) => Some(narrowed.get(name)?.ty.clone()),
+                None => Some(ty.clone()),
+            }
+        }
+    }
+}
+
 pub(crate) fn check_property_call_like(
     object: &ParsedExpression,
     object_span: Option<SyntaxTextSpan>,
@@ -276,6 +503,9 @@ pub(crate) fn check_property_call_like(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    if matches!(property_name, "push" | "unshift") {
+        crate::checks::expr::mark_evolving_array_operation(object, ctx);
+    }
     let object_ty =
         match crate::checks::expr::evaluate_expression(object, object_span, symbols, ctx) {
             // `Promise<T>` is modelled as its awaited `T` (see the `.then`
@@ -304,6 +534,11 @@ pub(crate) fn check_property_call_like(
             // decides *implicit-any* by receiver provenance, so a chain that
             // merely collapsed to `any` does not start reporting parameters tsc
             // contextually types.
+            failed @ (crate::infer::InferredExpression::MissingProperty { .. }
+            | crate::infer::InferredExpression::UnresolvedIdentifier { .. }) => {
+                evaluate_arguments_on_error_type(arguments, symbols, ctx);
+                return failed.flowing_type();
+            }
             _ => {
                 evaluate_arguments_context_free(object, arguments, symbols, ctx);
                 return None;
@@ -324,12 +559,12 @@ pub(crate) fn check_property_call_like(
 
     // Computed before the dispatch below so the narrowed element can be matched
     // on: `filter` with a type-predicate callback yields that predicate's type.
-    let filtered_element = match (&object_ty, property_name) {
-        (Type::Array(element), "filter") => {
-            let element = element.as_ref().clone();
-            filtered_element_type(arguments, &element, symbols, ctx)
-        }
-        _ => None,
+    let filtered_element = if property_name == "filter"
+        && let Type::Array(element) = &object_ty
+    {
+        filtered_element_type(element, arguments, symbols, ctx)
+    } else {
+        None
     };
 
     if property_name == "all" && is_promise_all_receiver(&object_ty) {
@@ -408,6 +643,10 @@ pub(crate) fn check_property_call_like(
     }
 
     match object_ty {
+        Type::ErrorType => {
+            evaluate_arguments_on_error_type(arguments, symbols, ctx);
+            Some(Type::ErrorType)
+        }
         Type::Any => {
             evaluate_arguments_context_free(object, arguments, symbols, ctx);
             Some(Type::Any)
@@ -432,6 +671,7 @@ pub(crate) fn check_property_call_like(
                         call_span,
                         type_arguments,
                         arguments,
+                        expected_return_type,
                         symbols,
                         ctx,
                     )?;
@@ -597,6 +837,7 @@ pub(crate) fn check_property_call_like(
                             call_span,
                             type_arguments,
                             arguments,
+                            expected_return_type,
                             symbols,
                             ctx,
                         )?;
@@ -674,6 +915,17 @@ pub(crate) fn check_property_call_like(
                 {
                     return None;
                 }
+                if let Some(diagnostic) =
+                    crate::checks::expr::global_this_missing_member(property_name, &object_ty, ctx)
+                {
+                    if let Some(diagnostic) = diagnostic {
+                        ctx.push(diagnostic_with_syntax_span(
+                            diagnostic,
+                            crate::spans::choose_span(property_span, object_span),
+                        ));
+                    }
+                    return Some(Type::Any);
+                }
                 let lib_feature =
                     crate::checks::expr::lib_feature_of_missing_member(&object_ty, property_name);
                 let diagnostic = match crate::checks::expr::property_spelling_suggestion(
@@ -745,9 +997,14 @@ pub(crate) fn check_property_call_like(
                         call_span,
                         type_arguments,
                         arguments,
+                        expected_return_type,
                         symbols,
                         ctx,
                     )
+                }
+                Type::ErrorType => {
+                    evaluate_arguments_on_error_type(arguments, symbols, ctx);
+                    Some(Type::ErrorType)
                 }
                 Type::Any => {
                     evaluate_arguments_context_free(object, arguments, symbols, ctx);
@@ -1002,11 +1259,19 @@ pub(crate) fn check_optional_property_call(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    if matches!(property_name, "push" | "unshift") {
+        crate::checks::expr::mark_evolving_array_operation(object, ctx);
+    }
     let object_result = evaluate_expression(object, object_span, symbols, ctx);
 
     let object_type = match object_result {
         InferredExpression::Known(ty) => ty,
-        _ => return None, // already reported by evaluate_expression
+        InferredExpression::MissingProperty { .. }
+        | InferredExpression::UnresolvedIdentifier { .. } => {
+            evaluate_arguments_on_error_type(arguments, symbols, ctx);
+            return Some(Type::ErrorType);
+        }
+        InferredExpression::Unknown => return None,
     };
 
     // No early return for a degraded receiver: the `Unknown` arm below walks the
@@ -1041,6 +1306,10 @@ pub(crate) fn check_optional_property_call(
     }
 
     match base_type {
+        Type::ErrorType => {
+            evaluate_arguments_on_error_type(arguments, symbols, ctx);
+            Some(Type::ErrorType)
+        }
         Type::Any => {
             evaluate_arguments_context_free(object, arguments, symbols, ctx);
             Some(Type::Any)
@@ -1132,6 +1401,7 @@ pub(crate) fn check_optional_property_call(
                             call_span,
                             type_arguments,
                             arguments,
+                            expected_return_type,
                             symbols,
                             ctx,
                         )?;
@@ -1198,6 +1468,17 @@ pub(crate) fn check_optional_property_call(
                 {
                     return None;
                 }
+                if let Some(diagnostic) =
+                    crate::checks::expr::global_this_missing_member(property_name, &base_type, ctx)
+                {
+                    if let Some(diagnostic) = diagnostic {
+                        ctx.push(diagnostic_with_syntax_span(
+                            diagnostic,
+                            crate::spans::choose_span(property_span, object_span),
+                        ));
+                    }
+                    return Some(Type::Any);
+                }
                 let diagnostic = match crate::checks::expr::property_spelling_suggestion(
                     property_name,
                     &base_type,
@@ -1238,10 +1519,15 @@ pub(crate) fn check_optional_property_call(
                         call_span,
                         type_arguments,
                         arguments,
+                        expected_return_type,
                         symbols,
                         ctx,
                     )
                     .map(|ret| union_type(vec![ret, Type::Undefined]))
+                }
+                Type::ErrorType => {
+                    evaluate_arguments_on_error_type(arguments, symbols, ctx);
+                    Some(Type::ErrorType)
                 }
                 Type::Any => {
                     evaluate_arguments_context_free(object, arguments, symbols, ctx);
@@ -1272,7 +1558,7 @@ pub(crate) fn check_optional_property_call(
 /// declared symbol would, so `vi.fn()` binds `T` (to its default) instead of
 /// returning `Mock<T>` with the parameter bare. Any other function-typed member
 /// is used as resolved.
-fn instantiate_declared_member_signature<'a>(
+pub(super) fn instantiate_declared_member_signature<'a>(
     function_type: &'a surge_ts_types::FunctionType,
     declared_member: Option<&Type>,
     type_arguments: &[ParsedType],
@@ -1390,9 +1676,22 @@ pub(crate) fn callable_member_call_return_type(
         ctx,
     );
     Some(
-        super::select_overload_return_type_for_inferred_call(&declared, arguments, symbols, ctx)
+        overloaded_member_call_return_type(&declared, arguments, symbols, ctx)
             .unwrap_or_else(|| function_type.return_type().clone()),
     )
+}
+
+/// The return type of the overload an inferred member call lands on. Only a
+/// non-generic pick answers: an inferred call has no contextual type, and a
+/// generic candidate instantiated without one widens what the context would
+/// have kept (`() => Promise.resolve('data')` against `QueryFunction<'data'>`).
+pub(crate) fn overloaded_member_call_return_type(
+    declared: &surge_ts_types::FunctionType,
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    super::select_overload_return_type_for_inferred_call(declared, arguments, symbols, ctx)
 }
 
 /// Under `noLib` the array member surface comes from the configured replacement
@@ -1415,6 +1714,14 @@ fn callable_property_signature(ty: Type) -> Type {
             // match sees the unpeeled reference and misreports TS2349 (lazy
             // value annotations wrap plain function-typed `declare const`s).
             Type::Function(function) => Some(function),
+            // A reference resolving to `any`, the sentinel, or a union of
+            // signatures is judged by what it resolves to, as the unwrapped
+            // types are (an inferred class member is such a reference).
+            resolved @ (Type::Any
+            | Type::Unknown
+            | Type::ErrorType
+            | Type::TypeParameter(_)
+            | Type::Union(_)) => return resolved,
             _ => None,
         },
         _ => None,

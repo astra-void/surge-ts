@@ -1,3 +1,3 @@
 type Status = "idle" | "done";
 
-let status: Status = "idle";
+let state: Status = "idle";

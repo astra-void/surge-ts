@@ -170,7 +170,7 @@ expected_diagnostics = ["TS2345"]
 [[case]]
 name = "function-call-return-unknown-ignored"
 path = "tests/smoke/function_call_return_unknown_ignored.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "call-non-callable-number"
@@ -523,7 +523,7 @@ source_text = "let user: User = { name: \"Ada\" };"
 
 [[case]]
 name = "module-resolution_module_does_not_see_script_global"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = []
 
 [[case.files]]
 file_name = "src/a.ts"
@@ -731,7 +731,7 @@ expected_diagnostics = ["TS2339"]
 [[case]]
 name = "property-call-unknown-object-no-cascade"
 path = "tests/smoke/property_call_unknown_object_no_cascade.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS18046"]
 
 [[case]]
 name = "property-call-any-object-returns-any"
@@ -751,12 +751,12 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "property-call-missing-property-no-argument-cascade"
 path = "tests/smoke/property_call_missing_property_no_argument_cascade.ts"
-expected_diagnostics = ["TS2339"]
+expected_diagnostics = ["TS2339", "TS2304"]
 
 [[case]]
 name = "property-call-non-callable-no-argument-cascade"
 path = "tests/smoke/property_call_non_callable_no_argument_cascade.ts"
-expected_diagnostics = ["TS2349"]
+expected_diagnostics = ["TS2349", "TS2304"]
 
 [[case]]
 name = "property-call-unresolved-argument-no-cascade"
@@ -766,7 +766,7 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "property-call-unknown-property-type-no-cascade"
 path = "tests/smoke/property_call_unknown_property_type_no_cascade.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS18046"]
 
 [[case]]
 name = "property-call-conditional-unresolved-no-cascade"
@@ -776,7 +776,7 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "property-call-object-literal-unresolved-argument-no-cascade"
 path = "tests/smoke/property_call_object_literal_unresolved_argument_no_cascade.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2322", "TS2304"]
 
 [[case]]
 name = "property-call-priority-unresolved-object-only"
@@ -786,12 +786,12 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "property-call-priority-missing-property-skips-arguments"
 path = "tests/smoke/property_call_priority_missing_property_skips_arguments.ts"
-expected_diagnostics = ["TS2339"]
+expected_diagnostics = ["TS2339", "TS2304"]
 
 [[case]]
 name = "property-call-priority-non-callable-skips-arguments"
 path = "tests/smoke/property_call_priority_non_callable_skips_arguments.ts"
-expected_diagnostics = ["TS2349"]
+expected_diagnostics = ["TS2349", "TS2304"]
 
 [[case]]
 name = "property-call-priority-arity-skips-arguments"
@@ -951,17 +951,17 @@ expected_diagnostics = ["TS2722"]
 [[case]]
 name = "property-call-optional-function-property-no-argument-cascade"
 path = "tests/smoke/property_call_optional_function_property_no_argument_cascade.ts"
-expected_diagnostics = ["TS2304", "TS2554", "TS2722"]
+expected_diagnostics = ["TS2722", "TS2304", "TS2554"]
 
 [[case]]
 name = "property-call-optional-function-property-assignment-no-cascade"
 path = "tests/smoke/property_call_optional_function_property_assignment_no_cascade.ts"
-expected_diagnostics = ["TS2304", "TS2554", "TS2722"]
+expected_diagnostics = ["TS2722", "TS2304", "TS2554"]
 
 [[case]]
 name = "property-call-optional-function-property-return-no-cascade"
 path = "tests/smoke/property_call_optional_function_property_return_no_cascade.ts"
-expected_diagnostics = ["TS2304", "TS2554", "TS2722"]
+expected_diagnostics = ["TS2722", "TS2304", "TS2554"]
 
 [[case]]
 name = "property-call-optional-function-property-access-still-union-valid"
@@ -986,7 +986,7 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "property-call-unknown-object-assignment-no-cascade"
 path = "tests/smoke/property_call_unknown_object_assignment_no_cascade.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS18046"]
 
 [[case]]
 name = "property-call-non-object-string"
@@ -1051,7 +1051,7 @@ expected_diagnostics = []
 [[case]]
 name = "property-call-matches-identifier-call-arity-behavior"
 path = "tests/smoke/property_call_matches_identifier_call_arity_behavior.ts"
-expected_diagnostics = ["TS2304", "TS2304", "TS2554", "TS2554"]
+expected_diagnostics = ["TS2304", "TS2554", "TS2304", "TS2554"]
 
 [[case]]
 name = "property-call-matches-identifier-call-argument-behavior"
@@ -1136,7 +1136,7 @@ expected_diagnostics = ["TS2353"]
 [[case]]
 name = "object-type-annotation-conditional-branch-missing-property"
 path = "tests/smoke/object_type_annotation_conditional_branch_missing_property.ts"
-expected_diagnostics = ["TS2741"]
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "object-type-annotation-conditional-branch-property-mismatch"
@@ -1321,7 +1321,7 @@ expected_diagnostics = []
 [[case]]
 name = "object-type-optional-non-fresh-missing-required-still-ts2322"
 path = "tests/smoke/object_type_optional_non_fresh_missing_required_still_ts2322.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2741"]
 
 [[case]]
 name = "object-type-optional-non-fresh-optional-present-mismatch-ts2322"
@@ -1366,7 +1366,7 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "object-type-optional-conditional-required-missing-in-one-branch"
 path = "tests/smoke/object_type_optional_conditional_required_missing_in_one_branch.ts"
-expected_diagnostics = ["TS2741"]
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "function-return-valid"
@@ -1441,7 +1441,7 @@ expected_diagnostics = ["TS2339"]
 [[case]]
 name = "function-body-local-shadows-parameter"
 path = "tests/smoke/function_body_local_shadows_parameter.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2300", "TS2300", "TS2322"]
 
 [[case]]
 name = "function-body-local-shadows-top-level"
@@ -1451,17 +1451,17 @@ expected_diagnostics = []
 [[case]]
 name = "function-body-duplicate-let"
 path = "tests/smoke/function_body_duplicate_let.ts"
-expected_diagnostics = ["TS2451"]
+expected_diagnostics = ["TS2451", "TS2451"]
 
 [[case]]
 name = "function-body-duplicate-const"
 path = "tests/smoke/function_body_duplicate_const.ts"
-expected_diagnostics = ["TS2451"]
+expected_diagnostics = ["TS2451", "TS2451"]
 
 [[case]]
 name = "function-body-duplicate-let-const"
 path = "tests/smoke/function_body_duplicate_let_const.ts"
-expected_diagnostics = ["TS2451"]
+expected_diagnostics = ["TS2451", "TS2451"]
 
 [[case]]
 name = "function-body-duplicate-var-allowed"
@@ -1471,7 +1471,7 @@ expected_diagnostics = []
 [[case]]
 name = "function-body-duplicate-shadow-parameter-allowed"
 path = "tests/smoke/function_body_duplicate_shadow_parameter_allowed.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2300", "TS2300", "TS2322"]
 
 [[case]]
 name = "function-body-duplicate-shadow-top-level-allowed"
@@ -1581,7 +1581,7 @@ expected_diagnostics = []
 [[case]]
 name = "function-body-block-duplicate-let"
 path = "tests/smoke/function_body_block_duplicate_let.ts"
-expected_diagnostics = ["TS2451"]
+expected_diagnostics = ["TS2451", "TS2451"]
 
 [[case]]
 name = "function-body-block-sibling-same-name-allowed"
@@ -1671,7 +1671,7 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "function-body-while-duplicate-in-body"
 path = "tests/smoke/function_body_while_duplicate_in_body.ts"
-expected_diagnostics = ["TS2451"]
+expected_diagnostics = ["TS2451", "TS2451"]
 
 [[case]]
 name = "function-body-while-outer-visible"
@@ -1686,7 +1686,7 @@ expected_diagnostics = ["TS2588"]
 [[case]]
 name = "function-body-if-duplicate-in-branch"
 path = "tests/smoke/function_body_if_duplicate_in_branch.ts"
-expected_diagnostics = ["TS2451"]
+expected_diagnostics = ["TS2451", "TS2451"]
 
 [[case]]
 name = "function-body-if-assignment-to-outer-mismatch"
@@ -1989,7 +1989,7 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "conditional-same-type-assignment-mismatch"
 path = "tests/smoke/conditional_same_type_assignment_mismatch.ts"
-expected_diagnostics = ["TS2322", "TS2322"]
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "conditional-assignment-valid"
@@ -2029,7 +2029,7 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "conditional-context-initializer-both-mismatch"
 path = "tests/smoke/conditional_context_initializer_both_mismatch.ts"
-expected_diagnostics = ["TS2322", "TS2322"]
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "conditional-context-initializer-valid"
@@ -2089,7 +2089,7 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "conditional-nested-context-both-nested-branches-mismatch"
 path = "tests/smoke/conditional_nested_context_both_nested_branches_mismatch.ts"
-expected_diagnostics = ["TS2322", "TS2322"]
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "conditional-nested-context-assignment-mismatch"
@@ -2170,12 +2170,12 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "control-flow-initializer-var-future-no-ts2448"
 path = "tests/smoke/control_flow_initializer_var_future_no_ts2448.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2454"]
 
 [[case]]
 name = "control-flow-initializer-self-reference"
 path = "tests/smoke/control_flow_initializer_self_reference.ts"
-expected_diagnostics = ["TS2454"]
+expected_diagnostics = ["TS2448", "TS2454"]
 
 [[case]]
 name = "control-flow-assignment-valid"
@@ -2412,7 +2412,7 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "union-operator-add-string-or-number-with-string-current-behavior"
 path = "tests/smoke/union_operator_add_string_or_number_with_string_current_behavior.ts"
-expected_diagnostics = ["TS2365"]
+expected_diagnostics = []
 
 [[case]]
 name = "union-operator-arithmetic-string-or-number-invalid"
@@ -2464,7 +2464,7 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "union-conditional-both-branches-invalid-same-type-order"
 path = "tests/smoke/union_conditional_both_branches_invalid_same_type_order.ts"
-expected_diagnostics = ["TS2322", "TS2322"]
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "union-conditional-both-branches-invalid-different-type-single-or-documented-order"
@@ -2484,7 +2484,7 @@ expected_diagnostics = []
 [[case]]
 name = "union-conditional-branch-property-access-optional-string-mismatch"
 path = "tests/smoke/union_conditional_branch_property_access_optional_string_mismatch.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2322", "TS2322"]
 
 [[case]]
 name = "type-alias-primitive-variable-valid"
@@ -2629,7 +2629,7 @@ expected_diagnostics = ["TS2456", "TS2456"]
 [[case]]
 name = "type-alias-duplicate-declaration"
 path = "tests/smoke/type_alias_duplicate_declaration.ts"
-expected_diagnostics = ["TS2300"]
+expected_diagnostics = ["TS2300", "TS2300"]
 
 [[case]]
 name = "type-alias-not-value-ts2304"
@@ -2639,7 +2639,7 @@ expected_diagnostics = ["TS2693"]
 [[case]]
 name = "type-alias-value-not-type-ts2304"
 path = "tests/smoke/type_alias_value_not_type_ts2304.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2749"]
 
 [[case]]
 name = "type-alias-same-name-as-value-allowed"
@@ -2649,12 +2649,12 @@ expected_diagnostics = []
 [[case]]
 name = "type-alias-duplicate-first-alias-wins"
 path = "tests/smoke/type_alias_duplicate_first_alias_wins.ts"
-expected_diagnostics = ["TS2300"]
+expected_diagnostics = ["TS2300", "TS2300"]
 
 [[case]]
 name = "type-alias-duplicate-no-cascade-after-duplicate"
 path = "tests/smoke/type_alias_duplicate_no_cascade_after_duplicate.ts"
-expected_diagnostics = ["TS2300"]
+expected_diagnostics = ["TS2300", "TS2300"]
 
 [[case]]
 name = "array-literal-empty-infers-any-array"
@@ -2959,7 +2959,7 @@ expected_diagnostics = []
 [[case]]
 name = "array-index-access-inferred-unknown-receiver-no-cascade"
 path = "tests/smoke/array_index_access_inferred_unknown_receiver_no_cascade.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS18046"]
 
 [[case]]
 name = "array-index-access-any-receiver-assignment-valid"
@@ -2969,12 +2969,12 @@ expected_diagnostics = []
 [[case]]
 name = "array-index-access-any-receiver-index-not-checked"
 path = "tests/smoke/array_index_access_any_receiver_index_not_checked.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2304"]
 
 [[case]]
 name = "array-index-access-unknown-receiver-assignment-no-cascade"
 path = "tests/smoke/array_index_access_unknown_receiver_assignment_no_cascade.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS18046"]
 
 [[case]]
 name = "array-index-access-non-array-receiver-no-cascade"
@@ -3022,7 +3022,7 @@ expected_diagnostics = []
 [[case]]
 name = "array-index-access-unknown-receiver-no-cascade"
 path = "tests/smoke/array_index_access_unknown_receiver_no_cascade.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS18046"]
 
 [[case]]
 name = "array-type-alias-valid"
@@ -3202,7 +3202,7 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "tuple-contextual-variable-too-many"
 path = "tests/smoke/tuple_contextual_variable_too_many.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2322", "TS2304"]
 
 [[case]]
 name = "tuple-contextual-variable-element-mismatch"
@@ -3247,17 +3247,17 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "tuple-length-too-many-variable-single-diagnostic"
 path = "tests/smoke/tuple_length_too_many_variable_single_diagnostic.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2322", "TS2304"]
 
 [[case]]
 name = "tuple-length-too-few-argument-single-diagnostic"
 path = "tests/smoke/tuple_length_too_few_argument_single_diagnostic.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2345"]
 
 [[case]]
 name = "tuple-length-too-many-argument-single-diagnostic"
 path = "tests/smoke/tuple_length_too_many_argument_single_diagnostic.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2345", "TS2304"]
 
 [[case]]
 name = "tuple-length-too-few-return-single-diagnostic"
@@ -3267,17 +3267,17 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "tuple-length-too-many-return-single-diagnostic"
 path = "tests/smoke/tuple_length_too_many_return_single_diagnostic.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2322", "TS2304"]
 
 [[case]]
 name = "tuple-length-mismatch-does-not-check-extra-unresolved-element"
 path = "tests/smoke/tuple_length_mismatch_does_not_check_extra_unresolved_element.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2322", "TS2304"]
 
 [[case]]
 name = "tuple-contextual-function-argument-length-mismatch"
 path = "tests/smoke/tuple_contextual_function_argument_length_mismatch.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2345"]
 
 [[case]]
 name = "tuple-contextual-function-return-length-mismatch"
@@ -3357,7 +3357,7 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "tuple-index-access-out-of-range-no-root-cascade"
 path = "tests/smoke/tuple_index_access_out_of_range_no_root_cascade.ts"
-expected_diagnostics = ["TS2339"]
+expected_diagnostics = ["TS2322", "TS2493"]
 
 [[case]]
 name = "tuple-index-access-string-index-mismatch-no-root-cascade"
@@ -3372,7 +3372,7 @@ expected_diagnostics = ["TS2538"]
 [[case]]
 name = "tuple-index-access-any-receiver-index-not-checked"
 path = "tests/smoke/tuple_index_access_any_receiver_index_not_checked.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2304"]
 
 [[case]]
 name = "tuple-index-access-any-receiver-valid"
@@ -3382,7 +3382,7 @@ expected_diagnostics = []
 [[case]]
 name = "tuple-index-access-unknown-receiver-no-cascade"
 path = "tests/smoke/tuple_index_access_unknown_receiver_no_cascade.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS18046"]
 
 [[case]]
 name = "tuple-index-access-inferred-variable-second-valid"
@@ -3432,7 +3432,7 @@ expected_diagnostics = []
 [[case]]
 name = "tuple-index-access-inferred-unknown-receiver-no-cascade"
 path = "tests/smoke/tuple_index_access_inferred_unknown_receiver_no_cascade.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS18046"]
 
 [[case]]
 name = "tuple-conditional-same-tuple-type-valid"
@@ -3487,7 +3487,7 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "tuple-function-parameter-length-mismatch"
 path = "tests/smoke/tuple_function_parameter_length_mismatch.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2345"]
 
 [[case]]
 name = "tuple-function-return-length-mismatch"
@@ -3572,7 +3572,7 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "tuple-no-cascade-length-mismatch-no-element-cascade"
 path = "tests/smoke/tuple_no_cascade_length_mismatch_no_element_cascade.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2322", "TS2304"]
 
 [[case]]
 name = "tuple-no-cascade-element-mismatch-no-root-cascade"
@@ -3592,7 +3592,7 @@ expected_diagnostics = ["TS2448", "TS2454"]
 [[case]]
 name = "tuple-flow-index-expression-use-before-declaration"
 path = "tests/smoke/tuple_flow_index_expression_use_before_declaration.ts"
-expected_diagnostics = ["TS2448", "TS2454"]
+expected_diagnostics = ["TS2322", "TS2448", "TS2454"]
 
 [[case]]
 name = "tuple-flow-nested-tuple-element-use-before-declaration"
@@ -3672,7 +3672,7 @@ expected_diagnostics = []
 [[case]]
 name = "tuple-index-access-out-of-range"
 path = "tests/smoke/tuple_index_access_out_of_range.ts"
-expected_diagnostics = ["TS2339"]
+expected_diagnostics = ["TS2322", "TS2493"]
 
 [[case]]
 name = "tuple-index-access-unresolved-index-no-cascade"
@@ -3928,7 +3928,7 @@ expected_diagnostics = []
 [[case]]
 name = "type-alias-duplicate-value-duplicate-still-value-rule"
 path = "tests/smoke/type_alias_duplicate_value_duplicate_still_value_rule.ts"
-expected_diagnostics = ["TS2451", "TS2451"]
+expected_diagnostics = ["TS2451", "TS2451", "TS2451"]
 
 [[case]]
 name = "type-alias-unknown-type-variable-no-cascade"
@@ -4008,7 +4008,7 @@ expected_diagnostics = ["TS2693"]
 [[case]]
 name = "type-alias-value-not-type-still-ts2304"
 path = "tests/smoke/type_alias_value_not_type_still_ts2304.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2749"]
 
 [[case]]
 name = "type-alias-same-name-as-function-value-allowed"
@@ -4248,12 +4248,12 @@ expected_diagnostics = ["TS2741"]
 [[case]]
 name = "interface-duplicate-alias-then-interface-first-wins"
 path = "tests/smoke/interface_duplicate_alias_then_interface_first_wins.ts"
-expected_diagnostics = ["TS2300"]
+expected_diagnostics = ["TS2300", "TS2300"]
 
 [[case]]
 name = "interface-duplicate-interface-then-alias-first-wins"
 path = "tests/smoke/interface_duplicate_interface_then_alias_first_wins.ts"
-expected_diagnostics = ["TS2300"]
+expected_diagnostics = ["TS2300", "TS2300"]
 
 [[case]]
 name = "interface-not-value-still-ts2304"
@@ -4263,7 +4263,7 @@ expected_diagnostics = ["TS2693"]
 [[case]]
 name = "interface-value-not-type-still-ts2304"
 path = "tests/smoke/interface_value_not_type_still_ts2304.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2749"]
 
 [[case]]
 name = "interface-same-name-as-value-allowed"
@@ -4298,7 +4298,7 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "interface-unknown-function-return-no-missing-return-cascade"
 path = "tests/smoke/interface_unknown_function_return_no_missing_return_cascade.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2304", "TS2355"]
 
 [[case]]
 name = "interface-cycle-self-no-stack-overflow"
@@ -4318,12 +4318,12 @@ expected_diagnostics = ["TS2322"]
 [[case]]
 name = "interface-duplicate-alias-then-interface-no-cascade"
 path = "tests/smoke/interface_duplicate_alias_then_interface_no_cascade.ts"
-expected_diagnostics = ["TS2300"]
+expected_diagnostics = ["TS2300", "TS2300"]
 
 [[case]]
 name = "interface-duplicate-interface-then-alias-no-cascade"
 path = "tests/smoke/interface_duplicate_interface_then_alias_no_cascade.ts"
-expected_diagnostics = ["TS2300"]
+expected_diagnostics = ["TS2300", "TS2300"]
 
 [[case]]
 name = "interface-merge-interface-property-conflict"
@@ -4333,7 +4333,7 @@ expected_diagnostics = ["TS2717", "TS2322"]
 [[case]]
 name = "interface-duplicate-alias-first-wins-property-mismatch"
 path = "tests/smoke/interface_duplicate_alias_first_wins_property_mismatch.ts"
-expected_diagnostics = ["TS2300", "TS2322"]
+expected_diagnostics = ["TS2300", "TS2300", "TS2322"]
 
 [[case]]
 name = "interface-duplicate-type-namespace-value-namespace-independent"
@@ -4378,7 +4378,7 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "interface-unknown-function-return-no-missing-return-cascade"
 path = "tests/smoke/interface_unknown_function_return_no_missing_return_cascade.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2304", "TS2355"]
 
 [[case]]
 name = "interface-cycle-self-property-no-cascade"
@@ -4455,7 +4455,7 @@ expected_diagnostics = []
 [[case]]
 name = "interface-optional-non-fresh-missing-required-still-ts2322"
 path = "tests/smoke/interface_optional_non_fresh_missing_required_still_ts2322.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = ["TS2741"]
 
 [[case]]
 name = "interface-local-variable-valid"
@@ -4510,7 +4510,7 @@ expected_diagnostics = []
 [[case]]
 name = "interface-conditional-mismatch"
 path = "tests/smoke/interface_conditional_mismatch.ts"
-expected_diagnostics = ["TS2741"]
+expected_diagnostics = ["TS2322"]
 
 [[case]]
 name = "interface-call-argument-contextual-valid"
@@ -4540,12 +4540,12 @@ expected_diagnostics = ["TS2693"]
 [[case]]
 name = "interface-value-not-type-variable-ts2304"
 path = "tests/smoke/interface_value_not_type_variable_ts2304.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2749"]
 
 [[case]]
 name = "interface-value-not-type-parameter-ts2304"
 path = "tests/smoke/interface_value_not_type_parameter_ts2304.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2749"]
 
 [[case]]
 name = "interface-same-name-as-parameter-type-allowed"
@@ -4825,7 +4825,7 @@ expected_diagnostics = []
 [[case]]
 name = "literal-widening-let-boolean-to-base"
 path = "tests/smoke/literal_widening_let_boolean_to_base.ts"
-expected_diagnostics = ["TS2322"]
+expected_diagnostics = []
 
 [[case]]
 name = "literal-widening-const-boolean-preserves-literal"
@@ -5458,12 +5458,12 @@ expected_diagnostics = ["TS2304"]
 [[case]]
 name = "function-type-unresolved-call-argument-no-cascade"
 path = "tests/smoke/function_type_unresolved_call_argument_no_cascade.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2304", "TS2345"]
 
 [[case]]
 name = "function-type-unresolved-return-no-cascade"
 path = "tests/smoke/function_type_unresolved_return_no_cascade.ts"
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2304", "TS2355"]
 
 [[case]]
 # tsc's early exit is `maybeTypeOfKind(t, Void)` (checker.go:3759), so a union
@@ -5928,7 +5928,7 @@ source_text = "import DefaultThing, { type User } from \"./thing\";\nlet user: U
 
 [[case]]
 name = "mixed-default-named-relative-missing-default"
-expected_diagnostics = ["TS2305"]
+expected_diagnostics = ["TS1192"]
 
 [[case.files]]
 file_name = "src/thing.ts"
@@ -5966,12 +5966,12 @@ expected_diagnostics = ["TS2307"]
 [[case]]
 name = "module-namespace-import-missing-module-no-cascade"
 path = "tests/smoke/module_namespace_import_missing_module_no_cascade.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2307"]
 
 [[case]]
 name = "module-re-export-named-missing-module"
 path = "tests/smoke/module_re_export_named_missing_module.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2307"]
 
 [[case]]
 name = "module-re-export-named-non-relative-unsupported"
@@ -5981,12 +5981,12 @@ expected_diagnostics = ["TS2307"]
 [[case]]
 name = "module-re-export-star-missing-module"
 path = "tests/smoke/module_re_export_star_missing_module.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2307"]
 
 [[case]]
 name = "module-re-export-star-as-unsupported"
 path = "tests/smoke/module_re_export_star_as_unsupported.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2307"]
 
 [[case]]
 name = "module-re-export-star-non-relative-unsupported"
@@ -6007,12 +6007,12 @@ files = [
   { file_name = "user.ts", source_text = "export const getName: string = \"Ada\";" },
   { file_name = "index.ts", source_text = "import getName from \"./user\";\nlet name = getName;" },
 ]
-expected_diagnostics = ["TS2305"]
+expected_diagnostics = ["TS2613"]
 
 [[case]]
 name = "module-default-import-missing-module-no-cascade"
 path = "tests/smoke/module_default_import_missing_module_no_cascade.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2307"]
 
 [[case]]
 name = "module-default-import-does-not-bind-type"
@@ -6020,7 +6020,7 @@ files = [
   { file_name = "user.ts", source_text = "export default 123;" },
   { file_name = "index.ts", source_text = "import DefaultThing from \"./user\";\nlet value: DefaultThing = 123;" },
 ]
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2749"]
 
 [[case]]
 name = "module-namespace-import-function-property-call-valid"
@@ -6106,7 +6106,7 @@ files = [
   { file_name = "index.ts", source_text = "export * from \"./user\";" },
   { file_name = "app.ts", source_text = "import getName from \"./index\";\nlet value = getName;" },
 ]
-expected_diagnostics = ["TS2305"]
+expected_diagnostics = ["TS1192"]
 
 [[case]]
 name = "module-re-export-star-missing-module-no-cascade"
@@ -6114,7 +6114,7 @@ files = [
   { file_name = "index.ts", source_text = "export * from \"./missing\";" },
   { file_name = "app.ts", source_text = "import { User } from \"./index\";\nlet value = User;" },
 ]
-expected_diagnostics = ["TS2307"]
+expected_diagnostics = ["TS2307", "TS2305"]
 
 [[case]]
 name = "module-re-export-star-conflict-policy-pinned"
@@ -6124,7 +6124,7 @@ files = [
   { file_name = "index.ts", source_text = "export * from \"./a\";\nexport * from \"./b\";" },
   { file_name = "app.ts", source_text = "import { label } from \"./index\";\nlet value: string = label;" },
 ]
-expected_diagnostics = []
+expected_diagnostics = ["TS2308"]
 
 [[case]]
 name = "module-re-export-star-local-explicit-wins"
@@ -6189,7 +6189,7 @@ files = [
   { file_name = "user.ts", source_text = "export const User: string = \"Ada\";" },
   { file_name = "index.ts", source_text = "import { User } from \"./user\";\nlet value: User = \"Ada\";" },
 ]
-expected_diagnostics = ["TS2304"]
+expected_diagnostics = ["TS2749"]
 
 [[case]]
 name = "module-resolution-type-only-import-type-usage-valid"
@@ -6260,7 +6260,7 @@ files = [
   { file_name = "setup.ts", source_text = "let value = 1;" },
   { file_name = "index.ts", source_text = "import { value } from \"./setup\";" },
 ]
-expected_diagnostics = ["TS2305"]
+expected_diagnostics = ["TS2306"]
 
 [[case]]
 name = "generic-type-alias-identity-valid"
@@ -6422,7 +6422,7 @@ files = [
   { file_name = "box.ts", source_text = "type Internal<T> = { value: T }; export type Box<T> = Internal<T>;" },
   { file_name = "index.ts", source_text = "import { Internal } from \"./box\";" },
 ]
-expected_diagnostics = []
+expected_diagnostics = ["TS2459"]
 
 [[case]]
 name = "generic-indexed-access-alias-string-key-valid"
@@ -6684,12 +6684,12 @@ expected_diagnostics = []
 [[case]]
 name = "function-type-this-parameter-not-counted-in-arity"
 path = "tests/smoke/function_type_this_parameter_not_counted_in_arity.ts"
-expected_diagnostics = []
+expected_diagnostics = ["TS2684"]
 
 [[case]]
 name = "function-type-this-parameter-argument-mismatch-still-checks-real-arg"
 path = "tests/smoke/function_type_this_parameter_argument_mismatch_still_checks_real_arg.ts"
-expected_diagnostics = ["TS2345"]
+expected_diagnostics = ["TS2684"]
 
 [[case]]
 name = "function-type-this-parameter-unresolved-type-no-cascade"

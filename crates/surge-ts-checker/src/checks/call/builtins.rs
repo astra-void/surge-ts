@@ -116,6 +116,7 @@ pub(crate) fn check_array_reduce_call(
                         crate::symbols::SymbolKind::Let,
                         &initial.expression,
                         &initial_type,
+                        false,
                     );
                     if surge_ts_types::is_assignable_to(&widened, element_type) {
                         element_type.clone()
@@ -249,6 +250,7 @@ pub(crate) fn check_promise_resolve_call(
                     crate::symbols::SymbolKind::Let,
                     &argument.expression,
                     &ty,
+                    false,
                 )
             };
             Some(super::promise_of(&value, ctx))
@@ -300,6 +302,7 @@ pub(crate) fn check_promise_race_call(
                         crate::symbols::SymbolKind::Let,
                         &element.expression,
                         &ty,
+                        false,
                     ),
                 ));
             }

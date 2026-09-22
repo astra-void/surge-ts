@@ -130,6 +130,42 @@ fn report_work_trip(key: &DeclarationResolutionKey) {
     }
 }
 
+/// Whether the alias recurses only in *tail* position of a conditional
+/// (`type Mutate<S, Ms> = … ? S : Ms extends [...] ? Mutate<…, …> : never`).
+///
+/// Such a recursion terminates by consuming its arguments and produces exactly
+/// one type per step, so discriminating its frames by their arguments (rather
+/// than reading the back-edge as a cycle) costs one instantiation per step. A
+/// self-reference nested inside a structure (a mapped type's member, a tuple,
+/// a union arm) fans out instead: ts-pattern's pattern aliases expand 57x
+/// slower when those are followed, which is why the general case stays behind
+/// [`generic_recursive_alias_references`].
+fn alias_is_tail_recursive(alias: &TypeAliasInfo) -> bool {
+    fn mentions(ty: &ParsedType, name: &str) -> bool {
+        let mut found = false;
+        ty.for_each_named_type(&mut |named| found |= named.name == name);
+        found
+    }
+
+    fn branch_is_tail(ty: &ParsedType, name: &str) -> bool {
+        match ty {
+            ParsedType::Named(named) if named.name == name => true,
+            ParsedType::Conditional(conditional) => {
+                !mentions(&conditional.check_type, name)
+                    && !mentions(&conditional.extends_type, name)
+                    && branch_is_tail(&conditional.true_type, name)
+                    && branch_is_tail(&conditional.false_type, name)
+            }
+            other => !mentions(other, name),
+        }
+    }
+
+    !alias.body.type_parameters.is_empty()
+        && matches!(&alias.body.ty, ParsedType::Conditional(_))
+        && branch_is_tail(&alias.body.ty, &alias.name)
+        && mentions(&alias.body.ty, &alias.name)
+}
+
 /// The `resolving`-stack identity for one *instantiation*.
 ///
 /// The plain declaration key carries no arguments, so `Decorate<{post: …}>` and
@@ -193,7 +229,8 @@ pub(crate) fn resolve_type_alias(
     let declaration_key = super::cache::alias_resolution_key(alias);
     // Under the instantiation-aware gate a generic back-edge is a cycle only
     // when its *arguments* repeat, or when the nesting cap is reached.
-    let frame_key = if generic_recursive_alias_references() {
+    let instantiation_frames = generic_recursive_alias_references() || alias_is_tail_recursive(alias);
+    let frame_key = if instantiation_frames {
         instantiation_frame_key(
             &declaration_key,
             !alias.body.type_parameters.is_empty(),
@@ -208,7 +245,7 @@ pub(crate) fn resolve_type_alias(
     if resolving.is_empty() {
         ctx.instantiation_work = 0;
     }
-    let work_exhausted = if generic_recursive_alias_references() && frame_key != declaration_key {
+    let work_exhausted = if instantiation_frames && frame_key != declaration_key {
         ctx.instantiation_work = ctx.instantiation_work.saturating_add(1);
         let tripped = ctx.instantiation_work > max_root_instantiation_work();
         if tripped {
@@ -218,7 +255,7 @@ pub(crate) fn resolve_type_alias(
     } else {
         false
     };
-    let nesting_exhausted = generic_recursive_alias_references()
+    let nesting_exhausted = instantiation_frames
         && frame_key != declaration_key
         && (work_exhausted
             || resolving.len() + super::cache::lazy_peel_depth() * MAX_RESOLUTION_DEPTH / 4
@@ -276,6 +313,25 @@ pub(crate) fn resolve_type_alias(
                 .any(|&frame| frame > index);
         if legal_recursion && (alias.body.type_parameters.is_empty() || literal_member_back_edge)
         {
+            // The lazy reference re-expands from these arguments on peel, and
+            // answers from the interner by them. A generic back-edge reached
+            // inside an open type-parameter scope arrives without them resolved
+            // (`D<R[K]>` under `R`, `K`); an empty list would peel `D` with no
+            // arguments at all, so they are resolved here under this frame's
+            // substitution.
+            let resolved_back_edge_arguments;
+            let pre_resolved_arguments = match pre_resolved_arguments {
+                None if !type_arguments.is_empty() => {
+                    resolved_back_edge_arguments = type_arguments
+                        .iter()
+                        .map(|argument| {
+                            resolve_parsed_type(argument.clone(), ctx, resolving, substitution).ty
+                        })
+                        .collect::<Vec<_>>();
+                    Some(resolved_back_edge_arguments.as_slice())
+                }
+                other => other,
+            };
             return ResolvedType {
                 ty: make_recursive_cycle_reference(
                     ctx,

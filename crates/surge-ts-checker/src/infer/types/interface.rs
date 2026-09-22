@@ -643,6 +643,8 @@ pub(crate) fn resolve_interface(
             interface.name_span.map_or(0, |span| span.start),
         )
     });
+    let outer_class_heritage =
+        std::mem::replace(&mut ctx.resolving_class_heritage, interface.is_class_instance);
     let resolved = crate::program::with_dts_expansion_reason(expansion_reason, || {
         with_type_declaration_scope(&declaration_effective_scope, ctx, |ctx| {
             with_file_name(ctx, &interface.file_name, |ctx| {
@@ -666,6 +668,7 @@ pub(crate) fn resolve_interface(
             })
         })
     });
+    ctx.resolving_class_heritage = outer_class_heritage;
     ctx.pop_type_parameter_scope();
     ctx.structural_resolution_frames.pop();
     let subtree_lowest_cycle = ctx.lowest_cycle_target_index;
@@ -1037,6 +1040,11 @@ pub(crate) fn resolve_interface_declaration(
     // `EventTarget` one it overrides and cost the callback its contextual type.
     let mut own_member_names =
         surge_ts_types::fx::FxHashSet::<&str>::with_hasher(Default::default());
+    // Each folded method group's members in declaration order, attached to the
+    // fold once the members are all in, so a call can pick its overload's
+    // return the way a free function's group does (tsc's `chooseOverload`).
+    let mut method_overload_members =
+        surge_ts_types::fx::FxHashMap::<&str, Vec<FunctionType>>::with_hasher(Default::default());
     // Stage 2 gate: a method's components defer only when it has NO overloads
     // — `merge_overload_signatures` compares parameter slots by equality and
     // must not peel, so distinct lazy-ref ids in an overload group would widen
@@ -1315,6 +1323,10 @@ pub(crate) fn resolve_interface_declaration(
                         interface_key?,
                     ))
                 });
+            method_overload_members
+                .entry(member.name.as_str())
+                .or_insert_with(|| vec![existing_fn.clone()])
+                .push(incoming.clone());
             let cached_overload = overload_key
                 .as_ref()
                 .and_then(|key| lookup_physical_interface_overload(ctx, key));
@@ -1390,6 +1402,14 @@ pub(crate) fn resolve_interface_declaration(
 
         properties.insert(member.name.as_str().into(), object_property);
         own_member_names.insert(member.name.as_str());
+    }
+
+    for (name, overloads) in method_overload_members {
+        if let Some(property) = properties.get_mut(name)
+            && let Type::Function(merged) = &property.ty
+        {
+            property.ty = Type::Function(merged.clone().with_overloads(overloads));
+        }
     }
 
     // An own index signature takes precedence; otherwise inherit one from a

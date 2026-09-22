@@ -83,6 +83,29 @@ fn strict_true_implies_no_implicit_any() {
 }
 
 #[test]
+fn strict_null_checks_follows_strict_unless_written() {
+    let root = temp_dir("strict-null-checks");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "strict": false } }"#,
+    );
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(loaded.diagnostics.is_empty());
+    assert!(!loaded.compiler_options.strict_null_checks);
+
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "strict": true, "strictNullChecks": false } }"#,
+    );
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(loaded.diagnostics.is_empty());
+    assert!(loaded.compiler_options.no_implicit_any);
+    assert!(!loaded.compiler_options.strict_null_checks);
+}
+
+#[test]
 fn no_implicit_any_false_overrides_strict_true() {
     let root = temp_dir("strict-override");
     write_file(
@@ -602,6 +625,28 @@ fn ts6_node20_and_newer_options_are_recognized() {
     assert_eq!(
         loaded.compiler_options.module_resolution,
         ModuleResolutionKind::Node20
+    );
+}
+
+#[test]
+fn display_only_options_are_accepted() {
+    let root = temp_dir("display-only-options");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{
+              "compilerOptions": {
+                "pretty": false,
+                "noErrorTruncation": true
+              }
+            }"#,
+    );
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert!(
+        loaded.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        loaded.diagnostics
     );
 }
 

@@ -140,6 +140,7 @@ pub(super) fn narrow_tuple_destructure_siblings(
 pub(super) fn narrow_condition_and_aliases_in_scope(
     base: &ParsedExpression,
     rewritten: Option<&ParsedExpression>,
+    alias_source: Option<&ParsedExpression>,
     scopes: &mut ScopeStack,
     branch_is_true: bool,
     ctx: &mut CheckerContext,
@@ -147,6 +148,13 @@ pub(super) fn narrow_condition_and_aliases_in_scope(
     narrow_discriminant_in_scope(base, scopes, branch_is_true, ctx);
     if let Some(rewritten) = rewritten {
         narrow_discriminant_in_scope(rewritten, scopes, branch_is_true, ctx);
+    }
+    // A `const` alias of a condition is narrowed by the test as well as the
+    // expression it was written as: tsc narrows both `s` and what
+    // `const s = a[i] || rest` reads. Expanding the alias alone left `s` at its
+    // declared type inside the branch.
+    if let Some(alias_source) = alias_source {
+        narrow_discriminant_in_scope(alias_source, scopes, branch_is_true, ctx);
     }
     narrow_tuple_destructure_siblings(base, scopes, branch_is_true);
 }

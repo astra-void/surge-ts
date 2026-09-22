@@ -191,6 +191,22 @@ pub(crate) fn resolve_function_type(
         resolving,
     );
 
+    // A written constraint or default (`<T extends C = D>() => …`) is a type
+    // reference like any other, resolved for its own diagnostics — but only
+    // where it is written. Resolving it again beneath another declaration's
+    // expansion buys no diagnostic and walks the constraint's own generic
+    // graph at every use site, which on zod's `.d.ts` chains does not
+    // terminate in reasonable time.
+    let written_here = resolving.is_empty();
+    for type_parameter in function_type.type_parameters.iter().take_while(|_| written_here) {
+        for written in [&type_parameter.constraint, &type_parameter.default_type]
+            .into_iter()
+            .flatten()
+        {
+            let _ = super::resolve_parsed_type(written.clone(), ctx, resolving, &local_substitution);
+        }
+    }
+
     let value_parameters = function_type
         .parameters
         .iter()
@@ -495,6 +511,9 @@ pub(crate) fn resolve_object_type(
         alloc_object_type(properties, string_index_type).with_number_index_type(number_index_type);
     if object_type.non_primitive {
         resolved_object = resolved_object.with_non_primitive_marker();
+    }
+    if let Some(display_name) = &object_type.display_name {
+        resolved_object = resolved_object.with_alias_name(display_name.clone());
     }
     if let Some(call_signature) = object_type.call_signature.as_deref() {
         let resolved = resolve_parsed_type(

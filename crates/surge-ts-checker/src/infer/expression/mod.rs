@@ -107,6 +107,17 @@ pub(crate) fn infer_expression(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    crate::checks::function::settle_call_result(
+        parsed_expression,
+        infer_expression_unsettled(parsed_expression, symbols, ctx),
+    )
+}
+
+fn infer_expression_unsettled(
+    parsed_expression: &ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
     record_expression_infer();
     let infer_start = Instant::now();
     let result = match parsed_expression {
@@ -185,16 +196,16 @@ pub(crate) fn infer_expression(
                 );
             }
             symbols
-            .get("this")
-            .map(|symbol| {
-                InferredExpression::Known(clone_type_with_metrics(
-                    &symbol.ty,
-                    CopySource::Identifier,
-                ))
-            })
-            // Outside a class body `this` has no instance type here; stay
-            // conservative rather than emitting an unresolved-identifier error.
-            .unwrap_or(InferredExpression::Unknown)
+                .get("this")
+                .map(|symbol| {
+                    InferredExpression::Known(clone_type_with_metrics(
+                        &symbol.ty,
+                        CopySource::Identifier,
+                    ))
+                })
+                // Outside a class body `this` has no instance type here; stay
+                // conservative rather than emitting an unresolved-identifier error.
+                .unwrap_or(InferredExpression::Unknown)
         }
         ParsedExpression::ObjectLiteral { properties, .. } => {
             InferredExpression::Known(infer_object_literal(properties, symbols, ctx))
@@ -210,21 +221,19 @@ pub(crate) fn infer_expression(
         }
         // tsc's comma operator: every operand is evaluated, the value is the
         // last one's.
-        ParsedExpression::Sequence { expressions, .. } => {
+        ParsedExpression::Sequence { expressions } => {
             let mut result = InferredExpression::Unknown;
-            for expression in expressions {
+            for (expression, _) in expressions {
                 result = infer_expression(expression, symbols, ctx);
             }
             result
         }
-        ParsedExpression::Await { operand, .. } => {
-            match infer_expression(operand, symbols, ctx) {
-                InferredExpression::Known(ty) => {
-                    InferredExpression::Known(crate::checks::call::awaited_type(&ty))
-                }
-                other => other,
+        ParsedExpression::Await { operand, .. } => match infer_expression(operand, symbols, ctx) {
+            InferredExpression::Known(ty) => {
+                InferredExpression::Known(crate::checks::call::awaited_type(&ty))
             }
-        }
+            other => other,
+        },
         ParsedExpression::Binary {
             operator,
             left,
@@ -283,6 +292,7 @@ pub(crate) fn infer_expression(
             symbols,
             ctx,
         ),
+        ParsedExpression::Assignment { value, .. } => infer_expression(value, symbols, ctx),
         ParsedExpression::NullishCoalescing { left, right, .. } => {
             let left_type = infer_expression(left, symbols, ctx);
             let right_type = match &left_type {
@@ -523,10 +533,15 @@ pub(crate) fn infer_expression(
                 let _ = infer_expression(expression, symbols, ctx);
             }
             if *is_tagged {
-                match expressions.first().map(|tag| infer_expression(tag, symbols, ctx)) {
+                match expressions
+                    .first()
+                    .map(|tag| infer_expression(tag, symbols, ctx))
+                {
                     Some(InferredExpression::Known(tag)) => {
                         match crate::checks::expr::tagged_template_signature(&tag) {
-                            Some(signature) => InferredExpression::Known(signature.return_type().clone()),
+                            Some(signature) => {
+                                InferredExpression::Known(signature.return_type().clone())
+                            }
                             None => InferredExpression::Unknown,
                         }
                     }
@@ -586,7 +601,9 @@ fn template_literal_type(expressions: &[ParsedExpression], quasis: &[Option<Stri
         match expression {
             ParsedExpression::StringLiteral(value) => Some(value.clone()),
             ParsedExpression::NumberLiteral(value)
-                if value.parse::<i64>().is_ok_and(|number| number.to_string() == *value) =>
+                if value
+                    .parse::<i64>()
+                    .is_ok_and(|number| number.to_string() == *value) =>
             {
                 Some(value.clone())
             }

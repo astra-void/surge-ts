@@ -1,4 +1,3 @@
-
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
     ParsedAssignment, ParsedExpression, ParsedMemberAssignment, ParsedThisPropertyAssignment,
@@ -6,16 +5,16 @@ use surge_ts_syntax::{
 };
 use surge_ts_types::{Type, TypeCopyReason, is_assignable_to, union_type, with_type_copy_reason};
 
+use super::super::visible_symbols;
 use crate::checks::assign::check_assignment_with_symbols;
 use crate::checks::expr::evaluate_expression;
 use crate::context::CheckerContext;
 use crate::context::convert_span;
 use crate::flow::{
-    FlowCheck, FunctionFlowState, check_assignment_target_flow, check_expression_flow, mark_assignment_state,
+    FlowCheck, FunctionFlowState, check_assignment_target_flow, mark_assignment_state,
 };
 use crate::infer::InferredExpression;
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
-use super::super::visible_symbols;
 
 pub(crate) fn check_function_assignment(
     assignment: ParsedAssignment,
@@ -35,13 +34,16 @@ pub(crate) fn check_function_assignment(
                 ctx,
                 assignment.target_span,
             ),
-            check_expression_flow(
-                &assignment.value,
-                assignment.value_span,
-                flow_state,
-                statement_index,
-                ctx,
-            ),
+            {
+                let (read, read_span) = crate::flow::assignment_value_read(&assignment);
+                crate::flow::check_substituting_read_flow(
+                    read,
+                    read_span,
+                    flow_state,
+                    statement_index,
+                    ctx,
+                )
+            },
         )
     } else {
         (FlowCheck::Clear, FlowCheck::Clear)
@@ -56,8 +58,20 @@ pub(crate) fn check_function_assignment(
             ctx,
         );
         let shadowed_locally = scopes.declares_locally(&target_name);
+        let assigns_empty_array = matches!(
+            &assignment.value,
+            ParsedExpression::ArrayLiteral { elements, .. } if elements.is_empty()
+        );
         check_assignment_with_symbols(assignment, &visible_symbols, shadowed_locally, ctx);
-        update_assigned_symbol_type(&target_name, inferred_value, scopes);
+        if !super::evolving_arrays::assign_evolving_array(
+            &target_name,
+            assigns_empty_array,
+            &inferred_value,
+            scopes,
+            ctx,
+        ) {
+            update_assigned_symbol_type(&target_name, inferred_value, scopes);
+        }
     }
 
     if !target_blocked.is_blocked() && flow_state.tracked_local_count() > 0 {
@@ -252,8 +266,7 @@ pub(crate) fn property_write_is_readonly(
     ctx: &CheckerContext,
 ) -> bool {
     object_property_is_readonly(receiver, property_name)
-        || declared_member(receiver, property_name, ctx)
-            .is_some_and(|(member, _)| member.readonly)
+        || declared_member(receiver, property_name, ctx).is_some_and(|(member, _)| member.readonly)
 }
 
 /// Whether the receiver's own object surface declares the member `readonly`.
@@ -297,12 +310,16 @@ fn report_readonly_element_write(
     // A tuple element is a property, reported on the index; an array's index
     // signature is reported on the whole access (`errorIfWritingToReadonlyIndex`).
     let (diagnostic, span) = match (receiver.peeled(), literal_index_key(index_type)) {
-        (Type::Tuple(_), Some(key)) => (Diagnostic::ts2540(key, ctx.file_name.clone()), element_span),
+        (Type::Tuple(_), Some(key)) => {
+            (Diagnostic::ts2540(key, ctx.file_name.clone()), element_span)
+        }
         _ => {
             let name = if lib_readonly_array {
                 let element = &reference.arguments[0];
                 match element {
-                    Type::Union(_) | Type::Function(_) => format!("readonly ({})[]", element.name()),
+                    Type::Union(_) | Type::Function(_) => {
+                        format!("readonly ({})[]", element.name())
+                    }
                     _ => format!("readonly {}[]", element.name()),
                 }
             } else {
@@ -336,8 +353,7 @@ fn element_write_target_type(receiver: &Type, index_type: &Type) -> Option<Type>
                 // to a made-up element type.
                 return elements.get(index).cloned();
             }
-            is_assignable_to(index_type, &Type::Number)
-                .then(|| union_type(elements.to_vec()))
+            is_assignable_to(index_type, &Type::Number).then(|| union_type(elements.to_vec()))
         }
         Type::Object(object) => {
             if let Some(key) = literal_index_key(index_type)
@@ -449,8 +465,7 @@ fn check_element_assignment(
 
     // A write is checked against the *declared* element type, not whatever the
     // enclosing branch narrowed the receiver to.
-    let receiver_type =
-        declared_reference_type(object, &visible_symbols).unwrap_or(object_type);
+    let receiver_type = declared_reference_type(object, &visible_symbols).unwrap_or(object_type);
 
     let property_span = index_span.or(assignment.target_span);
 
@@ -731,6 +746,7 @@ fn declare_expando_member(
         SymbolKind::Let,
         &assignment.value,
         &value_type,
+        false,
     );
     properties.insert(
         property_name.into(),
@@ -747,6 +763,34 @@ fn declare_expando_member(
 }
 
 pub(crate) fn check_member_assignment(
+    assignment: ParsedMemberAssignment,
+    scopes: &mut ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    // `x[n] = v` on an evolving array writes through an `any[]` receiver.
+    let evolving_receiver = ctx.auto_arrays_declared
+        && super::evolving_arrays::element_write_receiver(
+            &assignment.target,
+            scopes.visible_symbols(),
+        )
+        .is_some();
+    if evolving_receiver {
+        ctx.evolving_array_operation_target = match &assignment.target {
+            ParsedExpression::IndexAccess { object_span, .. } => *object_span,
+            ParsedExpression::ElementAccess { object, .. } => match object.as_ref() {
+                ParsedExpression::Identifier { span, .. } => *span,
+                _ => None,
+            },
+            _ => None,
+        };
+    }
+    check_member_assignment_itself(assignment, scopes, ctx);
+    if evolving_receiver {
+        ctx.evolving_array_operation_target = None;
+    }
+}
+
+fn check_member_assignment_itself(
     assignment: ParsedMemberAssignment,
     scopes: &mut ScopeStack,
     ctx: &mut CheckerContext,
@@ -817,7 +861,10 @@ pub(crate) fn check_member_assignment(
         && !scopes.declares_locally(name)
     {
         if let Some(span) = property_span.or(assignment.target_span) {
-            ctx.push(Diagnostic::ts2540(property_name, ctx.file_name.clone()).with_span(convert_span(span)));
+            ctx.push(
+                Diagnostic::ts2540(property_name, ctx.file_name.clone())
+                    .with_span(convert_span(span)),
+            );
         }
         return;
     }
@@ -885,16 +932,16 @@ pub(crate) fn check_member_assignment(
         return;
     }
     let accessor_write_type = accessor_write_type(&receiver_for_declaration, property_name, ctx);
-    let Some(target_type) = accessor_write_type
-        .or_else(|| declared_object_type
-        .as_ref()
-        .and_then(|declared| declared.get_property_access_type(property_name))
-        .or_else(|| {
-            object_type
-                .get_property_access_type(property_name)
-                .map(|narrowed| widen_narrowed_literals(&narrowed))
-        }))
-    else {
+    let Some(target_type) = accessor_write_type.or_else(|| {
+        declared_object_type
+            .as_ref()
+            .and_then(|declared| declared.get_property_access_type(property_name))
+            .or_else(|| {
+                object_type
+                    .get_property_access_type(property_name)
+                    .map(|narrowed| widen_narrowed_literals(&narrowed))
+            })
+    }) else {
         // `decl.id = x` on `A | B` where `B` has no `id`: tsc reports the
         // member on the union. Only a union of fully modelled objects is
         // reported, so an incompletely modelled receiver stays silent.
@@ -933,13 +980,22 @@ pub(crate) fn check_member_assignment(
         {
             // Any other receiver reports a missing member exactly as a read of
             // it does, gated by the same modelling checks the read applies.
-            let diagnostic = crate::checks::expr::missing_property_diagnostic(
+            let diagnostic = match crate::checks::expr::global_this_missing_member(
                 &property_name,
                 &object_type,
-                &visible_symbols,
-                ctx.file_name.clone(),
-            );
-            if let Some(span) = span.or(*property_span).or(assignment.target_span) {
+                ctx,
+            ) {
+                Some(diagnostic) => diagnostic,
+                None => Some(crate::checks::expr::missing_property_diagnostic(
+                    &property_name,
+                    &object_type,
+                    &visible_symbols,
+                    ctx.file_name.clone(),
+                )),
+            };
+            if let Some(diagnostic) = diagnostic
+                && let Some(span) = span.or(*property_span).or(assignment.target_span)
+            {
                 ctx.push(diagnostic.with_span(convert_span(span)));
             }
         }
@@ -984,7 +1040,8 @@ pub(crate) fn check_member_assignment(
     }
 
     if !is_assignable_to(&value_type, &target_type) {
-        let reported_target = crate::checks::expr::reported_relation_target(&value_type, &target_type);
+        let reported_target =
+            crate::checks::expr::reported_relation_target(&value_type, &target_type);
         let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
             &value_type,
             &reported_target,
@@ -1054,16 +1111,44 @@ pub(crate) fn check_this_property_assignment(
         } = crate::infer::infer_expression(&read, &visible_symbols, ctx)
             && let Some(span) = span.or(assignment.property_span)
         {
-            let diagnostic = crate::checks::expr::missing_property_diagnostic(
+            let diagnostic = match crate::checks::expr::global_this_missing_member(
                 &property_name,
                 &object_type,
-                &visible_symbols,
-                ctx.file_name.clone(),
-            );
-            ctx.push(diagnostic.with_span(convert_span(span)));
+                ctx,
+            ) {
+                Some(diagnostic) => diagnostic,
+                None => Some(crate::checks::expr::missing_property_diagnostic(
+                    &property_name,
+                    &object_type,
+                    &visible_symbols,
+                    ctx.file_name.clone(),
+                )),
+            };
+            if let Some(diagnostic) = diagnostic {
+                ctx.push(diagnostic.with_span(convert_span(span)));
+            }
         }
         return;
     };
+
+    let constructor_may_write = ctx
+        .constructor_writable_members
+        .as_ref()
+        .is_some_and(|members| members.contains(&assignment.property_name));
+    if !constructor_may_write {
+        let receiver = visible_symbols
+            .declared_type("this")
+            .cloned()
+            .unwrap_or_else(|| this_symbol.ty.clone());
+        if report_readonly_property_write(
+            &receiver,
+            &assignment.property_name,
+            assignment.property_span,
+            ctx,
+        ) {
+            return;
+        }
+    }
 
     // Evaluated against the member like an `o.p = …` write: the target types
     // the value contextually, an object literal elaborates into its members, and
@@ -1092,7 +1177,8 @@ pub(crate) fn check_this_property_assignment(
     }
 
     if !is_assignable_to(&value_type, &property_type) {
-        let reported_target = crate::checks::expr::reported_relation_target(&value_type, &property_type);
+        let reported_target =
+            crate::checks::expr::reported_relation_target(&value_type, &property_type);
         let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
             &value_type,
             &reported_target,
@@ -1105,6 +1191,180 @@ pub(crate) fn check_this_property_assignment(
             None => diagnostic,
         };
         ctx.push(diagnostic);
+    }
+}
+
+/// tsc's `getAssignmentReducedType`: an assignment narrows a union-declared
+/// binding to the declared members the value may be assigned to — `result =
+/// { type: "data", data }` leaves the declared `data` member, optional `id`
+/// and all, not the literal's own shape. A fresh boolean literal keeps its
+/// literal; surge's `boolean` is not a `true | false` union, so that member is
+/// narrowed here directly. When the members kept do not admit the value, the
+/// value itself stands in (tsc falls back to the declaration; surge's
+/// relation is incomplete enough that the value is the safer answer).
+pub(super) fn assignment_reduced_type(declared: Option<&Type>, assigned: Type) -> Type {
+    // An `any` fits every member, so tsc keeps the whole declaration; surge's
+    // `any` here is mostly its own degradation of a value tsc can type, and
+    // spreading it back over the declared union reports members (`undefined`)
+    // the real value rules out.
+    if matches!(assigned, Type::Any) {
+        return assigned;
+    }
+    let Some(Type::Union(declared)) = declared else {
+        return assigned;
+    };
+    let kept: Vec<Type> = declared
+        .types()
+        .iter()
+        .filter(|member| type_maybe_assignable_to(&assigned, member))
+        .map(|member| match (member, &assigned) {
+            (Type::Boolean, Type::BooleanLiteral(_)) => assigned.clone(),
+            _ => member.clone(),
+        })
+        .collect();
+    if kept.is_empty() {
+        return assigned;
+    }
+    let reduced = union_type(kept);
+    if is_assignable_to(&assigned, &reduced) {
+        reduced
+    } else {
+        assigned
+    }
+}
+
+fn type_maybe_assignable_to(source: &Type, target: &Type) -> bool {
+    match source {
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| member == target || is_assignable_to(member, target)),
+        _ => is_assignable_to(source, target),
+    }
+}
+
+/// Applies the assignments evaluating `expression` performs (`if ((m = f()))`,
+/// `a = b = c`) to the bindings, as an assignment statement does once checked:
+/// the target takes the assigned type and is definitely assigned after it. One
+/// that runs on only some paths (`c && (x = 1)`) joins the assigned type with
+/// the binding's and leaves it as assigned as it was.
+pub(crate) fn apply_expression_assignments(
+    expression: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    flow_state: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    let assignments = crate::flow::expression_assignments(expression);
+    if assignments.is_empty() {
+        return;
+    }
+    let certain = crate::flow::certainly_assigned_names(expression);
+    // Every path assigns a target a `?:` writes on both sides, so it holds one
+    // of those values: their union replaces what it held before.
+    let mut joined: Vec<(&str, Vec<Type>)> = Vec::new();
+    for (assignment, conditional) in &assignments {
+        let ParsedExpression::Assignment {
+            target_name, value, ..
+        } = assignment
+        else {
+            continue;
+        };
+        if *conditional && certain.contains(&target_name.as_str()) {
+            if let InferredExpression::Known(ty) =
+                crate::infer::infer_expression(value, visible_symbols(scopes), ctx)
+            {
+                match joined.iter_mut().find(|(name, _)| name == target_name) {
+                    Some((_, types)) => types.push(ty),
+                    None => joined.push((target_name.as_str(), vec![ty])),
+                }
+            }
+            continue;
+        }
+        apply_assignment_expression(assignment, *conditional, scopes, ctx);
+    }
+    for (name, types) in joined {
+        let value = InferredExpression::Known(union_type(types));
+        if !super::evolving_arrays::assign_evolving_array(name, false, &value, scopes, ctx) {
+            update_assigned_symbol_type(name, value, scopes);
+        }
+    }
+    if flow_state.tracked_local_count() > 0 {
+        crate::flow::mark_expression_assignments(expression, flow_state);
+    }
+}
+
+/// The types of the assignments a condition has run once it is known true
+/// (the right of a `&&` chain), for the branch that sees it true. Applied
+/// before that branch narrows by the condition, which then refines them.
+pub(crate) fn apply_condition_true_assignment_types(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    let certain: Vec<&ParsedExpression> = crate::flow::expression_assignments(condition)
+        .into_iter()
+        .filter(|(_, conditional)| !conditional)
+        .map(|(assignment, _)| assignment)
+        .collect();
+    for assignment in crate::flow::condition_true_assignments(condition) {
+        if !certain.iter().any(|seen| std::ptr::eq(*seen, assignment)) {
+            apply_assignment_expression(assignment, false, scopes, ctx);
+        }
+    }
+}
+
+/// Definite assignment for the branch that sees `condition` true.
+pub(crate) fn mark_condition_true_assignments(
+    condition: &ParsedExpression,
+    flow_state: &mut FunctionFlowState,
+) {
+    if flow_state.tracked_local_count() == 0 {
+        return;
+    }
+    for assignment in crate::flow::condition_true_assignments(condition) {
+        if let ParsedExpression::Assignment { target_name, .. } = assignment {
+            mark_assignment_state(target_name, flow_state);
+        }
+    }
+}
+
+fn apply_assignment_expression(
+    assignment: &ParsedExpression,
+    conditional: bool,
+    scopes: &mut ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    let ParsedExpression::Assignment {
+        target_name, value, ..
+    } = assignment
+    else {
+        return;
+    };
+    let before = scopes.resolve(target_name).map(|symbol| symbol.ty.clone());
+    let inferred_value = crate::infer::infer_expression(value, visible_symbols(scopes), ctx);
+    let assigns_empty_array = matches!(
+        value.as_ref(),
+        ParsedExpression::ArrayLiteral { elements, .. } if elements.is_empty()
+    );
+    if !super::evolving_arrays::assign_evolving_array(
+        target_name,
+        assigns_empty_array,
+        &inferred_value,
+        scopes,
+        ctx,
+    ) {
+        update_assigned_symbol_type(target_name, inferred_value, scopes);
+    }
+    if conditional
+        && let (Some(before), Some(symbol)) = (before, scopes.resolve(target_name))
+        && symbol.ty != before
+    {
+        let joined = SymbolInfo {
+            ty: union_type(vec![before, symbol.ty.clone()]),
+            kind: symbol.kind,
+            function_signature: symbol.function_signature.clone(),
+        };
+        scopes.insert_current(target_name.as_str(), joined);
     }
 }
 
@@ -1134,9 +1394,7 @@ fn assignment_reduced_declared_type(
     let kept: Vec<Type> = union
         .types()
         .iter()
-        .filter(|member| {
-            is_assignable_to(value, member) || (!value_nullable && !nullish(member))
-        })
+        .filter(|member| is_assignable_to(value, member) || (!value_nullable && !nullish(member)))
         .cloned()
         .collect();
     Some(if kept.is_empty() {
@@ -1201,59 +1459,73 @@ pub(crate) fn update_assigned_symbol_type(
         });
 
     let mut narrowed_by_assignment = false;
-    let has_declared_type = scopes.visible_symbols().declared_type(target_name).is_some();
-    let updated_ty = if symbol.ty == Type::Undefined
-        && !declared_union_admits_value
-        && !has_declared_type
-    {
-        union_type(vec![
-            Type::Undefined,
-            with_type_copy_reason(TypeCopyReason::ScopeOrContext, || value_ty.clone()),
-        ])
-    } else if symbol.ty == Type::Undefined {
-        narrowed_by_assignment = true;
-        value_ty
-    } else if symbol.ty == value_ty || is_assignable_to(&value_ty, &symbol.ty) {
-        // Assigning to a union-declared variable narrows it to what was
-        // assigned, as tsc does: the lazy-singleton idiom
-        // (`let client: Redis | null = null; … client = new Redis(); return client;`)
-        // otherwise keeps reading as the full union at every later use.
-        if matches!(symbol.ty, Type::Union(_)) && !value_ty.is_unknown() {
-            narrowed_by_assignment = true;
-            value_ty
-        } else {
-            with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone())
-        }
-    } else if matches!(symbol.ty, Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_)) {
-        union_type(vec![
-            with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone()),
-            value_ty,
-        ])
-    } else if scopes
+    let has_declared_type = scopes
         .visible_symbols()
         .declared_type(target_name)
-        .is_some_and(|declared| {
-            matches!(declared, Type::Union(_)) && is_assignable_to(&value_ty, declared)
-        })
-    {
-        // The binding is already narrowed (by its initializer, or by an earlier
-        // assignment) to something this value does not inhabit. The assignment is
-        // still legal against the *declaration*, and it re-narrows to the new
-        // value — `let s: Wide = "a"; s = "c";` is `"c"`, not a rejected write.
-        narrowed_by_assignment = true;
-        value_ty
-    } else if let Some(reduced) = assignment_reduced_declared_type(
-        scopes.visible_symbols().declared_type(target_name),
-        &symbol.ty,
-        &value_ty,
-    ) {
-        narrowed_by_assignment = true;
-        reduced
-    } else {
-        // Preserve the declared/inferred symbol type when an incompatible assignment
-        // is already reported to avoid cascading return/usage diagnostics.
-        with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone())
-    };
+        .is_some();
+    let updated_ty =
+        if symbol.ty == Type::Undefined && !declared_union_admits_value && !has_declared_type {
+            union_type(vec![
+                Type::Undefined,
+                with_type_copy_reason(TypeCopyReason::ScopeOrContext, || value_ty.clone()),
+            ])
+        } else if symbol.ty == Type::Undefined {
+            narrowed_by_assignment = true;
+            assignment_reduced_type(
+                scopes.visible_symbols().declared_type(target_name),
+                value_ty,
+            )
+        } else if symbol.ty == value_ty || is_assignable_to(&value_ty, &symbol.ty) {
+            // Assigning to a union-declared variable narrows it to what was
+            // assigned, as tsc does: the lazy-singleton idiom
+            // (`let client: Redis | null = null; … client = new Redis(); return client;`)
+            // otherwise keeps reading as the full union at every later use.
+            if matches!(symbol.ty, Type::Union(_)) && !value_ty.is_unknown() {
+                narrowed_by_assignment = true;
+                let declared = scopes
+                    .visible_symbols()
+                    .declared_type(target_name)
+                    .unwrap_or(&symbol.ty);
+                assignment_reduced_type(Some(declared), value_ty)
+            } else {
+                with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone())
+            }
+        } else if matches!(
+            symbol.ty,
+            Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_)
+        ) {
+            union_type(vec![
+                with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone()),
+                value_ty,
+            ])
+        } else if scopes
+            .visible_symbols()
+            .declared_type(target_name)
+            .is_some_and(|declared| {
+                matches!(declared, Type::Union(_)) && is_assignable_to(&value_ty, declared)
+            })
+        {
+            // The binding is already narrowed (by its initializer, or by an earlier
+            // assignment) to something this value does not inhabit. The assignment is
+            // still legal against the *declaration*, and it re-narrows to the new
+            // value — `let s: Wide = "a"; s = "c";` is `"c"`, not a rejected write.
+            narrowed_by_assignment = true;
+            assignment_reduced_type(
+                scopes.visible_symbols().declared_type(target_name),
+                value_ty,
+            )
+        } else if let Some(reduced) = assignment_reduced_declared_type(
+            scopes.visible_symbols().declared_type(target_name),
+            &symbol.ty,
+            &value_ty,
+        ) {
+            narrowed_by_assignment = true;
+            reduced
+        } else {
+            // Preserve the declared/inferred symbol type when an incompatible assignment
+            // is already reported to avoid cascading return/usage diagnostics.
+            with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone())
+        };
 
     if updated_ty == symbol.ty {
         return;

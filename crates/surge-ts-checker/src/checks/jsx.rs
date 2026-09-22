@@ -172,12 +172,36 @@ fn resolve_props_type(
                 ctx,
             );
             match inferred {
-                InferredExpression::Known(component_type) => component_props_type(&component_type),
-                _ => None,
+                InferredExpression::Known(component_type) => component_props_type(&component_type)
+                    .or_else(|| component_is_unmodelled(&component_type).then_some(Type::Unknown)),
+                // A value surge could not type at all is its own gap: tsc has the
+                // component's props and types the callbacks from them. Answering
+                // the sentinel marks the props unmodelled.
+                InferredExpression::Unknown => Some(Type::Unknown),
+                // An unresolved name or member is tsc's error type. Its
+                // attributes get no contextual signature (`getContextualSignature`
+                // of `any` is undefined), so tsc *does* report a callback in them
+                // as implicit `any` — leave them unsuppressed.
+                InferredExpression::UnresolvedIdentifier { .. }
+                | InferredExpression::MissingProperty { .. } => None,
             }
         }
         None => resolve_intrinsic_props_type(tag_name, element_span.or(fallback_span), ctx),
     }
+}
+
+/// Whether a component that yields no props type is surge's modelling gap
+/// rather than the source's. Only surge's own sentinel and a bare type parameter
+/// qualify — tRPC's `stream.Provider`, read off a `createHydrationStreamProvider<…>()`
+/// surge could not type, where tsc has the props and types every callback in
+/// them. `any` and tsc's error type do not: a callback attribute there has no
+/// contextual signature in tsc either, and it reports the parameter (the
+/// unresolved `Textarea` in tRPC's `next-sse-chat`).
+fn component_is_unmodelled(component_type: &Type) -> bool {
+    matches!(
+        component_type.peeled(),
+        Type::Unknown | Type::TypeParameter(_)
+    )
 }
 
 /// The props type for a component value: the first parameter of its call (or, for
@@ -243,10 +267,13 @@ fn resolve_intrinsic_props_type(
 
     let (intrinsic_elements, declarer_scope) = match in_scope {
         Some(name) => (name.to_string(), None),
-        None => {
-            let (key, scope) = runtime_fallback()?;
-            (key, Some(scope))
-        }
+        None => match runtime_fallback() {
+            Some((key, scope)) => (key, Some(scope)),
+            None => {
+                report_missing_intrinsic_elements(element_span, ctx);
+                return None;
+            }
+        },
     };
 
     let named = ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
@@ -278,6 +305,28 @@ fn resolve_intrinsic_props_type(
         element_span,
     ));
     None
+}
+
+/// tsc's `getIntrinsicTagSymbol`: with no `JSX.IntrinsicElements` to check the
+/// tag against, the element is an implicit `any`.
+fn report_missing_intrinsic_elements(
+    element_span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if !ctx.options.no_implicit_any {
+        return;
+    }
+    // Only when the program declares no intrinsic table at all. A table that
+    // exists but did not reach this file is surge's resolution gap — tsc
+    // reaches React's through the runtime module it synthesizes — and
+    // reporting it would describe that gap rather than the source.
+    if ctx.jsx_intrinsic_elements_declarer.is_some() {
+        return;
+    }
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts7026("IntrinsicElements", ctx.file_name.clone()),
+        element_span,
+    ));
 }
 
 /// Builds the value expression a component tag refers to: an identifier for
@@ -467,20 +516,6 @@ fn optional_aware_property_type(property: &ObjectProperty) -> Type {
 
 /// Reports TS2322 when a known prop's value is not assignable to its declared
 /// type, pointing at the attribute name (tsc's span for JSX prop mismatches).
-/// tsc's `isLiteralOfContextualType` for a non-generic contextual type.
-fn literal_of_contextual_type(literal: &Type, contextual: &Type) -> bool {
-    let matches_kind = |member: &Type| match literal {
-        Type::StringLiteral(_) => matches!(member, Type::StringLiteral(_)),
-        Type::NumberLiteral(_) => matches!(member, Type::NumberLiteral(_)),
-        Type::BooleanLiteral(_) => matches!(member, Type::BooleanLiteral(_) | Type::Boolean),
-        _ => true,
-    };
-    match contextual {
-        Type::Union(union) => union.types().iter().any(matches_kind),
-        other => matches_kind(other),
-    }
-}
-
 fn check_known_prop(
     attribute: &ParsedJsxAttribute,
     attribute_type: &Type,
@@ -498,16 +533,16 @@ fn check_known_prop(
         return;
     }
 
-    // tsc checks an attribute initializer for a mutable location, which widens
-    // a literal the contextual type has no literal of the same kind for.
-    let source_name = if literal_of_contextual_type(attribute_type, &expected_type) {
-        source_display_name(attribute_type, &expected_type)
-    } else {
-        crate::checks::expr::widen_type(attribute_type).name()
-    };
+    // tsc checks an attribute value as a mutable location
+    // (`getWidenedLiteralLikeTypeForContextualType`): `disabled="yes"` against
+    // `boolean` relates `string`, not the literal.
+    let checked = crate::checks::function::widen_unit_return_type(
+        attribute_type.clone(),
+        Some(&expected_type),
+    );
     let (source, target) = crate::checks::expr::disambiguated_pair(
-        attribute_type,
-        source_name,
+        &checked,
+        source_display_name(&checked, &expected_type),
         &expected_type,
         expected_type.name(),
         &ctx.file_name,

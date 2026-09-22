@@ -1,2 +1,2 @@
-let event: { kind?: "click" } = {};
-let kind: "click" | undefined = event.kind;
+let clickEvent: { kind?: "click" } = {};
+let kind: "click" | undefined = clickEvent.kind;

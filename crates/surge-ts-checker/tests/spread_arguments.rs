@@ -41,7 +41,7 @@ fn a_spread_expression_is_still_checked() {
         "declare function three(a: string, b: number, c: boolean): void;\n\
          export function f() { three(...missingName); }\n",
     );
-    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2556", "TS2304"]);
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn a_spread_of_a_missing_member_is_still_checked() {
          declare function two(a: string, b: number): void;\n\
          export function f() { two(...holder.missing); }\n",
     );
-    assert_eq!(codes(&diagnostics), vec!["TS2339"]);
+    assert_eq!(codes(&diagnostics), vec!["TS2556", "TS2339"]);
 }
 
 // A call with no spread still reports a real arity mismatch.

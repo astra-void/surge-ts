@@ -162,17 +162,10 @@ impl UnionType {
                 // Distinct members can render to one name — every member of a
                 // nominal enum displays as the enum itself — and tsc prints that
                 // name once.
-                // tsc prints a union in type-id order, where the `null` and
-                // `undefined` intrinsics sort after every other constituent.
-                let rank = |ty: &Type| match ty {
-                    Type::Null => 1,
-                    Type::Undefined => 2,
-                    _ => 0,
-                };
-                let mut ordered: Vec<&Type> = self.types().iter().collect();
-                ordered.sort_by_key(|ty| rank(ty));
                 let mut rendered: Vec<String> = Vec::with_capacity(self.types().len());
-                for member in ordered {
+                let mut members: Vec<&Type> = self.types().iter().collect();
+                members.sort_by_key(|member| display_rank(member));
+                for member in members {
                     let name = member.name();
                     if !rendered.iter().any(|existing| *existing == name) {
                         rendered.push(name);
@@ -239,6 +232,66 @@ pub fn remove_undefined(ty: &Type) -> Type {
     }
 }
 
+/// tsc's `getTypeWithFacts(type, Truthy)` over a union: the members a truthy
+/// value cannot be (`undefined`, `false`, `0`, `""`) go, and `boolean` keeps
+/// only `true`. A non-union is left as [`remove_nullish`] leaves it.
+pub fn remove_definitely_falsy(ty: &Type) -> Type {
+    // tsc narrows the resolved type; a reference standing for a union (a
+    // recursive alias's lazy back-edge, `R<T[K]>` resolving to `string |
+    // undefined`) narrows as that union. One that resolves to anything else is
+    // kept as written, so its nominal display survives.
+    if let Some(flattened) = flatten_reference_unions(ty) {
+        return remove_definitely_falsy(&flattened);
+    }
+    let Type::Union(union) = ty else {
+        return remove_nullish(ty);
+    };
+    let kept: Vec<Type> = union
+        .types()
+        .iter()
+        .filter_map(|member| match member {
+            Type::Undefined | Type::Void | Type::BooleanLiteral(false) => None,
+            Type::StringLiteral(value) if value.is_empty() => None,
+            Type::NumberLiteral(literal) if literal.value == "0" => None,
+            Type::Boolean => Some(Type::BooleanLiteral(true)),
+            other => Some(other.clone()),
+        })
+        .collect();
+    union_type(kept)
+}
+
+/// `ty` with every reference that resolves to a union replaced by that union —
+/// the reference itself, or a member of a union (an optional property typed by
+/// one reads as `R<…> | undefined`). A narrowing sorts members by what they
+/// are, which a reference standing for several of them does not say. `None`
+/// when there is nothing to expand.
+pub fn flatten_reference_unions(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::Reference(reference) if reference_resolves_to_union(ty) => Some(reference.resolve()),
+        Type::Union(union) if union.types().iter().any(reference_resolves_to_union) => {
+            Some(union_type(
+                union
+                    .types()
+                    .iter()
+                    .map(|member| match member {
+                        Type::Reference(reference) if reference_resolves_to_union(member) => {
+                            reference.resolve()
+                        }
+                        other => other.clone(),
+                    })
+                    .collect(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn reference_resolves_to_union(ty: &Type) -> bool {
+    matches!(ty, Type::Reference(reference)
+        if !reference.is_unique_symbol()
+            && matches!(reference.resolve_arc().as_ref(), Type::Union(_)))
+}
+
 pub fn remove_nullish(ty: &Type) -> Type {
     match ty {
         Type::Union(union) => {
@@ -268,6 +321,11 @@ pub fn union_type(types: Vec<Type>) -> Type {
         }
     }
 
+    // tsc's `getUnionType` (checker.go:26006): an `any` member is the whole
+    // union, and the error type outranks a written `any`.
+    if flattened.iter().any(|ty| matches!(ty, Type::ErrorType)) {
+        return Type::ErrorType;
+    }
     if flattened.iter().any(|ty| matches!(ty, Type::Any)) {
         return Type::Any;
     }
@@ -277,7 +335,9 @@ pub fn union_type(types: Vec<Type>) -> Type {
     // every member was `never`, the union itself is `never`.
     let had_members = !flattened.is_empty();
     flattened.retain(|ty| !matches!(ty, Type::Never));
-
+    absorb_empty_array_members(&mut flattened);
+    // Without `strictNullChecks` tsc's `addTypeToUnion` never adds `undefined`
+    // or `null` beside another member: they are already in its domain.
     if !crate::strict_null_checks()
         && flattened.iter().any(|ty| !matches!(ty, Type::Null | Type::Undefined))
     {
@@ -291,6 +351,50 @@ pub fn union_type(types: Vec<Type>) -> Type {
         0 => Type::Unknown,
         1 => unique[0].clone(),
         _ => Type::Union(UnionType::from_borrowed_members(&unique)),
+    }
+}
+
+/// Where tsc prints a union member. Members print in type-id order, so the
+/// keyword types the checker creates first (`string`, `number`, `bigint`,
+/// `boolean`, `symbol`, `void`, `object`) lead in that order, and literal and
+/// object types follow as they were first seen (measured on the 7.0.2 oracle:
+/// a lone `true`/`false` after the other literals); the `null` and
+/// `undefined` intrinsics sort after every other constituent.
+fn display_rank(member: &Type) -> u8 {
+    match member {
+        Type::String => 0,
+        Type::Number => 1,
+        Type::BigInt => 2,
+        Type::Boolean => 3,
+        Type::Symbol => 4,
+        Type::Void => 5,
+        Type::Object(object) if object.non_primitive && object.properties.is_empty() => 6,
+        // A lone `true`/`false` prints after the other literals.
+        Type::BooleanLiteral(_) => 8,
+        Type::Null => 9,
+        Type::Undefined => 10,
+        _ => 7,
+    }
+}
+
+/// `never[]` — the type of an empty array literal — is a subtype of every array
+/// type, so tsc's subtype reduction drops it beside another array member
+/// (`list || []` is `string[]`, `c ? [] : [1]` is `number[]`). Applied to every
+/// union rather than only the subtype-reducing sites: both forms relate to the
+/// same targets, so only the display of a written `never[] | T[]` differs.
+fn absorb_empty_array_members(members: &mut Vec<&Type>) {
+    // Without `strictNullChecks` the literal is `undefined[]`, which every
+    // array type is equally a supertype of.
+    fn is_empty_array(ty: &Type) -> bool {
+        matches!(ty, Type::Array(element)
+            if **element == Type::Never
+                || **element == Type::Undefined && !crate::strict_null_checks())
+    }
+    if !members.iter().any(|ty| is_empty_array(ty)) {
+        return;
+    }
+    if members.iter().any(|ty| matches!(ty, Type::Array(_)) && !is_empty_array(ty)) {
+        members.retain(|ty| !is_empty_array(ty));
     }
 }
 
@@ -792,7 +896,7 @@ mod tests {
         let ty = union_type(vec![Type::StringLiteral("ok".to_string()), Type::String]);
 
         assert!(matches!(ty, Type::Union(_)));
-        assert_eq!(ty.name(), r#""ok" | string"#);
+        assert_eq!(ty.name(), r#"string | "ok""#);
     }
 
     #[test]
@@ -800,7 +904,7 @@ mod tests {
         let ty = union_type(vec![Type::StringLiteral("idle".to_string()), Type::String]);
 
         assert!(matches!(ty, Type::Union(_)));
-        assert_eq!(ty.name(), r#""idle" | string"#);
+        assert_eq!(ty.name(), r#"string | "idle""#);
     }
 
     #[test]
@@ -813,7 +917,7 @@ mod tests {
         ]);
 
         assert!(matches!(ty, Type::Union(_)));
-        assert_eq!(ty.name(), "1 | number");
+        assert_eq!(ty.name(), "number | 1");
     }
 
     #[test]

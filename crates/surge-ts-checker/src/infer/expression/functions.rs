@@ -85,16 +85,16 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
         ParsedArrowFunctionBody::Expression(expression) => {
             declared_return_type.unwrap_or_else(|| {
                 let locals = body_locals(&arrow_function.parameters, &parameters, symbols);
-                match infer_expression(expression, &locals, ctx) {
-                    InferredExpression::Known(ty) => widen_fresh_literal_return(expression, ty),
-                    _ => Type::Unknown,
+                match infer_expression(expression, &locals, ctx).flowing_type() {
+                    Some(ty) => widen_fresh_literal_return(expression, ty),
+                    None => Type::Unknown,
                 }
             })
         }
         ParsedArrowFunctionBody::Block(body) => declared_return_type
             .or_else(|| {
                 let locals = body_locals(&arrow_function.parameters, &parameters, symbols);
-                infer_block_body_return_type(body, &arrow_function.parameters, locals, ctx)
+                infer_block_body_return_type(body, locals, ctx)
             })
             // A body with no `return` anywhere returns `void`, as tsc types it.
             // Leaving it at the degradation sentinel made the sketch unusable for
@@ -191,22 +191,22 @@ fn body_locals(
     parameter_types: &[Type],
     symbols: &SymbolTable,
 ) -> SymbolTable {
-    let mut locals = symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    // A destructured parameter binds its names from the parameter's type the
+    // way the checking pass does; skipping it left `({ ctx }) => …` with `ctx`
+    // unbound, so the body's return type was unknowable.
+    let mut scopes = crate::symbols::ScopeStack::from_root(
+        symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+    );
     for (parameter, ty) in parameters.iter().zip(parameter_types) {
-        let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } = &parameter.binding_name
-        else {
-            continue;
-        };
-        let _ = locals.insert(
-            name.clone(),
-            crate::symbols::SymbolInfo {
-                ty: ty.clone(),
-                kind: crate::symbols::SymbolKind::Parameter,
-                function_signature: None,
-            },
+        crate::checks::function::insert_binding_name(
+            &parameter.binding_name,
+            ty.clone(),
+            &mut scopes,
         );
     }
-    locals
+    scopes
+        .visible_symbols()
+        .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext)
 }
 
 pub(crate) fn required_parameter_count(
@@ -264,11 +264,10 @@ fn body_contains_return(body: &[surge_ts_syntax::ParsedFunctionBodyStatement]) -
 
 fn infer_block_body_return_type(
     body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
-    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
     mut locals: SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    use surge_ts_syntax::{ParsedBindingName, ParsedFunctionBodyStatement};
+    use surge_ts_syntax::ParsedFunctionBodyStatement;
 
     let returns_here = body
         .iter()
@@ -291,13 +290,6 @@ fn infer_block_body_return_type(
         return None;
     }
 
-    if parameters
-        .iter()
-        .any(|parameter| !matches!(parameter.binding_name, ParsedBindingName::Identifier { .. }))
-    {
-        return None;
-    }
-
     let mut returned = Vec::new();
     for statement in body {
         match statement {
@@ -310,32 +302,35 @@ fn infer_block_body_return_type(
                 else {
                     return None;
                 };
+                let kind = match variable.kind {
+                    surge_ts_syntax::ParsedVariableKind::Var => crate::symbols::SymbolKind::Var,
+                    surge_ts_syntax::ParsedVariableKind::Let => crate::symbols::SymbolKind::Let,
+                    surge_ts_syntax::ParsedVariableKind::Const => {
+                        crate::symbols::SymbolKind::Const
+                    }
+                };
+                // The binding holds what its declaration widens the initializer
+                // to (`const r = { ok: true }` is `{ ok: boolean }`), as the
+                // checking pass binds it.
+                let ty = crate::checks::var::widen_implicit_variable_initializer_type(
+                    kind,
+                    initializer,
+                    &ty,
+                    false,
+                );
                 let _ = locals.insert(
                     variable.name.clone(),
                     crate::symbols::SymbolInfo {
                         ty,
-                        kind: match variable.kind {
-                            surge_ts_syntax::ParsedVariableKind::Var => {
-                                crate::symbols::SymbolKind::Var
-                            }
-                            surge_ts_syntax::ParsedVariableKind::Let => {
-                                crate::symbols::SymbolKind::Let
-                            }
-                            surge_ts_syntax::ParsedVariableKind::Const => {
-                                crate::symbols::SymbolKind::Const
-                            }
-                        },
+                        kind,
                         function_signature: None,
                     },
                 );
             }
             ParsedFunctionBodyStatement::Return(statement) => {
                 let expression = statement.expression.as_ref()?;
-                let InferredExpression::Known(ty) = infer_expression(expression, &locals, ctx)
-                else {
-                    return None;
-                };
-                if ty.is_unknown() {
+                let ty = infer_expression(expression, &locals, ctx).flowing_type()?;
+                if ty.is_unknown() && !matches!(ty, Type::ErrorType) {
                     return None;
                 }
                 returned.push(widen_fresh_literal_return(expression, ty));

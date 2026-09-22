@@ -492,6 +492,16 @@ fn bind_infer_captures(
             );
             for property in &pattern.properties {
                 if let Some(check_property) = peeled.get_property_access_type(&property.name) {
+                    // An *optional* member of the pattern matches the property
+                    // without its `undefined` (tsc drops the missing/undefined
+                    // part before inferring), so
+                    // `Window extends { ext?: infer T }` captures the member's
+                    // own type — indexing the capture is what reads it.
+                    let check_property = if property.optional {
+                        surge_ts_types::remove_undefined(&check_property)
+                    } else {
+                        check_property
+                    };
                     bind_infer_captures(
                         &property.ty,
                         &check_property,
@@ -1735,11 +1745,14 @@ fn collect_infer_names(ty: &ParsedType, names: &mut Vec<String>) {
             for property in &object.properties {
                 collect_infer_names(&property.ty, names);
             }
+            // The folded `call_signature` keeps one return type, so a capture in
+            // a later overload's return is only reachable through the written list.
             for signature in object
                 .construct_signature
                 .as_deref()
                 .into_iter()
                 .chain(object.call_signature.as_deref())
+                .chain(object.call_signature_overloads.iter())
             {
                 for parameter in &signature.parameters {
                     collect_infer_names(&parameter.ty, names);
@@ -1894,6 +1907,21 @@ pub(crate) fn substitute_parsed_type_parameters_deep(
                 type_parameters: function.type_parameters.clone(),
             };
             ParsedType::Function(std::sync::Arc::new(substituted))
+        }
+        // A conditional nested in an alias body (`ValidateShape`'s inner
+        // `Exclude<…> extends never ? TActualShape : TExpectedShape`) is
+        // written in the alias's parameters too.
+        ParsedType::Conditional(conditional) => {
+            ParsedType::Conditional(std::sync::Arc::new(surge_ts_syntax::ParsedConditionalType {
+                check_type: Box::new(substitute_parsed_type_parameters_deep(&conditional.check_type, map)),
+                extends_type: Box::new(substitute_parsed_type_parameters_deep(
+                    &conditional.extends_type,
+                    map,
+                )),
+                true_type: Box::new(substitute_parsed_type_parameters_deep(&conditional.true_type, map)),
+                false_type: Box::new(substitute_parsed_type_parameters_deep(&conditional.false_type, map)),
+                span: conditional.span,
+            }))
         }
         other => other.clone(),
     }

@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2015",
+    "lib": ["ES5"],
+    "module": "CommonJS",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "typeRoots": ["./custom-types"],
+    "types": ["*"]
+  },
+  "include": ["src/**/*.ts"]
+}

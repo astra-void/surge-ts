@@ -3,10 +3,7 @@ use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::ParsedAssignment;
 use surge_ts_types::is_assignable_to;
 
-use super::emit_type_only_as_value_diagnostic;
-use super::expected::{
-    ExpectedTypeDiagnostic, evaluate_expression_with_expected_type_anchored,
-};
+use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type_anchored};
 use crate::context::{CheckerContext, convert_span};
 use crate::program::{
     DtsExpansionReason, record_assignability_check, record_program_timing,
@@ -30,13 +27,13 @@ pub(crate) fn check_assignment_with_symbols(
     };
 
     let Some(target) = symbols.get(&assignment.target_name) else {
-        if emit_type_only_as_value_diagnostic(&assignment.target_name, Some(target_span), ctx) {
-            return;
-        }
-
-        let diagnostic = crate::checks::expr::unresolved_name_diagnostic(&assignment.target_name, symbols, ctx)
-            .with_span(convert_span(target_span));
-        ctx.push(diagnostic);
+        crate::checks::expr::report_unresolved_value_name(
+            &assignment.target_name,
+            Some(target_span),
+            crate::checks::expr::UnresolvedNameSite::Reference,
+            symbols,
+            ctx,
+        );
         return;
     };
 
@@ -81,7 +78,9 @@ pub(crate) fn check_assignment_with_symbols(
             record_assignability_check();
             if inferred_value_type != surge_ts_types::Type::Unknown
                 && ((!type_contains_unknown(&target_type)
-                    && !type_contains_unknown(&inferred_value_type))
+                    && !crate::checks::call::as_source(|| {
+                        type_contains_unknown(&inferred_value_type)
+                    }))
                     || definite_unit_member_mismatch(&inferred_value_type, &target_type)
                     || definite_primitive_member_mismatch(&inferred_value_type, &target_type))
                 && !with_dts_expansion_reason(DtsExpansionReason::Assignability, || {
@@ -92,8 +91,12 @@ pub(crate) fn check_assignment_with_symbols(
                     &inferred_value_type,
                     &target_type,
                 );
-                let inferred_type_name =
-                    crate::checks::expr::source_display_name(&inferred_value_type, &reported_target);
+                // tsc generalizes a literal source unless the target could hold
+                // one (`reportRelationError`): `t = 1` into `string` reads `number`.
+                let inferred_type_name = crate::checks::expr::source_display_name(
+                    &inferred_value_type,
+                    &reported_target,
+                );
                 let target_type_name = reported_target.name();
                 let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
                     &inferred_value_type,
@@ -291,7 +294,16 @@ pub(crate) fn definite_primitive_member_mismatch(
 }
 
 pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
+    super::structural_walk::query(|| contains_unknown(ty))
+}
+
+fn contains_unknown(ty: &surge_ts_types::Type) -> bool {
     type ReferenceKey = (std::sync::Arc<str>, std::sync::Arc<[surge_ts_types::Type]>);
+    match super::structural_walk::visit(ty) {
+        super::structural_walk::Visit::Walk => {}
+        super::structural_walk::Visit::Seen => return false,
+        super::structural_walk::Visit::Exhausted => return true,
+    }
     thread_local! {
         // References already on the walk, to break the cyclic structural graphs
         // lazy nominal references form (interface A whose member resolves to B
@@ -325,6 +337,10 @@ pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
                     .borrow()
                     .iter()
                     .any(|(id, arguments)| *id == reference.id && *arguments == reference.arguments)
+                    // tsc's `isDeeplyNestedType`: a declaration on the path three
+                    // times is an expanding recursion (`Deep<T>` reaching
+                    // `Deep<T[]>`) whose arguments never repeat.
+                    || visiting.borrow().iter().filter(|(id, _)| *id == reference.id).count() >= 3
             });
             if on_path {
                 CYCLE_ASSUMPTIONS.with(|count| count.set(count.get() + 1));
@@ -361,7 +377,7 @@ pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
                     .borrow_mut()
                     .push((reference.id.clone(), reference.arguments.clone()));
             });
-            let result = without_bound_type_parameters(|| type_contains_unknown(&reference.resolve()));
+            let result = without_bound_type_parameters(|| contains_unknown(&reference.resolve()));
             VISITING_REFERENCES.with(|visiting| {
                 visiting.borrow_mut().pop();
             });
@@ -379,23 +395,26 @@ pub(crate) fn type_contains_unknown(ty: &surge_ts_types::Type) -> bool {
             }
             result
         }
-        surge_ts_types::Type::Array(element) => type_contains_unknown(element),
-        surge_ts_types::Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
-        surge_ts_types::Type::Function(function) => with_signature_type_parameters(function, || {
-            function.parameters().iter().any(type_contains_unknown)
-                || type_contains_unknown(function.return_type())
-        }),
+        surge_ts_types::Type::Array(element) => contains_unknown(element),
+        surge_ts_types::Type::Tuple(elements) => elements.iter().any(contains_unknown),
+        surge_ts_types::Type::Function(function) => {
+            !crate::checks::call::is_generic_signature(function)
+                && with_signature_type_parameters(function, || {
+                    function.parameters().iter().any(contains_unknown)
+                        || contains_unknown(function.return_type())
+                })
+        }
         surge_ts_types::Type::Object(object) => {
             object
                 .properties
                 .values()
-                .any(|property| type_contains_unknown(&property.ty))
+                .any(|property| contains_unknown(&property.ty))
                 || object
                     .string_index_type
                     .as_deref()
-                    .is_some_and(type_contains_unknown)
+                    .is_some_and(contains_unknown)
         }
-        surge_ts_types::Type::Union(union) => union.types().iter().any(type_contains_unknown),
+        surge_ts_types::Type::Union(union) => union.types().iter().any(contains_unknown),
         _ => false,
     }
 }

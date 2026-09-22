@@ -9,7 +9,6 @@ use surge_ts_types::{
     with_type_copy_reason,
 };
 
-use super::emit_type_only_as_value_diagnostic;
 use super::expected::{ExpectedTypeDiagnostic, evaluate_expression_with_expected_type};
 use crate::checks::expr::{evaluate_expression, source_display_name};
 use crate::context::CheckerContext;
@@ -118,17 +117,34 @@ pub(crate) fn check_call_like_with_expected_type(
         None
     };
     let Some(symbol) = symbols.get(callee_name).or(fallback_symbol.as_ref()) else {
-        if emit_type_only_as_value_diagnostic(callee_name, callee_span, ctx) {
-            return None;
-        }
-
-        ctx.push(diagnostic_with_syntax_span(
-            crate::checks::expr::unresolved_name_diagnostic(callee_name, symbols, ctx),
+        crate::checks::expr::report_unresolved_value_name(
+            callee_name,
             callee_span,
-        ));
+            crate::checks::expr::UnresolvedNameSite::Callee,
+            symbols,
+            ctx,
+        );
         return None;
     };
 
+    if symbol.ty == Type::GenuineUnknown {
+        let callee = ParsedExpression::Identifier {
+            name: callee_name.to_string(),
+            span: callee_span,
+        };
+        report_uncallable_unknown(&callee, callee_span, ctx);
+    }
+    // A binding that is plainly `undefined` here (a flow-typed `let` before
+    // any assignment) is `checkNonNullType`'s invocation error, and the call
+    // goes on as the error type.
+    if symbol.ty == Type::Undefined {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2722(ctx.file_name.clone()),
+            callee_span,
+        ));
+        evaluate_arguments_under_degraded_callee(callee_name, arguments, symbols, ctx);
+        return None;
+    }
     if symbol.ty.is_unknown() {
         evaluate_arguments_under_degraded_callee(callee_name, arguments, symbols, ctx);
         return None;
@@ -215,7 +231,10 @@ pub(crate) fn check_call_like_with_expected_type(
                     });
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2344(
-                            crate::checks::expr::source_display_name(&argument_type, &constraint_type),
+                            crate::checks::expr::source_display_name(
+                                &argument_type,
+                                &constraint_type,
+                            ),
                             constraint_type.name(),
                             ctx.file_name.clone(),
                         ),
@@ -267,6 +286,7 @@ pub(crate) fn check_call_like_with_expected_type(
                     call_span,
                     type_arguments,
                     arguments,
+                    None,
                     symbols,
                     ctx,
                 )
@@ -307,6 +327,7 @@ pub(crate) fn check_call_like_with_expected_type(
                     call_span,
                     type_arguments,
                     arguments,
+                    None,
                     symbols,
                     ctx,
                 )
@@ -328,7 +349,12 @@ pub(crate) fn check_call_like_with_expected_type(
                         "Object(call={}, ctor={}, props=[{}])",
                         o.call_signature().is_some(),
                         o.construct_signature().is_some(),
-                        o.properties.keys().take(6).map(|k| k.to_string()).collect::<Vec<_>>().join(",")
+                        o.properties
+                            .keys()
+                            .take(6)
+                            .map(|k| k.to_string())
+                            .collect::<Vec<_>>()
+                            .join(",")
                     ),
                     t => format!("{t:?}").chars().take(70).collect(),
                 };
@@ -398,7 +424,11 @@ impl DeclaredMemberSignature {
             if own.contains(&name.as_ref()) {
                 continue;
             }
-            if merged.is_placeholder(name) || matches!(ty, Type::Unknown | Type::TypeParameter(_)) {
+            // A binding that merely degraded is still a binding: the signature's
+            // own parameters infer independently of it (`query<$Output>` on a
+            // builder whose `TContext` surge could not model), and whatever
+            // does read it stays at the sentinel.
+            if merged.is_placeholder(name) || matches!(ty, Type::TypeParameter(_)) {
                 return None;
             }
             outer_type_arguments.push((name.to_string(), ty.clone()));
@@ -624,6 +654,7 @@ fn check_callable_union_call(
                 call_span,
                 type_arguments,
                 arguments,
+                None,
                 symbols,
                 ctx,
             ),
@@ -652,6 +683,7 @@ fn check_callable_union_call(
             call_span,
             type_arguments,
             arguments,
+            None,
             symbols,
             ctx,
         )
@@ -765,10 +797,16 @@ pub(crate) fn check_new_like(
     {
         let parameters = &info.body.type_parameters;
         let maximum = parameters.len();
-        let minimum = parameters.iter().filter(|parameter| parameter.default_type.is_none()).count();
+        let minimum = parameters
+            .iter()
+            .filter(|parameter| parameter.default_type.is_none())
+            .count();
         if type_arguments.len() < minimum || type_arguments.len() > maximum {
-            let expected =
-                if minimum == maximum { maximum.to_string() } else { format!("{minimum}-{maximum}") };
+            let expected = if minimum == maximum {
+                maximum.to_string()
+            } else {
+                format!("{minimum}-{maximum}")
+            };
             let type_arguments_start = callee_span.map(|span| SyntaxTextSpan {
                 start: span.end + 1,
                 end: span.end + 1,
@@ -894,6 +932,7 @@ pub(crate) fn check_new_like(
                         call_span,
                         type_arguments,
                         arguments,
+                        None,
                         symbols,
                         ctx,
                     )
@@ -934,8 +973,13 @@ pub(crate) fn check_new_like(
         }
     }
 
+    // The fast path stands in for a lib constructor, so it needs the lib to
+    // declare one: `new Map()` under `lib: ["es5"]` is an unresolved name.
     if let ParsedExpression::Identifier { name, .. } = callee
         && let Some(result_type) = surge_ts_types::Type::builtin_constructor_result_type(name)
+        && (symbols.get(name).is_some()
+            || ctx.symbols.get(name).is_some()
+            || ctx.ambient_global_symbols.get(name).is_some())
     {
         for argument in arguments {
             let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
@@ -947,7 +991,14 @@ pub(crate) fn check_new_like(
     let callee_type = match callee_result {
         // A constructor value is often a nominal reference (`declare const P:
         // PromiseConstructor`); peel it so its construct signature is visible.
-        InferredExpression::Known(ty) => ty.peeled(),
+        InferredExpression::Known(ty) => {
+            // `resolveNewExpression` reads the target through `checkNonNullExpression`.
+            let ty = ty.peeled();
+            match crate::checks::expr::check_non_null_operand(callee, &ty, callee_span, ctx) {
+                Some(non_null) => non_null.peeled(),
+                None => ty,
+            }
+        }
         // The constructor target is unresolved (e.g. `new Missing(...)`). The
         // missing-name diagnostic is already reported; still evaluate the
         // arguments so their own errors surface, but do not cascade a result.
@@ -960,15 +1011,36 @@ pub(crate) fn check_new_like(
     };
 
     match callee_type {
-        Type::Function(function_type) => check_function_type_call(
-            &function_type,
-            callee_span,
-            call_span,
-            type_arguments,
-            arguments,
-            symbols,
-            ctx,
-        ),
+        // A function type has a call signature and no construct signature (a
+        // constructor type is an object carrying one), so tsc resolves the call
+        // signature and types the `new` as `any`: TS7009 under `noImplicitAny`,
+        // otherwise TS2350 unless the function returns `void`.
+        Type::Function(function_type) => {
+            let _ = check_function_type_call(
+                &function_type,
+                callee_span,
+                call_span,
+                type_arguments,
+                arguments,
+                None,
+                symbols,
+                ctx,
+            );
+            let diagnostic = if ctx.options.no_implicit_any {
+                Some(Diagnostic::ts7009(ctx.file_name.clone()))
+            } else if *function_type.return_type() != Type::Void {
+                Some(Diagnostic::ts2350(ctx.file_name.clone()))
+            } else {
+                None
+            };
+            if let Some(diagnostic) = diagnostic {
+                ctx.push(diagnostic_with_syntax_span(
+                    diagnostic,
+                    call_span.or(callee_span),
+                ));
+            }
+            Some(Type::Any)
+        }
         // A class value (static side) carries a construct signature. Check the
         // constructor arguments against it and yield the instance type.
         Type::Object(object) if object.construct_signature().is_some() => {
@@ -982,6 +1054,7 @@ pub(crate) fn check_new_like(
                 call_span,
                 type_arguments,
                 arguments,
+                None,
                 symbols,
                 ctx,
             )
@@ -1010,6 +1083,7 @@ pub(crate) fn check_new_like(
                         call_span,
                         type_arguments,
                         arguments,
+                        None,
                         symbols,
                         ctx,
                     ) {
@@ -1030,7 +1104,16 @@ pub(crate) fn check_new_like(
         // already implied.
         Type::Any => generic_class_instance_type(callee, type_arguments, arguments, symbols, ctx)
             .or(Some(Type::Any)),
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => None,
+        // `checkNonNullType` has reported `unknown` under `strictNullChecks`;
+        // without it `unknown` is simply not constructable.
+        Type::GenuineUnknown => {
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2351(ctx.file_name.clone()),
+                callee_span,
+            ));
+            None
+        }
+        Type::Unknown | Type::TypeParameter(_) => None,
         // A generic class merged with a namespace (`class SQL` +
         // `namespace SQL { class Aliased }`) has the namespace object for a
         // value: the class half contributed the `any` above, which the merge
@@ -1293,7 +1376,12 @@ fn infer_generic_class_type_arguments(
         return None;
     }
     Some(infer_type_argument_substitution(
-        &signature, arguments, &[], None, symbols, ctx,
+        &signature,
+        arguments,
+        &[],
+        None,
+        symbols,
+        ctx,
     ))
 }
 
@@ -1335,11 +1423,14 @@ fn immediately_invoked_arrow_type(
         // (`getContextuallyTypedParameterType`): `({ p = 14 }) => p` called with
         // `{ p: 15 }` binds `p: number`.
         let ty = match evaluate_expression(&argument.expression, argument.span, symbols, ctx) {
-            InferredExpression::Known(ty) => crate::checks::var::widen_implicit_variable_initializer_type(
-                crate::symbols::SymbolKind::Let,
-                &argument.expression,
-                &ty,
-            ),
+            InferredExpression::Known(ty) => {
+                crate::checks::var::widen_implicit_variable_initializer_type(
+                    crate::symbols::SymbolKind::Let,
+                    &argument.expression,
+                    &ty,
+                    false,
+                )
+            }
             _ => Type::Unknown,
         };
         if !argument.spread {
@@ -1357,13 +1448,16 @@ fn immediately_invoked_arrow_type(
     }
 
     let required = argument_types.len();
-    let expected = crate::metrics::alloc_function_type(argument_types, Type::Unknown, false, required);
-    Some(crate::checks::function::check_arrow_function_expression_with_expected_type(
-        (**arrow).clone(),
-        Some(&expected),
-        symbols,
-        ctx,
-    ))
+    let expected =
+        crate::metrics::alloc_function_type(argument_types, Type::Unknown, false, required);
+    Some(
+        crate::checks::function::check_arrow_function_expression_with_expected_type(
+            (**arrow).clone(),
+            Some(&expected),
+            symbols,
+            ctx,
+        ),
+    )
 }
 
 pub(crate) fn check_expression_call(
@@ -1375,6 +1469,29 @@ pub(crate) fn check_expression_call(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    // tsc resolves `super(…)` against the base constructor's construct
+    // signatures and types the call `void`. A base surge has no constructor
+    // value for falls through to the degraded walk below.
+    if let ParsedExpression::Identifier { name, .. } = callee
+        && name == "super"
+        && let Some(construct_signature) = ctx
+            .super_constructor_type
+            .as_ref()
+            .and_then(construct_signature_of)
+    {
+        let _ = check_function_type_call(
+            &construct_signature,
+            callee_span,
+            call_span,
+            type_arguments,
+            arguments,
+            None,
+            symbols,
+            ctx,
+        );
+        return Some(Type::Void);
+    }
+
     let callee_result = match immediately_invoked_arrow_type(callee, arguments, symbols, ctx) {
         Some(function_type) => InferredExpression::Known(Type::Function(function_type)),
         None => evaluate_expression(callee, callee_span, symbols, ctx),
@@ -1391,6 +1508,7 @@ pub(crate) fn check_expression_call(
             return None;
         }
     };
+    let callee_type = check_non_null_callee(callee, callee_type, callee_span, ctx);
 
     match callee_type {
         Type::Function(function_type) => check_function_type_call(
@@ -1399,6 +1517,7 @@ pub(crate) fn check_expression_call(
             call_span,
             type_arguments,
             arguments,
+            None,
             symbols,
             ctx,
         ),
@@ -1417,6 +1536,62 @@ pub(crate) fn check_expression_call(
     }
 }
 
+/// `resolveCallExpression` reads the callee through `checkNonNullType` with
+/// the invocation wording: a possibly-`null` callee (the `null` keyword
+/// included) is TS2721, a possibly-`undefined` one TS2722 and one that may be
+/// either TS2723, all anchored on the callee (its parentheses included). The
+/// call goes on with the rest of the type, or `any` when nothing is left.
+fn check_non_null_callee(
+    callee: &ParsedExpression,
+    callee_type: Type,
+    callee_span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) -> Type {
+    if callee_type == Type::GenuineUnknown {
+        report_uncallable_unknown(callee, callee_span, ctx);
+        return Type::Unknown;
+    }
+    let is_null = matches!(callee, ParsedExpression::NullLiteral);
+    let nullability = if is_null {
+        Some((true, false))
+    } else {
+        crate::checks::expr::receiver_nullability(&callee_type)
+    };
+    let Some((null, undefined)) = nullability else {
+        return callee_type;
+    };
+    let span = callee_span
+        .and_then(|span| ctx.parenthesized_outer_span(span))
+        .or(callee_span);
+    let file_name = ctx.file_name.clone();
+    let diagnostic = match (null, undefined) {
+        (true, true) => Diagnostic::ts2723(file_name),
+        (true, false) => Diagnostic::ts2721(file_name),
+        _ => Diagnostic::ts2722(file_name),
+    };
+    ctx.push(diagnostic_with_syntax_span(diagnostic, span));
+    match callee_type {
+        Type::Undefined | Type::Null => Type::Any,
+        _ if is_null => Type::Any,
+        _ => surge_ts_types::remove_nullish(&callee_type).peeled(),
+    }
+}
+
+/// A call on `unknown`: `checkNonNullType`'s TS18046 under `strictNullChecks`,
+/// otherwise the plain not-callable TS2349.
+fn report_uncallable_unknown(
+    callee: &ParsedExpression,
+    callee_span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if !crate::checks::expr::report_unknown_operand(callee, callee_span, ctx) {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2349(ctx.file_name.clone()),
+            callee_span,
+        ));
+    }
+}
+
 pub(crate) fn check_optional_call_like(
     callee: &surge_ts_syntax::ParsedExpression,
     callee_span: Option<SyntaxTextSpan>,
@@ -1432,7 +1607,6 @@ pub(crate) fn check_optional_call_like(
         InferredExpression::Known(ty) => ty,
         _ => return None,
     };
-
 
     let base_type = surge_ts_types::remove_nullish(&callee_type);
 
@@ -1467,6 +1641,7 @@ pub(crate) fn check_optional_call_like(
             call_span,
             type_arguments,
             arguments,
+            None,
             symbols,
             ctx,
         )
@@ -1520,18 +1695,23 @@ fn candidate_definitely_rejects(
     candidate: &FunctionType,
     argument_types: &[ArgumentShape],
 ) -> Option<usize> {
-    argument_types.iter().enumerate().find_map(|(index, shape)| {
-        let argument = shape.ty.as_ref()?;
-        let parameter = effective_parameter_type(candidate, index)?;
-        (!type_contains_unknown(argument)
-            && !names_open_parameter(&parameter)
-            && (crate::checks::assign::definite_unit_member_mismatch(argument, &parameter)
-                || crate::checks::assign::definite_primitive_member_mismatch(argument, &parameter)
-                || (is_primitive_only(argument)
-                    && is_primitive_only(&parameter.peeled())
-                    && !is_assignable_to(argument, &parameter))))
-        .then_some(index)
-    })
+    argument_types
+        .iter()
+        .enumerate()
+        .find_map(|(index, shape)| {
+            let argument = shape.ty.as_ref()?;
+            let parameter = effective_parameter_type(candidate, index)?;
+            (!type_contains_unknown(argument)
+                && !names_open_parameter(&parameter)
+                && (crate::checks::assign::definite_unit_member_mismatch(argument, &parameter)
+                    || crate::checks::assign::definite_primitive_member_mismatch(
+                        argument, &parameter,
+                    )
+                    || (is_primitive_only(argument)
+                        && is_primitive_only(&parameter.peeled())
+                        && !is_assignable_to(argument, &parameter))))
+            .then_some(index)
+        })
 }
 
 /// A type made of primitives and their literals only, whose relations surge
@@ -1561,14 +1741,17 @@ fn last_candidate_rejected_argument(
     candidate: &FunctionType,
     argument_types: &[ArgumentShape],
 ) -> Option<usize> {
-    argument_types.iter().enumerate().find_map(|(index, shape)| {
-        let argument = shape.ty.as_ref()?;
-        // A generic candidate's own parameters are the sentinel here, which a
-        // relation accepts; what rejects is the rest of the shape (an arity, a
-        // parameter's type), exactly as the candidate itself would.
-        let parameter = effective_parameter_type(candidate, index)?;
-        (!is_assignable_to(argument, &parameter)).then_some(index)
-    })
+    argument_types
+        .iter()
+        .enumerate()
+        .find_map(|(index, shape)| {
+            let argument = shape.ty.as_ref()?;
+            // A generic candidate's own parameters are the sentinel here, which a
+            // relation accepts; what rejects is the rest of the shape (an arity, a
+            // parameter's type), exactly as the candidate itself would.
+            let parameter = effective_parameter_type(candidate, index)?;
+            (!is_assignable_to(argument, &parameter)).then_some(index)
+        })
 }
 
 fn overload_arity_fits(candidate: &FunctionType, argument_count: usize) -> bool {
@@ -1645,8 +1828,9 @@ pub(crate) fn check_function_type_call(
     function_type: &FunctionType,
     callee_span: Option<SyntaxTextSpan>,
     call_span: Option<SyntaxTextSpan>,
-    _type_arguments: &[ParsedType],
+    type_arguments: &[ParsedType],
     arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
@@ -1665,20 +1849,23 @@ pub(crate) fn check_function_type_call(
             .filter(|member| overload_arity_fits(member, arguments.len()))
             .collect();
         arity_candidates = fitting.len();
-        fitting_candidates = fitting.iter().map(|candidate| (*candidate).clone()).collect();
+        fitting_candidates = fitting
+            .iter()
+            .map(|candidate| (*candidate).clone())
+            .collect();
         if let [chosen] = fitting.as_slice()
             && chosen.overloads().is_none()
-            && !chosen
-                .parameters()
-                .iter()
-                .any(|parameter| type_contains_unknown(parameter) || matches!(parameter, Type::Never))
+            && !chosen.parameters().iter().any(|parameter| {
+                type_contains_unknown(parameter) || matches!(parameter, Type::Never)
+            })
         {
             return check_function_type_call(
                 chosen,
                 callee_span,
                 call_span,
-                _type_arguments,
+                type_arguments,
                 arguments,
+                expected_return_type,
                 symbols,
                 ctx,
             );
@@ -1732,7 +1919,11 @@ pub(crate) fn check_function_type_call(
         let diagnostic = if actual < required && function_type.is_variadic() {
             Diagnostic::ts2555(required, actual, ctx.file_name.clone())
         } else if required < expected && !function_type.is_variadic() {
-            Diagnostic::ts2554(format!("{required}-{expected}"), actual, ctx.file_name.clone())
+            Diagnostic::ts2554(
+                format!("{required}-{expected}"),
+                actual,
+                ctx.file_name.clone(),
+            )
         } else {
             Diagnostic::ts2554(expected_count, actual, ctx.file_name.clone())
         };
@@ -1942,7 +2133,8 @@ pub(crate) fn check_function_type_call(
                     || is_unnarrowable_literal(&argument.expression))
                     && ((!type_contains_unknown(&parameter_type)
                         && !surge_ts_types::parameter_type_is_degraded(&parameter_type)
-                        && (genuine_unknown_argument || !type_contains_unknown(&argument_type)))
+                        && (genuine_unknown_argument
+                            || !as_source(|| type_contains_degradation(&argument_type))))
                         || crate::checks::assign::definite_unit_member_mismatch(
                             &argument_type,
                             &parameter_type,
@@ -1962,7 +2154,8 @@ pub(crate) fn check_function_type_call(
                         &argument_type,
                         &parameter_type,
                     );
-                    let argument_type_name = source_display_name(&argument_type, &reported_parameter);
+                    let argument_type_name =
+                        source_display_name(&argument_type, &reported_parameter);
                     let parameter_type_name = reported_parameter.name();
                     // Every fitting candidate's parameter at this position is a
                     // member of the fold's, so none of them accepts it either.
@@ -2002,7 +2195,7 @@ pub(crate) fn check_function_type_call(
     // violate drops the overload), which this arity-only list does not model.
     if overload_failure_argument.is_none()
         && !mismatch_reported
-        && _type_arguments.is_empty()
+        && type_arguments.is_empty()
         && fitting_candidates.len() > 1
         && fitting_candidates
             .iter()
@@ -2017,7 +2210,7 @@ pub(crate) fn check_function_type_call(
         // this arity-only one, so the anchor stays where the fold rejected.
         let anchor = fitting_candidates
             .last()
-            .filter(|_| _type_arguments.is_empty())
+            .filter(|_| type_arguments.is_empty())
             .and_then(|last| last_candidate_rejected_argument(last, &argument_types))
             .unwrap_or(fold_failure);
         let span = arguments
@@ -2025,13 +2218,42 @@ pub(crate) fn check_function_type_call(
             .or_else(|| arguments.get(fold_failure))
             .and_then(|argument| argument.span.or(argument.expression_span));
         if span.is_some() {
-            ctx.push(diagnostic_with_syntax_span(Diagnostic::ts2769(ctx.file_name.clone()), span));
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2769(ctx.file_name.clone()),
+                span,
+            ));
         }
         mismatch_reported = true;
     }
 
     if has_unresolved_argument {
         return None;
+    }
+
+    // Each argument fits the fold — the union of what the candidates take at its
+    // position — but a call is resolved against one candidate at a time, and
+    // `pair(1, 2)` fits neither `(string, number)` nor `(number, string)`. When
+    // every candidate of fitting arity provably rejects some argument, tsc
+    // reports TS2769 on the argument the *last* candidate rejects.
+    if !mismatch_reported
+        && !has_spread_argument
+        && arity_candidates > 1
+        && let Some(members) = function_type.overloads()
+    {
+        let rejections: Vec<Option<usize>> = members
+            .iter()
+            .filter(|member| overload_arity_fits(member, arguments.len()))
+            .map(|member| first_rejected_argument(member, &argument_types))
+            .collect();
+        if rejections.iter().all(Option::is_some)
+            && let Some(Some(index)) = rejections.last()
+        {
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2769(ctx.file_name.clone()),
+                arguments[*index].span,
+            ));
+            return None;
+        }
     }
 
     // The arguments were checked once, against the permissive fold. With their
@@ -2041,7 +2263,16 @@ pub(crate) fn check_function_type_call(
     let return_type = if mismatch_reported || has_spread_argument {
         None
     } else {
-        select_overload_return_type(function_type, &argument_types)
+        choose_overload_return_type(
+            function_type,
+            &argument_types,
+            type_arguments,
+            callee_span,
+            arguments,
+            expected_return_type,
+            symbols,
+            ctx,
+        )
     };
     Some(with_type_copy_reason(
         TypeCopyReason::CallResolution,
@@ -2067,6 +2298,16 @@ pub(crate) fn select_overload_return_type_for_inferred_call(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    let argument_types = inferred_argument_shapes(function_type, arguments, symbols, ctx)?;
+    select_overload_return_type(function_type, &argument_types)
+}
+
+fn inferred_argument_shapes(
+    function_type: &FunctionType,
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Vec<ArgumentShape>> {
     function_type.overloads()?;
     if arguments.iter().any(|argument| argument.spread) {
         return None;
@@ -2088,7 +2329,7 @@ pub(crate) fn select_overload_return_type_for_inferred_call(
         })
         .collect();
     ctx.diagnostics.truncate(diagnostics_before);
-    select_overload_return_type(function_type, &argument_types)
+    Some(argument_types)
 }
 
 /// What overload selection knows about one argument.
@@ -2182,6 +2423,60 @@ fn select_overload_return_type(
     Some(picked.return_type().clone())
 }
 
+/// tsc's `chooseOverload` over the evaluated arguments: the candidates in
+/// declaration order, a generic one instantiated for this call from its own
+/// written signature before it is tested, and the first that accepts the
+/// arguments answers the call. `None` when none does or the answer still names
+/// an open parameter, which leaves the fold's return.
+///
+/// A candidate with no written signature to instantiate keeps its open
+/// parameters, which reject every argument exactly as they did before this
+/// walk: a free function's group is instantiated per call before it is attached,
+/// so only an interface method group reaches the instantiation.
+fn choose_overload_return_type(
+    function_type: &FunctionType,
+    argument_types: &[ArgumentShape],
+    type_arguments: &[ParsedType],
+    callee_span: Option<SyntaxTextSpan>,
+    arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let overloads = function_type.overloads()?;
+    crate::program::record_overload_selection_attempt();
+    for candidate in overloads {
+        let instantiated;
+        let candidate = if names_open_parameter(&Type::Function(candidate.clone())) {
+            let diagnostics_before = ctx.diagnostics.len();
+            instantiated = property::instantiate_declared_member_signature(
+                candidate,
+                None,
+                type_arguments,
+                callee_span,
+                arguments,
+                expected_return_type,
+                symbols,
+                ctx,
+            )
+            .into_owned();
+            ctx.diagnostics.truncate(diagnostics_before);
+            &instantiated
+        } else {
+            candidate
+        };
+        if !signature_accepts_argument_types(candidate, argument_types) {
+            continue;
+        }
+        if names_open_parameter(candidate.return_type()) {
+            return None;
+        }
+        crate::program::record_overload_selection_pick();
+        return Some(candidate.return_type().clone());
+    }
+    None
+}
+
 /// `type_contains_unknown` without the written `unknown`: an overload taking
 /// `(pattern: unknown)` or returning `(value: unknown) => value is T` is fully
 /// instantiated, and treating the keyword as the sentinel declined every such
@@ -2212,6 +2507,42 @@ fn names_open_parameter(ty: &Type) -> bool {
         Type::Union(union) => union.types().iter().any(names_open_parameter),
         _ => false,
     }
+}
+
+/// The first argument `signature` provably rejects. Only a fully modelled
+/// parameter and a fully known argument count: a callback, a degraded type or
+/// an open type parameter on either side proves nothing, and the candidate is
+/// then not known to reject the call at all.
+fn first_rejected_argument(
+    signature: &FunctionType,
+    argument_types: &[ArgumentShape],
+) -> Option<usize> {
+    let parameters = signature.parameters();
+    let expected = parameters.len();
+    argument_types.iter().enumerate().position(|(i, argument)| {
+        let is_rest_position = signature.is_variadic() && expected > 0 && i >= expected - 1;
+        let parameter_type = if is_rest_position {
+            rest_parameter_element_type(&parameters[expected - 1], i - (expected - 1))
+        } else if i < expected {
+            let declared = parameters[i].clone();
+            if i >= signature.required_parameter_count() {
+                union_type(vec![declared, Type::Undefined])
+            } else {
+                declared
+            }
+        } else {
+            return false;
+        };
+        let Some(argument_type) = argument.ty.as_ref() else {
+            return false;
+        };
+        !matches!(parameter_type, Type::Never)
+            && !names_open_parameter(&parameter_type)
+            && !type_contains_unknown(&parameter_type)
+            && !surge_ts_types::parameter_type_is_degraded(&parameter_type)
+            && !is_open_instantiation(argument_type)
+            && !is_assignable_to(argument_type, &parameter_type)
+    })
 }
 
 fn signature_accepts_argument_types(
@@ -2436,16 +2767,15 @@ pub(crate) fn type_argument_is_unresolved(ty: &Type) -> bool {
         // `T` to such a shape still types every use of `T` correctly except that
         // one member, which was already unmodelled.
         Type::Function(_) => false,
-        Type::Object(object) => {
-            object
-                .properties
-                .values()
-                .any(|property| type_argument_is_unresolved(&property.ty))
-                || object
-                    .string_index_type
-                    .as_deref()
-                    .is_some_and(type_argument_is_unresolved)
-        }
+        // Nor does a *property* carrying it, for the same reason and with the
+        // same reach: `router({ a: p1, b: p2 })` hands `TIn` an object whose
+        // members are procedures, and one member's unmodelled `input` vetoed
+        // the whole record — so the router lost every key and the client built
+        // from it lost every route. Go has no such veto at all
+        // (`inferFromTypes` records the source it is given); surge keeps it
+        // only where the sentinel *is* the candidate, or is the element every
+        // use of the parameter would read.
+        Type::Object(_) => false,
         Type::Union(union) => union.types().iter().any(type_argument_is_unresolved),
         _ => false,
     }
@@ -2467,19 +2797,92 @@ pub(crate) fn is_open_instantiation(ty: &Type) -> bool {
     matches!(ty, Type::Reference(reference) if reference.arguments.iter().any(argument_is_open))
 }
 
+/// Whether `function` declares type parameters of its own. Such a signature is
+/// fully modelled whatever its parameters say: they are written over its own
+/// placeholders (`static deserialize: <T>(s: string) => T`, or superjson's
+/// `registerCustom: <I, O>(t: Omit<Transformer<I, O>, 'name'>) => void`, whose
+/// `Omit` over placeholders resolves to the sentinel), so a "contains unknown"
+/// walk does not read them as a value surge failed to model. Treating them so
+/// silenced every assignment, argument and return of `SuperJSON`.
+///
+/// Only a *source* is read this way. A target carrying such signatures (ts-pattern's
+/// `Matcher` inside `P.Pattern<Input>`) is still where surge models least, and
+/// checking against it surfaced its gaps as false positives.
+pub(crate) fn is_generic_signature(function: &FunctionType) -> bool {
+    GENERIC_SIGNATURES_ARE_MODELLED.with(std::cell::Cell::get)
+        && !own_type_parameter_names(function).is_empty()
+}
+
+thread_local! {
+    static GENERIC_SIGNATURES_ARE_MODELLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs a "contains unknown" query over a value being checked, the side
+/// [`is_generic_signature`] applies to.
+pub(crate) fn as_source<R>(query: impl FnOnce() -> R) -> R {
+    let previous = GENERIC_SIGNATURES_ARE_MODELLED.with(|flag| flag.replace(true));
+    let result = query();
+    GENERIC_SIGNATURES_ARE_MODELLED.with(|flag| flag.set(previous));
+    result
+}
+
+fn own_type_parameter_names(function: &FunctionType) -> Vec<String> {
+    // A signature read from a type annotation (`static parse: <T>(s: string) =>
+    // T`) carries no declaration, only its rendered parameter list.
+    let Some(declaration) = function.declaration() else {
+        return function.type_parameter_names();
+    };
+    let type_parameters =
+        if let Some(member) = declaration.downcast_ref::<DeclaredMemberSignature>() {
+            &member.signature.type_parameters
+        } else if let Some(signature) =
+            declaration.downcast_ref::<crate::symbols::FunctionSignatureInfo>()
+        {
+            &signature.type_parameters
+        } else {
+            return function.type_parameter_names();
+        };
+    type_parameters
+        .iter()
+        .map(|parameter| parameter.name.clone())
+        .collect()
+}
+
+/// [`type_contains_unknown`] for a value's own shape: a written `unknown` in it
+/// (a method's `(o: unknown)` parameter) is a real type, and only surge's
+/// sentinel or a free type parameter says the shape is incomplete.
+fn type_contains_degradation(ty: &Type) -> bool {
+    UNKNOWN_KEYWORD_IS_REAL.with(|flag| {
+        let previous = flag.replace(true);
+        let result = type_contains_unknown(ty);
+        flag.set(previous);
+        result
+    })
+}
+
+thread_local! {
+    static UNKNOWN_KEYWORD_IS_REAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
-        Type::Unknown | Type::GenuineUnknown => true,
-        Type::TypeParameter(parameter) => !crate::checks::assign::is_bound_type_parameter(parameter),
+        Type::GenuineUnknown => !UNKNOWN_KEYWORD_IS_REAL.with(std::cell::Cell::get),
+        Type::Unknown => true,
+        Type::TypeParameter(parameter) => {
+            !crate::checks::assign::is_bound_type_parameter(parameter)
+        }
         Type::Array(element) => type_contains_unknown(element),
         Type::Reference(reference) if reference.is_readonly_array() => {
             reference.arguments.iter().any(type_contains_unknown)
         }
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
-        Type::Function(function) => crate::checks::assign::with_signature_type_parameters(function, || {
-            function.parameters().iter().any(type_contains_unknown)
-                || type_contains_unknown(function.return_type())
-        }),
+        Type::Function(function) => {
+            !is_generic_signature(function)
+                && crate::checks::assign::with_signature_type_parameters(function, || {
+                    function.parameters().iter().any(type_contains_unknown)
+                        || type_contains_unknown(function.return_type())
+                })
+        }
         Type::Object(object) => {
             object
                 .properties
@@ -2504,6 +2907,9 @@ fn is_unnarrowable_literal(expression: &ParsedExpression) -> bool {
             | ParsedExpression::BigIntLiteral(_)
             | ParsedExpression::ObjectLiteral { .. }
             | ParsedExpression::ArrayLiteral { .. }
-            | ParsedExpression::TemplateLiteral { is_tagged: false, .. }
+            | ParsedExpression::TemplateLiteral {
+                is_tagged: false,
+                ..
+            }
     )
 }

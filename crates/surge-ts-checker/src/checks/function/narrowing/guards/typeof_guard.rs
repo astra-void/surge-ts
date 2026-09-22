@@ -140,6 +140,9 @@ fn narrow_by_unmatched_typeof_tag(ty: &Type, keep_matching: bool) -> Option<Type
 }
 
 pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Option<Type> {
+    if let Some(flattened) = surge_ts_types::flatten_reference_unions(ty) {
+        return narrow_union_by_typeof(&flattened, tag, keep_matching);
+    }
     if type_for_typeof_tag(tag).is_none() && !matches!(tag, "object" | "function") {
         return narrow_by_unmatched_typeof_tag(ty, keep_matching);
     }

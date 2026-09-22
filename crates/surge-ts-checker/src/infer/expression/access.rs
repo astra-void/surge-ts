@@ -31,6 +31,12 @@ pub(crate) fn infer_index_access(
         };
     };
 
+    if let ParsedExpression::NumberLiteral(index_value) = index
+        && let Type::OpenTuple(tuple) = symbol.ty.peeled()
+        && let Some(element) = tuple.leading_element(index_value)
+    {
+        return InferredExpression::Known(element.clone());
+    }
     let receiver_type = match &symbol.ty {
         Type::Reference(_) => match symbol.ty.peeled() {
             peeled @ (Type::Array(_) | Type::Tuple(_)) => peeled,
@@ -43,10 +49,10 @@ pub(crate) fn infer_index_access(
     }
     match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown
-        | Type::GenuineUnknown
-        | Type::ErrorType
-        | Type::TypeParameter(_) => InferredExpression::Unknown,
+        Type::ErrorType => InferredExpression::Known(Type::ErrorType),
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+            InferredExpression::Unknown
+        }
         // Lowered to its element array above.
         Type::OpenTuple(_) => InferredExpression::Unknown,
         Type::Union(union_type) => {
@@ -82,6 +88,19 @@ pub(crate) fn infer_index_access(
                         }
                         result_types.push(unchecked_index_read(element_type.clone(), ctx));
                     }
+                    // Same numeric index signature `String` declares, per
+                    // member: `('all' | 'active')[0]` reads a `string` from
+                    // either side.
+                    Type::String | Type::StringLiteral(_) => {
+                        let index_type = match infer_expression(index, symbols, ctx) {
+                            InferredExpression::Known(ty) => ty,
+                            _ => return InferredExpression::Unknown,
+                        };
+                        if !is_assignable_to(&index_type, &Type::Number) {
+                            return InferredExpression::Unknown;
+                        }
+                        result_types.push(unchecked_index_read(Type::String, ctx));
+                    }
                     _ => return InferredExpression::Unknown,
                 }
             }
@@ -110,15 +129,26 @@ pub(crate) fn infer_index_access(
 
             InferredExpression::Known(unchecked_index_read(element_type.clone(), ctx))
         }
+        // `String` declares `readonly [index: number]: string`, so a numeric
+        // index reads a `string` — and under `noUncheckedIndexedAccess` that is
+        // `string | undefined` like any other index-signature read.
+        Type::String | Type::StringLiteral(_) => {
+            let index_type = match infer_expression(index, symbols, ctx) {
+                InferredExpression::Known(ty) => ty,
+                _ => return InferredExpression::Unknown,
+            };
+            if !is_assignable_to(&index_type, &Type::Number) {
+                return InferredExpression::Unknown;
+            }
+            InferredExpression::Known(unchecked_index_read(Type::String, ctx))
+        }
         Type::Function(_)
-        | Type::String
         | Type::Number
         | Type::Boolean
         | Type::BigInt
         | Type::Symbol
         | Type::Void
         | Type::Never
-        | Type::StringLiteral(_)
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
         | Type::Undefined
@@ -268,7 +298,12 @@ pub(crate) fn infer_property_access(
         InferredExpression::UnresolvedIdentifier { name, span } => {
             return InferredExpression::UnresolvedIdentifier { name, span };
         }
-        InferredExpression::MissingProperty { .. } | InferredExpression::Unknown => {
+        // tsc types a member the receiver lacks with its error type, and
+        // everything read off that is the error type again.
+        InferredExpression::MissingProperty { .. } => {
+            return InferredExpression::Known(Type::ErrorType);
+        }
+        InferredExpression::Unknown => {
             return InferredExpression::Unknown;
         }
     };
@@ -277,7 +312,10 @@ pub(crate) fn infer_property_access(
         crate::program::DtsExpansionReason::PropertyLookup,
         || match &object_type {
             Type::Any => InferredExpression::Known(Type::Any),
-            Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
+            Type::ErrorType => InferredExpression::Known(Type::ErrorType),
+            Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+                InferredExpression::Unknown
+            }
             // The check pass reports the receiver; the access itself has no
             // type tsc would continue with.
             Type::Undefined | Type::Null => InferredExpression::Unknown,
@@ -502,7 +540,12 @@ pub(crate) fn infer_property_call(
         InferredExpression::UnresolvedIdentifier { name, span } => {
             return InferredExpression::UnresolvedIdentifier { name, span };
         }
-        InferredExpression::MissingProperty { .. } | InferredExpression::Unknown => {
+        // tsc types a member the receiver lacks with its error type, and
+        // everything read off that is the error type again.
+        InferredExpression::MissingProperty { .. } => {
+            return InferredExpression::Known(Type::ErrorType);
+        }
+        InferredExpression::Unknown => {
             return InferredExpression::Unknown;
         }
     };
@@ -600,7 +643,10 @@ pub(crate) fn infer_property_call(
 
     let result = match &object_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
+        Type::ErrorType => InferredExpression::Known(Type::ErrorType),
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+            InferredExpression::Unknown
+        }
         Type::Array(element_type) if property_name == "find" => {
             InferredExpression::Known(surge_ts_types::union_type(vec![
                 element_type.as_ref().clone(),
@@ -817,13 +863,19 @@ pub(crate) fn infer_element_access(
         InferredExpression::UnresolvedIdentifier { name, span } => {
             return InferredExpression::UnresolvedIdentifier { name, span };
         }
-        InferredExpression::MissingProperty { .. } | InferredExpression::Unknown => {
+        // tsc types a member the receiver lacks with its error type, and
+        // everything read off that is the error type again.
+        InferredExpression::MissingProperty { .. } => {
+            return InferredExpression::Known(Type::ErrorType);
+        }
+        InferredExpression::Unknown => {
             return InferredExpression::Unknown;
         }
     };
 
     match &object_type {
         Type::Any => InferredExpression::Known(Type::Any),
+        Type::ErrorType => InferredExpression::Known(Type::ErrorType),
         Type::Tuple(elements) => {
             infer_tuple_index_access(elements, index, index_span, symbols, ctx)
         }
@@ -859,7 +911,12 @@ pub(crate) fn infer_optional_index_access(
         InferredExpression::UnresolvedIdentifier { name, span } => {
             return InferredExpression::UnresolvedIdentifier { name, span };
         }
-        InferredExpression::MissingProperty { .. } | InferredExpression::Unknown => {
+        // tsc types a member the receiver lacks with its error type, and
+        // everything read off that is the error type again.
+        InferredExpression::MissingProperty { .. } => {
+            return InferredExpression::Known(Type::ErrorType);
+        }
+        InferredExpression::Unknown => {
             return InferredExpression::Unknown;
         }
     };
@@ -868,7 +925,10 @@ pub(crate) fn infer_optional_index_access(
 
     match &base_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => InferredExpression::Unknown,
+        Type::ErrorType => InferredExpression::Known(Type::ErrorType),
+        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
+            InferredExpression::Unknown
+        }
         Type::Tuple(elements) => {
             let result = infer_tuple_index_access(elements, index, index_span, symbols, ctx);
             match result {
@@ -916,7 +976,12 @@ pub(crate) fn infer_optional_property_access(
         InferredExpression::UnresolvedIdentifier { name, span } => {
             return InferredExpression::UnresolvedIdentifier { name, span };
         }
-        InferredExpression::MissingProperty { .. } | InferredExpression::Unknown => {
+        // tsc types a member the receiver lacks with its error type, and
+        // everything read off that is the error type again.
+        InferredExpression::MissingProperty { .. } => {
+            return InferredExpression::Known(Type::ErrorType);
+        }
+        InferredExpression::Unknown => {
             return InferredExpression::Unknown;
         }
     };
@@ -929,9 +994,11 @@ pub(crate) fn infer_optional_property_access(
     let base_type = surge_ts_types::remove_nullish(&object_type);
 
     let result_type = match base_type {
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Any => {
-            InferredExpression::Known(base_type.clone())
-        }
+        Type::Unknown
+        | Type::GenuineUnknown
+        | Type::TypeParameter(_)
+        | Type::Any
+        | Type::ErrorType => InferredExpression::Known(base_type.clone()),
         Type::Union(ref union_type) => {
             let mut result_types = Vec::new();
             let mut saw_known = false;

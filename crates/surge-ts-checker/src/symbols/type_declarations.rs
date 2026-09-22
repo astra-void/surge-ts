@@ -209,6 +209,10 @@ pub(crate) struct InterfaceInfo {
     /// Only the abstract-instantiation check reads it; nothing about the shape
     /// depends on it.
     pub(crate) is_abstract_class: bool,
+    /// Set when this is the instance side of a class. A class base is an
+    /// expression, so its heritage names are reported by the class's own check
+    /// rather than wherever the instance is first expanded.
+    pub(crate) is_class_instance: bool,
     pub(crate) body: Arc<InterfaceBody>,
     /// See [`TypeAliasInfo::cached_resolution_key`].
     pub(crate) cached_resolution_key: std::sync::OnceLock<crate::context::DeclarationResolutionKey>,
@@ -252,6 +256,7 @@ impl InterfaceInfo {
             name_span,
             resolution_scope,
             is_abstract_class: false,
+            is_class_instance: false,
             body: Arc::new(InterfaceBody {
                 type_parameters,
                 extends,
@@ -283,6 +288,7 @@ impl Clone for InterfaceInfo {
             name_span: self.name_span,
             resolution_scope: self.resolution_scope.clone(),
             is_abstract_class: self.is_abstract_class,
+            is_class_instance: self.is_class_instance,
             body: self.body.clone(),
             cached_resolution_key: self.cached_resolution_key.clone(),
             cached_alias_id: self.cached_alias_id.clone(),
@@ -981,6 +987,7 @@ mod tests {
             None,
             None,
             Vec::new(),
+            Vec::new(),
             None,
         ));
 
@@ -1071,6 +1078,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
             Vec::new(),
             None,
         ));

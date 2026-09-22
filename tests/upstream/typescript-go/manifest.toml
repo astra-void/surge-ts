@@ -440,7 +440,7 @@ upstream_baseline_path = "testdata/baselines/reference/compiler/declarationEmitN
 local_path = "tests/upstream/typescript-go/cases/declarationEmitNoCrashOnCommentCopiedFromOtherFile.ts"
 mode = "virtual_files"
 expected_diagnostics = []
-reason = "Covers a predicate-returning function imported across files behind a long leading comment block. The fixture's second marker is written without a space, which the test-only splitter does not match, so both modules stay in one virtual file. Upstream emits no errors baseline, so this pins the case as false-positive free."
+reason = "Covers a predicate-returning function imported across files behind a long leading comment block. Upstream emits no errors baseline, so this pins the case as false-positive free."
 
 [[case]]
 name = "declaration-emit-resolve-package-json-exports-false"

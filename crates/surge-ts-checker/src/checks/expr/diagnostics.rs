@@ -36,6 +36,9 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
             if obj.synthetic_open_index {
                 widened = widened.with_open_index_marker();
             }
+            if obj.non_primitive {
+                widened = widened.with_non_primitive_marker();
+            }
             if let Some(call_signature) = obj.call_signature() {
                 widened = widened.with_call_signature(call_signature.clone());
             }
@@ -55,26 +58,46 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
 
 /// `true` if `ty` is a literal type or a union containing one. tsc keeps the
 /// source literal in assignability messages when the target is literal-like.
-/// tsc's `typeCouldHaveTopLevelSingletonTypes`: a unit type — a literal, or
-/// `null`/`undefined` — at the top level of the target.
-fn type_contains_literal(ty: &Type) -> bool {
+/// tsc's `isUnitType`: a literal, `null` or `undefined`. An enum is a union
+/// of enum literal types.
+fn is_unit_type(ty: &Type) -> bool {
     match ty {
         Type::StringLiteral(_)
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
         | Type::Null
         | Type::Undefined => true,
-        // An enum is a union of enum literal types.
-        Type::Reference(reference) if reference.enum_owner.is_some() => true,
-        // tsc's `isLiteralType`: a template literal or string mapping type
-        // is one.
+        Type::Reference(reference) => reference.enum_owner.is_some(),
+        _ => false,
+    }
+}
+
+/// tsc's `isLiteralType`, which `reportRelationError` generalizes. An object
+/// source is still widened: its fresh literal members print generalized.
+fn is_literal_like(ty: &Type) -> bool {
+    match ty {
+        Type::Boolean | Type::Object(_) | Type::Array(_) | Type::Tuple(_) => true,
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .all(|member| is_unit_type(member) || *member == Type::Boolean),
+        other => is_unit_type(other),
+    }
+}
+
+/// tsc's `typeCouldHaveTopLevelSingletonTypes`.
+fn could_have_singleton_types(ty: &Type) -> bool {
+    match ty {
+        Type::Boolean => false,
+        Type::Union(union) => union.types().iter().any(could_have_singleton_types),
+        // A template literal or string mapping type is not a unit type, but
+        // it can hold one.
         ty if surge_ts_types::is_template_literal_type(ty)
             || surge_ts_types::string_mapping_parts(ty).is_some() =>
         {
             true
         }
-        Type::Union(types) => types.types().iter().any(type_contains_literal),
-        _ => false,
+        other => is_unit_type(other),
     }
 }
 
@@ -107,6 +130,35 @@ pub(crate) fn carries_leaked_type_parameter(ty: &Type, ctx: &CheckerContext) -> 
 /// Builds the diagnostic for a missing property access. When the object is a
 /// class instance whose static side declares the property, tsc emits TS2576
 /// ("Did you mean to access the static member ...") instead of the plain TS2339.
+/// tsc's rule for a member `globalThis` lacks: TS2339 only when the name is a
+/// block-scoped global (which never lands on the global object), otherwise
+/// TS7017 under `noImplicitAny` and nothing without it — the read is `any`.
+/// `None` when the receiver is not `globalThis`.
+pub(crate) fn global_this_missing_member(
+    property_name: &str,
+    object_type: &Type,
+    ctx: &CheckerContext,
+) -> Option<Option<Diagnostic>> {
+    if !matches!(object_type, Type::Reference(reference)
+        if &*reference.id == crate::driver::GLOBAL_THIS_REFERENCE_ID)
+    {
+        return None;
+    }
+    let block_scoped = ctx.block_scoped_globals.contains(property_name);
+    let file_name = ctx.file_name.clone();
+    Some(if block_scoped {
+        Some(Diagnostic::ts2339(
+            property_name,
+            "typeof globalThis",
+            file_name,
+        ))
+    } else if ctx.options.no_implicit_any {
+        Some(Diagnostic::ts7017("typeof globalThis", file_name))
+    } else {
+        None
+    })
+}
+
 pub(crate) fn missing_property_diagnostic(
     property_name: &str,
     object_type: &Type,
@@ -473,7 +525,13 @@ pub(crate) fn source_display_name(source: &Type, target: &Type) -> String {
     // an object literal's own property types are already widened.
     if matches!(target, Type::Never) && matches!(source, Type::Object(_)) {
         widen_type(source).name()
-    } else if type_contains_literal(target) || matches!(target, Type::Never) {
+    } else if could_have_singleton_types(target)
+        || matches!(target, Type::Never)
+        || !is_literal_like(source)
+    {
+        // `reportRelationError` generalizes only a literal source (every member
+        // a unit type: `1`, `"a" | "b"`, not `number | "x"`), and only toward a
+        // target that could not hold it.
         source.name()
     } else if let Some(enum_name) = enum_base_display(source) {
         enum_name

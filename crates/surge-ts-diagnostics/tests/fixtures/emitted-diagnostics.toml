@@ -21,6 +21,18 @@ oracle = [
   "no-default-export-import-basic",
 ]
 
+[TS1194]
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
+]
+
+[TS2311]
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
+]
+
 [TS2347]
 status = "emitted"
 oracle = [
@@ -102,10 +114,58 @@ oracle = [
   "array-pattern-iterability-basic",
 ]
 
+[TS2503]
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
+]
+
 [TS2558]
 status = "emitted"
 oracle = [
   "call-type-argument-count-basic",
+]
+
+[TS2581]
+status = "emitted"
+oracle = [
+  "cannot-find-name-lib-basic",
+]
+
+[TS2582]
+status = "emitted"
+oracle = [
+  "cannot-find-name-lib-basic",
+]
+
+[TS2583]
+status = "emitted"
+oracle = [
+  "cannot-find-name-lib-basic",
+]
+
+[TS2584]
+status = "emitted"
+oracle = [
+  "cannot-find-name-lib-basic",
+]
+
+[TS2585]
+status = "emitted"
+oracle = [
+  "cannot-find-name-lib-basic",
+]
+
+[TS2592]
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
+]
+
+[TS2593]
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
 ]
 
 [TS2610]
@@ -126,10 +186,34 @@ oracle = [
   "no-default-export-import-basic",
 ]
 
+[TS2662]
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
+]
+
+[TS2663]
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
+]
+
 [TS2676]
 status = "emitted"
 oracle = [
   "accessor-declaration-rules-basic",
+]
+
+[TS2694]
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
+]
+
+[TS2702]
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
 ]
 
 [TS2706]
@@ -138,10 +222,22 @@ oracle = [
   "type-parameter-default-order-basic",
 ]
 
-[TS2721]
+[TS2708]
 status = "emitted"
 oracle = [
-  "null-type-basic",
+  "cannot-find-name-variants-basic",
+]
+
+[TS2709]
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
+]
+
+[TS2713]
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
 ]
 
 [TS2722]
@@ -156,6 +252,38 @@ oracle = [
   "null-type-basic",
 ]
 
+[TS7009]
+status = "emitted"
+oracle = [
+  "nullish-operand-basic",
+]
+
+[TS2350]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-checker/tests/program/assorted_checks.rs",
+]
+
+[TS2721]
+status = "emitted"
+oracle = [
+  "null-type-basic",
+  "nullish-operand-basic",
+]
+
+[TS2531]
+status = "emitted"
+oracle = [
+  "null-type-basic",
+  "nullish-operand-basic",
+]
+
+[TS2407]
+status = "emitted"
+oracle = [
+  "nullish-operand-basic",
+]
+
 [TS2724]
 status = "emitted"
 oracle = [
@@ -166,6 +294,24 @@ oracle = [
 status = "emitted"
 oracle = [
   "accessor-declaration-rules-basic",
+]
+
+[TS2833]
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
+]
+
+[TS2867]
+status = "emitted"
+oracle = [
+  "cannot-find-name-lib-basic",
+]
+
+[TS2868]
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
 ]
 
 [TS5102]
@@ -734,8 +880,10 @@ oracle = [
 ]
 
 [TS2749]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "cannot-find-name-variants-basic",
+]
 
 [TS2869]
 status = "emitted"
@@ -841,6 +989,11 @@ span_tests = [
 
 [TS7005]
 status = "emitted"
+oracle = [
+  "auto-type-flow-basic",
+  "evolving-array-basic",
+  "module-evolving-array-basic",
+]
 fixtures = [
   "tests/smoke/manifest.toml",
 ]
@@ -950,8 +1103,12 @@ span_tests = [
 ]
 
 [TS7034]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "auto-type-flow-basic",
+  "evolving-array-basic",
+  "module-evolving-array-basic",
+]
 
 [TS7051]
 status = "catalog-only"
@@ -1707,14 +1864,38 @@ oracle = [
   "null-type-basic",
 ]
 
-[TS2531]
+[TS2533]
 status = "emitted"
 oracle = [
   "null-type-basic",
 ]
 
-[TS2533]
+[TS2302]
 status = "emitted"
 oracle = [
-  "null-type-basic",
+  "class-type-parameter-scope-basic",
+]
+
+[TS2689]
+status = "emitted"
+oracle = [
+  "heritage-await-globalthis-basic",
+]
+
+[TS1308]
+status = "emitted"
+oracle = [
+  "heritage-await-globalthis-basic",
+]
+
+[TS7017]
+status = "emitted"
+oracle = [
+  "heritage-await-globalthis-basic",
+]
+
+[TS7026]
+status = "emitted"
+oracle = [
+  "jsx-missing-intrinsic-elements-basic",
 ]

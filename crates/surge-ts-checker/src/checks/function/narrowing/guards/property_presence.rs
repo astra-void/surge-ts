@@ -21,7 +21,13 @@ pub(super) fn property_presence_of(member: &Type, property: &str) -> PropertyPre
         Type::Object(object) => match object.get_property(property) {
             Some(existing) if existing.is_optional() => PropertyPresence::Optional,
             Some(_) => PropertyPresence::Required,
-            None if object.allows_string_index_access() => PropertyPresence::Undecidable,
+            // A string index answers no symbol key, but an index surge opened
+            // over an operand it could not model proves nothing either way.
+            None if object.allows_string_index_access()
+                && (!property.starts_with("[Symbol.") || object.synthetic_open_index) =>
+            {
+                PropertyPresence::Undecidable
+            }
             None => PropertyPresence::Absent,
         },
         _ => PropertyPresence::Undecidable,
@@ -165,10 +171,42 @@ pub(crate) fn parse_in_condition(
     else {
         return None;
     };
-    let ParsedExpression::StringLiteral(property) = left.as_ref() else {
-        return None;
+    let property = match left.as_ref() {
+        ParsedExpression::StringLiteral(property) => property.as_str(),
+        // `Symbol.iterator in heads`: a well-known symbol is a property name
+        // too (tsc's `isTypeUsableAsPropertyName`), keyed the way a computed
+        // `[Symbol.iterator]` member is.
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } if matches!(object.as_ref(), ParsedExpression::Identifier { name, .. } if name == "Symbol") => {
+            well_known_symbol_key(property_name)?
+        }
+        _ => return None,
     };
-    Some((right.as_ref(), property.as_str()))
+    Some((right.as_ref(), property))
+}
+
+fn well_known_symbol_key(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "asyncDispose" => "[Symbol.asyncDispose]",
+        "asyncIterator" => "[Symbol.asyncIterator]",
+        "dispose" => "[Symbol.dispose]",
+        "hasInstance" => "[Symbol.hasInstance]",
+        "isConcatSpreadable" => "[Symbol.isConcatSpreadable]",
+        "iterator" => "[Symbol.iterator]",
+        "match" => "[Symbol.match]",
+        "matchAll" => "[Symbol.matchAll]",
+        "replace" => "[Symbol.replace]",
+        "search" => "[Symbol.search]",
+        "species" => "[Symbol.species]",
+        "split" => "[Symbol.split]",
+        "toPrimitive" => "[Symbol.toPrimitive]",
+        "toStringTag" => "[Symbol.toStringTag]",
+        "unscopables" => "[Symbol.unscopables]",
+        _ => return None,
+    })
 }
 
 /// Builds a symbol table narrowed by a `"prop" in obj` test for the given branch.
