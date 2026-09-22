@@ -102,6 +102,22 @@ impl PartialEq for ObjectType {
             && self.number_index_type == other.number_index_type
             && signatures_equal(&self.construct_signature, &other.construct_signature)
             && signatures_equal(&self.call_signature, &other.call_signature)
+            && (!(self.is_memberless_intersection() || other.is_memberless_intersection())
+                || (self.intersection_operands == other.intersection_operands
+                    && self.non_primitive == other.non_primitive))
+    }
+}
+
+impl ObjectType {
+    /// An intersection with no members of its own (`T & null`, `string & {}`):
+    /// its operands are what it is, so they decide equality — `(T & object) |
+    /// (T & null)` must not collapse to one member.
+    fn is_memberless_intersection(&self) -> bool {
+        self.is_intersection
+            && self.properties.is_empty()
+            && self.string_index_type.is_none()
+            && self.number_index_type.is_none()
+            && self.intersection_operands.is_some()
     }
 }
 

@@ -359,6 +359,17 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         return false;
     }
 
+    if from != to
+        && current_relation_admits_anything(to)
+    {
+        return true;
+    }
+    if from != to
+        && let Some(related) = type_variable_related(from, to)
+    {
+        return related;
+    }
+
     if from == to
         || matches!(from, Type::Any)
         || matches!(from, Type::Never)
@@ -490,6 +501,156 @@ fn definitely_not_thenable(ty: &Type) -> bool {
         Type::Union(union) => union.types().iter().all(definitely_not_thenable),
         _ => false,
     }
+}
+
+/// `isSimpleTypeRelatedTo`'s last rule: under `strictNullChecks` anything is
+/// assignable (and comparable) to a union holding `undefined`, `null` and the
+/// empty object type — the union `unknown` stands for (`isUnknownLikeUnionType`).
+fn current_relation_admits_anything(to: &Type) -> bool {
+    let Type::Union(union) = to else {
+        return false;
+    };
+    crate::strict_null_checks()
+        && union.types().iter().any(|member| matches!(member, Type::Undefined))
+        && union.types().iter().any(|member| matches!(member, Type::Null))
+        && union.types().iter().any(is_empty_anonymous_object)
+}
+
+fn is_empty_anonymous_object(ty: &Type) -> bool {
+    matches!(ty, Type::Object(object)
+        if object.properties.is_empty()
+            && object.string_index_type.is_none()
+            && object.number_index_type.is_none()
+            && object.call_signature().is_none()
+            && object.construct_signature().is_none()
+            && !object.non_primitive
+            && !object.is_intersection
+            && object.alias_id.is_none())
+}
+
+/// The operands of an intersection holding a type variable of the body being
+/// checked: `T & X` narrowed (memberless, see
+/// `type_variable::intersect_type_variable`) or resolved (the merged members
+/// of the other operands, with the variable recorded beside them).
+fn type_variable_intersection_operands(ty: &Type) -> Option<&[Type]> {
+    let Type::Object(object) = ty else {
+        return None;
+    };
+    let operands = object.intersection_operands.as_deref()?;
+    (object.is_intersection && operands.iter().any(Type::is_type_variable)).then_some(operands)
+}
+
+/// A memberless `T & X`: its operands are the whole type.
+fn is_narrowed_type_variable(ty: &Type) -> bool {
+    matches!(ty, Type::Object(object) if object.properties.is_empty() && object.string_index_type.is_none())
+}
+
+/// The variable operands' constraints cut down by the other operands: a union
+/// constraint loses the members an operand rules out — `{}` rules out the
+/// nullish ones (`NonNullable<T>` over `T extends string | undefined` is
+/// `string`), a primitive operand every member not of it. `None` when no
+/// variable operand has a constraint to combine.
+fn effective_intersection_constraint(operands: &[Type]) -> Option<Type> {
+    let constraints: Vec<Type> = operands
+        .iter()
+        .filter_map(|operand| match operand {
+            Type::TypeParameter(parameter) => crate::type_variable::active_constraint(parameter).flatten(),
+            _ => None,
+        })
+        .collect();
+    let mut members: Vec<Type> = constraints
+        .iter()
+        .flat_map(|constraint| match constraint {
+            Type::Union(union) => union.types().to_vec(),
+            other => vec![other.clone()],
+        })
+        .collect();
+    if members.is_empty() {
+        return None;
+    }
+    for operand in operands.iter().filter(|operand| !matches!(operand, Type::TypeParameter(_))) {
+        if is_empty_anonymous_object(operand) {
+            members.retain(|member| !matches!(member, Type::Null | Type::Undefined | Type::Void));
+        } else if operand.base_primitive().is_some() && !matches!(operand, Type::Object(_)) {
+            members.retain(|member| is_assignable_to(member, operand));
+        }
+    }
+    Some(if members.is_empty() { Type::Never } else { crate::union_type(members) })
+}
+
+fn active_variable(ty: &Type) -> Option<(&crate::TypeParameterType, Option<Type>)> {
+    match ty {
+        Type::TypeParameter(parameter) => {
+            crate::type_variable::active_constraint(parameter).map(|constraint| (parameter, constraint))
+        }
+        _ => None,
+    }
+}
+
+/// tsc's relation for a type variable of the body being checked
+/// (`structuredTypeRelatedToWorker`, relater.go): a variable *source* relates
+/// through its constraint (`unknown` when it has none) once no target union
+/// member is the variable itself; a variable *target* admits nothing but
+/// itself, `never`, `any`, and a variable whose constraint leads to it — `T`
+/// "could be instantiated with an arbitrary type". `None` when neither side is
+/// such a variable. Placeholders and the degradation sentinel stay permissive
+/// on either side: they are surge's gaps, not types.
+fn type_variable_related(from: &Type, to: &Type) -> Option<bool> {
+    // An intersection target needs every constituent (`typeRelatedToEachType`);
+    // a source relates when some constituent does (`someTypeRelatedToType`), or
+    // failing that through the constraint the constituents combine to
+    // (`getEffectiveConstraintOfIntersection`).
+    // A merged intersection also answers structurally through its members, so
+    // only a failure on a memberless one is final.
+    if let Some(operands) = type_variable_intersection_operands(to) {
+        let variables_related = operands
+            .iter()
+            .filter(|operand| operand.is_type_variable() || is_narrowed_type_variable(to))
+            .all(|operand| is_assignable_to(from, operand));
+        if !variables_related || is_narrowed_type_variable(to) {
+            return Some(variables_related);
+        }
+    }
+    if let Some(operands) = type_variable_intersection_operands(from) {
+        if operands.iter().any(|operand| is_assignable_to(operand, to))
+            || effective_intersection_constraint(operands).is_some_and(|constraint| is_assignable_to(&constraint, to))
+        {
+            return Some(true);
+        }
+        if is_narrowed_type_variable(from) {
+            return Some(false);
+        }
+    }
+    let source = active_variable(from);
+    let target_is_variable = active_variable(to).is_some();
+    if source.is_none() && !target_is_variable {
+        return None;
+    }
+    if matches!(from, Type::Any | Type::Never | Type::Unknown | Type::ErrorType)
+        || matches!(to, Type::Any | Type::Unknown | Type::ErrorType | Type::GenuineUnknown)
+        || matches!(from, Type::TypeParameter(_)) && source.is_none()
+        || matches!(to, Type::TypeParameter(_)) && !target_is_variable
+    {
+        return Some(true);
+    }
+    if matches!(from, Type::Null | Type::Undefined) && !crate::strict_null_checks() {
+        return Some(true);
+    }
+    if let Some((_, constraint)) = source {
+        if let Type::Union(to_union) = to
+            && to_union.types().iter().any(|member| member == from)
+        {
+            return Some(true);
+        }
+        // `T extends T` is a circular constraint tsc reports and drops.
+        let constraint = constraint.filter(|constraint| constraint != from).unwrap_or(Type::GenuineUnknown);
+        return Some(is_assignable_to(&constraint, to));
+    }
+    Some(match from {
+        Type::Union(from_union) => union_source_related(from_union, to),
+        Type::Reference(reference) => is_assignable_to(&reference.resolve_arc(), to),
+        _ => false,
+    })
 }
 
 fn assignability_arms(from: &Type, to: &Type) -> bool {

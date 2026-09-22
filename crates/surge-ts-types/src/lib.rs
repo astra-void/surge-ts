@@ -11,6 +11,7 @@ mod object;
 mod reference;
 mod store;
 mod template_literal;
+pub mod type_variable;
 mod ty;
 mod union;
 

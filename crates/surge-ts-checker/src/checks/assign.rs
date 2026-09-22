@@ -159,8 +159,10 @@ thread_local! {
 /// Whether `parameter` is declared by a generic signature enclosing the type
 /// being walked (see [`with_signature_type_parameters`]). Such a placeholder
 /// is a bound name, not a type surge failed to model.
+/// A variable of the generic body being checked is bound the same way.
 pub(crate) fn is_bound_type_parameter(parameter: &surge_ts_types::TypeParameterType) -> bool {
-    BOUND_TYPE_PARAMETERS.with(|bound| bound.borrow().iter().any(|name| **name == *parameter.name))
+    parameter.is_active_variable()
+        || BOUND_TYPE_PARAMETERS.with(|bound| bound.borrow().iter().any(|name| **name == *parameter.name))
 }
 
 /// Runs `walk` with no type parameter bound. A reference's expansion is a

@@ -202,6 +202,19 @@ impl FunctionType {
         }
     }
 
+    /// The same signature — names, head, declaration, overloads — over new
+    /// parameter and return types.
+    pub fn with_signature_types(&self, parameters: Vec<Type>, return_type: Type) -> Self {
+        Self {
+            parameter_names: self.parameter_names.clone(),
+            type_parameter_head: self.type_parameter_head.clone(),
+            alias_name: self.alias_name.clone(),
+            declaration: self.declaration.clone(),
+            overloads: self.overloads.clone(),
+            ..Self::new(parameters, return_type, self.is_variadic(), self.required_parameter_count())
+        }
+    }
+
     /// Attaches the written parameter names for display. Ignored when the count
     /// does not match the parameter list, and dropped entirely when no position
     /// carries a name, so an unnamed signature keeps the memoized rendering.

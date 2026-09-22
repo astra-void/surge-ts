@@ -346,6 +346,25 @@ fn distribute_reference_unions() -> bool {
 }
 
 pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
+    let variables: Vec<Type> = members.iter().filter(|ty| ty.is_type_variable()).cloned().collect();
+    let merged = merge_intersection_member_types(members);
+    if variables.is_empty() {
+        return merged;
+    }
+    // The merge drops a type variable operand like an unmodelled one; the
+    // relation still needs it (`T & {}` is assignable to `T`), so it is kept
+    // beside the merged members.
+    match merged {
+        Type::Object(object) => {
+            let mut operands: Vec<Type> = object.intersection_operands.as_deref().unwrap_or_default().to_vec();
+            operands.extend(variables);
+            Type::Object(object.with_intersection_marker().with_intersection_operands(operands))
+        }
+        other => other,
+    }
+}
+
+fn merge_intersection_member_types(members: Vec<Type>) -> Type {
     let (members, unwrapped_open) = flatten_deferred_intersections(members);
     if members.iter().any(|ty| matches!(ty, Type::Any)) {
         return Type::Any;

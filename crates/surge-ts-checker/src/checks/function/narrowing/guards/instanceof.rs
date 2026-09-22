@@ -59,6 +59,15 @@ pub(super) fn instanceof_matches_with_heritage(
     instance: Option<&Type>,
 ) -> Option<bool> {
     match instanceof_matches(member, ctor_name) {
+        // `isTypeDerivedFrom`: a primitive derives from no class, however
+        // little that class declares.
+        // An anonymous object type has no base types to derive through.
+        Some(false)
+            if is_definitely_not_an_object(member)
+                || matches!(member, Type::Object(object) if object.alias_id.is_none() && object.alias_name.is_none()) =>
+        {
+            Some(false)
+        }
         Some(false) => {
             let Some(instance) = instance else {
                 return Some(false);
@@ -128,6 +137,9 @@ pub(crate) fn narrow_union_by_instanceof(
     // it resolves to, leaving `x instanceof Promise` unable to drop the non-Promise
     // arm.
     let peeled = ty.peeled();
+    if let Some(narrowed) = narrow_type_variables_by_instanceof(&peeled, ctor_name, instance, keep_matching) {
+        return narrowed;
+    }
     let Type::Union(union) = &peeled else {
         // A lone type that is an instance of the constructor cannot reach the
         // `else` branch (`isTypeDerivedFrom` filters it out), so an exhaustive
@@ -189,6 +201,66 @@ pub(crate) fn narrow_union_by_instanceof(
         return None;
     }
     Some(union_type(kept))
+}
+
+/// tsc's `getNarrowedType` with `checkDerived` where the subject holds a type
+/// variable of the body being checked. A variable is derived from the
+/// constructor when its constraint is; the true branch keeps derived members,
+/// and a variable that is not derived becomes `T & C` unless some other member
+/// already matched (then it is dropped, like any unrelated member). The false
+/// branch drops derived members. `None` when no member is such a variable.
+fn narrow_type_variables_by_instanceof(
+    ty: &Type,
+    ctor_name: &str,
+    instance: Option<&Type>,
+    keep_matching: bool,
+) -> Option<Option<Type>> {
+    let members: Vec<Type> = match ty {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other.clone()],
+    };
+    let derived = |member: &Type| -> Option<bool> {
+        let Type::TypeParameter(parameter) = member else {
+            return None;
+        };
+        let constraint = surge_ts_types::type_variable::active_constraint(parameter)?;
+        Some(constraint.is_some_and(|constraint| {
+            constraint.is_type_variable()
+                || instanceof_matches_with_heritage(&constraint, ctor_name, instance) == Some(true)
+        }))
+    };
+    if members.iter().all(|member| derived(member).is_none()) {
+        return None;
+    }
+    let other_matched = members.iter().any(|member| match derived(member) {
+        Some(derived) => derived,
+        None => instanceof_matches_with_heritage(member, ctor_name, instance) == Some(true),
+    });
+    let instance = instance.filter(|instance| !instance.is_unknown());
+    let kept: Vec<Type> = members
+        .iter()
+        .filter_map(|member| match (derived(member), keep_matching) {
+            (Some(true), true) => Some(member.clone()),
+            (Some(false), true) if other_matched => None,
+            (Some(false), true) => Some(match instance {
+                Some(instance) => surge_ts_types::type_variable::intersect_type_variable(member, instance.clone()),
+                None => member.clone(),
+            }),
+            (Some(true), false) => None,
+            (Some(false), false) => Some(member.clone()),
+            (None, _) => match instanceof_matches_with_heritage(member, ctor_name, instance) {
+                Some(is_instance) => (is_instance == keep_matching).then(|| member.clone()),
+                None => Some(member.clone()),
+            },
+        })
+        .collect();
+    if kept.is_empty() {
+        return Some(Some(Type::Never));
+    }
+    if kept.len() == members.len() && kept.iter().zip(&members).all(|(kept, member)| kept == member) {
+        return Some(None);
+    }
+    Some(Some(union_type(kept)))
 }
 
 /// Parses an `x instanceof Ctor` guard, returning the operand expression and the

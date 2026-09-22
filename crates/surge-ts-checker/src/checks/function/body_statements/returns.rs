@@ -195,7 +195,7 @@ pub(crate) fn check_function_return_statement(
             // shape, so a mismatch reflects the modelling gap rather than the
             // source — the same deep guard the variable-declaration check
             // applies.
-            if source_type.is_unknown() {
+            if source_type.is_unmodelled() {
                 return;
             }
 

@@ -16,6 +16,17 @@ impl NullishTest {
         match member {
             Type::Null => self.null,
             Type::Undefined => self.undefined,
+            // `T & null` (a type variable narrowed by `typeof x === "object"`)
+            // has the facts of its nullish operand.
+            Type::Object(object) if surge_ts_types::type_variable::is_nullish_type_variable_intersection(member) => {
+                object.intersection_operands.as_deref().is_some_and(|operands| {
+                    operands.iter().any(|operand| match operand {
+                        Type::Null => self.null,
+                        Type::Undefined => self.undefined,
+                        _ => false,
+                    })
+                })
+            }
             _ => false,
         }
     }

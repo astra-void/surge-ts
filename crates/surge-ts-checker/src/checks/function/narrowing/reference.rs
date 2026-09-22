@@ -37,8 +37,13 @@ pub(super) enum ReferenceGuard<'a> {
         keep_matching: bool,
         test: super::guards::NullishTest,
     },
+    /// `declared` is the slot's declared type when the root has one: tsc's
+    /// `getAssignmentReducedType` reduces the *declared* type by what was
+    /// assigned, so a write after a guard (`if (!o.c) o.c = v`) is not stuck
+    /// with the guard's `undefined`.
     Assigned {
         assigned: &'a Type,
+        declared: Option<&'a Type>,
     },
     /// A user-defined type predicate applied to a property path
     /// (`ts.isStringLiteral(node.moduleSpecifier)`).
@@ -192,10 +197,14 @@ impl ReferenceGuard<'_> {
             // An assignment narrows a union-declared slot to the members the
             // assigned value can inhabit, as tsc does. A non-union slot is
             // already as precise as the declaration allows, so it is left alone.
-            Self::Assigned { assigned } => {
-                let effective = Self::effective_leaf_type(ty, optional);
+            Self::Assigned { assigned, declared } => {
+                let effective = match declared {
+                    Some(declared) => (*declared).clone(),
+                    None => Self::effective_leaf_type(ty, optional),
+                };
                 let Type::Union(union) = &effective else {
-                    return None;
+                    return (declared.is_some() && (optional || effective != *ty) && !effective.is_unmodelled())
+                        .then_some((effective, false));
                 };
                 // Same scan-before-clone rule as the truthiness split: an
                 // assignment that rules nothing out must not rebuild the union.
@@ -510,7 +519,34 @@ pub(crate) fn narrow_assignment_target_in_scope(
     if path.is_empty() {
         return;
     }
-    narrow_reference_in_scope(&base, &path, ReferenceGuard::Assigned { assigned }, scopes);
+    let declared = scopes
+        .visible_symbols()
+        .declared_type(&base)
+        .and_then(|declared| declared_path_type(declared, &path));
+    narrow_reference_in_scope(
+        &base,
+        &path,
+        ReferenceGuard::Assigned { assigned, declared: declared.as_ref() },
+        scopes,
+    );
+}
+
+/// The declared type of the property `path` reaches from a root's declared
+/// type, when every link is a plain property of an object.
+fn declared_path_type(declared: &Type, path: &[String]) -> Option<Type> {
+    let mut current = declared.clone();
+    for name in path {
+        let Type::Object(object) = current.peeled() else {
+            return None;
+        };
+        let property = object.properties.get(name.as_str())?;
+        current = if property.optional {
+            union_type(vec![property.ty.clone(), Type::Undefined])
+        } else {
+            property.ty.clone()
+        };
+    }
+    Some(current)
 }
 
 /// Applies `guard` to `base`'s `path` in the *current* scope frame — see the

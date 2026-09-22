@@ -14,9 +14,15 @@ pub struct NumberLiteralType {
 /// a per-declaration identity here would make those tuples stop colliding and
 /// the cache hit *less*. Any consumer that keys on this must therefore establish
 /// that two declarations' same-named parameters cannot meet inside one key.
+///
+/// `owner` is `0` for such a placeholder. A nonzero `owner` makes it a type
+/// variable of the generic body being checked (see [`crate::type_variable`]);
+/// those never reach an instantiation key, because a body's resolutions are
+/// context-dependent and not interned.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeParameterType {
     pub name: std::sync::Arc<str>,
+    pub owner: u32,
 }
 
 /// A tuple with a rest slot: `[1, ...number[]]`, `[...string[], 'end']`,
@@ -189,6 +195,7 @@ impl Type {
     pub fn type_parameter(name: &str) -> Type {
         Type::TypeParameter(TypeParameterType {
             name: std::sync::Arc::from(name),
+            owner: 0,
         })
     }
 
@@ -349,7 +356,8 @@ impl Type {
                         .or_else(|| object.construct_signature())?;
                     function_property_access_type(signature, name)
                 })
-                .or_else(|| object.intersected_primitive()?.get_property_access_type(name)),
+                .or_else(|| object.intersected_primitive()?.get_property_access_type(name))
+                .or_else(|| narrowed_type_variable_member(object, name)),
             Type::Array(element) => array_property_access_type(name, element.as_ref()),
             // A tuple is an array, so it carries every `Array.prototype` method
             // (`includes`, `map`, …) over the union of its element types — not just
@@ -479,6 +487,17 @@ impl Type {
             Type::Object(object) => {
                 if let Some(alias_name) = &object.alias_name {
                     return alias_name.to_string();
+                }
+                // A narrowed type variable (`T & string`) has no members of its
+                // own; its operands are the whole type.
+                if object.is_intersection
+                    && object.properties.is_empty()
+                    && object.string_index_type.is_none()
+                    && object.number_index_type.is_none()
+                    && let Some(operands) = object.intersection_operands.as_deref()
+                    && operands.iter().any(|operand| matches!(operand, Type::TypeParameter(_)))
+                {
+                    return operands.iter().map(Type::name).collect::<Vec<_>>().join(" & ");
                 }
                 return object_structural_name(object);
             }
@@ -1365,4 +1384,20 @@ pub fn is_global_function_interface(ty: &Type) -> bool {
         }
         _ => false,
     }
+}
+
+/// A member of a type variable narrowed to `T & X` (see
+/// `type_variable::intersect_type_variable`): the variable's constraint and the
+/// other operands answer it, as the intersection's apparent members do in tsc.
+fn narrowed_type_variable_member(object: &crate::ObjectType, name: &str) -> Option<Type> {
+    if !object.is_intersection || !object.properties.is_empty() {
+        return None;
+    }
+    let operands = object.intersection_operands.as_deref()?;
+    operands.iter().find_map(|operand| match operand {
+        Type::TypeParameter(parameter) => {
+            crate::type_variable::active_constraint(parameter)??.get_property_access_type(name)
+        }
+        other => other.get_property_access_type(name),
+    })
 }

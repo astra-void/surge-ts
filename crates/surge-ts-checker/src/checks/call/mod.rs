@@ -145,7 +145,10 @@ pub(crate) fn check_call_like_with_expected_type(
         evaluate_arguments_under_degraded_callee(callee_name, arguments, symbols, ctx);
         return None;
     }
-    if symbol.ty.is_unknown() {
+    // A type variable narrowed to `T & X` is called through its constraint's
+    // signatures in tsc; surge does not model those, so it is called like the
+    // bare variable.
+    if symbol.ty.is_unknown() || surge_ts_types::type_variable::is_narrowed_type_variable(&symbol.ty) {
         evaluate_arguments_under_degraded_callee(callee_name, arguments, symbols, ctx);
         return None;
     }

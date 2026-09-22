@@ -177,6 +177,7 @@ pub(crate) fn extend_substitution_with_type_parameters(
             None if parameter.constraint.is_none() => {
                 Type::TypeParameter(surge_ts_types::TypeParameterType {
                     name: parameter.name.as_str().into(),
+                    owner: 0,
                 })
             }
             None => Type::Unknown,

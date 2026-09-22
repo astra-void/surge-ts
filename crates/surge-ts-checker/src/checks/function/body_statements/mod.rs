@@ -52,6 +52,7 @@ pub(crate) fn check_function_variable_declaration(
         {
             Some(Type::TypeParameter(surge_ts_types::TypeParameterType {
                 name: named.name.as_str().into(),
+                owner: 0,
             }))
         }
         _ => None,

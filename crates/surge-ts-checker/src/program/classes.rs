@@ -596,12 +596,32 @@ pub(crate) fn build_class_value_symbol_with_scope(
     let static_type = ObjectType::new(properties, None)
         .with_construct_signature(construct_signature)
         .with_alias_name(format!("typeof {}", class.name));
+    // tsc's `getBaseTypeVariableOfClass`: a class extending a value typed by a
+    // type variable is `typeof C & T` — the mixin idiom returns it as `T`.
+    let static_type = match base_type_variable(class, scope, ctx) {
+        Some(variable) => static_type
+            .with_intersection_marker()
+            .with_intersection_operands(vec![variable]),
+        None => static_type,
+    };
 
     SymbolInfo {
         ty: Type::Object(static_type),
         kind: SymbolKind::Const,
         function_signature: None,
     }
+}
+
+fn base_type_variable(
+    class: &ParsedClassDeclaration,
+    scope: Option<&SymbolTable>,
+    ctx: &CheckerContext,
+) -> Option<Type> {
+    let base = class.extends.first()?;
+    let symbol = scope
+        .and_then(|scope| scope.get(&base.name))
+        .or_else(|| ctx.symbols.get(&base.name))?;
+    symbol.ty.is_type_variable().then(|| symbol.ty.clone())
 }
 
 /// The base class's static members, as the starting point for a derived class's
@@ -753,12 +773,36 @@ fn syntactic_initializer_type(initializer: &surge_ts_syntax::ParsedExpression, k
     })
 }
 
+/// Inside its own body a generic class's instance is `C<T, …>` over its type
+/// variables when they are bound (tsc's `this` type is the class instantiated
+/// with its own parameters); otherwise the bare reference, as before.
 fn class_instance_type(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) -> Type {
+    let own_arguments_bound = !class.type_parameters.is_empty()
+        && class.type_parameters.iter().all(|parameter| {
+            parameter.name_span.is_some_and(|span| {
+                surge_ts_types::type_variable::variable_for_declaration(&ctx.file_name, span.start as u32).is_some()
+            })
+        });
+    let type_arguments = if own_arguments_bound {
+        class
+            .type_parameters
+            .iter()
+            .map(|parameter| {
+                ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+                    name: parameter.name.clone(),
+                    span: None,
+                    type_arguments: Vec::new(),
+                }))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     map_parsed_type(
         ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
             name: class.name.clone(),
             span: class.name_span,
-            type_arguments: Vec::new(),
+            type_arguments,
         })),
         ctx,
     )
@@ -1251,6 +1295,7 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
     // A class type parameter is in scope throughout its members, so the bodies
     // are checked under it; without the scope every annotation naming one
     // resolves to nothing.
+    let _type_variables = crate::checks::function::enter_body_type_variables(&class.type_parameters, ctx);
     crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
         check_class_member_bodies(class, ctx)
     });
@@ -1369,6 +1414,8 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
                 ctx.super_constructor_type = outer_super_constructor;
             }
             ParsedClassMember::Method(method) => {
+                let _type_variables =
+                    crate::checks::function::enter_body_type_variables(&method.type_parameters, ctx);
                 let function_type = map_function_signature(
                     &method.parameters,
                     method.return_type.as_ref(),

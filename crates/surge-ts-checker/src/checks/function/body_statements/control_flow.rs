@@ -487,7 +487,18 @@ pub(crate) fn check_function_for_of_statement(
                     ctx,
                 );
             }
-            element_type = Type::String;
+            // Over a type variable tsc binds the generic `Extract<keyof T,
+            // string>` (`getIndexTypeOrString`), which a write through it
+            // defers on rather than landing on an index signature; surge has
+            // no such type, and over a shape it could not model it cannot tell.
+            element_type = match &iterable_type {
+                InferredExpression::Known(iterable_type)
+                    if iterable_type.is_type_variable() || iterable_type.is_unmodelled() =>
+                {
+                    Type::Unknown
+                }
+                _ => Type::String,
+            };
             numeric_property_names = matches!(
                 &iterable_type,
                 InferredExpression::Known(iterable_type)

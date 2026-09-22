@@ -80,7 +80,7 @@ pub(crate) fn report_initializer_mismatch(
         inferred_initializer_type,
         declared_type,
     );
-    if inferred_initializer_type.is_unknown()
+    if inferred_initializer_type.is_unmodelled()
         || (type_contains_unknown(declared_type) && !definite_mismatch)
         || crate::checks::call::as_source(|| type_contains_unknown(inferred_initializer_type))
         || crate::checks::call::is_open_instantiation(inferred_initializer_type)

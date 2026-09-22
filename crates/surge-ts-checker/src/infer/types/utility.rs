@@ -666,6 +666,11 @@ pub(crate) fn resolve_readonly_utility_type(
 /// becomes the readonly shape; a union distributes (the mapped type is
 /// homomorphic); anything else is itself.
 fn readonly_shape(source: &Type) -> Type {
+    // A mapped type over a type variable stays deferred in tsc; surge does not
+    // model that, and the variable itself would claim to be it.
+    if source.is_type_variable() {
+        return Type::Unknown;
+    }
     match source.peeled() {
         Type::Object(object_type) => {
             let mut properties = PropertyMap::default();
