@@ -540,6 +540,7 @@ impl Project {
             allow_importing_ts_extensions: loaded.compiler_options.allow_importing_ts_extensions,
             no_unused_locals: loaded.compiler_options.no_unused_locals,
             no_unused_parameters: loaded.compiler_options.no_unused_parameters,
+            allow_unreachable_code: loaded.compiler_options.allow_unreachable_code,
             no_lib: loaded.compiler_options.no_lib,
             skip_lib_check: loaded.compiler_options.skip_lib_check,
             stub_external_modules: options.stub_external_modules,

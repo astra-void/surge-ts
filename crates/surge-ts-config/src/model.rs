@@ -45,6 +45,8 @@ pub struct NormalizedCompilerOptions {
     pub no_unused_locals: bool,
     /// `compilerOptions.noUnusedParameters`. Independent of `strict`; defaults off.
     pub no_unused_parameters: bool,
+    /// `compilerOptions.allowUnreachableCode`, set only when written `true`.
+    pub allow_unreachable_code: bool,
     pub target: ScriptTarget,
     pub module: ModuleKind,
     pub module_resolution: ModuleResolutionKind,
@@ -104,6 +106,7 @@ impl Default for NormalizedCompilerOptions {
             allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
+            allow_unreachable_code: false,
             target: ScriptTarget::ES2024,
             module: ModuleKind::Preserve,
             module_resolution: ModuleResolutionKind::Bundler,

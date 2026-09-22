@@ -955,6 +955,9 @@ fn grammar_finding_diagnostic(
         Kind::DuplicateImplementation => Diagnostic::ts2393(ctx.file_name.clone()),
         Kind::MultipleConstructorImplementations => Diagnostic::ts2392(ctx.file_name.clone()),
         Kind::MissingSuperCall => Diagnostic::ts2377(ctx.file_name.clone()),
+        // `checkBinaryLikeExpression` reports it only when unreachable code is
+        // not explicitly allowed.
+        Kind::UnusedCommaOperand if ctx.options.allow_unreachable_code => return None,
         Kind::UnusedCommaOperand => Diagnostic::ts2695(ctx.file_name.clone()),
         Kind::AlwaysTruthyExpression => Diagnostic::ts2872(ctx.file_name.clone()),
         Kind::AlwaysFalsyExpression => Diagnostic::ts2873(ctx.file_name.clone()),

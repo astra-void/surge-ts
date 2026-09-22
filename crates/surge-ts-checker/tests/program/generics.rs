@@ -1071,6 +1071,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
+            allow_unreachable_code: false,
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
