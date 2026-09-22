@@ -155,9 +155,10 @@ pub(crate) fn check_function_return_statement(
 
     match inferred_expression {
         InferredExpression::Known(source_type) => {
-            ctx.note_contextual_return_type(&source_type);
             // tsc's `unwrapReturnType`: an async function relates the awaited
-            // value to the awaited return type.
+            // value to the awaited return type, and that is what its body is
+            // taken to return (`return this.p` of a `Promise<void>` is a
+            // void-like return under `noImplicitReturns`).
             let unwrapped_return_type;
             let (source_type, return_type) = if ctx.in_async_body {
                 unwrapped_return_type = crate::checks::call::awaited_type(return_type);
@@ -165,6 +166,7 @@ pub(crate) fn check_function_return_statement(
             } else {
                 (source_type, return_type)
             };
+            ctx.note_contextual_return_type(&source_type);
             // A sentinel anywhere in either side means surge lost part of the
             // shape, so a mismatch reflects the modelling gap rather than the
             // source — the same deep guard the variable-declaration check

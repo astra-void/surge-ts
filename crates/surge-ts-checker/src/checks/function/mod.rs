@@ -1077,11 +1077,11 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     && !is_generator
                     && !body_flow.guarantees_exit
                     && !body_flow.guarantees_value_return
-                    && should_check_missing_return(&return_type)
+                    && should_check_missing_return(&body_return_type)
                 {
                     emit_missing_return_diagnostic(
                         body_flow,
-                        &return_type,
+                        &body_return_type,
                         return_type_span.or(arrow_span),
                         ctx,
                     );

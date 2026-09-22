@@ -849,13 +849,20 @@ pub(crate) fn promise_of(value: &Type, ctx: &mut CheckerContext) -> Type {
     if !promise_nominal_enabled() {
         return value.clone();
     }
-    let value = awaited_type(value);
+    // Unwrapped by its rendering alone: forcing a lazy value (`awaited_type`
+    // peels for a thenable) resolves it here, outside the scope that binds
+    // the names it was written in (`core.output<typeof schema>` inside the
+    // arrow whose parameter `schema` is).
+    let value = promise_like_awaited_type(value);
     if value.is_unknown() {
         return value;
     }
-    const SLOT: &str = "__surge_promised";
+    // The slot is named after the value: a reference renders its written
+    // argument, and the instantiation is cached by its resolved arguments, so
+    // any other name would be the display every later `Promise<value>` gets.
+    let slot = value.name();
     let mut substitution = crate::infer::TypeParameterSubstitution::new();
-    substitution.insert(SLOT.to_string(), value.clone());
+    substitution.insert(slot.clone(), value.clone());
     let named = |name: &str, type_arguments| {
         ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
             name: name.to_string(),
@@ -865,7 +872,7 @@ pub(crate) fn promise_of(value: &Type, ctx: &mut CheckerContext) -> Type {
     };
     let reported = ctx.diagnostics().len();
     let promise = crate::infer::map_parsed_type_with_substitution(
-        named("Promise", vec![named(SLOT, Vec::new())]),
+        named("Promise", vec![named(&slot, Vec::new())]),
         ctx,
         &substitution,
     );

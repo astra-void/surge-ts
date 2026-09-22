@@ -1701,10 +1701,17 @@ pub(crate) fn check_function_body_with_signature_and_this(
         }
         _ => body_flow,
     };
-    if has_explicit_return_type && should_check_missing_return(function_type.return_type()) {
+    // tsc's `unwrapReturnType`: an async body owes the awaited return type,
+    // so `async (): Promise<void>` with no `return` is exempt like `(): void`.
+    let unwrapped_return_type = if is_async && !is_generator {
+        crate::checks::call::awaited_type(function_type.return_type())
+    } else {
+        function_type.return_type().clone()
+    };
+    if has_explicit_return_type && should_check_missing_return(&unwrapped_return_type) {
         emit_missing_return_diagnostic(
             body_flow,
-            function_type.return_type(),
+            &unwrapped_return_type,
             missing_return_span,
             ctx,
         );

@@ -961,6 +961,10 @@ fn parameter_carries_degraded_unknown(ty: &Type, depth: usize) -> bool {
             .types()
             .iter()
             .any(|member| parameter_carries_degraded_unknown(member, depth + 1)),
+        // A generic member signature carries the sentinel where its own type
+        // parameters were erased; that is a bound name, not a hole (see the
+        // same arm in the checker's return walker).
+        Type::Function(function) if function.type_parameter_head().is_some() => false,
         Type::Function(function) => {
             function
                 .parameters()

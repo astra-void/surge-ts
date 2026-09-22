@@ -2393,6 +2393,28 @@ pub(crate) fn collect_inferred_type_argument(
             }
         }
         ParsedType::Union(expected_types) => {
+            // `T | PromiseLike<T>` (the lib's `then` callbacks, `Awaited`-style
+            // parameters): a promise argument infers `T` from what it resolves
+            // to, never as the whole promise — tsc pairs it with the
+            // `PromiseLike<T>` member first (`inferToMultipleTypes` infers to
+            // every structured member before a naked one records the source),
+            // and what remains for the naked `T` is the awaited value.
+            if let Some(promised) = promise_like_member_target(expected_types)
+                && crate::checks::call::promise_nominal_enabled()
+            {
+                let awaited = crate::checks::call::awaited_type(argument_type);
+                if awaited != *argument_type {
+                    collect_inferred_type_argument(
+                        promised,
+                        &awaited,
+                        substitution,
+                        widen_literals,
+                        ctx,
+                        depth,
+                    );
+                    return;
+                }
+            }
             // A union carries no member order, so zipping positionally is only
             // meaningful when every member has a shape to pin it to. Once the
             // union mixes a naked type parameter with structured members
@@ -2529,6 +2551,41 @@ fn is_conditional_alias_reference(member: &ParsedType, ctx: &CheckerContext) -> 
         matches!(handle.get(), TypeDeclarationInfo::Alias(info)
             if matches!(info.body.ty, ParsedType::Conditional(_)))
     })
+}
+
+/// The `T` of a `T | PromiseLike<T>` / `T | Promise<T>` union, when the union
+/// has exactly that shape.
+fn promise_like_member_target(members: &[ParsedType]) -> Option<&ParsedType> {
+    let [first, second] = members else {
+        return None;
+    };
+    fn promised(member: &ParsedType) -> Option<&ParsedType> {
+        match member {
+            ParsedType::Named(named)
+                if matches!(named.name.as_str(), "PromiseLike" | "Promise")
+                    && named.type_arguments.len() == 1 =>
+            {
+                Some(&named.type_arguments[0])
+            }
+            _ => None,
+        }
+    }
+    // Written twice, so compared by name: the spans differ.
+    fn bare_name(member: &ParsedType) -> Option<&str> {
+        match member {
+            ParsedType::Named(named) if named.type_arguments.is_empty() => Some(&named.name),
+            _ => None,
+        }
+    }
+    match (promised(first), promised(second)) {
+        (Some(inner), None) if bare_name(inner).is_some() && bare_name(inner) == bare_name(second) => {
+            Some(second)
+        }
+        (None, Some(inner)) if bare_name(inner).is_some() && bare_name(inner) == bare_name(first) => {
+            Some(first)
+        }
+        _ => None,
+    }
 }
 
 fn is_naked_type_parameter(member: &ParsedType, substitution: &TypeParameterSubstitution) -> bool {
