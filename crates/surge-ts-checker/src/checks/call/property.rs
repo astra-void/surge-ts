@@ -353,6 +353,13 @@ pub(crate) fn check_property_call_like(
     {
         return check_promise_resolve_call(arguments, expected_return_type, symbols, ctx);
     }
+    if property_name == "race"
+        && type_arguments.is_empty()
+        && is_promise_all_receiver(&object_ty)
+        && let Some(result) = check_promise_race_call(arguments, symbols, ctx)
+    {
+        return Some(result);
+    }
     // `Promise.reject(reason)` is a `Promise<never>`. Only with the promise
     // kept as a type: collapsed, it would be a bare `never`, and a call typed
     // `never` ends the flow it sits in.

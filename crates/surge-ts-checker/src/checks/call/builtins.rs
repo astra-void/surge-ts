@@ -264,6 +264,55 @@ pub(crate) fn check_promise_resolve_call(
     }
 }
 
+/// `Promise.race([a, b])`: a promise of what any one element awaits to — the
+/// union the lib's `Awaited<T[number]>` names over an array-literal argument.
+pub(crate) fn check_promise_race_call(
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let [argument] = arguments else {
+        return None;
+    };
+    let ParsedExpression::ArrayLiteral { elements, .. } = &argument.expression else {
+        return None;
+    };
+    if elements.is_empty() || elements.iter().any(|element| element.spread) {
+        return None;
+    }
+    let _ = evaluate_expression_with_expected_type(
+        &argument.expression,
+        argument.span,
+        None,
+        ExpectedTypeDiagnostic::ArgumentNotAssignable,
+        symbols,
+        ctx,
+    );
+    let reported = ctx.diagnostics().len();
+    let mut awaited = Vec::with_capacity(elements.len());
+    for element in elements {
+        match crate::infer::infer_expression(&element.expression, symbols, ctx) {
+            // An element's fresh literal widens as an inferred `T` does
+            // (`[p, 1]` races to `string | number`); `as const` keeps it.
+            InferredExpression::Known(ty) if !ty.is_unknown() => {
+                awaited.push(super::awaited_type(
+                    &crate::checks::var::widen_implicit_variable_initializer_type(
+                        crate::symbols::SymbolKind::Let,
+                        &element.expression,
+                        &ty,
+                    ),
+                ));
+            }
+            _ => {
+                ctx.truncate_diagnostics(reported);
+                return None;
+            }
+        }
+    }
+    ctx.truncate_diagnostics(reported);
+    Some(super::promise_of(&surge_ts_types::union_type(awaited), ctx))
+}
+
 pub(crate) fn check_promise_all_call(
     arguments: &[ParsedCallArgument],
     call_span: Option<SyntaxTextSpan>,

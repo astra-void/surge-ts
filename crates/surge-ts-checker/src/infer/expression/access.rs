@@ -530,14 +530,16 @@ pub(crate) fn infer_property_call(
     // `Promise.all` / `Promise.resolve` are typed by their own rules on the
     // checked path; the inferred path — a destructuring initializer takes it —
     // has to answer the same type, without reporting anything itself.
-    if (property_name == "all"
+    if (matches!(property_name, "all" | "race")
         || (property_name == "resolve" && crate::checks::call::promise_nominal_enabled()))
         && type_arguments.is_empty()
         && !arguments.iter().any(|argument| argument.spread)
         && crate::checks::call::is_promise_all_receiver(&object_type)
     {
         let reported = ctx.diagnostics().len();
-        let result = if property_name == "all" {
+        let result = if property_name == "race" {
+            crate::checks::call::check_promise_race_call(arguments, symbols, ctx)
+        } else if property_name == "all" {
             (!arguments.is_empty())
                 .then(|| crate::checks::call::check_promise_all_call(arguments, None, None, symbols, ctx))
                 .flatten()
