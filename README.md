@@ -127,52 +127,41 @@ diagnostics output, is documented in [PUBLIC_API.md](PUBLIC_API.md).)
 
 ## Status at a glance
 
-Verified at commit `f841633` on 2026-09-08 (Apple M1 Pro, macOS 27.0, release
-build, TypeScript 7.0.2 oracle). The full snapshot, including the measurement
-caveats, is in [CURRENT_STATUS.md](CURRENT_STATUS.md); the numbers below are
-carried from it rather than re-measured here.
-
-| Gate | Result |
-| --- | ---: |
-| Workspace tests (`cargo nextest run --workspace`) | 1859 / 1859 |
-| Oracle preset sweep, normal gate | 148 / 148 |
-| Oracle preset sweep, `--strictMessages` | 148 / 148 |
-| Oracle preset sweep, `--strictSpans` | 148 / 148 |
-| Real projects at exact parity | ky 0/0, unnamed 0/0, ofetch 1/1, zod 21/21 |
+The current gate results — workspace tests, the oracle preset sweep under the
+normal gate and both strict flags, and every real-project corpus — are recorded
+in [CURRENT_STATUS.md § Verification snapshot](CURRENT_STATUS.md#verification-snapshot)
+together with the commit they were measured at. They are volatile, so they live
+there and nowhere else.
 
 The normal gate is diagnostic code-count and file/code/line parity against the
 upstream compiler. Message text and span/column are separate, non-gating
-dimensions; both are green across the registered presets at this commit, which
-is a statement about those fixtures and not about arbitrary code. A new preset
-can record drift without failing CI, and the closed deltas are kept in
-[STRICT_DRIFT_INVENTORY.md](STRICT_DRIFT_INVENTORY.md).
+dimensions: a preset can record drift without failing CI, and the drift that
+currently exists is listed in [STRICT_DRIFT_INVENTORY.md](STRICT_DRIFT_INVENTORY.md).
 
 Projects where `tsc` reports zero diagnostics are pinned as **false-positive
 corpora**, with gates of different strength: `pnpm run real:ky:test` asserts
 exact 0/0, so any surge diagnostic fails it, while `pnpm run real:unnamed:test`
-asserts a count ceiling (a ratchet that only moves down) and currently sits at
-0. Both skip cleanly when the checkout or the `typescript` package is absent.
-What this evidence does *not* establish is full TypeScript compatibility —
-projects outside the covered surface can and do drift, and the known gaps are
-tracked openly in [CURRENT_STATUS.md](CURRENT_STATUS.md) and
-[REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md). tRPC is a measured workload,
-never a parity claim.
+asserts a count ceiling (a ratchet that only moves down). Both skip cleanly
+when the checkout or the `typescript` package is absent, and a skipped gate is
+not a passing gate. What this evidence does *not* establish is full TypeScript
+compatibility — projects outside the covered surface can and do drift, and the
+known gaps are tracked openly in [CURRENT_STATUS.md](CURRENT_STATUS.md#known-limitations)
+and [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md). tRPC is a measured
+workload, never a parity claim.
 
 ## Performance
 
-One recorded workload, measured at commit `f841633` on an Apple M1 Pro: the
-tRPC monorepo (checkout `dfbafa8`) checks in roughly **5 s** at `--jobs auto`
-with a ~1.09 GB peak physical footprint. Absolute wall figures move between
-measurement rounds with machine load — only interleaved A/B pairs taken in one
-session compare, and peak RSS on this workload varies ±30–50% run to run
-without that discipline.
+The last recorded measurement — one workload (the tRPC monorepo) on one
+machine at one commit — is in
+[CURRENT_STATUS.md § Current performance state](CURRENT_STATUS.md#current-performance-state),
+with its caveats. It is not a compiler comparison and does not transfer across
+projects, hardware, allocators, or build profiles; only interleaved A/B pairs
+taken in one session compare, and peak RSS on that workload varies ±30–50% run
+to run without that discipline.
 
-This is one project on one machine at one commit — not a compiler comparison,
-and not transferable across projects, hardware, allocators, or build profiles.
 What *is* a property rather than a measurement: repeated runs render
 byte-identical diagnostics, and `--jobs 1` and `--jobs auto` produce identical
-output. Numbers, caveats, and reproduction steps:
-[CURRENT_STATUS.md](CURRENT_STATUS.md) and [BENCHMARKS.md](BENCHMARKS.md).
+output. Methodology and reproduction steps: [BENCHMARKS.md](BENCHMARKS.md).
 
 ## Architecture overview
 

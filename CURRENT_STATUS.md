@@ -20,12 +20,12 @@ than copying them.
 
 | Field | Value |
 | --- | --- |
-| Date | 2026-09-07 |
-| Commit | `f841633` (clean checkout; built and measured from a detached worktree at that commit) |
+| Date | 2026-09-22 |
+| Commit | `7ea0cddb` (clean checkout; release CLI built in a detached worktree at that commit, frozen copy passed to the harness with `SURGE_TS_BIN`) |
 | Hardware | Apple M1 Pro (MacBookPro18,1), 10 cores, 16 GiB RAM |
-| OS | macOS 27.0 (build 26A5425a) |
-| Toolchain | rustc 1.94.0, Node v22.23.2, pnpm 11.13.0, TypeScript oracle 7.0.2 |
-| Build profile | cargo `release` (`lto = "fat"`, `codegen-units = 1`), system allocator |
+| OS | macOS 27.0 (build 26A428) |
+| Toolchain | rustc 1.98.1, Node v22.23.2, TypeScript oracle 7.0.2; harness scripts invoked through `node_modules/.bin/tsx` (the same entry points the `pnpm run` scripts call) |
+| Build profile | cargo `release` (`lto = "fat"`, `codegen-units = 1`), default `mimalloc` allocator |
 
 Commands run for this snapshot are listed in [§ How to re-verify](#how-to-re-verify).
 
@@ -37,38 +37,40 @@ detached worktree at the commit you intend to cite and point the harness at it
 with `SURGE_TS_BIN`, so an in-progress working tree cannot leak into a recorded
 number.
 
-**The regression this snapshot opened is closed.** tRPC's peak memory footprint
-and wall time roughly doubled at `4b3bcc0` and are back to their pre-`4b3bcc0`
-level at this commit; the bisect and the before/after are in
-[§ Current performance state](#current-performance-state).
+**Fixtures come from the commit, too.** The sweep reads presets from the tree
+it runs in. During this snapshot one preset (`block-arrow-return-basic`) was
+being edited, uncommitted, in the primary working tree; run there it failed the
+normal gate, and run against the committed fixture (extracted with `git
+archive 7ea0cddb`) it passes. The numbers below use the committed fixture.
 
 ### Gates
 
 | Gate | Command | Result |
 | --- | --- | ---: |
-| Workspace tests | `cargo nextest run --workspace` | **1938 / 1939 passed** — `any_member_produces_no_degraded_interface_resolutions`, a counter-based invariant (`an any member must not degrade any interface resolution`), is at 3 of 14; bisected to `6e097c69`, whose deferral of a non-distributive conditional with an unresolved parameter interacts with the `any`-member guards |
+| Workspace tests | `cargo nextest run --workspace` | **not measured** for this snapshot. The last clean result recorded here was 1938 / 1939 at `f841633` (2026-09-07); it does not describe `7ea0cddb`. |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
-| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **225 / 225 passed** |
-| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **224 / 225 passed** — one message drift, see below |
-| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **225 / 225 passed** |
-| Oracle preset sweep — both strict flags | same + both | **224 / 225 passed** — the same drift |
+| Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **387 / 387 passed** |
+| Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **371 / 387 passed** — 16 message drifts, see below |
+| Oracle preset sweep — `--strictSpans` | same + `--strictSpans` | **385 / 387 passed** — 2 span drifts |
+| Oracle preset sweep — both strict flags | same + both | **370 / 387 passed** — the union of the two |
 | Real-project gate — ky (exact 0/0) | `pnpm run real:ky:test` | **3 / 3 passed** |
-| Real-project gate — unnamed (ceiling of 34) | `pnpm run real:unnamed:test` | **2 / 2 passed** — at 0 of 34 |
+| Real-project gate — unnamed (ceiling of 34) | `pnpm run real:unnamed:test` | **2 / 2 passed** — at **11** of 34 (see [§ Real-project compatibility](#real-project-compatibility)) |
 
 The normal gate compares **diagnostic code counts** and **file/code/line**
-parity against the upstream TypeScript compiler. Across all 225 presets the
-sweep saw 342 `tsc` diagnostics and 342 `surge-ts` diagnostics, with
-`onlyTsc = 0` and `onlyRust = 0`.
+parity against the upstream TypeScript compiler. Across all 387 presets the
+sweep saw 1,473 `tsc` diagnostics and matched every one at file/code/line.
 
-**Span/column matches on every registered preset; message text matches on all
-but one.** `declaration-flow-narrowing-basic` drifts under `--strictMessages`:
-surge names an assigned union `'"a" | "b"'` where tsc names it `'string'`, same
-file/code/line/column. It is the only drift in the sweep, it predates the
-2026-09-13 measurement, and the normal gate is unaffected. The strict flags are
-*separate dimensions* — a preset can reopen one without failing the normal gate
-— so their exit codes stay non-gating in CI. The 2026-09-01 drift inventory and
-the fixes that closed it are kept in
-[STRICT_DRIFT_INVENTORY.md § Current snapshot](STRICT_DRIFT_INVENTORY.md#current-snapshot-2026-09-03).
+**Strict drift has reopened on 17 presets.** It was zero on 2026-09-03 and one
+preset on 2026-09-07; the presets added since then were pinned at the normal
+gate, and 17 of them carry message-text or column drift at an already-correct
+file/code/line. They fall into a few classes — surge naming an alias or a
+`ReturnType<…>` where tsc prints the expansion (or the reverse), a fresh
+literal left unwidened in the message (`'2'` for `'number'`, `[boolean]` for
+`[true]`), and a degraded member rendered as `any` or `unknown`. The per-preset
+list is in
+[STRICT_DRIFT_INVENTORY.md § Current snapshot](STRICT_DRIFT_INVENTORY.md#current-snapshot-2026-09-22).
+The strict flags are *separate dimensions* — a preset can reopen one without
+failing the normal gate — so their exit codes stay non-gating in CI.
 
 `diagnostics-pack`, the compact emitted-diagnostic fixture, is green at **31/31**
 and passes the normal gate *and* both strict gates.
@@ -179,21 +181,23 @@ Summary of what backs it today:
 ## Real-project compatibility
 
 Measured with `pnpm run oracle:compare -- --project <tsconfig> --maxDiagnostics
-100000` at the snapshot commit against the pinned TypeScript 7.0.2 oracle.
-Detailed history, drift taxonomies, and burn-down records live in
+100000` at the snapshot commit (`7ea0cddb`, 2026-09-22) against the pinned
+TypeScript 7.0.2 oracle, one corpus at a time. "tsc-only" and "surge-only" count
+diagnostics, not locations, by file/code/line. Detailed history, drift
+taxonomies, and burn-down records live in
 [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md).
 
-| Project | Checkout | `tsc` | `surge-ts` | Verdict |
-| --- | --- | ---: | ---: | --- |
-| **ky** (sindresorhus/ky 2.0.2) | `3419113` | 0 | 0 | **exact** — strict false-positive gate |
-| **ofetch** (unjs/ofetch) | `1dbc37f` | 1 | 1 | **exact** — same file/code/line and message text (TS5108) |
-| **zod** | `912f0f5` | 21 | 21 | **exact** — same file/code/line and message text; the two surge-only `TS18046` the `trpc-fn-80` merge opened were closed by `2067888`, which gives a generic class a permissive static object when it declares a predicate or assertion static, so `z.ZodError.assert` narrows again |
-| **unnamed** (local Next.js App Router app) | local | 0 | 1 | **regressed, gate broken** — re-measured 2026-09-14 from a frozen binary at `a78ea118`: one surge-only `TS2353` (`app/[locale]/application/data-table.tsx:542`, a computed `[field]` key rejected against the target object type). It was 0/0 when last recorded; the regression predates the semantic-gate work and is not yet attributed to a commit. |
-| **trpc** | `dfbafa8` | 1244 | 1155 | surge-only **0**, `tsc`-only 89 — a false-positive gate with an inventoried false-negative side, **not** a parity claim (dirty-tree measurement, 2026-09-13, after the `trpc-fn-80` merge) |
-| **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 10 | **provisional** — false-positive burn-down list measured on a dirty tree, not a gate (see note) |
-| **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | **provisional** — 446 when first measured; the 1 that remains is surge-only, and the 2 `tsc`-only reports are 7.0.2-specific behaviour (union member order; `unknown` for a predicate inside `P.array`) that surge does not reproduce — see the 2026-09-13 note in REAL_PROJECT_COMPAT.md; under `SURGE_LOCAL_TYPE_DECLARATION_CHECKS=1` (body-local `Expect<Equal<…>>` assertions fire) the surge-only count is 7 after the 2026-09-13/14 follow-up (63 → 7; the six left are one `Chainable` alias-cycle degradation, see the note); dirty-tree measurement, not a gate (see note) |
-| **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | 16 | 4 | **newly provisioned, provisional** — 134 when first measured; all 4 are surge-only and the 16 `tsc` reports are unmatched; not a gate (see note) |
-| **zustand** (pmndrs/zustand 5.0.15) | `2115efb` | 0 | 37 | **provisional** — 136 when first measured, 42 when last recorded, **37** re-measured 2026-09-14 at `a78ea118`; clean under the oracle, so all 37 are surge-only false positives, and 27 of them are closed by one sealed gate; not a gate (see note) |
+| Project | Checkout | `tsc` | `surge-ts` | tsc-only / surge-only | Verdict |
+| --- | --- | ---: | ---: | ---: | --- |
+| **ky** (sindresorhus/ky 2.0.2) | `3419113` | 0 | 0 | 0 / 0 | **exact** — strict false-positive gate |
+| **ofetch** (unjs/ofetch) | `1dbc37f` | 1 | 1 | 0 / 0 | **exact** — same file/code/line and message text (TS5108) |
+| **zod** | `912f0f5` | 21 | 21 | 0 / 0 | **exact** — same file/code/line and message text |
+| **unnamed** (local Next.js App Router app) | `a5ece30` + 3 local edits dated 2026-09-01 | 0 | 11 | 0 / 11 | **regressed, inside the ceiling** — 1 when last recorded (2026-09-14, `a78ea118`). The checkout has not changed since 2026-09-01, so the 10 new reports are surge's; they are not yet attributed to a commit. `TS2532` ×4 in `components/ui/sidebar.tsx`, `TS2339` ×4 in `app/[locale]/application/data-table.tsx` plus the older `TS2353` at line 542, `TS2339` in `components/ui/input-otp.tsx`, `TS2344` in `components/ui/pagination.tsx`. |
+| **trpc** | `dfbafa8` | 1244 | 1218 | 34 / 8 | a false-positive gate with an inventoried false-negative side, **not** a parity claim; 89 / 0 when last recorded (2026-09-13). tsc-only by code: `TS2883` ×10, `TS7006` ×10, `TS2339`/`TS4111`/`TS2769`/`TS2554` ×2, one each of `TS2345`, `TS2322`, `TS2353`, `TS2578`, `TS4023`, `TS7031`. Surge-only: `TS7006`, `TS2538`, `TS2339`, `TS2322` ×2 each. |
+| **tanstack-query** (TanStack/query) | `cdbe8cb` | 0 | 8 | 0 / 8 | **provisional**, not a gate — 10 when last recorded |
+| **ts-pattern** (gvergnaud/ts-pattern 5.9.0) | `c92ca43` | 2 | 1 | 2 / 1 | **provisional**, not a gate — unchanged since 2026-09-13: the 1 is surge-only, and the 2 `tsc`-only reports are 7.0.2-specific behaviour (union member order; `unknown` for a predicate inside `P.array`) that surge does not reproduce — see the 2026-09-13 note in REAL_PROJECT_COMPAT.md |
+| **drizzle-orm** (drizzle-team/drizzle-orm 0.45.3) | `b786252` | — | — | — | **not measured — surge deadlocks.** The check thread blocks forever in module analysis (`collect_exportable_value_symbols`), re-entering a `LazyIntersectionMerge` whose `OnceLock` it is already initializing. Bisected to `2c25f3f4` (2026-09-17, the 148-file tsc check-porting landing; `f0eb22cb` finishes); `SURGE_EARLY_MODULE_LOCAL_VALUES=0` does not avoid it. It was 16 / 4 when last recorded (2026-09-13). **Fixed after this snapshot by `8f46a6d8`**; with the fix the corpus finishes in about 6 s but was not re-measured for this table, so no count is recorded here — the first run reports about 170 surge diagnostics, most from checks that landed while the hang hid the corpus, and that is a burn-down list, not a parity number. See [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#two-regressions-the-seven-corpus-checks-did-not-cover). |
+| **zustand** (pmndrs/zustand 5.0.15) | `2115efb` | 0 | 4 | 0 / 4 | **provisional**, not a gate — 37 when last recorded (2026-09-14); `TS2349` ×2 and `TS2554` ×2, all in `tests/` |
 
 Notes that matter:
 
@@ -426,60 +430,37 @@ Notes that matter:
 ## Known limitations
 
 Each entry below carries the date it was last reproduced or refuted against the
-oracle. Entries marked **2026-09-03** were re-probed at `f63641d` for this
-snapshot; entries marked **2026-09-01** are carried forward from the previous
-snapshot without re-verification and are labelled as such.
+oracle. Entries marked **2026-09-22** were re-probed at `7ea0cddb` with a
+reduced probe compared by `pnpm run oracle:compare`; anything older is carried
+forward without re-verification and says so.
 
 ### Confirmed current gaps
 
+- **`Promise<T>` is modelled as `T`.** *(reproduced 2026-09-22.)* With
+  `declare function f(): Promise<number>`, `const x: number = f()` is not
+  reported; `tsc` reports TS2322 (`Type 'Promise<number>' is not assignable to
+  type 'number'`). `await f()` is typed correctly. The lib generic is folded to
+  its awaited type, which is why un-awaited misuse is silent.
+- **A contextually typed block-body callback keeps the degradation
+  sentinel.** *(reproduced 2026-09-22.)* Block-bodied arrow and function
+  expressions take their return type from their `return` statements since
+  `7ea0cddb`, but only when no contextual type applies: `xs.map((x) => {
+  return String(x); })` assigned to `number[]` is not reported. Concise-body
+  callbacks are inferred.
 - **An arrow argument's body is inferred by the expression sketch, which
   cannot call a global or instantiate a member generic.** *(reproduced
-  2026-09-11 on the dirty tree over `6e034fd`.)* `declare function fn<T
-  extends Procedure = Procedure>(impl?: T): Mock<T>` called as
-  `fn((value: Date) => value.toISOString())` now binds `T` to the arrow's
-  signature on both paths (see
-  [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#closed-t-from-an-arrow-argument-2026-09-11)),
-  but `fn((n: number) => String(n))` and `fn(() => p.then(() => "x"))` still
-  yield a permissive result: the sketch resolves callees from the local table
-  only (`String` is an object with a call signature, not a function symbol)
-  and does not instantiate a member's type parameters. `const bad: number =
-  fn((n: number) => String(n))` is not reported.
-- **Overload resolution: the return type is selected, the no-match diagnostic
-  is not.** *(refuted in part 2026-09-13 on `7780246`, dirty tree.)* The
-  2026-09-03 example — `declare function f(a: string): string; declare
-  function f(a: number): number;` then `const bad: string = f(1)` — now reports
-  TS2322 like `tsc`: the arguments are checked once against the group's
-  permissive fold and the return type is the first overload's that accepts
-  them, at no measured CPU or memory cost (the branch that re-checked every
-  candidate, ~+79% CPU, was not rebased). What remains: a call matching *no*
-  overload keeps the fold's `TS2345`/`TS2322` where `tsc` reports `TS2769`,
-  and interface / type-literal method groups still resolve through the fold
-  alone. See
-  [REAL_PROJECT_COMPAT.md § Overload return selection](REAL_PROJECT_COMPAT.md#overload-return-selection-2026-09-13).
-- **Module augmentation is lost through a star re-export wrapper.**
-  *(re-probed 2026-09-03.)* With `declare module "core"` in a `.d.ts` and
-  `export * from "core"` in `wrapper`, importing the augmented interface from
-  `wrapper` yields the unaugmented shape (a surge-only excess/unknown-property
-  error), while importing from `core` directly is correct.
-- **An augmented *base* interface is not seen through a derived one.**
-  *(reproduced 2026-09-11 on the dirty tree over `6e034fd`.)* With
-  `declare module "./generated" { interface BaseNode { parent: Node } }` and
-  `interface Identifier extends BaseNode`, `id.parent` is a surge-only TS2339.
-  Augmenting `Identifier` itself works — an augmentation merges into the
-  per-import export table, while heritage resolves the base in the declaring
-  file's own scope, which carries no augmentation. This is what hides `parent`
-  on every `@typescript-eslint` AST node. The *relative specifier* half of the
-  same gap is fixed — see
-  [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#half-closed-a-relative-declare-module-sibling-augmentation-2026-09-11).
-- **`typeof import("pkg")` in a type alias does not resolve.** *(re-probed
-  2026-09-03.)* `type T = typeof import("./dep")` leaves `T` unbound: TS2304 at
-  the alias use site. Dynamic `import()` and `import("m").T` are parser gaps as
-  well.
+  2026-09-22.)* `declare function fn<T extends (...a: any[]) => any>(impl?: T):
+  T` called as `const bad: number = fn((n: number) => String(n))` is not
+  reported. See
+  [REAL_PROJECT_COMPAT.md](REAL_PROJECT_COMPAT.md#closed-t-from-an-arrow-argument-2026-09-11)
+  for the half that is closed.
+- **`import("m").T` type queries and dynamic `import()` are not typed.**
+  *(reproduced 2026-09-22.)* `const bad: import("./dep").T = { a: 1 }` and
+  `const s: string = (await import("./dep")).v` are both missed. `typeof
+  import("./dep")` in a type alias *does* resolve now (see below).
 - **Generic JSX components: type-parameter-dependent prop mismatches are
-  missed.** *(2026-09-01, not re-probed at this commit.)*
-  `<List<string> items={[1]} />` is accepted; non-generic props on generic
-  components *are* checked. Explicit-type-argument and value-inference paths in
-  the registered React fixtures are correct.
+  missed.** *(reproduced 2026-09-22.)* `<List<string> items={[1]} />` is
+  accepted; non-generic props on generic components *are* checked.
 - **Project references, incremental checking, and watch mode are not
   implemented.** *(re-probed 2026-09-03.)* There is no `--build`, `--watch`, or
   `--incremental` flag; every run is a full project check.
@@ -491,6 +472,28 @@ snapshot without re-verification and are labelled as such.
   [crates/surge-ts/MODULE_RESOLUTION.md](crates/surge-ts/MODULE_RESOLUTION.md).
 - **Full `lib.d.ts` / DOM / Node / React parity** remains out of scope even
   though the complete, unmodified lib graph is bundled and loaded.
+
+### Refuted on 2026-09-22
+
+Each of these was listed above as a current gap and no longer reproduces on its
+reduced probe at `7ea0cddb`. A reduced probe is not the corpus: where the entry
+named a corpus trigger, that trigger was not re-measured separately.
+
+- **Overload resolution.** A call matching no overload of a declared function
+  group now reports `TS2769` like `tsc`, and an interface or type-literal method
+  group is resolved member by member (`2a22babc`) rather than through the
+  group's permissive fold.
+- **Module augmentation lost through a star re-export wrapper.** With `declare
+  module "core"` in a `.d.ts` and `export * from "core"` in `wrapper`, the
+  augmented member is checked when the interface is imported from `wrapper`.
+- **An augmented base interface not seen through a derived one.** With
+  `declare module "./generated" { interface BaseNode { parent: Node } }` and
+  `interface Identifier extends BaseNode`, `id.parent` resolves and is checked.
+  The `@typescript-eslint` `parent` case that motivated the entry was not
+  re-measured on its own; the two eslint-plugin `TS2339` still on tanstack-query
+  are `.types` reads, not `parent`.
+- **`typeof import("pkg")` in a type alias.** `type T = typeof
+  import("./dep")` binds, and `T["x"]` is checked.
 
 ### Refuted on 2026-09-03
 
@@ -514,7 +517,7 @@ snapshot without re-verification and are labelled as such.
   recovered. Do not restate the sentinel-suppression claim without a
   reproduction.
 
-### Fixed at this commit (2026-09-03)
+### Fixed on 2026-09-03 (at `b090760`)
 
 - **Every strict-sweep drift.** The nine targets recorded on 2026-09-01 — eight
   message-text, one span — are closed; both strict sweeps are green. The fixes
@@ -589,6 +592,9 @@ configuration. Every one carries the concrete reason it is still off.
 | `SURGE_GENERIC_RECURSIVE_ALIAS=1` | Key a generic alias's resolution frame by its *instantiation* (declaration + resolved-argument fingerprint) rather than its declaration, so recursing into itself with different arguments is not read as a cycle. Without it a recursive generic record collapses to the degradation sentinel. | One false positive and a cost, both on named corpora. Measured 2026-09-14 on all nine corpora from an isolated worktree: zustand 37 → 11 (27 false positives closed, **1 opened** — `TS2554` at `tests/middlewareTypes.test.tsx:476`, where `devtools`' three-argument `set` loses its mutator extension under the nested `devtools(subscribeWithSelector(…))` composition), every other corpus byte-identical. The previously recorded drizzle-orm 4 → 6 and tanstack-query +2 regressions **no longer reproduce**. The nontermination that used to seal this gate is fixed by the per-root breadth budget (see below); ts-pattern now finishes, but costs seconds where the gate-off run costs a third of one, because the gate makes surge actually evaluate a type-level program it previously short-circuited to `unknown`. |
 | `SURGE_LOCAL_TYPE_DECLARATION_CHECKS=1` | Check a body-local `type` / `interface` / `class` declaration at its statement, the way a top-level one is checked. | Measured 2026-09-14 on all nine corpora: only ts-pattern moves, 0 → 22, every one an `Expect<Equal<…>>` type-level divergence. Eight other corpora are byte-identical, so the remaining work is entirely ts-pattern's type-level program. |
 | `SURGE_COMPLETE_DEFAULT_ARGS=1` | Carry an interface's resolved defaults on its reference, as tsc's type reference does; positional `infer` binding against a partially-written reference needs them. | Measured 2026-09-14: a pure regression of 4 on the current corpora (zod +2, tanstack-query +1, trpc +1) and 0 closed. zod's is `ParsePayload`'s bare `$ZodRawIssue` member losing its own alias default once the interface reference carries one — a default bound under the wrong substitution. |
+| `SURGE_VALUE_EXPORT_REFINEMENT=1` | Re-analyze a module whose value *or type-only* imports settled in the previous round, so an export whose initializer reads an imported value is published with its real type instead of the sentinel (up to 8 rounds). | Correct but no gain yet, and costly (recorded in `6dda508d`, 2026-09-21, and the gate's doc comment): trpc is byte-identical with it on, and zod goes from about 7 s to 53 s wall. The trpc `TS7006` it was once credited with closing were an artifact of a missed relative-import dependency; what blocks them is the router's root types (`ctx`, `errorShape`, `transformer`). |
+| `SURGE_TSC_IMPLICIT_ANY=1` | Apply tsc's implicit-any rule without surge's two extra exemptions (a degraded contextual type, unmodelled JSX props). | The exemptions stand in for contextual types surge fails to supply. Recorded 2026-09-16 in the gate's doc comment: trpc tsc-only 50 → 37, but surge-only trpc 7 → 724, zod 0 → 357, tanstack-query 7 → 211 — dominated by zod's `$constructor` interface losing its construct signature. |
+| `SURGE_DISTRIBUTE_REFERENCE_UNIONS=1` | Distribute an intersection over a union operand that arrives as a *reference* (`ComponentType<P> & {…}`), not only over a bare union. | Recorded 2026-09-16 in the gate's doc comment: trpc tsc-only 55 → 70, surge-only 2 → 4, because an intersection merge keeps only one of an operand's overloaded call signatures (jscodeshift's `JSCodeshift` becomes uncallable). |
 
 ### Termination model for recursive generic aliases
 
@@ -639,7 +645,21 @@ strategies, not semantics; leaving them off costs no compatibility.
 | `SURGE_DEFER_PLACEHOLDER_INSTANTIATIONS=1` | Defer placeholder-argument instantiation. Left off: mixed intersections and conditionals peel immediately and zod's RSS rose. |
 
 **Default-on with an opt-out kill switch** (for A/B profiling and regression
-isolation only — production behavior is the default): `SURGE_AMBIENT_BLOCK_IMPORTS`,
+isolation only — production behavior is the default). Three of them changed
+checking recently enough to need their own note:
+
+| Gate | Default since | Default behavior | Opt-out |
+| --- | --- | --- | --- |
+| `SURGE_INFER_BLOCK_RETURN_TYPES` | `7ea0cddb`, 2026-09-22 | An unannotated block-bodied arrow or function expression takes its return type from its `return` statements (tsc's `getReturnTypeFromBody`), widened unless a contextual type asks for the literal. Before, every such function was the sentinel and no use of it was checked. Not applied when a contextual type exists (see [§ Known limitations](#confirmed-current-gaps)). | `=0` |
+| `SURGE_INFER_DECLARATION_RETURN_TYPES` | `d8e156eb`, 2026-09-21 | `lazy`: an unannotated declaration's return type, and an unannotated class field's or getter's type, are read from the body on first demand, like tsc's `getReturnTypeOfSignature`. Generic classes keep `any` for now. | `=0` or `=off` restores sentinel returns and `any` members; `=lazy:<substring>` limits it to matching files; `=1` (or any other value, read as a file substring) runs the eager walk during signature collection, kept for comparison only |
+| `SURGE_EARLY_MODULE_LOCAL_VALUES` | `2c25f3f4`, 2026-09-17 | Module-local value tables are seeded before export publication, so a `typeof <value>` inside a value export's type resolves instead of dying at the sentinel. | `=0` |
+
+The commit messages record what each flip cost: `d8e156eb` about +3–4% RSS
+and +5% wall on trpc, `7ea0cddb` trpc timing within noise. Those figures are
+carried forward from the commit messages (2026-09-21 and 2026-09-22); they were
+not re-measured for this snapshot.
+
+The rest: `SURGE_AMBIENT_BLOCK_IMPORTS`,
 `SURGE_NS_IFACE_MERGE`, `SURGE_NS_QUALIFIED_RETRY`, `SURGE_READONLY_ARRAYS`,
 `SURGE_VARIADIC_TUPLES`, `SURGE_WRITTEN_CALL_SIGNATURE`, `SURGE_LAZY_DTS_VALUES`,
 `SURGE_THIN_PRELIM`, `SURGE_MODULE_TYPE_DEDUP`, `SURGE_EAGER_DEPENDENCY_ALIASES`,
@@ -676,6 +696,17 @@ Off by default.
 One workload, one machine, one commit. **These numbers do not transfer** across
 projects, hardware, allocators, or build profiles, and they are not a compiler
 comparison.
+
+**This section was not re-measured for the 2026-09-22 snapshot.** The table
+below is the last interleaved A/B recorded here (2026-09-07, `5db229c`) and is
+kept as that record, not as the state of `7ea0cddb`. Since then the checker
+has started evaluating a good deal it used to short-circuit to the sentinel —
+recursive mapped aliases, lazily inferred returns and class members,
+block-bodied arrows — and the commits that did so recorded their own cost:
+`ca66c582` about +9% user time and +3% RSS on trpc (three interleaved pairs)
+and about +4% on zod, `d8e156eb` about +3–4% RSS and +5% wall on trpc. Those
+figures are carried forward from the commit messages. A fresh interleaved A/B
+against `5db229c` is the open measurement.
 
 tRPC monorepo at `.local-projects/trpc`, checkout `dfbafa8` (2026-07-26),
 project mode, `--jobs auto`, cold process over a warm filesystem cache, peak
@@ -740,7 +771,7 @@ surge-only over-report (see
 - There is no incremental or persistent mode; every run is a full check.
 - The diagnostic surface moved by 37 against `b090760` (1,190 → 1,153), so that
   column is not a like-for-like comparison of identical work. The `1d5d2b8`
-  column is: it emits the same 1,153 diagnostics as this commit.
+  column is: it emits the same 1,153 diagnostics as `5db229c`.
 
 Performance history, methodology, and the reproduction recipe live in
 [BENCHMARKS.md](BENCHMARKS.md); the detailed engineering investigations live in
@@ -753,12 +784,13 @@ Performance history, methodology, and the reproduction recipe live in
 - **No full TypeScript compatibility claim.** The oracle gate establishes
   parity on the covered fixtures and projects only.
 - **No general message-text or span/column parity claim.** The strict sweeps
-  are green across the 214 registered presets at this commit bar one message
-  drift, which is a statement about those fixtures — not about arbitrary code.
-  The strict flags stay non-gating so a preset can record a drift without
-  failing CI.
+  carry drift on 17 of the registered presets at the snapshot commit (see
+  [§ Gates](#gates)), and even where they are green that is a statement about
+  those fixtures — not about arbitrary code. The strict flags stay non-gating
+  so a preset can record a drift without failing CI.
 - **No claim that trpc matches `tsc`.** It is a workload and a measured
-  baseline; 135 diagnostics still differ in each direction combined.
+  baseline; 42 diagnostics still differ at the snapshot commit, 34 `tsc`-only
+  and 8 surge-only.
 - **No wall-clock performance claim at this commit** — see the caveat above.
 - **No cross-tool performance claim.** `pnpm bench:compilers` exists as a
   developer aid; its output is local-machine-relative and is not a marketing
@@ -843,6 +875,21 @@ pnpm run oracle:compare -- --project .local-projects/ky/tsconfig.json --maxDiagn
 ```bash
 pnpm run real:ky:test && pnpm run real:unnamed:test
 ```
+
+```bash
+pnpm run oracle:compare -- --project .local-projects/trpc --maxDiagnostics 100000 --json
+```
+
+The last command is repeated per corpus (`ofetch`, `zod`, `zustand`,
+`tanstack-query/tsconfig.surge.json`, `ts-pattern/tsconfig.surge.json`,
+`drizzle-orm/drizzle-orm/tsconfig.surge.json`, and `../../nextjs/unnamed`), one
+at a time. For this snapshot every command ran with `SURGE_TS_BIN` pointing at
+a frozen copy of the release binary built in a detached worktree at the
+snapshot commit, and `SURGE_MAX_FOOTPRINT_MB` set as a guard. Without
+`SURGE_TS_BIN` the scripts build the CLI from the tree they are run in, which is
+the working tree, not the commit you mean to cite. The sweep also reads presets
+from that tree; if the working tree has fixture edits, compare against
+fixtures extracted from the commit (`git archive <commit> tests/compat-projects`).
 
 The strict sweeps exit non-zero by design when drift exists; that is the
 expected outcome, not a failure of the run. `--strictMessages --strictSpans`
