@@ -75,6 +75,123 @@ pub(crate) fn collect_global_function_signatures(
     }
 }
 
+/// Each script file's own top-level values, for the other scripts to see:
+/// the binder declares every script's `var`/`let`/`const`/namespace in the
+/// one global table, so `let greeting` in `a.ts` is in scope in `b.ts`. Only
+/// a program with two or more scripts needs them.
+pub(crate) fn collect_script_values(
+    parsed_files: &[ParsedProgramFile],
+    global_symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Vec<Option<Arc<SymbolTable>>> {
+    let mut values = vec![None; parsed_files.len()];
+    if parsed_files.iter().filter(|parsed_file| is_script_source(parsed_file)).count() < 2 {
+        return values;
+    }
+    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+        if !is_script_source(parsed_file) {
+            continue;
+        }
+        ctx.set_file_name(parsed_file.file_name.clone());
+        let collected = crate::modules::collect_exportable_value_symbols(
+            &parsed_file.statements,
+            &ctx.type_declarations,
+            global_symbols,
+            None,
+            false,
+            ctx,
+        );
+        let mut own = SymbolTable::new();
+        for (name, symbol) in collected.iter_shared() {
+            let inherited = global_symbols
+                .get_own(name)
+                .is_some_and(|global| std::ptr::eq(global, symbol.as_ref()));
+            if !inherited {
+                let _ = own.insert_shared(name.clone(), symbol.clone());
+            }
+        }
+        values[file_index] = Some(Arc::new(own));
+    }
+    merge_script_namespace_values(parsed_files, &mut values);
+    values
+}
+
+/// `namespace A` reopened in several scripts is one merged namespace, so every
+/// file sees the members each block exports, not the first block's alone.
+fn merge_script_namespace_values(
+    parsed_files: &[ParsedProgramFile],
+    values: &mut [Option<Arc<SymbolTable>>],
+) {
+    let namespace_names = |parsed_file: &ParsedProgramFile| -> Vec<String> {
+        parsed_file
+            .statements
+            .iter()
+            .filter_map(|statement| match statement {
+                ParsedStatement::NamespaceDeclaration(namespace) => Some(namespace.name.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut merged: HashMap<String, surge_ts_types::Type> = HashMap::new();
+    let mut declaring_files: HashMap<String, usize> = HashMap::new();
+    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+        let Some(table) = values[file_index].as_ref() else {
+            continue;
+        };
+        for name in namespace_names(parsed_file) {
+            let Some(symbol) = table.get_own(&name) else {
+                continue;
+            };
+            *declaring_files.entry(name.clone()).or_default() += 1;
+            let combined = match merged.remove(&name) {
+                Some(existing) => merge_namespace_value(&existing, &symbol.ty),
+                None => symbol.ty.clone(),
+            };
+            merged.insert(name, combined);
+        }
+    }
+    for (name, ty) in merged {
+        if declaring_files.get(&name).copied().unwrap_or(0) < 2 {
+            continue;
+        }
+        for table in values.iter_mut().flatten() {
+            let Some(symbol) = table.get_own(&name) else {
+                continue;
+            };
+            let replacement = crate::symbols::SymbolInfo {
+                ty: ty.clone(),
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            };
+            let _ = Arc::make_mut(table).insert(name.clone(), replacement);
+        }
+    }
+}
+
+fn merge_namespace_value(
+    left: &surge_ts_types::Type,
+    right: &surge_ts_types::Type,
+) -> surge_ts_types::Type {
+    use surge_ts_types::Type;
+    let (Type::Object(left_object), Type::Object(right_object)) = (left, right) else {
+        return left.clone();
+    };
+    let mut properties = left_object.properties.as_ref().clone();
+    for (name, property) in right_object.properties.iter() {
+        match properties.get(name).cloned() {
+            Some(existing) => {
+                let mut combined = existing;
+                combined.ty = merge_namespace_value(&combined.ty, &property.ty);
+                properties.insert(name.clone(), combined);
+            }
+            None => {
+                properties.insert(name.clone(), property.clone());
+            }
+        }
+    }
+    Type::Object(crate::metrics::alloc_object_type(properties, None))
+}
+
 fn is_script_source(parsed_file: &ParsedProgramFile) -> bool {
     parsed_file.file_kind != FileKind::GeneratedDeclaration
         && !parsed_file.is_module

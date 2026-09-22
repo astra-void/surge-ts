@@ -678,6 +678,7 @@ export const fixturePresets: Record<string, string> = {
   'comma-operand-allow-unreachable-code-basic': path.join(workspaceRoot, 'tests/compat-projects/comma-operand-allow-unreachable-code-basic/tsconfig.json'),
   'signature-implicit-any-basic': path.join(workspaceRoot, 'tests/compat-projects/signature-implicit-any-basic/tsconfig.json'),
   'signature-parameter-typeof-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/signature-parameter-typeof-scope-basic/tsconfig.json'),
+  'script-global-values-across-files-basic': path.join(workspaceRoot, 'tests/compat-projects/script-global-values-across-files-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

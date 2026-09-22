@@ -1219,6 +1219,34 @@ pub(super) fn check_program_file(
         for (name, symbol) in ctx.ambient_global_symbols.iter_handles() {
             let _ = script_sym.insert_handle(name.clone(), clone_symbol_info_handle(symbol));
         }
+        // Other scripts' values are globals here too. A `var` this file declares
+        // itself is the first declaration of it only against later files, and
+        // TS2403 compares every redeclaration with the first one.
+        let own_vars: std::collections::HashSet<&str> = parsed_file
+            .statements
+            .iter()
+            .filter_map(|statement| match statement {
+                surge_ts_syntax::ParsedStatement::VariableDeclaration(variable)
+                    if matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Var) =>
+                {
+                    Some(variable.name.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        for (other_index, values) in shared_state.script_values.iter().enumerate() {
+            let Some(values) = values.as_ref().filter(|_| other_index != file_index) else {
+                continue;
+            };
+            for (name, symbol) in values.iter_handles() {
+                if other_index > file_index && own_vars.contains(name.as_ref()) {
+                    continue;
+                }
+                if script_sym.get(name).is_none() {
+                    let _ = script_sym.insert_handle(name.clone(), clone_symbol_info_handle(symbol));
+                }
+            }
+        }
         ctx.set_symbols(script_sym);
 
         let current_type_declarations = ctx.type_declarations.clone();
