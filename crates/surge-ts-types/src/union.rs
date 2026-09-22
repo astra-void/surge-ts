@@ -498,6 +498,39 @@ fn dedup_members<'a>(flattened: Vec<&'a Type>) -> Vec<&'a Type> {
     unique
 }
 
+/// A large union's members keyed by [`dedup_key`], so repeated membership
+/// probes against one union cost a hash lookup each instead of a scan.
+pub(crate) struct UnionMemberIndex<'a> {
+    members: &'a [Type],
+    buckets: PrehashedU64Map<(usize, Vec<usize>)>,
+}
+
+impl<'a> UnionMemberIndex<'a> {
+    /// `None` below [`LINEAR_DEDUP_LIMIT`], where scanning is the cheaper probe.
+    pub(crate) fn for_large(members: &'a [Type]) -> Option<Self> {
+        if members.len() <= LINEAR_DEDUP_LIMIT {
+            return None;
+        }
+        let mut buckets: PrehashedU64Map<(usize, Vec<usize>)> =
+            PrehashedU64Map::with_capacity_and_hasher(members.len(), Default::default());
+        for (index, member) in members.iter().enumerate() {
+            match buckets.entry(dedup_key(member)) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert((index, Vec::new()));
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => entry.get_mut().1.push(index),
+            }
+        }
+        Some(Self { members, buckets })
+    }
+
+    pub(crate) fn contains(&self, ty: &Type) -> bool {
+        self.buckets.get(&dedup_key(ty)).is_some_and(|(first, overflow)| {
+            self.members[*first] == *ty || overflow.iter().any(|&index| self.members[index] == *ty)
+        })
+    }
+}
+
 fn dedup_key(ty: &Type) -> u64 {
     let mut hasher = FxHasher::default();
     dedup_key_into(ty, &mut hasher, 0);
