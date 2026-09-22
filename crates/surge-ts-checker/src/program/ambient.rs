@@ -678,23 +678,83 @@ fn mangle_types_package_name(type_name: &str) -> String {
         .unwrap_or_else(|| type_name.to_string())
 }
 
-pub(crate) fn collect_ambient_modules(
+type AmbientBlockImports =
+    surge_ts_types::fx::FxHashMap<(usize, usize), crate::modules::ModuleImportBindings>;
+
+fn ambient_blocks_have_imports(parsed_files: &[ParsedProgramFile]) -> bool {
+    parsed_files
+        .iter()
+        .filter(|parsed_file| !parsed_file.is_module)
+        .flat_map(|parsed_file| &parsed_file.statements)
+        .any(|statement| {
+            matches!(
+                statement,
+                ParsedStatement::DeclareModuleDeclaration(module)
+                    if module.module_specifier != "global"
+                        && module.statements.iter().any(|statement| {
+                            matches!(statement, ParsedStatement::ImportDeclaration(_))
+                        })
+            )
+        })
+}
+
+/// Binds the imports written inside each script file's `declare module`
+/// blocks against the ambient tables registered so far. Resolution
+/// diagnostics are dropped: an unresolvable block import stays silent, as it
+/// always has.
+fn bind_ambient_block_imports(
     parsed_files: &[ParsedProgramFile],
     ctx: &mut CheckerContext,
-    timings: Option<&Arc<Mutex<ProgramTimings>>>,
-) {
-    let ambient_binding_start = Instant::now();
-    let mut ambient_module_entries = Vec::<AmbientModuleEntry>::new();
-    let mut ambient_module_indexes = HashMap::<String, usize>::new();
-
-    for parsed_file in parsed_files {
-        ctx.set_file_name(parsed_file.file_name.clone());
-        let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
-        ctx.type_declaration_scope = None;
-        for statement in &parsed_file.statements {
+) -> AmbientBlockImports {
+    let mut bindings = AmbientBlockImports::default();
+    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+        if parsed_file.is_module {
+            continue;
+        }
+        for (statement_index, statement) in parsed_file.statements.iter().enumerate() {
             let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
                 continue;
             };
+            if module.module_specifier == "global"
+                || !module
+                    .statements
+                    .iter()
+                    .any(|statement| matches!(statement, ParsedStatement::ImportDeclaration(_)))
+            {
+                continue;
+            }
+            ctx.set_file_name(parsed_file.file_name.clone());
+            let mut block_file = parsed_file.clone();
+            block_file.statements = module.statements.clone();
+            let diagnostics_before = ctx.diagnostics().len();
+            let block_bindings =
+                crate::modules::resolve_module_imports(&block_file, &[], &[], &[], &|_| false, ctx);
+            ctx.truncate_diagnostics(diagnostics_before);
+            bindings.insert((file_index, statement_index), block_bindings);
+        }
+    }
+    bindings
+}
+
+fn register_ambient_blocks(
+    parsed_files: &[ParsedProgramFile],
+    block_imports: Option<&AmbientBlockImports>,
+    ctx: &mut CheckerContext,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+) -> Vec<AmbientModuleEntry> {
+    let mut ambient_module_entries = Vec::<AmbientModuleEntry>::new();
+    let mut ambient_module_indexes = HashMap::<String, usize>::new();
+
+    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+        ctx.set_file_name(parsed_file.file_name.clone());
+        let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
+        ctx.type_declaration_scope = None;
+        for (statement_index, statement) in parsed_file.statements.iter().enumerate() {
+            let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
+                continue;
+            };
+            let bound_imports = block_imports
+                .and_then(|block_imports| block_imports.get(&(file_index, statement_index)));
 
             if module.module_specifier == "global" {
                 continue;
@@ -744,10 +804,16 @@ pub(crate) fn collect_ambient_modules(
                 ctx.type_declarations.len(),
                 TableCloneKind::General,
             );
-            let current_type_declarations_scope =
-                Arc::new(TypeDeclarationScope::new(vec![Arc::new(
-                    ctx.type_declarations.clone(),
-                )]));
+            let block_declarations = Arc::new(ctx.type_declarations.clone());
+            let block_scope = Arc::new(TypeDeclarationScope::new(vec![block_declarations.clone()]));
+            let current_type_declarations_scope = match bound_imports {
+                Some(bindings) => {
+                    let mut layers = vec![block_declarations];
+                    layers.extend(bindings.scope_layers());
+                    Arc::new(TypeDeclarationScope::new(layers))
+                }
+                None => block_scope.clone(),
+            };
             ctx.type_declaration_scope = Some(current_type_declarations_scope.clone());
             let mut local_function_signatures = HashMap::new();
             let mut current_symbols = std::mem::take(&mut ctx.symbols);
@@ -831,7 +897,9 @@ pub(crate) fn collect_ambient_modules(
             // (`import { EventEmitter } from "stream"` was a false TS2305).
             // Only the ambient modules registered so far answer, and an
             // unresolvable one keeps missing silently as it always has.
-            let imported_symbols = if temp_file
+            let imported_symbols = if let Some(bindings) = bound_imports {
+                bindings.symbols.clone()
+            } else if temp_file
                 .statements
                 .iter()
                 .any(|statement| matches!(statement, ParsedStatement::ImportDeclaration(_)))
@@ -925,7 +993,7 @@ pub(crate) fn collect_ambient_modules(
                     module_specifier: module.module_specifier.clone(),
                     file: temp_file,
                     raw_export_table,
-                    block_scope: current_type_declarations_scope.clone(),
+                    block_scope,
                 });
             }
 
@@ -940,11 +1008,10 @@ pub(crate) fn collect_ambient_modules(
         }
         ctx.type_declaration_scope = saved_type_declaration_scope;
     }
+    ambient_module_entries
+}
 
-    if ambient_module_entries.is_empty() {
-        return;
-    }
-
+fn resolve_ambient_export_tables(ambient_module_entries: &[AmbientModuleEntry], ctx: &mut CheckerContext) {
     let ambient_files = ambient_module_entries
         .iter()
         .map(|entry| entry.file.clone())
@@ -970,6 +1037,49 @@ pub(crate) fn collect_ambient_modules(
                 .insert(entry.module_specifier.clone(), resolved_export_table);
         }
     }
+}
+
+pub(crate) fn collect_ambient_modules(
+    parsed_files: &[ParsedProgramFile],
+    ctx: &mut CheckerContext,
+    timings: Option<&Arc<Mutex<ProgramTimings>>>,
+) {
+    let ambient_binding_start = Instant::now();
+
+    // An import inside `declare module "fs/promises"` is one of the block's
+    // locals (Go's binder declares it in the module's symbol table), so
+    // `function access(path: PathLike)` resolves `PathLike` through it no
+    // matter where the imported block sits in the program. Its target can be
+    // any other block, registered later, so the blocks are registered once
+    // silently to give every import a table to bind against, then registered
+    // for real with each block's bindings in its scope.
+    let block_imports = ambient_blocks_have_imports(parsed_files).then(|| {
+        let diagnostics_start = ctx.diagnostics().len();
+        let saved_ambient_modules = ctx.ambient_modules.clone();
+        let saved_module_augmentations = ctx.module_augmentations.clone();
+        let saved_resolved_named_types = ctx
+            .resolved_named_types
+            .lock()
+            .map(|memo| memo.clone())
+            .unwrap_or_default();
+        let preliminary_entries = register_ambient_blocks(parsed_files, None, ctx, timings);
+        resolve_ambient_export_tables(&preliminary_entries, ctx);
+        let bindings = bind_ambient_block_imports(parsed_files, ctx);
+        ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_start);
+        ctx.ambient_modules = saved_ambient_modules;
+        ctx.module_augmentations = saved_module_augmentations;
+        if let Ok(mut memo) = ctx.resolved_named_types.lock() {
+            *memo = saved_resolved_named_types;
+        }
+        bindings
+    });
+
+    let ambient_module_entries =
+        register_ambient_blocks(parsed_files, block_imports.as_ref(), ctx, timings);
+    if ambient_module_entries.is_empty() {
+        return;
+    }
+    resolve_ambient_export_tables(&ambient_module_entries, ctx);
 
     // A class in one block that extends a class imported from another
     // (`class Stream extends EventEmitter` in `declare module "stream"`) took
