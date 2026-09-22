@@ -146,11 +146,16 @@ pub(crate) fn check_function_return_statement(
     // cannot answer this — it reports per branch and yields the sentinel on a
     // mismatch — so ask the diagnostic-free inference path for the value's own
     // type, which for `cond ? anyValue : { … }` is the union tsc would form.
-    if ctx.in_contextual_return_body()
-        && may_infer_as_any(expression)
-        && returns_any(&crate::infer::infer_expression(expression, symbols, ctx))
-    {
-        ctx.note_contextual_return_is_any();
+    if ctx.in_contextual_return_body() && may_infer_as_any(expression) {
+        // Diagnostic-free: the value was already checked above, and a type
+        // query in it (`as Out<typeof schema>`) is resolved here without the
+        // arrow's own parameters in scope.
+        let reported = ctx.diagnostics().len();
+        let inferred = crate::infer::infer_expression(expression, symbols, ctx);
+        ctx.truncate_diagnostics(reported);
+        if returns_any(&inferred) {
+            ctx.note_contextual_return_is_any();
+        }
     }
 
     match inferred_expression {
