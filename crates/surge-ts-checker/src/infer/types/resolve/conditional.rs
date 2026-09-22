@@ -1908,6 +1908,21 @@ pub(crate) fn substitute_parsed_type_parameters_deep(
             };
             ParsedType::Function(std::sync::Arc::new(substituted))
         }
+        // A conditional nested in an alias body (`ValidateShape`'s inner
+        // `Exclude<…> extends never ? TActualShape : TExpectedShape`) is
+        // written in the alias's parameters too.
+        ParsedType::Conditional(conditional) => {
+            ParsedType::Conditional(std::sync::Arc::new(surge_ts_syntax::ParsedConditionalType {
+                check_type: Box::new(substitute_parsed_type_parameters_deep(&conditional.check_type, map)),
+                extends_type: Box::new(substitute_parsed_type_parameters_deep(
+                    &conditional.extends_type,
+                    map,
+                )),
+                true_type: Box::new(substitute_parsed_type_parameters_deep(&conditional.true_type, map)),
+                false_type: Box::new(substitute_parsed_type_parameters_deep(&conditional.false_type, map)),
+                span: conditional.span,
+            }))
+        }
         other => other.clone(),
     }
 }

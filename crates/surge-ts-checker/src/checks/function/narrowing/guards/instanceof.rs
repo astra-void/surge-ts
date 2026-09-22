@@ -36,7 +36,8 @@ pub(super) fn instanceof_matches(member: &Type, ctor_name: &str) -> Option<bool>
         other => {
             let name = other.name();
             let base = name.split('<').next().unwrap_or(name.as_str());
-            Some(base == ctor_name)
+            let own_name = base.rsplit('.').next().unwrap_or(base);
+            Some(base == ctor_name || own_name == ctor_name)
         }
     }
 }
@@ -64,6 +65,11 @@ pub(super) fn instanceof_matches_with_heritage(
             };
             if instance.is_unknown() || member.is_unknown() {
                 return Some(false);
+            }
+            // The member *is* the instance type: a constructor-like value
+            // whose `prototype` names it, where no class name can match.
+            if member == instance {
+                return Some(true);
             }
             if !surge_ts_types::is_assignable_to(member, instance) {
                 return Some(false);
@@ -142,6 +148,24 @@ pub(crate) fn narrow_union_by_instanceof(
         .cloned()
         .collect();
 
+    // tsc's `getNarrowedType`: with no member derived from the candidate, a
+    // candidate that is itself a subtype of the subject is what the value is.
+    if kept.is_empty()
+        && keep_matching
+        && let Some(instance) = instance
+        && !instance.is_unknown()
+        && union
+            .types()
+            .iter()
+            .any(|member| !member.is_unknown() && surge_ts_types::is_assignable_to(instance, member))
+        && !union
+            .types()
+            .iter()
+            .any(|member| surge_ts_types::is_assignable_to(member, instance))
+    {
+        return Some(instance.clone());
+    }
+
     if kept.is_empty() && keep_matching {
         // No member *names* the constructor, but `x instanceof C` still proves
         // the value is an object: a nominal member may be a subclass whose
@@ -183,11 +207,16 @@ pub(crate) fn parse_instanceof_condition(
     else {
         return None;
     };
-    let ParsedExpression::Identifier {
-        name: ctor_name, ..
-    } = right.as_ref()
-    else {
-        return None;
+    // A namespace-qualified constructor (`x instanceof schemas.$ZodType`) is
+    // matched by its own name, the last segment.
+    let ctor_name = match right.as_ref() {
+        ParsedExpression::Identifier { name, .. } => name,
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } if matches!(object.as_ref(), ParsedExpression::Identifier { .. }) => property_name,
+        _ => return None,
     };
     Some((left.as_ref(), ctor_name.as_str()))
 }

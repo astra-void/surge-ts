@@ -17,6 +17,21 @@ pub(crate) fn thin_prelim_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("SURGE_THIN_PRELIM").as_deref() != Ok("0"))
 }
 
+thread_local! {
+    static SOURCE_EXPORTS_SHARE_ENVIRONMENT_STORE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` with source-file value collection interning its lazy references
+/// into the caller's persistent declaration-environment store (see the store
+/// comment in [`collect_exportable_value_symbols`]).
+pub(crate) fn with_source_exports_sharing_environment_store<R>(f: impl FnOnce() -> R) -> R {
+    let previous = SOURCE_EXPORTS_SHARE_ENVIRONMENT_STORE.with(|flag| flag.replace(true));
+    let result = f();
+    SOURCE_EXPORTS_SHARE_ENVIRONMENT_STORE.with(|flag| flag.set(previous));
+    result
+}
+
 /// The thin variant of [`collect_exportable_value_symbols`]: same symbol name
 /// surface (variables degrade to `Unknown`, namespace value objects keep their
 /// permissive member sets), no shadow context, no annotation resolution, no
@@ -370,6 +385,146 @@ fn apply_merging_namespace_value_members(
     }
 }
 
+/// tsc binds a top-level `fn.x = value` as a declaration of `x` on `fn` when
+/// `fn` is a function declaration or a `const` holding a function (an
+/// *expando*): the value's type is `{ (…): R; x: typeof value }` for every
+/// reader, in this module and in its importers (`Card.Header = Header`, then
+/// `<Card.Header />`). Several writes of one name union their types.
+pub(crate) fn apply_expando_members(
+    statements: &[ParsedStatement],
+    exportable_values: &mut SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let mut assignments = Vec::new();
+    for statement in statements {
+        match statement {
+            ParsedStatement::MemberAssignment(assignment) => assignments.push(assignment.as_ref()),
+            ParsedStatement::If(if_statement) => {
+                collect_nested_member_assignments(&if_statement.then_body, &[], &mut assignments);
+                collect_nested_member_assignments(&if_statement.else_body, &[], &mut assignments);
+            }
+            ParsedStatement::Block(body) => {
+                collect_nested_member_assignments(body, &[], &mut assignments)
+            }
+            _ => {}
+        }
+    }
+    for assignment in assignments {
+        let surge_ts_syntax::ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } = &assignment.target
+        else {
+            continue;
+        };
+        let surge_ts_syntax::ParsedExpression::Identifier { name, .. } = object.as_ref() else {
+            continue;
+        };
+        let Some(symbol) = exportable_values.get_own_shared(name) else {
+            continue;
+        };
+        let (call_signature, mut properties) = match (&symbol.kind, &symbol.ty) {
+            (SymbolKind::Function | SymbolKind::Const, Type::Function(function)) => {
+                (function.clone(), surge_ts_types::PropertyMap::default())
+            }
+            (SymbolKind::Function | SymbolKind::Const, Type::Object(object)) => {
+                let Some(signature) = object.call_signature() else {
+                    continue;
+                };
+                (signature.clone(), (*object.properties).clone())
+            }
+            _ => continue,
+        };
+        let reported = ctx.diagnostics().len();
+        let inferred =
+            crate::infer::infer_expression(&assignment.value, exportable_values, ctx);
+        ctx.truncate_diagnostics(reported);
+        let crate::infer::InferredExpression::Known(value_type) = inferred else {
+            continue;
+        };
+        if value_type.is_unknown() {
+            continue;
+        }
+        let value_type = crate::checks::var::widen_implicit_variable_initializer_type(
+            SymbolKind::Let,
+            &assignment.value,
+            &value_type,
+            false,
+        );
+        let member_type = match properties.get(property_name.as_str()) {
+            Some(existing) => surge_ts_types::union_type(vec![existing.ty.clone(), value_type]),
+            None => value_type,
+        };
+        properties.insert(
+            property_name.as_str().into(),
+            surge_ts_types::ObjectProperty::required(member_type),
+        );
+        let kind = symbol.kind;
+        let function_signature = symbol.function_signature.clone();
+        let _ = exportable_values.insert(
+            name.clone(),
+            SymbolInfo {
+                ty: Type::Object(
+                    crate::metrics::alloc_object_type(properties, None)
+                        .with_call_signature(call_signature.clone()),
+                ),
+                kind,
+                function_signature,
+            },
+        );
+    }
+}
+
+/// Member writes inside `if` and bare blocks: tsc binds an expando wherever it
+/// sits in its container, not only at the top of it. A block that declares the
+/// receiver's name itself (`const Y = …; Y.test = 42`) writes to its own
+/// binding, which shadows the outer function.
+fn collect_nested_member_assignments<'a>(
+    body: &'a [surge_ts_syntax::ParsedFunctionBodyStatement],
+    shadowed: &[&'a str],
+    assignments: &mut Vec<&'a surge_ts_syntax::ParsedMemberAssignment>,
+) {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+    let mut shadowed = shadowed.to_vec();
+    for statement in body {
+        match statement {
+            Statement::VariableDeclaration(variable) => shadowed.push(variable.name.as_str()),
+            Statement::Function(function) => shadowed.push(function.name.as_str()),
+            Statement::Class(class) => shadowed.push(class.name.as_str()),
+            _ => {}
+        }
+    }
+    for statement in body {
+        match statement {
+            Statement::MemberAssignment(assignment) => {
+                let receiver = match &assignment.target {
+                    surge_ts_syntax::ParsedExpression::PropertyAccess { object, .. } => {
+                        match object.as_ref() {
+                            surge_ts_syntax::ParsedExpression::Identifier { name, .. } => {
+                                Some(name.as_str())
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if receiver.is_some_and(|name| !shadowed.contains(&name)) {
+                    assignments.push(assignment.as_ref());
+                }
+            }
+            Statement::If(if_statement) => {
+                collect_nested_member_assignments(&if_statement.then_body, &shadowed, assignments);
+                collect_nested_member_assignments(&if_statement.else_body, &shadowed, assignments);
+            }
+            Statement::Block(body) => {
+                collect_nested_member_assignments(body, &shadowed, assignments)
+            }
+            _ => {}
+        }
+    }
+}
+
 fn object_with_namespace_members(
     object: &surge_ts_types::ObjectType,
     members: &surge_ts_types::PropertyMap,
@@ -461,6 +616,15 @@ pub(crate) fn collect_exportable_value_symbols(
         // references those files leave behind are handled where they are read
         // instead — a receiver that peels to the sentinel reports nothing.
         shadow_ctx.declaration_environment_store = ctx.declaration_environment_store.clone();
+    } else if SOURCE_EXPORTS_SHARE_ENVIRONMENT_STORE.with(std::cell::Cell::get) {
+        // Except for the value-export refinement rounds: the tables they
+        // install are the ones consumers read, and a refined value is exactly
+        // what peels its references. A recursive alias's back-edge there
+        // (tRPC's `DecoratedProcedureUtilsRecord<TRoot, $Value>` behind
+        // `useUtils().todo`) forced through a dead store turns the member
+        // intersection into its `DecorateRouter` half alone, and every
+        // procedure read off it into a TS2339.
+        shadow_ctx.declaration_environment_store = ctx.declaration_environment_store.clone();
     }
     shadow_ctx.type_declaration_scope = ctx.type_declaration_scope.clone();
     shadow_ctx.ambient_global_type_declarations = ctx.ambient_global_type_declarations.clone();
@@ -509,6 +673,7 @@ pub(crate) fn collect_exportable_value_symbols(
         );
     }
     apply_merging_namespace_value_members(&merging_namespaces, &mut exportable_values);
+    apply_expando_members(statements, &mut exportable_values, &mut shadow_ctx);
     inherit_base_statics(statements, &mut exportable_values, imported_symbols);
 
     exportable_values
@@ -883,15 +1048,9 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                     .is_none_or(|ty| matches!(ty, Type::Object(_)));
             if merges {
                 let ty = namespace_value_object_type_resolved(namespace, ctx);
-                let ty = match (existing, &ty) {
-                    (Some(Type::Object(previous)), Type::Object(current)) => {
-                        let mut properties = previous.properties.as_ref().clone();
-                        for (name, property) in current.properties.iter() {
-                            properties.insert(name.clone(), property.clone());
-                        }
-                        Type::Object(crate::metrics::alloc_object_type(properties, None))
-                    }
-                    _ => ty,
+                let ty = match existing {
+                    Some(previous) => merge_namespace_value_objects(&previous, &ty),
+                    None => ty,
                 };
                 let _ = exportable_values.insert(
                     namespace.name.clone(),
@@ -1248,6 +1407,27 @@ pub(crate) fn collect_namespace_member_value_symbols(
 /// namespace's member *set* is precise — enabling TS2339 on real typos — without
 /// re-resolving a partially modelled surface and cascading. Used to bind an
 /// `export = <namespace>` value so `import * as Ns` exposes `Ns.member`.
+/// Merges a later block of a namespace into the value object an earlier block
+/// produced. Nested namespaces merge member by member at every depth, so
+/// `namespace M { namespace N { … } }` written twice keeps both `N` bodies.
+fn merge_namespace_value_objects(previous: &Type, current: &Type) -> Type {
+    let (Type::Object(previous), Type::Object(current)) = (previous, current) else {
+        return current.clone();
+    };
+    let mut properties = previous.properties.as_ref().clone();
+    for (name, property) in current.properties.iter() {
+        let merged = match properties.get(name) {
+            Some(existing) => surge_ts_types::ObjectProperty {
+                ty: merge_namespace_value_objects(&existing.ty, &property.ty),
+                ..property.clone()
+            },
+            None => property.clone(),
+        };
+        properties.insert(name.clone(), merged);
+    }
+    Type::Object(crate::metrics::alloc_object_type(properties, None))
+}
+
 pub(crate) fn namespace_value_object_type(namespace: &ParsedNamespaceDeclaration) -> Type {
     let mut properties = surge_ts_types::PropertyMap::default();
     fill_namespace_value_properties(namespace, &mut properties);
@@ -1436,15 +1616,9 @@ pub(crate) fn fill_namespace_value_properties(
                 // A nested namespace written twice merges the same way a
                 // top-level one does; without this the second block replaces
                 // the first and its siblings' members go missing.
-                let merged = match (properties.get(&name).map(|previous| &previous.ty), &inner) {
-                    (Some(Type::Object(previous)), Type::Object(current)) => {
-                        let mut properties = previous.properties.as_ref().clone();
-                        for (name, property) in current.properties.iter() {
-                            properties.insert(name.clone(), property.clone());
-                        }
-                        Type::Object(crate::metrics::alloc_object_type(properties, None))
-                    }
-                    _ => inner,
+                let merged = match properties.get(&name) {
+                    Some(previous) => merge_namespace_value_objects(&previous.ty, &inner),
+                    None => inner,
                 };
                 properties.insert(name, ObjectProperty::required(merged));
             }

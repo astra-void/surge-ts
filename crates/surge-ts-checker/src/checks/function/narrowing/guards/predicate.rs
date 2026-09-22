@@ -126,25 +126,29 @@ pub(crate) fn parse_type_predicate_condition(
     // narrows nothing.
     let signature = match &signature.return_type {
         Some(surge_ts_syntax::ParsedType::Predicate(_)) => signature,
+        _ if signature.inferred_predicate.is_some() => signature,
         _ => signature.predicate_overload.clone()?,
     };
-    let Some(surge_ts_syntax::ParsedType::Predicate(predicate)) = &signature.return_type else {
-        return None;
+    let (predicate_type, index) = match (&signature.return_type, &signature.inferred_predicate) {
+        (Some(surge_ts_syntax::ParsedType::Predicate(predicate)), _) => {
+            if predicate.asserts || predicate.parameter_name == "this" {
+                return None;
+            }
+            let index = signature
+                .parameter_names
+                .iter()
+                .position(|name| name.as_deref() == Some(predicate.parameter_name.as_str()))?;
+            (predicate.ty.clone()?, index)
+        }
+        // The target is already a type; the written slot is never resolved.
+        (_, Some(inferred)) => (surge_ts_syntax::ParsedType::Any, inferred.parameter_index),
+        _ => return None,
     };
-    if predicate.asserts || predicate.parameter_name == "this" {
-        return None;
-    }
-    let predicate_type = predicate.ty.clone()?;
-    let index = signature
-        .parameter_names
-        .iter()
-        .position(|name| name.as_deref() == Some(predicate.parameter_name.as_str()))?;
     let tested = &arguments.get(index)?.expression;
     // An element access (`node.arguments[0]`) is a reference tsc narrows too;
     // it is keyed the way the element-reference narrowing records reads.
-    let (subject, path) = super::super::reference_path(tested).or_else(|| {
-        super::super::element_access_parts(tested).map(|key| (key, Vec::new()))
-    })?;
+    let (subject, path) = super::super::reference_path(tested)
+        .or_else(|| super::super::element_access_parts(tested).map(|key| (key, Vec::new())))?;
     let other_arguments = if signature.type_parameters.is_empty() || !type_arguments.is_empty() {
         Vec::new()
     } else {
@@ -240,12 +244,10 @@ pub(crate) fn narrow_by_predicate(
         && matches!(predicate.peeled(), Type::Object(_))
         && !surge_ts_types::is_assignable_to(&peeled, predicate)
     {
-        return Some(
-            crate::infer::types::merge_intersection_members(vec![
-                ty.clone(),
-                predicate.clone(),
-            ]),
-        );
+        return Some(crate::infer::types::merge_intersection_members(vec![
+            ty.clone(),
+            predicate.clone(),
+        ]));
     }
     None
 }

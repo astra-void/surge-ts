@@ -34,7 +34,7 @@ fn without_definitely_falsy(ty: &Type) -> Option<Type> {
 
 fn is_definitely_falsy(ty: &Type) -> bool {
     match ty {
-        Type::Undefined | Type::Void | Type::Never => true,
+        Type::Undefined | Type::Null | Type::Void | Type::Never => true,
         Type::BooleanLiteral(false) => true,
         Type::StringLiteral(value) => value.is_empty(),
         Type::NumberLiteral(value) => value.value == "0",
@@ -96,6 +96,7 @@ fn is_all_primitive(ty: &Type) -> bool {
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
         | Type::Undefined
+        | Type::Null
         | Type::Void => true,
         Type::Reference(reference) => is_all_primitive(&reference.resolve()),
         Type::Union(union) => union.types().iter().all(is_all_primitive),
@@ -188,7 +189,7 @@ pub(crate) fn is_definitely_not_iterable(ty: &Type, nullish_is_error: bool) -> b
         | Type::BooleanLiteral(_)
         | Type::BigInt
         | Type::Symbol => true,
-        Type::Undefined | Type::GenuineUnknown => nullish_is_error,
+        Type::Undefined | Type::Null | Type::GenuineUnknown => nullish_is_error,
         Type::Union(union) => union
             .types()
             .iter()

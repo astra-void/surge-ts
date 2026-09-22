@@ -855,25 +855,32 @@ fn inference_provably_records_nothing(
         // An object type inferred from a function source: properties pair by
         // name, call signatures pair, and a function has no construct signature
         // or index info to pair (inference.go:822-826, 838-850).
-        ParsedType::Function(function) => {
-            source.and_then(function_source).is_some()
-                && signature_provably_records_nothing(function, name, ctx, depth)
-        }
-        ParsedType::Object(object) => {
-            if source.and_then(function_source).is_none() {
-                return false;
+        ParsedType::Function(function) => match source.and_then(source_surface) {
+            Some(SourceSurface::Function) => {
+                signature_provably_records_nothing(function, name, ctx, depth)
             }
+            // No call signature on the source to pair with.
+            Some(SourceSurface::Members(_) | SourceSurface::Nothing) => true,
+            None => false,
+        },
+        ParsedType::Object(object) => {
+            let Some(surface) = source.and_then(source_surface) else {
+                return false;
+            };
             let properties_record_nothing = object.properties.iter().all(|property| {
                 !parsed_type_mentions_name(&property.ty, name)
-                    || !function_source_has_property(&property.name, ctx)
+                    || !source_has_property(&surface, &property.name, ctx)
             });
             properties_record_nothing
-                && object
-                    .call_signature
-                    .as_deref()
-                    .into_iter()
-                    .chain(object.call_signature_overloads.iter())
-                    .all(|signature| signature_provably_records_nothing(signature, name, ctx, depth))
+                && (!matches!(surface, SourceSurface::Function)
+                    || object
+                        .call_signature
+                        .as_deref()
+                        .into_iter()
+                        .chain(object.call_signature_overloads.iter())
+                        .all(|signature| {
+                            signature_provably_records_nothing(signature, name, ctx, depth)
+                        }))
         }
         _ => false,
     }
@@ -909,9 +916,10 @@ fn reference_provably_records_nothing(
             })
         }
         TypeDeclarationInfo::Interface(interface) => {
-            if source.and_then(function_source).is_none()
-                || interface.body.type_parameters.len() < named.type_arguments.len()
-            {
+            let Some(surface) = source.and_then(source_surface) else {
+                return false;
+            };
+            if interface.body.type_parameters.len() < named.type_arguments.len() {
                 return false;
             }
             let body = interface.body.clone();
@@ -922,9 +930,10 @@ fn reference_provably_records_nothing(
                     let member_type =
                         crate::infer::substitute_parsed_type_parameters_deep(&member.ty, &map);
                     !parsed_type_mentions_name(&member_type, name)
-                        || !function_source_has_property(&member.name, ctx)
+                        || !source_has_property(&surface, &member.name, ctx)
                 });
-                let signatures_record_nothing = body.call_signature.iter().all(|signature| {
+                let signatures_record_nothing = !matches!(surface, SourceSurface::Function)
+                    || body.call_signature.iter().all(|signature| {
                     match crate::infer::substitute_parsed_type_parameters_deep(
                         &ParsedType::Function(std::sync::Arc::new(signature.clone())),
                         &map,
@@ -975,6 +984,45 @@ fn signature_provably_records_nothing(
         .iter()
         .all(|parameter| inference_provably_records_nothing(&parameter.ty, None, name, ctx, depth + 1))
         && inference_provably_records_nothing(&signature.return_type, None, name, ctx, depth + 1)
+}
+
+/// What `inferFromObjectTypes` can pair a target's members with, for the
+/// sources whose answer is known: a function's apparent members, a primitive's
+/// wrapper interface (`getApparentType`, inference.go), or nothing at all for a
+/// source that is no object and has no apparent one.
+enum SourceSurface {
+    Function,
+    Members(&'static [&'static str]),
+    Nothing,
+}
+
+fn source_surface(source: &Type) -> Option<SourceSurface> {
+    match source.peeled() {
+        Type::Function(_) => Some(SourceSurface::Function),
+        Type::Boolean | Type::BooleanLiteral(_) => Some(SourceSurface::Members(&["Boolean", "Object"])),
+        Type::String | Type::StringLiteral(_) => Some(SourceSurface::Members(&["String", "Object"])),
+        Type::Number | Type::NumberLiteral(_) => Some(SourceSurface::Members(&["Number", "Object"])),
+        Type::BigInt => Some(SourceSurface::Members(&["BigInt", "Object"])),
+        Type::Symbol => Some(SourceSurface::Members(&["Symbol", "Object"])),
+        Type::Undefined | Type::Null | Type::Void | Type::Never => Some(SourceSurface::Nothing),
+        _ => None,
+    }
+}
+
+/// Whether the source answers `member`. A lib surge cannot find counts as
+/// declaring it, the direction that keeps a default out.
+fn source_has_property(surface: &SourceSurface, member: &str, ctx: &CheckerContext) -> bool {
+    let interfaces: &[&str] = match surface {
+        SourceSurface::Function => return function_source_has_property(member, ctx),
+        SourceSurface::Members(interfaces) => interfaces,
+        SourceSurface::Nothing => return false,
+    };
+    interfaces
+        .iter()
+        .any(|interface| lookup_declaration_for_inference(interface, ctx).is_none())
+        || interfaces
+            .iter()
+            .any(|interface| interface_declares_member(interface, member, ctx, 0))
 }
 
 /// The function a source is, when it is one.
@@ -1357,6 +1405,75 @@ fn constraint_target_display(
     Type::Object(resolved_object.clone()).name()
 }
 
+/// The literal kinds an argument's array elements keep while it is inferred
+/// from: those a type parameter the written parameter mentions is constrained
+/// to (tsc's `isLiteralOfContextualType`). `T extends string` infers
+/// `"a" | "b"` from `["a", "b"]`; an unconstrained `T` infers `string`.
+fn literal_element_context(
+    parameter_type: &ParsedType,
+    function_signature: &FunctionSignatureInfo,
+    top_level_return_type_parameters: &[&str],
+    expected_return_type: Option<&Type>,
+    ctx: &mut CheckerContext,
+) -> crate::infer::expression::LiteralElementContext {
+    let mut context = crate::infer::expression::LiteralElementContext::default();
+    for type_parameter in &function_signature.type_parameters {
+        if !parsed_type_mentions_name(parameter_type, &type_parameter.name) {
+            continue;
+        }
+        // The contextual return type reaches the elements through the return
+        // mapper: `const c: "a" | "b" = pick(["a", "b"])` instantiates `T` to
+        // the literal union, which is a literal context in its own right.
+        if let Some(expected) = expected_return_type
+            && top_level_return_type_parameters.contains(&type_parameter.name.as_str())
+        {
+            let members = match surge_ts_types::peel_to_pattern_literal(expected) {
+                Type::Union(union) => union.types().to_vec(),
+                other => vec![other],
+            };
+            for member in &members {
+                match member {
+                    Type::StringLiteral(_) => context.string = true,
+                    Type::NumberLiteral(_) => context.number = true,
+                    pattern
+                        if surge_ts_types::is_template_literal_type(pattern)
+                            || surge_ts_types::string_mapping_parts(pattern).is_some() =>
+                    {
+                        context.string = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let Some(constraint) = type_parameter.constraint.as_ref() else {
+            continue;
+        };
+        let diagnostics_before = ctx.diagnostics().len();
+        let constraint = with_declaring_scope(function_signature, ctx, |ctx| {
+            crate::infer::map_parsed_type(constraint.clone(), ctx)
+        });
+        ctx.truncate_diagnostics(diagnostics_before);
+        let members = match surge_ts_types::peel_to_pattern_literal(&constraint) {
+            Type::Union(union) => union.types().to_vec(),
+            other => vec![other],
+        };
+        for member in members {
+            match surge_ts_types::peel_to_pattern_literal(&member) {
+                Type::String | Type::StringLiteral(_) => context.string = true,
+                Type::Number | Type::NumberLiteral(_) => context.number = true,
+                pattern
+                    if surge_ts_types::is_template_literal_type(&pattern)
+                        || surge_ts_types::string_mapping_parts(&pattern).is_some() =>
+                {
+                    context.string = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    context
+}
+
 fn contextual_type_names_literal(contextual: &Type, literal: &Type, depth: u8) -> bool {
     if depth > 4
         || !matches!(
@@ -1487,6 +1604,13 @@ pub(crate) fn infer_type_argument_substitution(
         // emits; the authoritative pass re-evaluates every argument and reports the
         // genuine ones.
         let diagnostics_before = ctx.diagnostics().len();
+        let literal_context = literal_element_context(
+            parameter_type,
+            function_signature,
+            &top_level_return_type_parameters,
+            expected_return_type,
+            ctx,
+        );
         let inferred_argument = match array_literal_tuple_inference(
             parameter_type,
             &function_signature.type_parameters,
@@ -1498,7 +1622,9 @@ pub(crate) fn infer_type_argument_substitution(
             written_tuple_argument_inference(parameter_type, &argument.expression, symbols, ctx)
         }) {
             Some(tuple) => InferredExpression::Known(tuple),
-            None => infer_expression(&argument.expression, symbols, ctx),
+            None => crate::infer::expression::with_literal_element_context(literal_context, || {
+                infer_expression(&argument.expression, symbols, ctx)
+            }),
         };
         ctx.truncate_diagnostics(diagnostics_before);
         let Some(argument_type) = inferred_argument.flowing_type() else {
@@ -1527,10 +1653,14 @@ pub(crate) fn infer_type_argument_substitution(
         // `id(1)` is `1` while `box(1)` is `{ v: number }`. A literal inside an
         // object or array literal argument has already widened at its mutable
         // location, so only a bare primitive literal is kept.
+        // Elements kept as literals by their contextual type were never
+        // widened at their mutable location, and tsc does not widen them here
+        // either.
         // A literal the call's contextual type itself names stays a literal too
         // (tsc's `isLiteralOfContextualType`): `Promise.resolve('data')` where a
         // `'data'` result is expected infers `'data'`.
         let widen_literals = argument_is_fresh_literal(&argument.expression)
+            && literal_context == crate::infer::expression::LiteralElementContext::default()
             && !(argument_is_primitive_literal(&argument.expression)
                 && top_level_return_type_parameters
                     .iter()
@@ -1937,9 +2067,9 @@ fn array_literal_tuple_inference(
         let constraint = type_parameter.constraint.as_ref()?;
         let element_constraint = tuple_element_constraint(constraint)?;
         matches!(
-        element_constraint,
-        ParsedType::String | ParsedType::Number | ParsedType::Boolean
-    ) || matches!(
+            element_constraint,
+            ParsedType::String | ParsedType::Number | ParsedType::Boolean
+        ) || matches!(
         element_constraint,
         ParsedType::Named(element_named)
             if type_parameters.iter().any(|type_parameter| {
@@ -2297,6 +2427,31 @@ pub(crate) fn collect_inferred_type_argument(
                 },
                 _ => return,
             };
+            // tsc's `instantiateTypeWithSingleGenericCallSignature`: a generic
+            // function passed where a non-generic signature is expected is
+            // instantiated in that signature's context first, so `id` against
+            // `(values: number[]) => r` contributes `number[]` for `r` rather
+            // than a placeholder return that infers nothing.
+            let actual_function = if actual_function.type_parameter_head().is_some()
+                && expected_function.type_parameters.is_empty()
+            {
+                let diagnostics_before = ctx.diagnostics().len();
+                let contextual = map_parsed_type_with_substitution(
+                    ParsedType::Function(expected_function.clone()),
+                    ctx,
+                    substitution,
+                );
+                ctx.truncate_diagnostics(diagnostics_before);
+                match contextual {
+                    Type::Function(contextual) => {
+                        surge_ts_types::generic_source_in_context_of(&actual_function, &contextual)
+                            .unwrap_or(actual_function)
+                    }
+                    _ => actual_function,
+                }
+            } else {
+                actual_function
+            };
             let actual_parameters = actual_function.parameters();
             let rest_index = actual_function
                 .is_variadic()
@@ -2349,6 +2504,23 @@ pub(crate) fn collect_inferred_type_argument(
                 depth,
             );
         }
+        // tsc's `inferToConditionalType`: a source that is not itself a
+        // conditional infers into both branches (`inferToMultipleTypes` over the
+        // true and false types). tRPC's `create(opts?: ValidateShape<TOptions,
+        // …>)` reaches `TOptions` only through the inner conditional's true
+        // branch.
+        ParsedType::Conditional(conditional) if depth < 8 => {
+            for branch in [&conditional.true_type, &conditional.false_type] {
+                collect_inferred_type_argument(
+                    branch,
+                    argument_type,
+                    substitution,
+                    widen_literals,
+                    ctx,
+                    depth + 1,
+                );
+            }
+        }
         ParsedType::Intersection(expected_types) => {
             // An intersection's members all constrain the *same* argument at
             // once, so there is no member to choose between — but inferring
@@ -2381,6 +2553,28 @@ pub(crate) fn collect_inferred_type_argument(
             }
         }
         ParsedType::Union(expected_types) => {
+            // `T | PromiseLike<T>` (the lib's `then` callbacks, `Awaited`-style
+            // parameters): a promise argument infers `T` from what it resolves
+            // to, never as the whole promise — tsc pairs it with the
+            // `PromiseLike<T>` member first (`inferToMultipleTypes` infers to
+            // every structured member before a naked one records the source),
+            // and what remains for the naked `T` is the awaited value.
+            if let Some(promised) = promise_like_member_target(expected_types)
+                && crate::checks::call::promise_nominal_enabled()
+            {
+                let awaited = crate::checks::call::awaited_type(argument_type);
+                if awaited != *argument_type {
+                    collect_inferred_type_argument(
+                        promised,
+                        &awaited,
+                        substitution,
+                        widen_literals,
+                        ctx,
+                        depth,
+                    );
+                    return;
+                }
+            }
             // A union carries no member order, so zipping positionally is only
             // meaningful when every member has a shape to pin it to. Once the
             // union mixes a naked type parameter with structured members
@@ -2517,6 +2711,41 @@ fn is_conditional_alias_reference(member: &ParsedType, ctx: &CheckerContext) -> 
         matches!(handle.get(), TypeDeclarationInfo::Alias(info)
             if matches!(info.body.ty, ParsedType::Conditional(_)))
     })
+}
+
+/// The `T` of a `T | PromiseLike<T>` / `T | Promise<T>` union, when the union
+/// has exactly that shape.
+fn promise_like_member_target(members: &[ParsedType]) -> Option<&ParsedType> {
+    let [first, second] = members else {
+        return None;
+    };
+    fn promised(member: &ParsedType) -> Option<&ParsedType> {
+        match member {
+            ParsedType::Named(named)
+                if matches!(named.name.as_str(), "PromiseLike" | "Promise")
+                    && named.type_arguments.len() == 1 =>
+            {
+                Some(&named.type_arguments[0])
+            }
+            _ => None,
+        }
+    }
+    // Written twice, so compared by name: the spans differ.
+    fn bare_name(member: &ParsedType) -> Option<&str> {
+        match member {
+            ParsedType::Named(named) if named.type_arguments.is_empty() => Some(&named.name),
+            _ => None,
+        }
+    }
+    match (promised(first), promised(second)) {
+        (Some(inner), None) if bare_name(inner).is_some() && bare_name(inner) == bare_name(second) => {
+            Some(second)
+        }
+        (None, Some(inner)) if bare_name(inner).is_some() && bare_name(inner) == bare_name(first) => {
+            Some(first)
+        }
+        _ => None,
+    }
 }
 
 fn is_naked_type_parameter(member: &ParsedType, substitution: &TypeParameterSubstitution) -> bool {
@@ -2962,6 +3191,24 @@ pub(crate) fn record_type_argument_candidate(
         return;
     }
 
+    // `never` is a subtype of every candidate, so a later `never` never
+    // decides the supertype: `withFew(xs, id, fail)` binds `r` from `id`'s
+    // return, not from `fail`'s. An *existing* `never` stands: replacing it
+    // needs the candidate's variance, which is not tracked here.
+    if matches!(candidate, Type::Never) {
+        return;
+    }
+
+    // tsc's `getCommonSupertype`: nullable candidates do not compete — the
+    // supertype is chosen among the rest and every candidate's `null` and
+    // `undefined` are added back, so `eq(b as B, d as D | undefined)` binds
+    // `T` to `B | undefined`. The supertype is the leftmost candidate every
+    // later one is a subtype of (`getSupertypeOrUnion`).
+    if let Some(merged) = common_supertype_candidate(&existing, &candidate) {
+        substitution.set(type_parameter_name.to_string(), merged, false);
+        return;
+    }
+
     if let Some(common_primitive) = common_primitive_candidate(&existing, &candidate) {
         substitution.set(type_parameter_name.to_string(), common_primitive, false);
         return;
@@ -2986,6 +3233,42 @@ pub(crate) fn record_type_argument_candidate(
             false,
         );
     }
+}
+
+fn common_supertype_candidate(existing: &Type, candidate: &Type) -> Option<Type> {
+    let split = |ty: &Type| -> (Option<Type>, Vec<Type>) {
+        let members: Vec<Type> = match ty {
+            Type::Union(union) => union.types().to_vec(),
+            other => vec![other.clone()],
+        };
+        let (nullable, primary): (Vec<Type>, Vec<Type>) = members
+            .into_iter()
+            .partition(|member| matches!(member, Type::Null | Type::Undefined));
+        let primary = (!primary.is_empty()).then(|| surge_ts_types::union_type(primary));
+        (primary, nullable)
+    };
+    let (existing_primary, mut nullable) = split(existing);
+    let (candidate_primary, candidate_nullable) = split(candidate);
+    if nullable.is_empty() && candidate_nullable.is_empty() {
+        return None;
+    }
+    nullable.extend(candidate_nullable);
+    let primary = match (existing_primary, candidate_primary) {
+        (None, None) => None,
+        (Some(only), None) | (None, Some(only)) => Some(only),
+        (Some(left), Some(right)) => {
+            if left == right || is_assignable_to(&right, &left) {
+                Some(left)
+            } else if is_assignable_to(&left, &right) {
+                Some(right)
+            } else {
+                Some(common_primitive_candidate(&left, &right)?)
+            }
+        }
+    };
+    let mut members: Vec<Type> = primary.into_iter().collect();
+    members.extend(nullable);
+    Some(surge_ts_types::union_type(members))
 }
 
 pub(crate) fn common_primitive_candidate(existing: &Type, candidate: &Type) -> Option<Type> {
@@ -3016,6 +3299,8 @@ pub(crate) fn widen_candidate_type(ty: &Type) -> Type {
                             optional: property.optional,
                             method: property.method,
                             readonly: property.readonly,
+                            restriction: property.restriction.clone(),
+                            index_slot: property.index_slot,
                         },
                     )
                 })
@@ -3027,7 +3312,10 @@ pub(crate) fn widen_candidate_type(ty: &Type) -> Type {
             // every member the spread stood for read as missing.
             let mut widened = alloc_object_type(
                 properties,
-                object.string_index_type.as_deref().map(widen_candidate_type),
+                object
+                    .string_index_type
+                    .as_deref()
+                    .map(widen_candidate_type),
             );
             if object.synthetic_open_index {
                 widened = widened.with_open_index_marker();

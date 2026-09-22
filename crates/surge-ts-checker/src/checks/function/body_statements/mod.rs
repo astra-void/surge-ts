@@ -94,11 +94,18 @@ pub(crate) fn check_function_variable_declaration(
         // `const [error, value] = tuple` lowers to one `tuple[N]` binding per
         // element; remembering which element each one is makes the group
         // dependent when `tuple` is a union of tuples.
-        if matches!(variable_kind, ParsedVariableKind::Const)
-            && let Some((source, index)) = tuple_destructure_source(initializer)
-        {
-            flow_state.record_tuple_destructure_binding(local_name.clone(), source, index);
-        }
+        let destructured = matches!(variable_kind, ParsedVariableKind::Const)
+            .then(|| {
+                tuple_destructure_binding(
+                    initializer,
+                    variable.array_pattern_span,
+                    variable.from_binding_pattern,
+                    &visible_symbols(scopes),
+                    ctx,
+                )
+            })
+            .flatten();
+        scopes.record_tuple_destructure(local_name.as_str(), destructured);
     }
 
     check_local_duplicate_declaration(&variable, scopes, ctx);
@@ -183,6 +190,7 @@ pub(crate) fn check_function_variable_declaration(
 
     let visible_symbols = visible_symbols(scopes);
 
+    let is_annotated = variable.declared_type.is_some();
     let probe_initializer = (literal_initializer_type.is_none()
         && variable.declared_type.is_some()
         && !initializer_flow_blocked)
@@ -242,7 +250,7 @@ pub(crate) fn check_function_variable_declaration(
             Some(initialized) => {
                 let declared = symbol.ty.clone();
                 scopes.insert_current_handle(local_name.as_str(), symbol);
-                scopes.insert_current_narrowed(
+                scopes.insert_current_declared(
                     local_name.as_str(),
                     SymbolInfo {
                         ty: initialized,
@@ -251,6 +259,19 @@ pub(crate) fn check_function_variable_declaration(
                     },
                     declared,
                 );
+            }
+            // An annotation is the binding's declared type for good: recording
+            // it lets a later write be checked against it and narrowed from
+            // it, rather than rewriting the binding to whatever was assigned.
+            None if is_annotated && !symbol.ty.is_unknown() => {
+                let declared = symbol.ty.clone();
+                let info = SymbolInfo {
+                    ty: declared.clone(),
+                    kind: symbol_kind_for_variable(variable_kind),
+                    function_signature: symbol.function_signature.clone(),
+                };
+                scopes.insert_current_handle(local_name.as_str(), symbol);
+                scopes.insert_current_declared(local_name.as_str(), info, declared);
             }
             None => {
                 // An un-annotated `let`/`var` is declared at its initializer's
@@ -368,9 +389,23 @@ pub(crate) fn check_function_block(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
+    // A bare block always runs, so what it assigns to an outer binding holds
+    // after it; a binding the block declares itself is not the outer one.
+    let mut assigned = Vec::new();
+    branch_assigned_names(&block_body, &mut assigned);
+    assigned.retain(|name| {
+        !block_body.iter().any(|statement| {
+            matches!(
+                statement,
+                ParsedFunctionBodyStatement::VariableDeclaration(variable) if variable.name == *name
+            )
+        })
+    });
     scopes.push_child();
     check_function_body(block_body, return_type, scopes, flow_state, ctx);
+    let assigned_types = branch_assignment_types(&assigned, scopes);
     scopes.pop_child();
+    adopt_branch_assignments(&assigned_types, scopes);
 }
 
 pub(crate) fn check_function_expression_statement(

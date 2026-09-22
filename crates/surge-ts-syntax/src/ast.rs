@@ -275,7 +275,8 @@ pub struct ParsedDeclareModuleDeclaration {
 pub struct ParsedNamespaceDeclaration {
     /// The namespace identifier, e.g. `JSX`. Nested names (`A.B`) are joined with `.`.
     pub name: String,
-    /// Written `declare namespace`: its members are exported without `export`.
+    /// Written `declare namespace`: every declaration in the body is ambient,
+    /// and its members are exported without `export`.
     pub is_declare: bool,
     pub name_span: Option<TextSpan>,
     pub statements: Vec<ParsedStatement>,
@@ -297,6 +298,7 @@ pub enum ParsedType {
     BigInt,
     Symbol,
     Undefined,
+    Null,
     Void,
     Any,
     /// A type the source itself does not resolve (an unresolved name, or a
@@ -414,6 +416,7 @@ impl Clone for ParsedType {
             Self::BigInt => Self::BigInt,
             Self::Symbol => Self::Symbol,
             Self::Undefined => Self::Undefined,
+            Self::Null => Self::Null,
             Self::Void => Self::Void,
             Self::Any => Self::Any,
             Self::Unknown => Self::Unknown,
@@ -455,6 +458,7 @@ impl ParsedType {
             | Self::BigInt
             | Self::Symbol
             | Self::Undefined
+            | Self::Null
             | Self::Void
             | Self::Any
             | Self::ErrorType
@@ -638,8 +642,9 @@ pub struct ParsedObjectBindingElement {
     pub binding_name: ParsedBindingName,
     pub name_span: Option<TextSpan>,
     pub has_default: bool,
-    /// The default written for the property (`{ c = fallback }`), with its span.
-    pub default_value: Option<Box<(ParsedExpression, Option<TextSpan>)>>,
+    /// The initializer of `{ a = value }`, checked against the property's type.
+    pub default_value: Option<Box<ParsedExpression>>,
+    pub default_span: Option<TextSpan>,
     pub span: Option<TextSpan>,
 }
 
@@ -688,6 +693,11 @@ pub struct ParsedInterfaceDeclaration {
     /// A bare call signature (`(value?: any): number`) on the interface, making
     /// values of this type callable without `new` (e.g. `NumberConstructor`).
     pub call_signature: Option<ParsedFunctionType>,
+    /// Every call signature as written, in source order, kept only when the
+    /// interface declares more than one. `call_signature` above stays the
+    /// permissive fold; this list is what overload resolution picks a candidate
+    /// from, the way a function declaration's overload group does.
+    pub call_signature_overloads: Vec<ParsedFunctionType>,
     /// Construct signatures (`new <T>(executor): Promise<T>`) on the interface,
     /// making values of this type usable with `new` (e.g. `PromiseConstructor`,
     /// `SetConstructor`). One entry per overload; the resolver merges them into a
@@ -1504,6 +1514,9 @@ pub struct ParsedVariableDeclaration {
 pub struct ParsedAssignment {
     pub target_name: String,
     pub target_span: Option<TextSpan>,
+    /// The target as written, parentheses included (`(x) = v`), which is where
+    /// tsc reports the value not fitting; `target_span` is the name itself.
+    pub written_target_span: Option<TextSpan>,
     pub value: ParsedExpression,
     pub value_span: Option<TextSpan>,
 }
@@ -1539,6 +1552,7 @@ pub struct ParsedFunctionDeclaration {
     /// describes what it *yields*, so tsc does not require it to `return` a
     /// value — the missing-return checks skip it.
     pub is_generator: bool,
+    pub is_async: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1893,6 +1907,7 @@ impl ParsedType {
             | ParsedType::BigInt
             | ParsedType::Symbol
             | ParsedType::Undefined
+            | ParsedType::Null
             | ParsedType::Void
             | ParsedType::Any
             | ParsedType::ErrorType

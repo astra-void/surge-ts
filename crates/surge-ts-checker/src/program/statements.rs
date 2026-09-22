@@ -546,13 +546,23 @@ fn check_statements_over_module_scope(
     ctx: &mut CheckerContext,
 ) -> Vec<Option<surge_ts_types::Type>> {
     let mut scopes = crate::symbols::ScopeStack::from_root(symbols);
+    // The block is a scope of its own: a `const name` in it shadows the module
+    // binding or the global of that name instead of redeclaring it. The frame
+    // stays pushed so `names` still read what the block narrowed them to.
+    scopes.push_child();
     let flow_facts = crate::flow::collect_function_flow_facts(&statements);
     let mut flow_state = crate::flow::FunctionFlowState::new(
         flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
     );
     let mut var_names = Vec::new();
     crate::flow::collect_var_names(&statements, &mut var_names);
-    crate::checks::function::check_function_body(statements, None, &mut scopes, &mut flow_state, ctx);
+    crate::checks::function::check_function_body(
+        statements,
+        None,
+        &mut scopes,
+        &mut flow_state,
+        ctx,
+    );
     // A `var` is function-scoped, so one declared in a module-level block,
     // branch or loop is a module binding once the statement has run.
     for name in var_names {
@@ -639,7 +649,9 @@ fn module_auto_array(
             declared_array: true,
             is_let,
             initialized: true,
-            assignments: is_let.then(|| ctx.let_assignment(name_span.start)).flatten(),
+            assignments: is_let
+                .then(|| ctx.let_assignment(name_span.start))
+                .flatten(),
             evolving: true,
             elements: surge_ts_types::Type::Never,
             unsettled: false,
@@ -664,7 +676,13 @@ pub(crate) fn check_program_statement(
     } else {
         Vec::new()
     };
-    check_program_statement_itself(statement, file_index, statement_index, function_signatures, ctx);
+    check_program_statement_itself(
+        statement,
+        file_index,
+        statement_index,
+        function_signatures,
+        ctx,
+    );
     if !mutations.is_empty() {
         evolving_arrays::apply_module_mutations(mutations, ctx);
     }
@@ -698,7 +716,39 @@ fn check_program_statement_itself(
                 .symbols
                 .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
             let mut scopes = crate::symbols::ScopeStack::from_root(symbols);
+            let receiver = match &assignment.target {
+                surge_ts_syntax::ParsedExpression::PropertyAccess {
+                    object,
+                    property_name,
+                    ..
+                } => match object.as_ref() {
+                    surge_ts_syntax::ParsedExpression::Identifier { name, .. } => {
+                        Some((name.clone(), property_name.clone()))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
             crate::checks::function::check_member_assignment(*assignment, &mut scopes, ctx);
+            // The scope stack is this statement's alone. An expando member the
+            // write *declared* (`fn.x = v`) belongs to the binding, so it is
+            // carried back for the statements that follow; what a write to an
+            // existing member narrowed is not.
+            if let Some((name, property_name)) = receiver
+                && let Some(updated) = scopes.resolve(&name)
+                && let surge_ts_types::Type::Object(object) = &updated.ty
+                && object.call_signature().is_some()
+                && ctx.symbols.get(&name).is_some_and(|current| {
+                    current.ty.get_property_access_type(&property_name).is_none()
+                })
+            {
+                let updated = crate::symbols::SymbolInfo {
+                    ty: updated.ty.clone(),
+                    kind: updated.kind,
+                    function_signature: updated.function_signature.clone(),
+                };
+                let _ = ctx.symbols.insert(name, updated);
+            }
         }
         ParsedStatement::FunctionDeclaration(function) => {
             with_module_declared_only(ctx, |ctx| {
@@ -816,13 +866,139 @@ fn check_program_statement_itself(
             }
         },
         ParsedStatement::DeclareModuleDeclaration(_) => {}
-        // Namespace members are bound during type-declaration collection; the
-        // namespace itself produces no value-level checks here.
-        ParsedStatement::NamespaceDeclaration(_) => {}
+        ParsedStatement::NamespaceDeclaration(namespace) => {
+            check_namespace_body(&namespace, file_index, ctx);
+        }
         ParsedStatement::UnsupportedDeclaration { span } => {
             emit_unsupported_declaration_diagnostic(ctx, span);
         }
     }
+}
+
+/// tsc's `checkModuleDeclaration` checks the body as ordinary source
+/// elements, in a scope of its own: the body's values (exported or not)
+/// shadow the enclosing ones, and its bare type references resolve against the
+/// namespace's qualified members.
+///
+/// The scope mirrors a module file's: hoisted function declarations are bound
+/// up front, and the body's other values back later references through the
+/// module value fallback, together with what other blocks of the same
+/// namespace export.
+fn check_namespace_body(
+    namespace: &surge_ts_syntax::ParsedNamespaceDeclaration,
+    file_index: usize,
+    ctx: &mut CheckerContext,
+) {
+    let ambient_body;
+    let namespace = if namespace.is_declare {
+        ambient_body = ambient_namespace(namespace);
+        &ambient_body
+    } else {
+        namespace
+    };
+    let prefix = match ctx.namespace_member_prefix_stack.last() {
+        Some(outer) => format!("{outer}.{}", namespace.name),
+        None => namespace.name.clone(),
+    };
+    ctx.namespace_member_prefix_stack.push(prefix);
+
+    let enclosing = std::sync::Arc::new(
+        ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+    );
+    let type_declarations = ctx.type_declarations.clone();
+    let namespace_values = crate::modules::collect_exportable_value_symbols(
+        &namespace.statements,
+        &type_declarations,
+        &enclosing,
+        None,
+        false,
+        ctx,
+    );
+    let mut body_values = crate::symbols::SymbolTable::new();
+    for (name, symbol) in namespace_values.iter_shared() {
+        let inherited = enclosing
+            .get_handle(name)
+            .is_some_and(|outer| std::sync::Arc::ptr_eq(&outer, symbol));
+        if !inherited {
+            let _ = body_values.insert_shared(name.clone(), symbol.clone());
+        }
+    }
+    let merged = (!namespace.name.contains('.'))
+        .then(|| {
+            enclosing.get_handle(&namespace.name).or_else(|| {
+                ctx.module_value_fallback
+                    .as_ref()
+                    .and_then(|fallback| fallback.get_handle(&namespace.name))
+            })
+        })
+        .flatten();
+    if let Some(merged) = merged
+        && let surge_ts_types::Type::Object(object) = &merged.ty
+    {
+        for (name, property) in object.properties.iter() {
+            let own = body_values.get_own(name).map(|symbol| symbol.ty.clone());
+            // Another block's export, or this block's nested namespace, which
+            // the merged object carries with every block's members.
+            if own.is_none() || matches!(own, Some(surge_ts_types::Type::Object(_))) {
+                let _ = body_values.insert(
+                    name.to_string(),
+                    crate::symbols::SymbolInfo {
+                        ty: property.ty.clone(),
+                        kind: crate::symbols::SymbolKind::Var,
+                        function_signature: None,
+                    },
+                );
+            }
+        }
+    }
+    let saved_fallback = ctx.module_value_fallback.take();
+    let body_values = match saved_fallback.clone() {
+        Some(outer) => body_values.with_parent_fallback(outer),
+        None => body_values,
+    };
+    ctx.module_value_fallback = Some(std::sync::Arc::new(body_values));
+
+    let mut symbols = crate::symbols::SymbolTable::declaration_scope(enclosing);
+    let mut function_signatures = HashMap::new();
+    collect_function_signatures_from_statements(
+        &namespace.statements,
+        file_index,
+        &mut symbols,
+        &mut function_signatures,
+        ctx,
+    );
+    let saved_symbols = std::mem::take(&mut ctx.symbols);
+    ctx.set_symbols(symbols);
+    check_program_file_statements(&namespace.statements, file_index, &function_signatures, ctx);
+    ctx.set_symbols(saved_symbols);
+    ctx.module_value_fallback = saved_fallback;
+    ctx.namespace_member_prefix_stack.pop();
+}
+
+/// A `declare namespace` makes every declaration in it ambient, nested
+/// namespaces and classes included (a `declare class` has no initializers to
+/// check).
+fn ambient_namespace(
+    namespace: &surge_ts_syntax::ParsedNamespaceDeclaration,
+) -> surge_ts_syntax::ParsedNamespaceDeclaration {
+    fn ambient_statement(statement: &mut ParsedStatement) {
+        match statement {
+            ParsedStatement::ClassDeclaration(class) => class.is_declare = true,
+            ParsedStatement::NamespaceDeclaration(inner) => {
+                inner.is_declare = true;
+                inner.statements.iter_mut().for_each(ambient_statement);
+            }
+            ParsedStatement::ExportDeclaration(export) => {
+                if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_mut() {
+                    ambient_statement(declaration);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut ambient = namespace.clone();
+    ambient.statements.iter_mut().for_each(ambient_statement);
+    ambient
 }
 
 /// The target of `export =` / `export default <expression>`, which tsc checks

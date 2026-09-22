@@ -117,6 +117,16 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
             .unwrap_or(Type::Unknown),
     };
 
+    // An async function returns a promise of what its body completes with.
+    let return_type = if arrow_function.is_async
+        && arrow_function.return_type.is_none()
+        && !return_type.is_unknown()
+    {
+        crate::checks::call::promise_of(&return_type, ctx)
+    } else {
+        return_type
+    };
+
     alloc_function_type(
         parameters,
         return_type,

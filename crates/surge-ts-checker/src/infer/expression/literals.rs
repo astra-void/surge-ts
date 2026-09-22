@@ -131,6 +131,8 @@ pub(crate) fn infer_object_literal(
                                     optional: existing.optional,
                                     method: existing.method || source_property.method,
                                     readonly: false,
+                                    restriction: None,
+                                    index_slot: false,
                                 }
                             }
                             _ => source_property.clone(),
@@ -275,6 +277,20 @@ pub(crate) fn infer_const_expression(
                 members, None,
             )))
         }
+        // tsc's `checkTemplateExpression` in a const context: the template is
+        // typed by its own pattern, `` `*${s}*` `` rather than `string`.
+        ParsedExpression::TemplateLiteral {
+            expressions,
+            quasis,
+            is_tagged: false,
+            ..
+        } if !expressions.is_empty() => {
+            let inferred = infer_expression(expression, symbols, ctx);
+            match template_expression_pattern_type(expressions, quasis, symbols, ctx) {
+                Some(pattern) => InferredExpression::Known(pattern),
+                None => inferred,
+            }
+        }
         _ => infer_expression(expression, symbols, ctx),
     }
 }
@@ -342,13 +358,10 @@ pub(crate) fn infer_array_literal(
     // not widened: `[...combination]` off a `('a' | 'b')[]` stays that union
     // where widening made it `string[]` and rejected every use of the copy.
     let element_type = if spread_element_types.is_empty() {
-        crate::checks::expr::widen_type(&union_type(element_types))
-    } else if element_types.is_empty() {
-        union_type(spread_element_types)
+        widen_outside_literal_context(element_types)
     } else {
         if !element_types.is_empty() {
-            spread_element_types
-                .push(crate::checks::expr::widen_type(&union_type(element_types)));
+            spread_element_types.push(widen_outside_literal_context(element_types));
         }
         union_type(spread_element_types)
     };
@@ -372,7 +385,9 @@ fn widen_top_level_literals(ty: &Type) -> Type {
         Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => {
             crate::checks::expr::widen_type(ty)
         }
-        Type::Union(union) => union_type(union.types().iter().map(widen_top_level_literals).collect()),
+        Type::Union(union) => {
+            union_type(union.types().iter().map(widen_top_level_literals).collect())
+        }
         other => other.clone(),
     }
 }
@@ -436,4 +451,102 @@ pub(crate) fn check_paired_setter(
         parameter.declared_type = Some(getter.return_type.clone().unwrap_or(surge_ts_syntax::ParsedType::Any));
     }
     let _ = check_arrow_function_expression(setter, symbols, ctx);
+}
+
+/// The template literal type a template expression has where tsc types it by
+/// pattern (a const context, or a template-literal contextual type): each
+/// interpolation contributes its own type when that is within
+/// `string | number | boolean | bigint | null | undefined`
+/// (`templateConstraintType`), and `string` otherwise.
+pub(crate) fn template_expression_pattern_type(
+    expressions: &[ParsedExpression],
+    quasis: &[Option<String>],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    if quasis.len() != expressions.len() + 1 {
+        return None;
+    }
+    let texts: Vec<String> = quasis.iter().cloned().collect::<Option<_>>()?;
+    let before = ctx.diagnostics().len();
+    let types: Vec<Type> = expressions
+        .iter()
+        .map(|interpolation| match infer_expression(interpolation, symbols, ctx) {
+            InferredExpression::Known(ty) if is_template_constraint(&ty) => ty,
+            // A type parameter is a generic placeholder tsc relates through
+            // its constraint, which surge's placeholder does not carry; like a
+            // value surge could not type, it stands as `any`, the placeholder
+            // that matches whatever the target asks for.
+            InferredExpression::Known(ty) if !ty.is_unknown() && ty != Type::Any => Type::String,
+            _ => Type::Any,
+        })
+        .collect();
+    ctx.truncate_diagnostics_releasing_utility_keys(before);
+    Some(surge_ts_types::template_literal_type(&texts, &types))
+}
+
+fn is_template_constraint(ty: &Type) -> bool {
+    let primitive = |ty: &Type| {
+        matches!(
+            ty,
+            Type::String
+                | Type::Number
+                | Type::Boolean
+                | Type::BigInt
+                | Type::Null
+                | Type::Undefined
+                | Type::StringLiteral(_)
+                | Type::NumberLiteral(_)
+                | Type::BooleanLiteral(_)
+        ) || surge_ts_types::is_template_literal_type(ty)
+    };
+    match ty {
+        Type::Union(union) => union.types().iter().all(primitive),
+        other => primitive(other),
+    }
+}
+
+/// Which literal kinds an array literal's elements keep, per tsc's
+/// `isLiteralOfContextualType`: an element whose contextual type is a type
+/// variable constrained to `string` stays a string literal, and likewise for
+/// `number`. Set by generic inference around the one argument it applies to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct LiteralElementContext {
+    pub(crate) string: bool,
+    pub(crate) number: bool,
+}
+
+thread_local! {
+    static LITERAL_ELEMENT_CONTEXT: std::cell::Cell<LiteralElementContext> =
+        const { std::cell::Cell::new(LiteralElementContext { string: false, number: false }) };
+}
+
+pub(crate) fn with_literal_element_context<R>(
+    context: LiteralElementContext,
+    run: impl FnOnce() -> R,
+) -> R {
+    let previous = LITERAL_ELEMENT_CONTEXT.with(|cell| cell.replace(context));
+    let result = run();
+    LITERAL_ELEMENT_CONTEXT.with(|cell| cell.set(previous));
+    result
+}
+
+fn widen_outside_literal_context(element_types: Vec<Type>) -> Type {
+    let context = LITERAL_ELEMENT_CONTEXT.with(std::cell::Cell::get);
+    if context == LiteralElementContext::default() {
+        return crate::checks::expr::widen_type(&union_type(element_types));
+    }
+    let members: Vec<Type> = element_types
+        .into_iter()
+        .flat_map(|ty| match ty {
+            Type::Union(union) => union.types().to_vec(),
+            other => vec![other],
+        })
+        .map(|member| match &member {
+            Type::StringLiteral(_) if context.string => member,
+            Type::NumberLiteral(_) if context.number => member,
+            _ => crate::checks::expr::widen_type(&member),
+        })
+        .collect();
+    union_type(members)
 }

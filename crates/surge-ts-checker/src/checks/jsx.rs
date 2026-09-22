@@ -198,7 +198,10 @@ fn resolve_props_type(
 /// contextual signature in tsc either, and it reports the parameter (the
 /// unresolved `Textarea` in tRPC's `next-sse-chat`).
 fn component_is_unmodelled(component_type: &Type) -> bool {
-    matches!(component_type.peeled(), Type::Unknown | Type::TypeParameter(_))
+    matches!(
+        component_type.peeled(),
+        Type::Unknown | Type::TypeParameter(_)
+    )
 }
 
 /// The props type for a component value: the first parameter of its call (or, for
@@ -288,7 +291,6 @@ fn resolve_intrinsic_props_type(
     let Type::Object(object) = &intrinsic_type else {
         return None;
     };
-
 
     if let Some(property_type) = object.get_property_type(tag_name) {
         return Some(property_type.clone());

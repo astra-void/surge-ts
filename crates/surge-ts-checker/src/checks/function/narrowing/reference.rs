@@ -35,6 +35,7 @@ pub(super) enum ReferenceGuard<'a> {
     },
     Nullish {
         keep_matching: bool,
+        test: super::guards::NullishTest,
     },
     Assigned {
         assigned: &'a Type,
@@ -52,15 +53,53 @@ pub(super) enum ReferenceGuard<'a> {
         literal: &'a ParsedExpression,
         keep_matching: bool,
     },
+    /// The reference tested falsy (`if (!x)`, the `else` of `if (x)`): tsc's
+    /// `getTypeWithFacts(type, TypeFacts.Falsy)`, where members that are always
+    /// truthy go and anything that may be falsy stays (`string` keeps `string`,
+    /// not `""`).
+    Falsy,
+    /// `x.constructor === C` held: only what `C` itself constructs is left.
+    ConstructedBy { ctor_name: &'a str },
+    /// `a.b.c.kind === "x"`: the union at `a.b.c` is filtered by its `kind`
+    /// member, however deep the reference is.
+    Discriminant {
+        property: &'a str,
+        literal: &'a Type,
+        keep_matching: bool,
+    },
 }
 
 impl ReferenceGuard<'_> {
+    /// Whether the guard holding proves the tested reference is not
+    /// `undefined` — and so, for `base?.p`, that `base` is not nullish either:
+    /// a nullish base makes the whole chain `undefined`.
+    fn proves_defined(&self) -> bool {
+        match self {
+            Self::Truthy => true,
+            Self::Typeof { tag, keep_matching } => (*tag == "undefined") != *keep_matching,
+            Self::Nullish {
+                keep_matching: false,
+                test,
+            } => test.undefined,
+            _ => false,
+        }
+    }
+
     /// Narrows one leaf — a property's type plus its `optional` flag, or a whole
     /// binding's type with `optional = false`. `None` leaves the leaf alone.
     pub(super) fn narrow_leaf(&self, ty: &Type, optional: bool) -> Option<(Type, bool)> {
         match self {
+            Self::ConstructedBy { ctor_name } => {
+                let narrowed = narrow_union_by_constructor(ty, ctor_name)?;
+                (narrowed != *ty).then_some((narrowed, optional))
+            }
+            Self::Falsy => {
+                let effective = Self::effective_leaf_type(ty, optional);
+                let narrowed = super::truthy::keep_possibly_falsy(&effective);
+                (narrowed != effective).then_some((narrowed, false))
+            }
             Self::Truthy => {
-                let narrowed = surge_ts_types::remove_definitely_falsy(ty);
+                let narrowed = super::truthy::remove_definitely_falsy(ty);
                 (optional || narrowed != *ty).then_some((narrowed, false))
             }
             // An optional property carries its `undefined` in the `optional` flag
@@ -102,9 +141,12 @@ impl ReferenceGuard<'_> {
                 let narrowed = narrow_union_by_arraybufferview(&effective, *keep_views)?;
                 (optional || narrowed != *ty).then_some((narrowed, false))
             }
-            Self::Nullish { keep_matching } => {
+            Self::Nullish {
+                keep_matching,
+                test,
+            } => {
                 let effective = Self::effective_leaf_type(ty, optional);
-                let narrowed = narrow_union_by_nullish(&effective, *keep_matching)?;
+                let narrowed = narrow_union_by_nullish(&effective, *keep_matching, *test)?;
                 (optional || narrowed != *ty).then_some((narrowed, false))
             }
             Self::Predicate {
@@ -118,6 +160,16 @@ impl ReferenceGuard<'_> {
             // The complement of a literal test keeps `undefined` (an absent
             // property is not the literal either), and an optional slot stores
             // that `undefined` in its flag, so it is moved back there.
+            Self::Discriminant {
+                property,
+                literal,
+                keep_matching,
+            } => {
+                let effective = Self::effective_leaf_type(ty, optional);
+                let narrowed =
+                    narrow_union_by_discriminant(&effective, property, literal, *keep_matching)?;
+                (optional || narrowed != *ty).then_some((narrowed, false))
+            }
             Self::LiteralEquality {
                 literal,
                 keep_matching,
@@ -203,6 +255,9 @@ pub(super) fn reference_path(expression: &ParsedExpression) -> Option<(String, V
             Some((base, path))
         }
         ParsedExpression::NonNullAssertion { expression, .. } => reference_path(expression),
+        // tsc's `isMatchingReference`: a comma expression is the reference its
+        // right operand is.
+        ParsedExpression::Sequence { expressions } => reference_path(&expressions.last()?.0),
         _ => None,
     }
 }
@@ -216,10 +271,34 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
 
     match ty.peeled() {
         Type::Object(mut object_type) => {
-            let mut existing = object_type.properties.get(head.as_str())?.clone();
+            // A name reached only through the string index signature is a
+            // reference like any other (`typeof config.works !== "boolean"`);
+            // the narrowed slot is recorded as a property marked `index_slot`.
+            let mut existing = match object_type.properties.get(head.as_str()) {
+                Some(existing) => existing.clone(),
+                None => surge_ts_types::ObjectProperty {
+                    index_slot: true,
+                    ..surge_ts_types::ObjectProperty::required(
+                        object_type.string_index_type.as_deref()?.clone(),
+                    )
+                },
+            };
             existing.ty = crate::checks::function::settle_lazy_read(existing.ty);
             let (narrowed_ty, narrowed_optional) = if rest.is_empty() {
-                guard.narrow_leaf(&existing.ty, existing.optional)?
+                match guard.narrow_leaf(&existing.ty, existing.optional) {
+                    Some(narrowed) => narrowed,
+                    // An index slot a guard proves present, or a write fills,
+                    // is recorded even when its type stands: that is what
+                    // keeps `noUncheckedIndexedAccess` from widening the read
+                    // with `undefined` again.
+                    None if existing.index_slot
+                        && (guard.proves_defined()
+                            || matches!(guard, ReferenceGuard::Assigned { .. })) =>
+                    {
+                        (existing.ty.clone(), false)
+                    }
+                    None => return None,
+                }
             } else {
                 // A truthy test further down the chain proves this link is
                 // present too — the same fact that drops a nullish union
@@ -244,6 +323,8 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
                     optional: narrowed_optional,
                     method: existing.method,
                     readonly: existing.readonly,
+                    restriction: existing.restriction.clone(),
+                    index_slot: existing.index_slot,
                 },
             );
             Some(Type::Object(object_type))
@@ -262,8 +343,8 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
                     // `undefined`, which is falsy. Keeping the nullish member
                     // left `opts?.t ? f(opts.t) : …` reading `opts.t` as
                     // `string | undefined`.
-                    None if matches!(guard, ReferenceGuard::Truthy)
-                        && matches!(member, Type::Undefined | Type::Void) =>
+                    None if guard.proves_defined()
+                        && matches!(member, Type::Undefined | Type::Null | Type::Void) =>
                     {
                         narrowed_any = true;
                     }
@@ -271,6 +352,9 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
                     // narrow" and for "this member cannot satisfy the guard at
                     // all", and keeping the member was wrong in the second case.
                     None if property_path_is_impossible(member, path, guard) => {
+                        narrowed_any = true;
+                    }
+                    None if nullish_discriminant_rules_out(member, union.types(), path, guard) => {
                         narrowed_any = true;
                     }
                     None => members.push(member.clone()),
@@ -297,25 +381,90 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
 /// such a member (it *is* the undefined one), and the truthy guard reaches its
 /// own arm above.
 fn property_path_is_impossible(member: &Type, path: &[String], guard: ReferenceGuard<'_>) -> bool {
-    if !matches!(
-        guard,
-        ReferenceGuard::Nullish {
-            keep_matching: false
-        }
-    ) {
-        return false;
+    // A literal test reached through a path discriminates the unions it
+    // crosses: `w.thing && w.thing.kind === "a"` drops the members of
+    // `w.thing` whose `kind` can never be `"a"`.
+    if let ReferenceGuard::LiteralEquality {
+        literal,
+        keep_matching,
+    } = guard
+    {
+        let (Some(literal), Some(leaf)) = (
+            literal_expression_value(literal),
+            property_path_leaf_type(member, path),
+        ) else {
+            return false;
+        };
+        let result = discriminant_type_match(&leaf, &literal);
+        return if keep_matching {
+            result == DiscriminantMatch::No
+        } else {
+            result == DiscriminantMatch::Yes
+        };
     }
+    let ReferenceGuard::Nullish {
+        keep_matching: false,
+        test,
+    } = guard
+    else {
+        return false;
+    };
     let Some(leaf) = property_path_leaf_type(member, path) else {
         return false;
     };
-    match leaf {
-        Type::Undefined | Type::Void | Type::Never => true,
-        Type::Union(union) => union
-            .types()
-            .iter()
-            .all(|member| matches!(member, Type::Undefined | Type::Void | Type::Never)),
+    let selected = |ty: &Type| match ty {
+        Type::Null => test.null,
+        Type::Undefined | Type::Void => test.undefined,
+        Type::Never => true,
         _ => false,
+    };
+    match leaf {
+        Type::Union(union) => union.types().iter().all(selected),
+        other => selected(&other),
     }
+}
+
+/// tsc's `narrowTypeByDiscriminant` for a nullish equality: `null` and
+/// `undefined` are unit types, so a property some member declares as one of
+/// them discriminates the union, and `x.p === null` drops every member whose
+/// `p` can never be `null`.
+fn nullish_discriminant_rules_out(
+    member: &Type,
+    members: &[Type],
+    path: &[String],
+    guard: ReferenceGuard<'_>,
+) -> bool {
+    let ReferenceGuard::Nullish {
+        keep_matching: true,
+        test,
+    } = guard
+    else {
+        return false;
+    };
+    let selects = |ty: &Type| match ty {
+        Type::Null => test.null,
+        Type::Undefined | Type::Void => test.undefined,
+        _ => false,
+    };
+    let leaf_members = |ty: &Type| -> Option<Vec<Type>> {
+        match property_path_leaf_type(ty, path)?.peeled() {
+            Type::Union(union) => Some(union.types().to_vec()),
+            other => Some(vec![other]),
+        }
+    };
+    let Some(leaf) = leaf_members(member) else {
+        return false;
+    };
+    let definitely_unselected = leaf.iter().all(|ty| {
+        !selects(ty)
+            && !ty.is_unknown()
+            && !matches!(ty, Type::Any | Type::Never | Type::Reference(_))
+    });
+    definitely_unselected
+        && members.iter().any(|other| {
+            !std::ptr::eq(other, member)
+                && leaf_members(other).is_some_and(|leaf| leaf.iter().any(selects))
+        })
 }
 
 /// The declared type at the end of `path`, with an optional slot's `undefined`
@@ -366,6 +515,13 @@ pub(crate) fn narrow_assignment_target_in_scope(
 
 /// Applies `guard` to `base`'s `path` in the *current* scope frame — see the
 /// shadowing note in [`narrow_discriminant_in_scope`].
+/// A function declaration is not a reference tsc narrows — only variables,
+/// parameters and properties are — so `isFoo || isFoo()` still calls a
+/// function, not the `never` a falsy `isFoo` would be.
+fn is_unnarrowable_binding(symbol: &SymbolInfo, path: &[String]) -> bool {
+    path.is_empty() && matches!(symbol.kind, crate::symbols::SymbolKind::Function)
+}
+
 pub(super) fn narrow_reference_in_scope(
     base: &str,
     path: &[String],
@@ -375,6 +531,9 @@ pub(super) fn narrow_reference_in_scope(
     let Some(symbol) = scopes.resolve(base) else {
         return;
     };
+    if is_unnarrowable_binding(symbol, path) {
+        return;
+    }
     let Some(narrowed) = narrowed_reference_type(&symbol.ty, path, guard) else {
         return;
     };
@@ -391,9 +550,240 @@ pub(super) fn narrow_reference_in_scope(
 /// test on a reference, or every reference an `&&` chain proves truthy. Only
 /// truthiness of the true branch is modelled — the falsy complement (`""`, `0`,
 /// …) is not.
+/// tsc's `narrowTypeByOptionalChainContainment`: the reference an optional
+/// chain starts from is not nullish wherever the chain is known not to have
+/// short-circuited — it equals a value that is never `undefined` (`null`
+/// included, for `==`), or it differs from one that always is. `value_type`
+/// answers the compared operand's type.
+fn optional_chain_contained_receiver<'a>(
+    condition: &'a ParsedExpression,
+    branch_is_true: bool,
+    value_type: &dyn Fn(&ParsedExpression) -> Option<Type>,
+) -> Option<&'a ParsedExpression> {
+    use surge_ts_syntax::ParsedBinaryOperator;
+    let ParsedExpression::Binary {
+        operator,
+        left,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let (equals, strict) = match operator {
+        ParsedBinaryOperator::StrictEquals => (true, true),
+        ParsedBinaryOperator::Equals => (true, false),
+        ParsedBinaryOperator::StrictNotEquals => (false, true),
+        ParsedBinaryOperator::NotEquals => (false, false),
+        _ => return None,
+    };
+    let (chain, value) = if left.continues_optional_chain() {
+        (left.as_ref(), right.as_ref())
+    } else if right.continues_optional_chain() {
+        (right.as_ref(), left.as_ref())
+    } else {
+        return None;
+    };
+    let value_type = match value {
+        ParsedExpression::UndefinedLiteral => Type::Undefined,
+        ParsedExpression::NullLiteral => Type::Null,
+        other => value_type(other)?,
+    };
+    let nullable = |ty: &Type| match ty {
+        Type::Undefined | Type::Void => true,
+        Type::Null => !strict,
+        _ => false,
+    };
+    let members: Vec<Type> = match value_type.peeled() {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other],
+    };
+    let removes_nullable = if equals == branch_is_true {
+        members.iter().all(|member| {
+            !nullable(member) && !matches!(member, Type::Any) && !member.is_unknown()
+        })
+    } else {
+        members.iter().all(nullable)
+    };
+    if !removes_nullable {
+        return None;
+    }
+    optional_chain_receiver(chain)
+}
+
+/// The expression written before the chain's innermost `?.`.
+fn optional_chain_receiver(chain: &ParsedExpression) -> Option<&ParsedExpression> {
+    match chain {
+        ParsedExpression::OptionalPropertyAccess { object, .. }
+        | ParsedExpression::OptionalIndexAccess { object, .. }
+        | ParsedExpression::OptionalPropertyCall { object, .. }
+        | ParsedExpression::OptionalCall { callee: object, .. } => Some(object.as_ref()),
+        ParsedExpression::PropertyAccess { object, .. }
+        | ParsedExpression::ElementAccess { object, .. }
+        | ParsedExpression::PropertyCall { object, .. } => optional_chain_receiver(object),
+        _ => None,
+    }
+}
+
+/// The type of an operand a guard compares with, as far as the symbol table
+/// alone answers it: a literal or a binding.
+pub(super) fn compared_operand_type(
+    symbols: &SymbolTable,
+) -> impl Fn(&ParsedExpression) -> Option<Type> + '_ {
+    move |expression| match expression {
+        ParsedExpression::Identifier { name, .. } => {
+            symbols.get(name).map(|symbol| symbol.ty.clone())
+        }
+        other => super::guards::literal_expression_value(other),
+    }
+}
+
+/// tsc's `narrowTypeByConstructor`, for `x.constructor == C` and
+/// `x["constructor"] == C` written either way round: the reference whose
+/// constructor is compared, the constructor's name, and whether the operator is
+/// an equality. tsc narrows only in the branch where the comparison holds.
+fn parse_constructor_equality(
+    condition: &ParsedExpression,
+) -> Option<((String, Vec<String>), &str, bool)> {
+    use surge_ts_syntax::ParsedBinaryOperator;
+    let ParsedExpression::Binary {
+        operator,
+        left,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let eq = match operator {
+        ParsedBinaryOperator::StrictEquals | ParsedBinaryOperator::Equals => true,
+        ParsedBinaryOperator::StrictNotEquals | ParsedBinaryOperator::NotEquals => false,
+        _ => return None,
+    };
+    let constructor_of = |expression: &ParsedExpression| -> Option<(String, Vec<String>)> {
+        let is_constructor_key =
+            |index: &ParsedExpression| matches!(index, ParsedExpression::StringLiteral(key) if key == "constructor");
+        match expression {
+            ParsedExpression::PropertyAccess {
+                object,
+                property_name,
+                ..
+            } if property_name == "constructor" => reference_path(object),
+            ParsedExpression::ElementAccess { object, index, .. } if is_constructor_key(index) => {
+                reference_path(object)
+            }
+            ParsedExpression::IndexAccess {
+                object_name, index, ..
+            } if is_constructor_key(index) => Some((object_name.clone(), Vec::new())),
+            _ => None,
+        }
+    };
+    fn constructor_name(expression: &ParsedExpression) -> Option<&str> {
+        match expression {
+            ParsedExpression::Identifier { name, .. } => Some(name.as_str()),
+            ParsedExpression::PropertyAccess {
+                object,
+                property_name,
+                ..
+            } if matches!(object.as_ref(), ParsedExpression::Identifier { .. })
+                && property_name != "constructor" =>
+            {
+                Some(property_name.as_str())
+            }
+            _ => None,
+        }
+    }
+    if let (Some(reference), Some(name)) = (constructor_of(left), constructor_name(right)) {
+        return Some((reference, name, eq));
+    }
+    let (reference, name) = (constructor_of(right)?, constructor_name(left)?);
+    Some((reference, name, eq))
+}
+
+/// The members of a union that `ctor_name` itself constructs (tsc's
+/// `isConstructedBy`): a class instance of exactly that class — a subclass has
+/// its own constructor — a primitive for its wrapper, an array for `Array`.
+/// What surge cannot judge stays. `None` when nothing would change, or when
+/// nothing would be left: the match is by name, and an empty result is more
+/// likely a name surge did not recognize than a contradiction in the source.
+fn narrow_union_by_constructor(ty: &Type, ctor_name: &str) -> Option<Type> {
+    let Type::Union(union) = ty.peeled() else {
+        return None;
+    };
+    let constructed_by = |member: &Type| -> bool {
+        match member {
+            Type::Any | Type::Unknown | Type::GenuineUnknown | Type::ErrorType | Type::TypeParameter(_) => true,
+            Type::Number | Type::NumberLiteral(_) => ctor_name == "Number",
+            Type::String | Type::StringLiteral(_) => ctor_name == "String",
+            Type::Boolean | Type::BooleanLiteral(_) => ctor_name == "Boolean",
+            Type::BigInt => ctor_name == "BigInt",
+            Type::Symbol => ctor_name == "Symbol",
+            Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) => ctor_name == "Array",
+            Type::Undefined | Type::Null | Type::Void | Type::Never => false,
+            Type::Function(_) => ctor_name == "Function",
+            other => {
+                let name = other.name();
+                let base = name.split('<').next().unwrap_or(name.as_str());
+                base == ctor_name || base.rsplit('.').next() == Some(ctor_name)
+            }
+        }
+    };
+    let members = union.types();
+    let kept: Vec<Type> = members.iter().filter(|member| constructed_by(member)).cloned().collect();
+    if kept.is_empty() || kept.len() == members.len() {
+        return None;
+    }
+    Some(union_type(kept))
+}
+
+/// The statement form of the constructor guard in [`collect_reference_guards`].
+pub(super) fn narrow_constructor_equality_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    let Some(((base, path), ctor_name, eq)) = parse_constructor_equality(condition) else {
+        return false;
+    };
+    if eq == branch_is_true {
+        narrow_reference_in_scope(&base, &path, ReferenceGuard::ConstructedBy { ctor_name }, scopes);
+    }
+    true
+}
+
+/// The statement form of the containment guard in [`collect_reference_guards`].
+pub(super) fn narrow_optional_call_containment_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    let receiver = {
+        let value_type = compared_operand_type(scopes.visible_symbols());
+        optional_chain_contained_receiver(condition, branch_is_true, &value_type)
+            .or_else(|| match parse_typeof_condition(condition) {
+                Some((operand, tag, eq)) if (branch_is_true == eq) != (tag == "undefined") => {
+                    optional_chain_receiver(operand)
+                }
+                _ => None,
+            })
+            .or_else(|| match parse_instanceof_condition(condition) {
+                Some((operand, _)) if branch_is_true => optional_chain_receiver(operand),
+                _ => None,
+            })
+            .and_then(reference_path)
+    };
+    let Some((base, path)) = receiver else {
+        return false;
+    };
+    narrow_reference_in_scope(&base, &path, ReferenceGuard::Truthy, scopes);
+    // Not the end of it: `o?.kind === "a"` still discriminates `o`.
+    false
+}
+
 pub(super) fn collect_reference_guards<'a>(
     condition: &'a ParsedExpression,
     branch_is_true: bool,
+    value_type: &dyn Fn(&ParsedExpression) -> Option<Type>,
     guards: &mut Vec<(String, Vec<String>, ReferenceGuard<'a>)>,
 ) {
     if let ParsedExpression::Logical {
@@ -404,8 +794,8 @@ pub(super) fn collect_reference_guards<'a>(
     } = condition
     {
         if branch_is_true {
-            collect_reference_guards(left, true, guards);
-            collect_reference_guards(right, true, guards);
+            collect_reference_guards(left, true, value_type, guards);
+            collect_reference_guards(right, true, value_type, guards);
         }
         return;
     }
@@ -419,8 +809,8 @@ pub(super) fn collect_reference_guards<'a>(
     } = condition
     {
         if !branch_is_true {
-            collect_reference_guards(left, false, guards);
-            collect_reference_guards(right, false, guards);
+            collect_reference_guards(left, false, value_type, guards);
+            collect_reference_guards(right, false, value_type, guards);
         }
         return;
     }
@@ -439,7 +829,7 @@ pub(super) fn collect_reference_guards<'a>(
             ..
         } = operand.as_ref()
     {
-        collect_reference_guards(inner, branch_is_true, guards);
+        collect_reference_guards(inner, branch_is_true, value_type, guards);
         return;
     }
     if let ParsedExpression::Unary {
@@ -448,11 +838,34 @@ pub(super) fn collect_reference_guards<'a>(
         ..
     } = condition
     {
-        collect_reference_guards(operand, !branch_is_true, guards);
+        collect_reference_guards(operand, !branch_is_true, value_type, guards);
+        return;
+    }
+
+    // `o?.f() === value` holds only where `o` is not nullish. The comparison
+    // may narrow further below (`o?.kind === "a"` still discriminates `o`).
+    if let Some(receiver) =
+        optional_chain_contained_receiver(condition, branch_is_true, value_type)
+        && let Some((base, path)) = reference_path(receiver)
+    {
+        guards.push((base, path, ReferenceGuard::Truthy));
+    }
+
+    if let Some(((base, path), ctor_name, eq)) = parse_constructor_equality(condition) {
+        if eq == branch_is_true {
+            guards.push((base, path, ReferenceGuard::ConstructedBy { ctor_name }));
+        }
         return;
     }
 
     if let Some((operand, tag, eq)) = parse_typeof_condition(condition) {
+        // A chain whose `typeof` is anything but `"undefined"` did not
+        // short-circuit, so what it starts from is present.
+        if (branch_is_true == eq) != (tag == "undefined")
+            && let Some((base, path)) = optional_chain_receiver(operand).and_then(reference_path)
+        {
+            guards.push((base, path, ReferenceGuard::Truthy));
+        }
         if let Some((base, path)) = reference_path(operand) {
             guards.push((
                 base,
@@ -467,6 +880,11 @@ pub(super) fn collect_reference_guards<'a>(
     }
 
     if let Some((operand, ctor_name)) = parse_instanceof_condition(condition) {
+        if branch_is_true
+            && let Some((base, path)) = optional_chain_receiver(operand).and_then(reference_path)
+        {
+            guards.push((base, path, ReferenceGuard::Truthy));
+        }
         if let Some((base, path)) = reference_path(operand) {
             guards.push((
                 base,
@@ -507,13 +925,14 @@ pub(super) fn collect_reference_guards<'a>(
         return;
     }
 
-    if let Some((subject, eq)) = parse_nullish_equality_condition(condition) {
+    if let Some((subject, eq, test)) = parse_nullish_equality_condition(condition) {
         if let Some((base, path)) = reference_path(subject) {
             guards.push((
                 base,
                 path,
                 ReferenceGuard::Nullish {
                     keep_matching: branch_is_true == eq,
+                    test,
                 },
             ));
         }
@@ -550,8 +969,17 @@ pub(super) fn collect_reference_guards<'a>(
         return;
     }
 
-    if branch_is_true && let Some((base, path)) = reference_path(condition) {
+    // `a?.b()` being truthy proves `a` present: a short-circuited chain is
+    // `undefined`. `reference_path` stops at the call, so test its receiver.
+    let tested = match condition {
+        ParsedExpression::OptionalPropertyCall { object, .. }
+        | ParsedExpression::OptionalCall { callee: object, .. } => object.as_ref(),
+        other => other,
+    };
+    if branch_is_true && let Some((base, path)) = reference_path(tested) {
         guards.push((base, path, ReferenceGuard::Truthy));
+    } else if !branch_is_true && let Some((base, path)) = reference_path(condition) {
+        guards.push((base, path, ReferenceGuard::Falsy));
     }
 }
 
@@ -575,7 +1003,12 @@ pub(super) fn narrow_reference_guard_symbol_table(
     branch_is_true: bool,
 ) -> Option<SymbolTable> {
     let mut guards = Vec::new();
-    collect_reference_guards(condition, branch_is_true, &mut guards);
+    collect_reference_guards(
+        condition,
+        branch_is_true,
+        &compared_operand_type(symbols),
+        &mut guards,
+    );
     if guards.is_empty() {
         return None;
     }
@@ -586,6 +1019,9 @@ pub(super) fn narrow_reference_guard_symbol_table(
         let Some(symbol) = narrowed_symbols.get(&base) else {
             continue;
         };
+        if is_unnarrowable_binding(symbol, &path) {
+            continue;
+        }
         let Some(narrowed) = narrowed_reference_type(&symbol.ty, &path, guard) else {
             continue;
         };

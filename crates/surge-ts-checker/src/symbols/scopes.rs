@@ -6,7 +6,8 @@ use surge_ts_syntax::ParsedExpression;
 use surge_ts_types::Type;
 
 use crate::symbols::{
-    AutoArrayBinding, SymbolInfo, SymbolInfoHandle, SymbolTable, clone_symbol_info_handle,
+    AutoArrayBinding, SymbolInfo, SymbolInfoHandle, SymbolTable, TupleDestructureBinding,
+    clone_symbol_info_handle,
 };
 
 #[derive(Debug, Clone)]
@@ -26,6 +27,7 @@ pub(crate) struct ScopeFrame {
     /// Guard-alias conditions this frame's declarations shadowed, restored on
     /// `pop_child` like `declared_shadows`.
     alias_shadows: HashMap<Arc<str>, Option<Arc<ParsedExpression>>>,
+    destructure_shadows: HashMap<Arc<str>, Option<TupleDestructureBinding>>,
     /// Names this frame *declares*, as opposed to bindings of an enclosing
     /// frame it only flow-narrowed. `else { const v = … }` shadows a narrowed
     /// `v`, and that local must not be mistaken for the outer binding's state.
@@ -58,6 +60,7 @@ impl ScopeStack {
                 visible_shadows: HashMap::new(),
                 declared_shadows: HashMap::new(),
                 alias_shadows: HashMap::new(),
+                destructure_shadows: HashMap::new(),
                 declared_here: std::collections::HashSet::new(),
                 auto_shadows: HashMap::new(),
                 is_function_scope: true,
@@ -125,6 +128,31 @@ impl ScopeStack {
         self.insert_frame_entry(name.into(), Arc::new(symbol))
     }
 
+    /// Declares `name` in the current frame with `declared` as its declaration
+    /// type. Unlike a narrowing, a declaration does not inherit the record of
+    /// an outer binding it shadows: `let v: T` in a block, where the block
+    /// declares its own `T`, is checked against *that* `T`.
+    pub(crate) fn insert_current_declared(
+        &mut self,
+        name: impl Into<Arc<str>>,
+        symbol: SymbolInfo,
+        declared: Type,
+    ) -> Option<SymbolInfoHandle> {
+        let name = name.into();
+        let previous_declared = self.visible_symbols.declared_type(&name).cloned();
+        let current_frame = self
+            .frames
+            .last_mut()
+            .expect("scope stack must contain at least one frame");
+        current_frame
+            .declared_shadows
+            .entry(Arc::clone(&name))
+            .or_insert(previous_declared);
+        self.visible_symbols
+            .set_declared_type(Arc::clone(&name), Some(declared));
+        self.insert_current(name, symbol)
+    }
+
     /// Records (or clears, with `None`) the condition a boolean `const` guard
     /// stands for, visible to expression-level narrowing until the frame pops.
     pub(crate) fn record_alias_condition(
@@ -148,6 +176,29 @@ impl ScopeStack {
         self.visible_symbols.set_alias_condition(name, condition);
     }
 
+    /// Records (or clears, with `None`) the tuple element a `const` binding was
+    /// destructured from, until the frame pops.
+    pub(crate) fn record_tuple_destructure(
+        &mut self,
+        name: &str,
+        binding: Option<TupleDestructureBinding>,
+    ) {
+        let name: Arc<str> = name.into();
+        let previous = self.visible_symbols.tuple_destructure(&name);
+        if previous.is_none() && binding.is_none() {
+            return;
+        }
+        let current_frame = self
+            .frames
+            .last_mut()
+            .expect("scope stack must contain at least one frame");
+        current_frame
+            .destructure_shadows
+            .entry(Arc::clone(&name))
+            .or_insert(previous);
+        self.visible_symbols.set_tuple_destructure(name, binding);
+    }
+
     /// Records whether the binding just declared as `name` is an evolving
     /// array, hiding any outer entry of the same name until the frame pops.
     pub(crate) fn declare_auto_array(&mut self, name: &str, binding: Option<AutoArrayBinding>) {
@@ -155,7 +206,9 @@ impl ScopeStack {
             return;
         }
         let name: Arc<str> = name.into();
-        let previous = self.visible_symbols.set_auto_array(Arc::clone(&name), binding);
+        let previous = self
+            .visible_symbols
+            .set_auto_array(Arc::clone(&name), binding);
         let current_frame = self
             .frames
             .last_mut()
@@ -214,9 +267,19 @@ impl ScopeStack {
         for frame in self.frames.iter_mut().rev() {
             if frame.symbols.get(&name).is_some() {
                 record_scope_stack_visible_symbol_handle_copy_count(1);
+                // The new type narrows the same binding, so its declaration
+                // must stay readable from the entry that now answers for it.
+                let declared = self.visible_symbols.declared_type(&name).cloned();
                 self.visible_symbols
                     .insert_handle(name.clone(), clone_symbol_info_handle(&symbol));
-                frame.symbols.insert_handle(name, symbol);
+                if declared.is_some() && self.visible_symbols.declared_type(&name).is_none() {
+                    self.visible_symbols.set_declared_type(name.clone(), declared.clone());
+                }
+                let frame_declared = frame.symbols.declared_type(&name).cloned().or(declared);
+                frame.symbols.insert_handle(name.clone(), symbol);
+                if frame_declared.is_some() && frame.symbols.declared_type(&name).is_none() {
+                    frame.symbols.set_declared_type(name, frame_declared);
+                }
                 return true;
             }
         }
@@ -269,10 +332,7 @@ impl ScopeStack {
     }
 
     /// Installs narrowings taken from a branch frame into the current one.
-    pub(crate) fn adopt_narrowings(
-        &mut self,
-        narrowings: Vec<(Arc<str>, SymbolInfoHandle, Type)>,
-    ) {
+    pub(crate) fn adopt_narrowings(&mut self, narrowings: Vec<(Arc<str>, SymbolInfoHandle, Type)>) {
         for (name, symbol, declared) in narrowings {
             let _ = self.insert_current_narrowed(name, (*symbol).clone(), declared);
         }
@@ -294,6 +354,10 @@ impl ScopeStack {
         for (name, previous_condition) in frame.alias_shadows {
             self.visible_symbols
                 .set_alias_condition(name, previous_condition);
+        }
+        for (name, previous_binding) in frame.destructure_shadows {
+            self.visible_symbols
+                .set_tuple_destructure(name, previous_binding);
         }
         for (name, previous_symbol) in frame.visible_shadows {
             // `var` is function-scoped: a block that declared one leaves it

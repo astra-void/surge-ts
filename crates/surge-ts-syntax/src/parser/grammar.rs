@@ -1185,21 +1185,33 @@ impl GrammarCollector {
         // A property with no annotation and no initializer has an implicit
         // `any` type *unless* the constructor assigns it: tsc infers the
         // declaration's type from that assignment.
-        let assigned = constructor_assigned_property_names(class);
+        let (assigned_instance, assigned_static) = assigned_property_names(class);
         for element in &class.body.body {
-            let ClassElement::PropertyDefinition(property) = element else {
-                continue;
+            // An auto-accessor is declared like a property and judged like one.
+            let (key, is_typed, is_static) = match element {
+                ClassElement::PropertyDefinition(property) => (
+                    &property.key,
+                    property.type_annotation.is_some() || property.value.is_some() || property.computed,
+                    property.r#static,
+                ),
+                ClassElement::AccessorProperty(property) => (
+                    &property.key,
+                    property.type_annotation.is_some() || property.value.is_some() || property.computed,
+                    property.r#static,
+                ),
+                _ => continue,
             };
-            if property.type_annotation.is_some() || property.value.is_some() || property.computed {
+            if is_typed {
                 continue;
             }
-            let Some(name) = property_key_name(&property.key) else {
+            let Some(name) = property_key_name(key) else {
                 continue;
             };
+            let assigned = if is_static { &assigned_static } else { &assigned_instance };
             if assigned.contains(&name) {
                 continue;
             }
-            self.push(Kind::ImplicitAnyMember, property.key.span(), Some(&name));
+            self.push(Kind::ImplicitAnyMember, key.span(), Some(&name));
         }
 
         if constructors.len() > 1 {
@@ -1581,7 +1593,11 @@ enum MemberKind {
 
 /// The names a class constructor assigns through `this.<name> = …`, which is
 /// where tsc gets the type of a property declared without one.
-fn constructor_assigned_property_names(class: &Class<'_>) -> Vec<String> {
+/// The members tsc infers a declared type for from assignments: `this.x = …`
+/// (or `this["x"]`, `this[0]`) in the constructor for an instance member, and
+/// the same inside a `static {}` block for a static one. Returned as
+/// `(instance, static)`.
+fn assigned_property_names(class: &Class<'_>) -> (Vec<String>, Vec<String>) {
     struct ThisAssignmentCollector {
         names: Vec<String>,
     }
@@ -1591,27 +1607,51 @@ fn constructor_assigned_property_names(class: &Class<'_>) -> Vec<String> {
             &mut self,
             assignment: &oxc_ast::ast::AssignmentExpression<'a>,
         ) {
-            if let AssignmentTarget::StaticMemberExpression(member) = &assignment.left
-                && matches!(member.object, Expression::ThisExpression(_)) {
+            match &assignment.left {
+                AssignmentTarget::StaticMemberExpression(member)
+                    if matches!(member.object, Expression::ThisExpression(_)) =>
+                {
                     self.names.push(member.property.name.to_string());
                 }
+                AssignmentTarget::ComputedMemberExpression(member)
+                    if matches!(member.object, Expression::ThisExpression(_)) =>
+                {
+                    match &member.expression {
+                        Expression::StringLiteral(literal) => {
+                            self.names.push(literal.value.to_string());
+                        }
+                        Expression::NumericLiteral(literal) => {
+                            self.names.push(literal.value.to_string());
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
             oxc_ast_visit::walk::walk_assignment_expression(self, assignment);
         }
     }
 
-    let mut collector = ThisAssignmentCollector { names: Vec::new() };
+    let mut instance = ThisAssignmentCollector { names: Vec::new() };
+    let mut statics = ThisAssignmentCollector { names: Vec::new() };
     for element in &class.body.body {
-        let ClassElement::MethodDefinition(method) = element else {
-            continue;
-        };
-        if method.kind != MethodDefinitionKind::Constructor {
-            continue;
-        }
-        if let Some(body) = method.value.body.as_ref() {
-            collector.visit_function_body(body);
+        match element {
+            ClassElement::MethodDefinition(method)
+                if method.kind == MethodDefinitionKind::Constructor =>
+            {
+                if let Some(body) = method.value.body.as_ref() {
+                    instance.visit_function_body(body);
+                }
+            }
+            ClassElement::StaticBlock(block) => {
+                for statement in &block.body {
+                    statics.visit_statement(statement);
+                }
+            }
+            _ => {}
         }
     }
-    collector.names
+    (instance.names, statics.names)
 }
 
 struct SuperCallInStatement {

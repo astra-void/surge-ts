@@ -336,9 +336,15 @@ fn parse_assignment_expression(
     };
     let value = logical_assignment_value(assignment.operator, target, target_span, value, value_span)?;
 
+    // tsc reports on the target as written, parentheses included: `(x) = ''`.
+    let written_target_span = Some(crate::TextSpan {
+        start: assignment.span.start as usize,
+        end: identifier.span.end as usize,
+    });
     Some(ParsedAssignment {
         target_name: identifier.name.to_string(),
         target_span,
+        written_target_span,
         value,
         value_span,
     })
@@ -399,6 +405,7 @@ pub(crate) fn parse_destructuring_assignment(expression: &Expression<'_>) -> Vec
         ParsedAssignment {
             target_name: identifier.name.to_string(),
             target_span: Some(text_span_from_oxc_span(identifier.span)),
+            written_target_span: Some(text_span_from_oxc_span(identifier.span)),
             value,
             value_span: source_span,
         }

@@ -5,7 +5,7 @@ use crate::symbols::SymbolTable;
 
 /// Whether a union member's discriminant `property` is the given literal.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum DiscriminantMatch {
+pub(crate) enum DiscriminantMatch {
     Yes,
     No,
     Unknown,
@@ -92,36 +92,71 @@ pub(super) fn discriminant_match(member: &Type, property: &str, literal: &Type) 
     };
     // The discriminant is often written as `typeof Codes.a`, which resolves to a
     // lazy reference around the literal rather than the literal itself.
-    let property_ty = property_type.ty.peeled();
+    match discriminant_type_match(&property_type.ty, literal) {
+        // `tag?: "a"` may be absent, so the member also survives `tag !== "a"`.
+        DiscriminantMatch::Yes if property_type.optional => DiscriminantMatch::Unknown,
+        matched => matched,
+    }
+}
+
+/// Whether a discriminant of type `property_ty` can hold `literal`.
+pub(crate) fn discriminant_type_match(property_ty: &Type, literal: &Type) -> DiscriminantMatch {
+    let property_ty = property_ty.peeled();
     match &property_ty {
-        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => {
-            if &property_ty != literal {
-                DiscriminantMatch::No
-            } else if property_type.optional {
-                // `tag?: "a"` may be absent, so the member also survives
-                // `tag !== "a"`.
-                DiscriminantMatch::Unknown
-            } else {
-                DiscriminantMatch::Yes
-            }
-        }
         Type::Union(union) => {
-            if union.types().iter().any(|ty| ty == literal) {
+            let matches: Vec<DiscriminantMatch> = union
+                .types()
+                .iter()
+                .map(|ty| constituent_match(&ty.peeled(), literal))
+                .collect();
+            if matches.iter().all(|result| *result == DiscriminantMatch::No) {
+                DiscriminantMatch::No
+            } else {
                 // The literal is one of several possibilities; keep the member in
                 // both branches conservatively.
                 DiscriminantMatch::Unknown
-            } else if union.types().iter().all(|ty| {
-                matches!(
-                    ty,
-                    Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
-                )
-            }) {
-                DiscriminantMatch::No
-            } else {
-                DiscriminantMatch::Unknown
             }
         }
-        _ => DiscriminantMatch::Unknown,
+        _ => constituent_match(&property_ty, literal),
+    }
+}
+
+/// Whether one non-union discriminant type can hold `literal`. tsc keeps a
+/// member only when its property type is comparable to the compared value, so a
+/// primitive of another domain (`kind: string` against `=== false`) rules the
+/// member out just as a different literal does.
+fn constituent_match(property_ty: &Type, literal: &Type) -> DiscriminantMatch {
+    if matches!(
+        property_ty,
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
+    ) {
+        return if property_ty == literal {
+            DiscriminantMatch::Yes
+        } else {
+            DiscriminantMatch::No
+        };
+    }
+    let same_domain = match literal {
+        Type::StringLiteral(_) => matches!(property_ty, Type::String),
+        Type::NumberLiteral(_) => matches!(property_ty, Type::Number),
+        Type::BooleanLiteral(_) => matches!(property_ty, Type::Boolean),
+        _ => return DiscriminantMatch::Unknown,
+    };
+    let is_primitive = matches!(
+        property_ty,
+        Type::String
+            | Type::Number
+            | Type::Boolean
+            | Type::BigInt
+            | Type::Symbol
+            | Type::Undefined
+            | Type::Null
+            | Type::Void
+    );
+    if is_primitive && !same_domain {
+        DiscriminantMatch::No
+    } else {
+        DiscriminantMatch::Unknown
     }
 }
 

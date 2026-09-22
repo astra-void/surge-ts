@@ -100,7 +100,7 @@ pub(crate) fn strip_reported_undefined_receiver(
     ) {
         return object_type;
     }
-    surge_ts_types::remove_undefined(&object_type)
+    surge_ts_types::remove_nullish(&object_type)
 }
 
 /// Reports a possibly-`undefined` operand, the way tsc's `checkNonNullType`
@@ -117,11 +117,14 @@ pub(crate) fn maybe_emit_possibly_undefined_receiver(
     // `undefined`, which is not the receiver's own: `b?.value.x` is fine, while
     // `b?.inner.x` with an optional `inner` is still an error. tsc keeps the
     // two apart with a marker; surge re-derives the link without it.
-    // A `null` keyword is the same TS18050 as `undefined`, but surge types it
-    // as `Any` (infer/expression/mod.rs) rather than a null type, so the
-    // nullability gate below would never see it.
+    // A `null` keyword names a value, like `undefined` below: TS18050.
     if matches!(object, ParsedExpression::NullLiteral) {
-        push_nullish_operand_diagnostic(object, choose_span(object_span, fallback_span), ctx);
+        push_nullish_operand_diagnostic(
+            object,
+            (true, false),
+            choose_span(object_span, fallback_span),
+            ctx,
+        );
         return true;
     }
     let receiver_type = if object.continues_optional_chain() {
@@ -132,16 +135,21 @@ pub(crate) fn maybe_emit_possibly_undefined_receiver(
     } else {
         object_type.clone()
     };
-    if !receiver_can_be_undefined(&receiver_type) {
+    let Some((null, undefined)) = receiver_nullability(&receiver_type) else {
         return false;
-    }
-    push_nullish_operand_diagnostic(object, choose_span(object_span, fallback_span), ctx);
+    };
+    push_nullish_operand_diagnostic(
+        object,
+        (null, undefined),
+        choose_span(object_span, fallback_span),
+        ctx,
+    );
     true
 }
 
 /// tsc's `checkNonNullType` on an operator operand. Unlike a member receiver,
 /// an optional chain's own `undefined` counts here. Returns the type the
-/// operator goes on with when it reported: the non-`undefined` part, or `any`
+/// operator goes on with when it reported: the non-nullish part, or `any`
 /// (tsc's error type) when nothing is left.
 pub(crate) fn check_non_null_operand(
     operand: &ParsedExpression,
@@ -153,16 +161,14 @@ pub(crate) fn check_non_null_operand(
         return report_unknown_operand(operand, span, ctx).then_some(Type::Any);
     }
     if matches!(operand, ParsedExpression::NullLiteral) {
-        push_nullish_operand_diagnostic(operand, span, ctx);
+        push_nullish_operand_diagnostic(operand, (true, false), span, ctx);
         return Some(Type::Any);
     }
-    if !receiver_can_be_undefined(operand_type) {
-        return None;
-    }
-    push_nullish_operand_diagnostic(operand, span, ctx);
+    let nullability = receiver_nullability(operand_type)?;
+    push_nullish_operand_diagnostic(operand, nullability, span, ctx);
     Some(match operand_type.peeled() {
-        Type::Undefined => Type::Any,
-        _ => surge_ts_types::remove_undefined(operand_type),
+        Type::Undefined | Type::Null => Type::Any,
+        _ => surge_ts_types::remove_nullish(operand_type),
     })
 }
 
@@ -190,32 +196,37 @@ pub(crate) fn report_unknown_operand(
     true
 }
 
-/// `reportObjectPossiblyNullOrUndefinedError` for an operand that is the
-/// `null` keyword or possibly `undefined`. The keyword and the identifier
+/// `reportObjectPossiblyNullOrUndefinedError` for an operand that admits the
+/// given `(null, undefined)` values. The `null` keyword and the identifier
 /// `undefined` name values rather than possibly-nullish places, so they are
-/// TS18050; an entity name is TS18048. A parenthesized operand is neither to
-/// tsc — it is the unnamed TS2531/TS2532, anchored at the parentheses.
+/// TS18050; an entity name picks TS18047/TS18048/TS18049 by which nullish
+/// values it admits, and anything else TS2531/TS2532/TS2533. A parenthesized
+/// operand is not an entity name to tsc, so it is unnamed, anchored at the
+/// parentheses.
 fn push_nullish_operand_diagnostic(
     operand: &ParsedExpression,
+    (null, undefined): (bool, bool),
     span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) {
     let file_name = ctx.file_name.clone();
+    let unnamed = |file_name: String| match (null, undefined) {
+        (true, true) => Diagnostic::ts2533(file_name),
+        (true, false) => Diagnostic::ts2531(file_name),
+        _ => Diagnostic::ts2532(file_name),
+    };
     if let Some(outer) = span.and_then(|span| ctx.parenthesized_outer_span(span)) {
-        let diagnostic = if matches!(operand, ParsedExpression::NullLiteral) {
-            Diagnostic::ts2531(file_name)
-        } else {
-            Diagnostic::ts2532(file_name)
-        };
-        ctx.push(diagnostic_with_syntax_span(diagnostic, Some(outer)));
+        ctx.push(diagnostic_with_syntax_span(unnamed(file_name), Some(outer)));
         return;
     }
     let diagnostic = match operand {
         ParsedExpression::NullLiteral => Diagnostic::ts18050("null", file_name),
         ParsedExpression::UndefinedLiteral => Diagnostic::ts18050("undefined", file_name),
-        _ => match nameable_receiver(operand) {
-            Some(name) => Diagnostic::ts18048(name, file_name),
-            None => Diagnostic::ts2532(file_name),
+        _ => match (nameable_receiver(operand), null, undefined) {
+            (Some(name), true, true) => Diagnostic::ts18049(name, file_name),
+            (Some(name), true, false) => Diagnostic::ts18047(name, file_name),
+            (Some(name), _, _) => Diagnostic::ts18048(name, file_name),
+            (None, _, _) => unnamed(file_name),
         },
     };
     ctx.push(diagnostic_with_syntax_span(diagnostic, span));
@@ -239,7 +250,7 @@ fn chain_link_type_without_marker(
             let InferredExpression::Known(base) = infer_expression(object, symbols, ctx) else {
                 return None;
             };
-            property_type_on(&surge_ts_types::remove_undefined(&base), property_name)
+            property_type_on(&surge_ts_types::remove_nullish(&base), property_name)
         }
         ParsedExpression::PropertyAccess {
             object,
@@ -247,11 +258,11 @@ fn chain_link_type_without_marker(
             ..
         } => {
             let base = chain_link_type_without_marker(object, symbols, ctx)?;
-            property_type_on(&surge_ts_types::remove_undefined(&base), property_name)
+            property_type_on(&surge_ts_types::remove_nullish(&base), property_name)
         }
         ParsedExpression::NonNullAssertion { expression, .. } => {
             chain_link_type_without_marker(expression, symbols, ctx)
-                .map(|ty| surge_ts_types::remove_undefined(&ty))
+                .map(|ty| surge_ts_types::remove_nullish(&ty))
         }
         _ => None,
     }
@@ -283,16 +294,25 @@ fn property_type_on(base: &Type, name: &str) -> Option<Type> {
 /// sentinel is left alone: part of it is unmodelled, so the `undefined` member
 /// may be surge's, not the source's. `void` is not nullable to tsc — a member
 /// read on it is a missing property, reported elsewhere.
-pub(crate) fn receiver_can_be_undefined(ty: &Type) -> bool {
-    match ty.peeled() {
-        Type::Undefined => true,
+/// Which nullish values a receiver admits, as `(null, undefined)`; `None` when
+/// it admits neither, or when part of it is unmodelled.
+pub(crate) fn receiver_nullability(ty: &Type) -> Option<(bool, bool)> {
+    let (null, undefined) = match ty.peeled() {
+        Type::Undefined => (false, true),
+        Type::Null => (true, false),
         Type::Union(union) => {
             let members = union.types();
-            !members.iter().any(Type::is_unknown)
-                && members.iter().any(|member| *member == Type::Undefined)
+            if members.iter().any(Type::is_unknown) {
+                return None;
+            }
+            (
+                members.iter().any(|member| *member == Type::Null),
+                members.iter().any(|member| *member == Type::Undefined),
+            )
         }
-        _ => false,
-    }
+        _ => return None,
+    };
+    (null || undefined).then_some((null, undefined))
 }
 
 /// The receiver name tsc is willing to render. `reportObjectPossiblyNullOrUndefinedError`
@@ -461,7 +481,6 @@ fn levenshtein_with_max(source: &str, target: &str, max: f64) -> Option<f64> {
     (result <= max).then_some(result)
 }
 
-
 /// tsc's `checkIdentifier` for a binding it types by control flow (`autoType`,
 /// `autoArrayType`). The receiver of `push`/`unshift`/`length`/`x[n] = v` is
 /// `any[]` and unreported. In its own function a read sees the flow; only an
@@ -483,7 +502,10 @@ pub(crate) fn check_auto_array_read(
     // A module-level binding evolves in the module table; the scope stack a
     // statement is checked through only holds a snapshot of it.
     let binding = match binding.module_level {
-        true => ctx.symbols.auto_array(name).map_or(binding, |(current, _)| current),
+        true => ctx
+            .symbols
+            .auto_array(name)
+            .map_or(binding, |(current, _)| current),
         false => binding,
     };
     let any_array = Type::Array(Box::new(Type::Any));
@@ -494,8 +516,8 @@ pub(crate) fn check_auto_array_read(
     let position = span.map_or(0, |span| span.start);
     // A top-level function or class declaration never continues the module's flow.
     let declared_only = binding.module_level && ctx.module_declared_only_depth > 0;
-    let sees_flow = !declared_only
-        && (!from_enclosing_function || binding.closure_sees_flow(position));
+    let sees_flow =
+        !declared_only && (!from_enclosing_function || binding.closure_sees_flow(position));
     let never_initialized = binding.never_initialized();
     let declared_array = binding.declared_array;
     let element_less = binding.is_element_less();
@@ -510,7 +532,11 @@ pub(crate) fn check_auto_array_read(
         Some(Type::Any)
     };
     let implicit = implicit?;
-    let type_name = if implicit == Type::Any { "any" } else { "any[]" };
+    let type_name = if implicit == Type::Any {
+        "any"
+    } else {
+        "any[]"
+    };
     ctx.push(diagnostic_with_syntax_span(
         Diagnostic::ts7034(name, type_name, ctx.file_name.clone()),
         name_span,
@@ -526,7 +552,9 @@ pub(crate) fn check_auto_array_read(
 /// [`check_auto_array_read`] to recognize when it evaluates it.
 pub(crate) fn mark_evolving_array_operation(object: &ParsedExpression, ctx: &mut CheckerContext) {
     if ctx.auto_arrays_declared
-        && let ParsedExpression::Identifier { span: Some(span), .. } = object
+        && let ParsedExpression::Identifier {
+            span: Some(span), ..
+        } = object
     {
         ctx.evolving_array_operation_target = Some(*span);
     }

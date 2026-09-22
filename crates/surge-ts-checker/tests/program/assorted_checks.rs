@@ -88,6 +88,7 @@ fn array_reduce_and_string_replace_type_their_callbacks() {
     let options = CheckerOptions {
         no_implicit_any: true,
         strict_property_initialization: false,
+        strict_null_checks: true,
         ..Default::default()
     };
     let diagnostics = program_with_options(&[("a.ts", source)], options);

@@ -231,7 +231,10 @@ pub(crate) fn check_call_like_with_expected_type(
                     });
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2344(
-                            crate::checks::expr::source_display_name(&argument_type, &constraint_type),
+                            crate::checks::expr::source_display_name(
+                                &argument_type,
+                                &constraint_type,
+                            ),
                             constraint_type.name(),
                             ctx.file_name.clone(),
                         ),
@@ -346,7 +349,12 @@ pub(crate) fn check_call_like_with_expected_type(
                         "Object(call={}, ctor={}, props=[{}])",
                         o.call_signature().is_some(),
                         o.construct_signature().is_some(),
-                        o.properties.keys().take(6).map(|k| k.to_string()).collect::<Vec<_>>().join(",")
+                        o.properties
+                            .keys()
+                            .take(6)
+                            .map(|k| k.to_string())
+                            .collect::<Vec<_>>()
+                            .join(",")
                     ),
                     t => format!("{t:?}").chars().take(70).collect(),
                 };
@@ -613,18 +621,26 @@ fn check_callable_union_call(
     }
 
     // tsc's `resolveCallExpression` reads the callee through
-    // `checkNonNullExpression`: a possibly-`undefined` callee is TS2722 on the
-    // whole callee, and the call proceeds on the rest.
-    if union.types().iter().any(|ty| matches!(ty, Type::Undefined)) {
+    // `checkNonNullExpression`: a possibly-nullish callee is TS2721/2722/2723
+    // on the whole callee, and the call proceeds on the rest.
+    let null = union.types().iter().any(|ty| matches!(ty, Type::Null));
+    let undefined = union.types().iter().any(|ty| matches!(ty, Type::Undefined));
+    if null || undefined {
+        let file_name = ctx.file_name.clone();
+        let diagnostic = match (null, undefined) {
+            (true, true) => Diagnostic::ts2723(file_name),
+            (true, false) => Diagnostic::ts2721(file_name),
+            _ => Diagnostic::ts2722(file_name),
+        };
         ctx.push(diagnostic_with_syntax_span(
-            Diagnostic::ts2722(ctx.file_name.clone()),
+            diagnostic,
             callee_expression_span.or(callee_span),
         ));
         let defined = union_type(
             union
                 .types()
                 .iter()
-                .filter(|ty| !matches!(ty, Type::Undefined))
+                .filter(|ty| !matches!(ty, Type::Undefined | Type::Null))
                 .cloned()
                 .collect(),
         );
@@ -788,10 +804,16 @@ pub(crate) fn check_new_like(
     {
         let parameters = &info.body.type_parameters;
         let maximum = parameters.len();
-        let minimum = parameters.iter().filter(|parameter| parameter.default_type.is_none()).count();
+        let minimum = parameters
+            .iter()
+            .filter(|parameter| parameter.default_type.is_none())
+            .count();
         if type_arguments.len() < minimum || type_arguments.len() > maximum {
-            let expected =
-                if minimum == maximum { maximum.to_string() } else { format!("{minimum}-{maximum}") };
+            let expected = if minimum == maximum {
+                maximum.to_string()
+            } else {
+                format!("{minimum}-{maximum}")
+            };
             let type_arguments_start = callee_span.map(|span| SyntaxTextSpan {
                 start: span.end + 1,
                 end: span.end + 1,
@@ -1019,7 +1041,10 @@ pub(crate) fn check_new_like(
                 None
             };
             if let Some(diagnostic) = diagnostic {
-                ctx.push(diagnostic_with_syntax_span(diagnostic, call_span.or(callee_span)));
+                ctx.push(diagnostic_with_syntax_span(
+                    diagnostic,
+                    call_span.or(callee_span),
+                ));
             }
             Some(Type::Any)
         }
@@ -1358,7 +1383,12 @@ fn infer_generic_class_type_arguments(
         return None;
     }
     Some(infer_type_argument_substitution(
-        &signature, arguments, &[], None, symbols, ctx,
+        &signature,
+        arguments,
+        &[],
+        None,
+        symbols,
+        ctx,
     ))
 }
 
@@ -1392,28 +1422,49 @@ fn immediately_invoked_arrow_type(
     }
 
     let diagnostics_before = ctx.diagnostics().len();
-    let argument_types: Vec<Type> = arguments
-        .iter()
-        .map(
-            |argument| match evaluate_expression(&argument.expression, argument.span, symbols, ctx) {
-                InferredExpression::Known(ty) => ty,
-                _ => Type::Unknown,
-            },
-        )
-        .collect();
+    // The effective arguments: a tuple spread is one argument per element, an
+    // array spread one argument of its element type.
+    let mut argument_types: Vec<Type> = Vec::with_capacity(arguments.len());
+    for argument in arguments {
+        // tsc reads the widened literal type of the argument
+        // (`getContextuallyTypedParameterType`): `({ p = 14 }) => p` called with
+        // `{ p: 15 }` binds `p: number`.
+        let ty = match evaluate_expression(&argument.expression, argument.span, symbols, ctx) {
+            InferredExpression::Known(ty) => {
+                crate::checks::var::widen_implicit_variable_initializer_type(
+                    crate::symbols::SymbolKind::Let,
+                    &argument.expression,
+                    &ty,
+                    false,
+                )
+            }
+            _ => Type::Unknown,
+        };
+        if !argument.spread {
+            argument_types.push(ty);
+            continue;
+        }
+        match ty.peeled() {
+            Type::Tuple(elements) => argument_types.extend(elements),
+            other => argument_types.push(crate::checks::function::for_of_element_type(&other)),
+        }
+    }
     ctx.truncate_diagnostics(diagnostics_before);
     if argument_types.iter().any(|ty| ty.is_unknown()) {
         return None;
     }
 
     let required = argument_types.len();
-    let expected = crate::metrics::alloc_function_type(argument_types, Type::Unknown, false, required);
-    Some(crate::checks::function::check_arrow_function_expression_with_expected_type(
-        (**arrow).clone(),
-        Some(&expected),
-        symbols,
-        ctx,
-    ))
+    let expected =
+        crate::metrics::alloc_function_type(argument_types, Type::Unknown, false, required);
+    Some(
+        crate::checks::function::check_arrow_function_expression_with_expected_type(
+            (**arrow).clone(),
+            Some(&expected),
+            symbols,
+            ctx,
+        ),
+    )
 }
 
 pub(crate) fn check_expression_call(
@@ -1493,8 +1544,9 @@ pub(crate) fn check_expression_call(
 }
 
 /// `resolveCallExpression` reads the callee through `checkNonNullType` with
-/// the invocation wording: the `null` keyword is TS2721, a possibly-`undefined`
-/// callee TS2722, both anchored on the callee (its parentheses included). The
+/// the invocation wording: a possibly-`null` callee (the `null` keyword
+/// included) is TS2721, a possibly-`undefined` one TS2722 and one that may be
+/// either TS2723, all anchored on the callee (its parentheses included). The
 /// call goes on with the rest of the type, or `any` when nothing is left.
 fn check_non_null_callee(
     callee: &ParsedExpression,
@@ -1507,20 +1559,28 @@ fn check_non_null_callee(
         return Type::Unknown;
     }
     let is_null = matches!(callee, ParsedExpression::NullLiteral);
-    if !is_null && !crate::checks::expr::receiver_can_be_undefined(&callee_type) {
-        return callee_type;
-    }
-    let span = callee_span.and_then(|span| ctx.parenthesized_outer_span(span)).or(callee_span);
-    let diagnostic = if is_null {
-        Diagnostic::ts2721(ctx.file_name.clone())
+    let nullability = if is_null {
+        Some((true, false))
     } else {
-        Diagnostic::ts2722(ctx.file_name.clone())
+        crate::checks::expr::receiver_nullability(&callee_type)
+    };
+    let Some((null, undefined)) = nullability else {
+        return callee_type;
+    };
+    let span = callee_span
+        .and_then(|span| ctx.parenthesized_outer_span(span))
+        .or(callee_span);
+    let file_name = ctx.file_name.clone();
+    let diagnostic = match (null, undefined) {
+        (true, true) => Diagnostic::ts2723(file_name),
+        (true, false) => Diagnostic::ts2721(file_name),
+        _ => Diagnostic::ts2722(file_name),
     };
     ctx.push(diagnostic_with_syntax_span(diagnostic, span));
     match callee_type {
-        Type::Undefined => Type::Any,
+        Type::Undefined | Type::Null => Type::Any,
         _ if is_null => Type::Any,
-        _ => surge_ts_types::remove_undefined(&callee_type).peeled(),
+        _ => surge_ts_types::remove_nullish(&callee_type).peeled(),
     }
 }
 
@@ -1555,8 +1615,7 @@ pub(crate) fn check_optional_call_like(
         _ => return None,
     };
 
-
-    let base_type = surge_ts_types::remove_undefined(&callee_type);
+    let base_type = surge_ts_types::remove_nullish(&callee_type);
 
     // A callee typed by an interface or type literal with a call signature
     // (`declare const expectTypeOf: _ExpectTypeOf`) is as callable as a plain
@@ -1635,6 +1694,73 @@ fn construct_signature_of(ty: &Type) -> Option<surge_ts_types::FunctionType> {
     }
 }
 
+/// The first argument `candidate` rejects beyond doubt. Only a primitive or
+/// unit mismatch counts (`true` for a `string` / `number` slot): an object
+/// argument's rejection may be a lib shape surge models partly (`File` against
+/// `Blob`), and reporting it would describe surge rather than the call.
+fn candidate_definitely_rejects(
+    candidate: &FunctionType,
+    argument_types: &[ArgumentShape],
+) -> Option<usize> {
+    argument_types
+        .iter()
+        .enumerate()
+        .find_map(|(index, shape)| {
+            let argument = shape.ty.as_ref()?;
+            let parameter = effective_parameter_type(candidate, index)?;
+            (!type_contains_unknown(argument)
+                && !names_open_parameter(&parameter)
+                && (crate::checks::assign::definite_unit_member_mismatch(argument, &parameter)
+                    || crate::checks::assign::definite_primitive_member_mismatch(
+                        argument, &parameter,
+                    )
+                    || (is_primitive_only(argument)
+                        && is_primitive_only(&parameter.peeled())
+                        && !is_assignable_to(argument, &parameter))))
+            .then_some(index)
+        })
+}
+
+/// A type made of primitives and their literals only, whose relations surge
+/// decides without any lib shape.
+fn is_primitive_only(ty: &Type) -> bool {
+    match ty {
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::Null
+        | Type::Undefined
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => true,
+        Type::Union(union) => union.types().iter().all(is_primitive_only),
+        _ => false,
+    }
+}
+
+/// tsc's `reportCallResolutionErrors` re-checks the last candidate and reports
+/// "No overload matches this call" where that candidate rejects its first
+/// argument. `None` when no typed argument is rejected by it (a callback, whose
+/// shape is a wildcard here, may be the one), which leaves the fold's verdict.
+fn last_candidate_rejected_argument(
+    candidate: &FunctionType,
+    argument_types: &[ArgumentShape],
+) -> Option<usize> {
+    argument_types
+        .iter()
+        .enumerate()
+        .find_map(|(index, shape)| {
+            let argument = shape.ty.as_ref()?;
+            // A generic candidate's own parameters are the sentinel here, which a
+            // relation accepts; what rejects is the rest of the shape (an arity, a
+            // parameter's type), exactly as the candidate itself would.
+            let parameter = effective_parameter_type(candidate, index)?;
+            (!is_assignable_to(argument, &parameter)).then_some(index)
+        })
+}
+
 fn overload_arity_fits(candidate: &FunctionType, argument_count: usize) -> bool {
     let parameters = candidate.parameters();
     let mut required = candidate.required_parameter_count();
@@ -1642,6 +1768,32 @@ fn overload_arity_fits(candidate: &FunctionType, argument_count: usize) -> bool 
         required -= 1;
     }
     argument_count >= required && (candidate.is_variadic() || argument_count <= parameters.len())
+}
+
+/// The parameter an argument at `index` is checked against: the rest
+/// parameter's element past the fixed ones, and an optional parameter with the
+/// `undefined` a caller may pass it. `None` once the signature has run out.
+fn effective_parameter_type(function_type: &FunctionType, index: usize) -> Option<Type> {
+    let parameters = function_type.parameters();
+    let expected = parameters.len();
+    if function_type.is_variadic() && expected > 0 && index >= expected - 1 {
+        // tsc relates the arguments a non-array rest type receives as one
+        // gathered tuple (`getSpreadArgumentType`), not position by position.
+        return match parameters[expected - 1].peeled() {
+            Type::Array(element) => Some(*element),
+            _ => None,
+        };
+    }
+    let declared = parameters.get(index)?.clone();
+    Some(
+        if index >= function_type.required_parameter_count()
+            && !is_assignable_to(&Type::Undefined, &declared)
+        {
+            union_type(vec![declared, Type::Undefined])
+        } else {
+            declared
+        },
+    )
 }
 
 fn rest_parameter_element_type(parameter_type: &Type, rest_offset: usize) -> Type {
@@ -1658,6 +1810,15 @@ fn rest_parameter_element_type(parameter_type: &Type, rest_offset: usize) -> Typ
             .or_else(|| elements.last())
             .cloned()
             .unwrap_or(Type::Any),
+        // `...x: [number, string, ...boolean[]]` expands to the positional
+        // parameters the tuple spells out, then to what its own rest holds —
+        // a trailing element cannot be placed without knowing the argument
+        // count, so it joins the rest.
+        Type::OpenTuple(tuple) => tuple.leading.get(rest_offset).cloned().unwrap_or_else(|| {
+            let mut members = vec![tuple.rest.as_ref().clone()];
+            members.extend(tuple.trailing.iter().cloned());
+            union_type(members)
+        }),
         Type::Union(union) => union_type(
             union
                 .types()
@@ -1686,6 +1847,7 @@ pub(crate) fn check_function_type_call(
     // signature arguments are checked against whenever a candidate is not fully
     // modelled, since a sentinel parameter would reject what tsc accepts.
     let mut arity_candidates = 0;
+    let mut fitting_candidates: Vec<FunctionType> = Vec::new();
     if let Some(members) = function_type.overloads()
         && !arguments.iter().any(|argument| argument.spread)
     {
@@ -1694,15 +1856,18 @@ pub(crate) fn check_function_type_call(
             .filter(|member| overload_arity_fits(member, arguments.len()))
             .collect();
         arity_candidates = fitting.len();
-        if let [sole] = fitting.as_slice()
-            && sole.overloads().is_none()
-            && !sole
-                .parameters()
-                .iter()
-                .any(|parameter| type_contains_unknown(parameter) || matches!(parameter, Type::Never))
+        fitting_candidates = fitting
+            .iter()
+            .map(|candidate| (*candidate).clone())
+            .collect();
+        if let [chosen] = fitting.as_slice()
+            && chosen.overloads().is_none()
+            && !chosen.parameters().iter().any(|parameter| {
+                type_contains_unknown(parameter) || matches!(parameter, Type::Never)
+            })
         {
             return check_function_type_call(
-                sole,
+                chosen,
                 callee_span,
                 call_span,
                 type_arguments,
@@ -1717,6 +1882,7 @@ pub(crate) fn check_function_type_call(
     let actual = arguments.len();
     let mut has_unresolved_argument = false;
     let mut mismatch_reported = false;
+    let mut overload_failure_argument: Option<usize> = None;
 
     // A trailing parameter typed `void` (or a union containing `void`) is optional
     // at the call site — `cb()` is valid for `cb: (x: void) => void`, and a
@@ -1760,7 +1926,11 @@ pub(crate) fn check_function_type_call(
         let diagnostic = if actual < required && function_type.is_variadic() {
             Diagnostic::ts2555(required, actual, ctx.file_name.clone())
         } else if required < expected && !function_type.is_variadic() {
-            Diagnostic::ts2554(format!("{required}-{expected}"), actual, ctx.file_name.clone())
+            Diagnostic::ts2554(
+                format!("{required}-{expected}"),
+                actual,
+                ctx.file_name.clone(),
+            )
         } else {
             Diagnostic::ts2554(expected_count, actual, ctx.file_name.clone())
         };
@@ -1788,11 +1958,11 @@ pub(crate) fn check_function_type_call(
     // spread.
     let mut argument_types: Vec<ArgumentShape> = Vec::with_capacity(arguments.len());
 
-    for (i, argument) in arguments.iter().enumerate() {
-        // A spread stands for however many arguments its type holds, so it does
-        // not line up with the parameter at this position — checking it against
-        // one would report the whole tuple against a single parameter. Its own
-        // expression is still evaluated so errors inside it surface.
+    // tsc's `getEffectiveCallArguments`: a tuple spread stands for one argument
+    // per element, an array spread for one argument of its element type, and
+    // what follows lines up with the parameters after them.
+    let mut i = 0usize;
+    for argument in arguments.iter() {
         if argument.spread {
             let spread_result =
                 evaluate_expression(&argument.expression, argument.span, symbols, ctx);
@@ -1803,8 +1973,69 @@ pub(crate) fn check_function_type_call(
                 ctx,
             );
             argument_types.push(ArgumentShape::wildcard());
+            let spread_elements: Vec<Type> = match &spread_result {
+                InferredExpression::Known(spread) => match spread.peeled() {
+                    Type::Tuple(elements) => elements,
+                    other => {
+                        let element = crate::checks::function::for_of_element_type(&other);
+                        // `hasCorrectArity`: an array spread may only begin
+                        // where every required parameter is already supplied
+                        // and a parameter is still there to receive it.
+                        if matches!(other, Type::Array(_))
+                            && !type_contains_unknown(&element)
+                            && !matches!(element, Type::Any)
+                            && !mismatch_reported
+                            && function_type.overloads().is_none()
+                            && (i < function_type.required_parameter_count()
+                                || (!function_type.is_variadic() && i >= expected))
+                        {
+                            ctx.push(diagnostic_with_syntax_span(
+                                Diagnostic::ts2556(ctx.file_name.clone()),
+                                argument.span,
+                            ));
+                            mismatch_reported = true;
+                        }
+                        vec![element]
+                    }
+                },
+                _ => vec![Type::Unknown],
+            };
+            for element in spread_elements {
+                if !mismatch_reported
+                    && !element.is_unknown()
+                    && !matches!(element, Type::Any)
+                    && function_type.overloads().is_none()
+                    && let Some(parameter_type) = effective_parameter_type(function_type, i)
+                    && !type_contains_unknown(&parameter_type)
+                    && !surge_ts_types::parameter_type_is_degraded(&parameter_type)
+                    && !type_contains_unknown(&element)
+                    && !is_assignable_to(&element, &parameter_type)
+                {
+                    let reported_parameter =
+                        crate::checks::expr::reported_relation_target(&element, &parameter_type);
+                    let element_name = source_display_name(&element, &reported_parameter);
+                    ctx.push(diagnostic_with_syntax_span(
+                        crate::checks::expr::assignability_mismatch_diagnostic(
+                            &element,
+                            &parameter_type,
+                            &element_name,
+                            &reported_parameter.name(),
+                            true,
+                            ctx.file_name.clone(),
+                        ),
+                        argument.span,
+                    ));
+                    mismatch_reported = true;
+                }
+                i += 1;
+            }
             continue;
         }
+        let i = {
+            let position = i;
+            i += 1;
+            position
+        };
 
         // For a variadic signature the trailing rest parameter (declared as an
         // array) matches each remaining argument against its *element* type, not
@@ -1907,31 +2138,50 @@ pub(crate) fn check_function_type_call(
                 if (!matches!(parameter_type, Type::Never)
                     || is_rest_position
                     || is_unnarrowable_literal(&argument.expression))
-                    && !type_contains_unknown(&parameter_type)
-                    && !surge_ts_types::parameter_type_is_degraded(&parameter_type)
-                    && (genuine_unknown_argument
-                        || !as_source(|| type_contains_degradation(&argument_type)))
+                    && ((!type_contains_unknown(&parameter_type)
+                        && !surge_ts_types::parameter_type_is_degraded(&parameter_type)
+                        && (genuine_unknown_argument
+                            || !as_source(|| type_contains_degradation(&argument_type))))
+                        || crate::checks::assign::definite_unit_member_mismatch(
+                            &argument_type,
+                            &parameter_type,
+                        )
+                        // Not at a rest position: a rest type that is not an
+                        // array is related to the gathered arguments as a
+                        // whole, which this per-argument pairing is not.
+                        || (!is_rest_position
+                            && crate::checks::assign::definite_primitive_member_mismatch(
+                                &argument_type,
+                                &parameter_type,
+                            )))
                     && !is_open_instantiation(&argument_type)
                     && !is_assignable_to(&argument_type, &parameter_type)
                 {
-                    let argument_type_name = source_display_name(&argument_type, &parameter_type);
-                    let parameter_type_name = parameter_type.name();
+                    let reported_parameter = crate::checks::expr::reported_relation_target(
+                        &argument_type,
+                        &parameter_type,
+                    );
+                    let argument_type_name =
+                        source_display_name(&argument_type, &reported_parameter);
+                    let parameter_type_name = reported_parameter.name();
                     // Every fitting candidate's parameter at this position is a
                     // member of the fold's, so none of them accepts it either.
-                    let diagnostic = if arity_candidates > 1 {
-                        Diagnostic::ts2769(ctx.file_name.clone())
+                    // Where tsc says so is decided once every argument is typed:
+                    // at the last candidate's first rejected argument.
+                    if arity_candidates > 1 {
+                        // This argument's shape is already recorded.
+                        overload_failure_argument = Some(argument_types.len().saturating_sub(1));
                     } else {
-                        crate::checks::expr::assignability_mismatch_diagnostic(
+                        let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
                             &argument_type,
                             &parameter_type,
                             &argument_type_name,
                             &parameter_type_name,
                             true,
                             ctx.file_name.clone(),
-                        )
-                    };
-
-                    ctx.push(diagnostic_with_syntax_span(diagnostic, argument.span));
+                        );
+                        ctx.push(diagnostic_with_syntax_span(diagnostic, argument.span));
+                    }
                     mismatch_reported = true;
                 }
             }
@@ -1941,6 +2191,46 @@ pub(crate) fn check_function_type_call(
             }
             InferredExpression::Unknown => {}
         }
+    }
+
+    // The fold accepts what no member does when its positions disagree
+    // (`set(key: string, …)` / `set(key: number, …)` fold `key` to the
+    // sentinel). tsc's `chooseOverload` finds no applicable candidate then, so
+    // the call is TS2769 all the same — decided only where every candidate
+    // rejects a typed argument outright.
+    // Explicit type arguments filter the candidates first (a constraint they
+    // violate drops the overload), which this arity-only list does not model.
+    if overload_failure_argument.is_none()
+        && !mismatch_reported
+        && type_arguments.is_empty()
+        && fitting_candidates.len() > 1
+        && fitting_candidates
+            .iter()
+            .all(|candidate| candidate_definitely_rejects(candidate, &argument_types).is_some())
+    {
+        overload_failure_argument = fitting_candidates
+            .last()
+            .and_then(|last| candidate_definitely_rejects(last, &argument_types));
+    }
+    if let Some(fold_failure) = overload_failure_argument {
+        // With explicit type arguments the candidate list tsc re-checks is not
+        // this arity-only one, so the anchor stays where the fold rejected.
+        let anchor = fitting_candidates
+            .last()
+            .filter(|_| type_arguments.is_empty())
+            .and_then(|last| last_candidate_rejected_argument(last, &argument_types))
+            .unwrap_or(fold_failure);
+        let span = arguments
+            .get(anchor)
+            .or_else(|| arguments.get(fold_failure))
+            .and_then(|argument| argument.span.or(argument.expression_span));
+        if span.is_some() {
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2769(ctx.file_name.clone()),
+                span,
+            ));
+        }
+        mismatch_reported = true;
     }
 
     if has_unresolved_argument {
@@ -2126,6 +2416,14 @@ fn select_overload_return_type(
     // `registry.get(schema)?.id` came back as an unbound `$replace<Meta, S>`
     // without this.
     if names_open_parameter(picked.return_type()) {
+        return None;
+    }
+    // A generic member resolved outside a call has its type parameters at
+    // their defaults (`querySelector<E extends Element = Element>` answers
+    // `Element`), where tsc would infer them — from the arguments or from the
+    // contextual return type (`const r: SVGRectElement = q.querySelector(…)!`).
+    // Only the call's own instantiation can answer for it.
+    if picked.type_parameter_head().is_some() {
         return None;
     }
     crate::program::record_overload_selection_pick();
@@ -2424,6 +2722,7 @@ fn substituted_construct_signature(
         namespace_prefix: None,
         predicate_overload: None,
         overload_alternatives: Vec::new(),
+        inferred_predicate: None,
     };
     let mut substitution = crate::infer::TypeParameterSubstitution::new();
     for (type_parameter, argument) in parsed.type_parameters.iter().zip(type_arguments.iter()) {
@@ -2540,14 +2839,20 @@ fn own_type_parameter_names(function: &FunctionType) -> Vec<String> {
     let Some(declaration) = function.declaration() else {
         return function.type_parameter_names();
     };
-    let type_parameters = if let Some(member) = declaration.downcast_ref::<DeclaredMemberSignature>() {
-        &member.signature.type_parameters
-    } else if let Some(signature) = declaration.downcast_ref::<crate::symbols::FunctionSignatureInfo>() {
-        &signature.type_parameters
-    } else {
-        return function.type_parameter_names();
-    };
-    type_parameters.iter().map(|parameter| parameter.name.clone()).collect()
+    let type_parameters =
+        if let Some(member) = declaration.downcast_ref::<DeclaredMemberSignature>() {
+            &member.signature.type_parameters
+        } else if let Some(signature) =
+            declaration.downcast_ref::<crate::symbols::FunctionSignatureInfo>()
+        {
+            &signature.type_parameters
+        } else {
+            return function.type_parameter_names();
+        };
+    type_parameters
+        .iter()
+        .map(|parameter| parameter.name.clone())
+        .collect()
 }
 
 /// [`type_contains_unknown`] for a value's own shape: a written `unknown` in it
@@ -2569,7 +2874,10 @@ thread_local! {
 pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
         Type::GenuineUnknown => !UNKNOWN_KEYWORD_IS_REAL.with(std::cell::Cell::get),
-        Type::Unknown | Type::TypeParameter(_) => true,
+        Type::Unknown => true,
+        Type::TypeParameter(parameter) => {
+            !crate::checks::assign::is_bound_type_parameter(parameter)
+        }
         Type::Array(element) => type_contains_unknown(element),
         Type::Reference(reference) if reference.is_readonly_array() => {
             reference.arguments.iter().any(type_contains_unknown)
@@ -2577,8 +2885,10 @@ pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
         Type::Function(function) => {
             !is_generic_signature(function)
-                && (function.parameters().iter().any(type_contains_unknown)
-                    || type_contains_unknown(function.return_type()))
+                && crate::checks::assign::with_signature_type_parameters(function, || {
+                    function.parameters().iter().any(type_contains_unknown)
+                        || type_contains_unknown(function.return_type())
+                })
         }
         Type::Object(object) => {
             object
@@ -2604,6 +2914,9 @@ fn is_unnarrowable_literal(expression: &ParsedExpression) -> bool {
             | ParsedExpression::BigIntLiteral(_)
             | ParsedExpression::ObjectLiteral { .. }
             | ParsedExpression::ArrayLiteral { .. }
-            | ParsedExpression::TemplateLiteral { is_tagged: false, .. }
+            | ParsedExpression::TemplateLiteral {
+                is_tagged: false,
+                ..
+            }
     )
 }

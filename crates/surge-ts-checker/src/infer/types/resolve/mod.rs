@@ -209,6 +209,10 @@ pub(crate) fn resolve_parsed_type(
             ty: Type::Undefined,
             had_error: false,
         },
+        ParsedType::Null => ResolvedType {
+            ty: Type::Null,
+            had_error: false,
+        },
         ParsedType::Any => ResolvedType {
             ty: Type::Any,
             had_error: false,
@@ -356,6 +360,20 @@ pub(crate) fn resolve_parsed_type(
                     ctx.module_local_values_for_file(&file_name)
                         .and_then(|table| table.get(&type_of.name).cloned())
                 });
+
+            // `undefined` is a global value like any other to a type query:
+            // `var x: typeof undefined`. Its type is the widening `undefined`,
+            // which is `any` once `strictNullChecks` is off.
+            if symbol.is_none() && type_of.name == "undefined" && type_of.members.is_empty() {
+                return ResolvedType {
+                    ty: if surge_ts_types::strict_null_checks() {
+                        Type::Undefined
+                    } else {
+                        Type::Any
+                    },
+                    had_error: false,
+                };
+            }
 
             let Some(symbol) = symbol else {
                 // `globalThis` is always a valid built-in, but its value symbol is

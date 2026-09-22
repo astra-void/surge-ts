@@ -81,6 +81,7 @@ pub(crate) enum CanonicalTypeIdentity {
     BigInt,
     Symbol,
     Undefined,
+    Null,
     Void,
     Any,
     Never,

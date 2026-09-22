@@ -17,6 +17,7 @@ mod type_guards;
 pub(crate) use element_reference::*;
 use guards::*;
 pub(crate) use predicate::*;
+pub(crate) use guards::typeof_tags_of;
 pub(crate) use reference::*;
 pub(crate) use truthy::*;
 pub(crate) use type_guards::*;
@@ -121,7 +122,9 @@ fn narrow_single_guard_for_identifier(
         parse_instanceof_condition(condition).map(|(operand, ctor)| (operand, ctor))
         && name == var_name
     {
-        let instance = resolve_constructor_instance_type(ctor_name, ctx);
+        let constructor_value = scopes.resolve(ctor_name).map(|symbol| symbol.ty.clone());
+        let instance =
+            resolve_constructor_instance_type(ctor_name, constructor_value.as_ref(), ctx);
         if let Some(narrowed) =
             narrow_union_by_instanceof(ty, ctor_name, instance.as_ref(), branch_is_true)
         {
@@ -190,11 +193,11 @@ fn narrow_single_guard_for_identifier(
             keep_matching,
         );
     }
-    if let Some((ParsedExpression::Identifier { name, .. }, eq)) =
+    if let Some((ParsedExpression::Identifier { name, .. }, eq, test)) =
         parse_nullish_equality_condition(condition)
         && name == var_name
     {
-        return narrow_union_by_nullish(ty, branch_is_true == eq);
+        return narrow_union_by_nullish(ty, branch_is_true == eq, test);
     }
     if let Some((name, literal, eq)) =
         parse_identifier_literal_equality(condition, scopes.visible_symbols())
@@ -230,7 +233,7 @@ fn narrow_by_property_guard(
     branch_is_true: bool,
     resolve_literal: &dyn Fn(&ParsedExpression) -> Option<Type>,
 ) -> Option<Type> {
-    if let Some((reference, eq)) = parse_nullish_equality_condition(condition)
+    if let Some((reference, eq, _)) = parse_nullish_equality_condition(condition)
         && let Some(path) = property_path_below(reference, var_name)
     {
         let keep_nullish = branch_is_true == eq;
@@ -266,7 +269,7 @@ fn narrow_property_guard_symbol_table(
     branch_is_true: bool,
 ) -> Option<SymbolTable> {
     let reference = parse_nullish_equality_condition(condition)
-        .map(|(reference, _)| reference)
+        .map(|(reference, ..)| reference)
         .or_else(|| {
             parse_discriminant_condition_with(condition, &|_| None).map(|(object, ..)| object)
         })
@@ -411,7 +414,12 @@ fn narrow_logical_guard_in_scope(
     // each truthy-tested reference (`o.p && o.p.q`) non-nullish — which
     // `narrow_type_for_identifier` above, keyed on a whole binding, cannot express.
     let mut reference_guards = Vec::new();
-    collect_reference_guards(condition, branch_is_true, &mut reference_guards);
+    collect_reference_guards(
+        condition,
+        branch_is_true,
+        &compared_operand_type(scopes.visible_symbols()),
+        &mut reference_guards,
+    );
     for (base, path, guard) in reference_guards {
         narrow_reference_in_scope(&base, &path, guard, scopes);
     }
@@ -433,7 +441,7 @@ fn collect_property_guard_bases(condition: &ParsedExpression, names: &mut Vec<St
         } => collect_property_guard_bases(operand, names),
         _ => {
             let reference = parse_nullish_equality_condition(condition)
-                .map(|(reference, _)| reference)
+                .map(|(reference, ..)| reference)
                 .unwrap_or(condition);
             if let Some((base, path)) = reference::reference_path(reference)
                 && !path.is_empty()
@@ -602,12 +610,190 @@ pub(crate) fn narrow_condition_symbol_table(
     symbols: &SymbolTable,
     branch_is_true: bool,
 ) -> Option<SymbolTable> {
+    let narrowed = narrow_condition_symbol_table_by_guard(condition, symbols, branch_is_true);
+    let siblings =
+        tuple_destructure_sibling_narrowings(condition, narrowed.as_ref().unwrap_or(symbols), branch_is_true);
+    if siblings.is_empty() {
+        return narrowed;
+    }
+    let mut table = narrowed.unwrap_or_else(|| symbols.clone_with_reason(TypeCopyReason::ScopeOrContext));
+    for (name, symbol, declared) in siblings {
+        table.insert_narrowed(name, symbol, declared);
+    }
+    Some(table)
+}
+
+/// The binding a condition proves truthy (`true`) or falsy (`false`), when the
+/// condition is exactly that binding or its negation.
+fn truthiness_tested_binding(condition: &ParsedExpression, branch_is_true: bool) -> Option<(&str, bool)> {
+    match condition {
+        ParsedExpression::Identifier { name, .. } => Some((name.as_str(), branch_is_true)),
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => truthiness_tested_binding(operand, !branch_is_true),
+        _ => None,
+    }
+}
+
+/// tsc's destructured-discriminated-union narrowing: `const [error, value] =
+/// tuple` over a *union of tuples* binds dependent names, so proving `error`
+/// falsy rules out the union members whose first element is not nullish, and
+/// `value` is retyped from the survivors.
+///
+/// Only the source's own union is filtered — each sibling is re-derived from
+/// it, never narrowed on its own — so a binding whose element is identical in
+/// every surviving member keeps exactly the type it already had.
+pub(crate) fn tuple_destructure_sibling_narrowings(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+) -> Vec<(Arc<str>, SymbolInfo, Type)> {
+    // What the condition proves about one binding, as a test on the type a
+    // source member gives that binding: truthiness keeps the members where it
+    // can (or cannot) be nullish-only, a literal comparison the members that
+    // can (or cannot only) be that literal — the discriminant of
+    // `const { kind, payload } = action`.
+    let (tested, keeps): (&str, Box<dyn Fn(&Type) -> bool>) =
+        if let Some((tested, holds)) = truthiness_tested_binding(condition, branch_is_true) {
+            // A member stays where its read can be what the test found: truthy
+            // (`done: true`, `true | false`) or falsy (`done: false`, a nullish
+            // or empty literal) — so a boolean-literal discriminant partitions
+            // `{ done: false; value: T } | { done: true; value?: undefined }`.
+            (
+                tested,
+                Box::new(move |read: &Type| {
+                    let definitely_falsy = |ty: &Type| match ty {
+                        Type::Never
+                        | Type::Undefined
+                        | Type::Null
+                        | Type::Void
+                        | Type::BooleanLiteral(false) => true,
+                        Type::StringLiteral(value) => value.is_empty(),
+                        Type::NumberLiteral(literal) => literal.value == "0",
+                        _ => false,
+                    };
+                    if holds {
+                        !definitely_falsy(&truthy::remove_definitely_falsy(read))
+                    } else {
+                        !matches!(truthy::keep_possibly_falsy(read), Type::Never)
+                    }
+                }),
+            )
+        } else if let Some((tested, literal, eq)) = parse_identifier_literal_equality(condition, symbols) {
+            let holds = eq == branch_is_true;
+            (
+                tested,
+                Box::new(move |read: &Type| {
+                    if holds {
+                        surge_ts_types::is_assignable_to(&literal, read)
+                    } else {
+                        *read != literal
+                    }
+                }),
+            )
+        } else {
+            return Vec::new();
+        };
+    let Some(binding) = symbols.tuple_destructure(tested) else {
+        return Vec::new();
+    };
+    let (source, tested_key) = (binding.source, binding.key);
+    let Some(source_type) = binding
+        .source_type
+        .or_else(|| symbols.get(&source).map(|symbol| symbol.ty.clone()))
+    else {
+        return Vec::new();
+    };
+    // A named source the same test already narrowed (it is a discriminant
+    // alias too: `kind` stands for `action.kind`) arrives as the one member
+    // left, and the siblings are simply read off it again.
+    let members: Vec<Type> = match source_type.peeled() {
+        Type::Union(union) => union.types().iter().map(Type::peeled).collect(),
+        narrowed @ (Type::Object(_) | Type::Tuple(_)) => vec![narrowed],
+        _ => return Vec::new(),
+    };
+    let read_union = |key: &crate::symbols::DestructureKey| -> Option<Type> {
+        members
+            .iter()
+            .map(|member| key.read(member))
+            .collect::<Option<Vec<Type>>>()
+            .map(union_type)
+    };
+    // A binding holds what it reads or a narrowing of it; anything else is a
+    // different declaration under the same name.
+    let still_bound = |name: &str, key: &crate::symbols::DestructureKey| {
+        symbols.get(name).is_some_and(|symbol| {
+            read_union(key).is_some_and(|read| surge_ts_types::is_assignable_to(&symbol.ty, &read))
+        })
+    };
+    let already_narrowed = members.len() == 1;
+    if !already_narrowed && !still_bound(tested, &tested_key) {
+        return Vec::new();
+    }
+
+    let kept: Vec<&Type> = members
+        .iter()
+        .filter(|member| {
+            already_narrowed || tested_key.read(member).is_some_and(|read| keeps(&read))
+        })
+        .collect();
+    if kept.is_empty() || (!already_narrowed && kept.len() == members.len()) {
+        return Vec::new();
+    }
+
+    let mut narrowings = Vec::new();
+    for (name, key) in symbols.tuple_destructure_siblings(&source) {
+        if !already_narrowed && !still_bound(&name, &key) {
+            continue;
+        }
+        let Some(symbol) = symbols.get(&name) else {
+            continue;
+        };
+        let selected: Vec<Type> = kept.iter().filter_map(|member| key.read(member)).collect();
+        if selected.len() != kept.len() {
+            continue;
+        }
+        let narrowed = surge_ts_types::with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+            union_type(selected)
+        });
+        // The tested binding keeps what its own guard made of it.
+        if narrowed == symbol.ty || !surge_ts_types::is_assignable_to(&narrowed, &symbol.ty) {
+            continue;
+        }
+        let declared = symbols.declared_type(&name).unwrap_or(&symbol.ty).clone();
+        narrowings.push((
+            name,
+            SymbolInfo {
+                ty: narrowed,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            },
+            declared,
+        ));
+    }
+    narrowings
+}
+
+fn narrow_condition_symbol_table_by_guard(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+) -> Option<SymbolTable> {
     // `ok ? a : b` where `ok` is a boolean `const` alias narrows by the
     // condition the alias was written as, not by the opaque identifier.
+    // …and by the alias binding itself, which is what was tested.
     if let ParsedExpression::Identifier { name, .. } = condition
         && let Some(alias) = symbols.alias_condition(name)
     {
-        return narrow_condition_symbol_table(&alias, symbols, branch_is_true);
+        let by_alias = narrow_condition_symbol_table(&alias, symbols, branch_is_true);
+        return narrow_reference_guard_symbol_table(
+            condition,
+            by_alias.as_ref().unwrap_or(symbols),
+            branch_is_true,
+        )
+        .or(by_alias);
     }
     // `!guard` narrows the opposite branch.
     if let ParsedExpression::Unary {
@@ -752,6 +938,10 @@ pub(crate) fn narrow_reference_non_null_in_scope(
         &path,
         ReferenceGuard::Nullish {
             keep_matching: false,
+            test: guards::NullishTest {
+                null: true,
+                undefined: true,
+            },
         },
         scopes,
     );
@@ -778,10 +968,12 @@ fn narrow_value_guards_in_scope(
         return;
     }
 
-    // In the branch where the condition holds, a guard on a genuinely-`unknown`
-    // value narrows it (tsc), so a later access inside the branch is not a
-    // `TS18046`. Drop the guarded identifier to the degradation sentinel so the
-    // property-access check stays silent. See the matching `&&`-operand path in
+    narrow_value_guards_by_guard(condition, scopes, branch_is_true, ctx);
+
+    // A guard surge could not turn into a type still narrows a
+    // genuinely-`unknown` value for tsc, so a later access inside the branch is
+    // not a `TS18046`: what is left `unknown` after the narrowers above drops
+    // to the degradation sentinel. See the matching `&&`-operand path in
     // `narrow_truthy_operand_symbol_table`.
     if branch_is_true {
         downgrade_guarded_genuine_unknown_in_scope(condition, scopes);
@@ -790,10 +982,23 @@ fn narrow_value_guards_in_scope(
         collect_holding_guard_identifiers(condition, false, &mut names);
         downgrade_genuine_unknown_in_scope(&names, scopes);
     }
+}
 
+fn narrow_value_guards_by_guard(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+    ctx: &mut CheckerContext,
+) {
     narrow_element_reference_guards_in_scope(condition, scopes, branch_is_true, ctx);
 
     if narrow_logical_guard_in_scope(condition, scopes, branch_is_true, ctx) {
+        return;
+    }
+    if narrow_optional_call_containment_in_scope(condition, scopes, branch_is_true) {
+        return;
+    }
+    if narrow_constructor_equality_in_scope(condition, scopes, branch_is_true) {
         return;
     }
     if narrow_typeof_in_scope(condition, scopes, branch_is_true) {
@@ -841,6 +1046,25 @@ fn narrow_value_guards_in_scope(
     };
     let keep_matching = branch_is_true == eq;
 
+    // A discriminant more than one member down (`this.state.inner.kind`) is
+    // narrowed along its reference path; the arms below keep the two shallow
+    // shapes they were written for.
+    if let Some((base, path)) = reference_path(discriminant_object)
+        && path.len() > 1
+    {
+        narrow_reference_in_scope(
+            &base,
+            &path,
+            ReferenceGuard::Discriminant {
+                property,
+                literal: &literal,
+                keep_matching,
+            },
+            scopes,
+        );
+        return;
+    }
+
     let (base_name, narrowed_symbol, declared) = match discriminant_object {
         ParsedExpression::Identifier { name, .. } => {
             let Some(symbol) = scopes.resolve(name) else {
@@ -870,8 +1094,13 @@ fn narrow_value_guards_in_scope(
             property_name: base_property,
             ..
         } => {
-            let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
-                return;
+            // `this.state.kind === "a"` narrows `this.state` as `p.state.kind`
+            // narrows `p.state`: `this` is bound like any other name.
+            let this_name = "this".to_string();
+            let name = match object.as_ref() {
+                ParsedExpression::Identifier { name, .. } => name,
+                ParsedExpression::This { .. } => &this_name,
+                _ => return,
             };
             let Some(symbol) = scopes.resolve(name) else {
                 return;
@@ -903,6 +1132,8 @@ fn narrow_value_guards_in_scope(
                     optional: base_property_type.optional,
                     method: base_property_type.method,
                     readonly: base_property_type.readonly,
+                    restriction: base_property_type.restriction.clone(),
+                    index_slot: base_property_type.index_slot,
                 },
             );
             (
@@ -1035,6 +1266,8 @@ mod tests {
                     optional: *optional,
                     method: false,
                     readonly: false,
+                    restriction: None,
+                    index_slot: false,
                 },
             );
         }

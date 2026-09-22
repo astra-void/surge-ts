@@ -273,11 +273,43 @@ message = "Object is possibly 'undefined'."
 arity = 0
 
 [[diagnostic]]
+code = "TS2531"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Object is possibly 'null'."
+arity = 0
+
+[[diagnostic]]
+code = "TS2533"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Object is possibly 'null' or 'undefined'."
+arity = 0
+
+[[diagnostic]]
+code = "TS18047"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is possibly 'null'."
+arity = 1
+
+[[diagnostic]]
 code = "TS18048"
 category = "Error"
 source = "typescript"
 support = "emitted"
 message = "'{0}' is possibly 'undefined'."
+arity = 1
+
+[[diagnostic]]
+code = "TS18049"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is possibly 'null' or 'undefined'."
 arity = 1
 
 [[diagnostic]]
@@ -529,6 +561,14 @@ message = "Type '{0}' cannot be used as an index type."
 arity = 1
 
 [[diagnostic]]
+code = "TS2550"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' does not exist on type '{1}'. Do you need to change your target library? Try changing the 'lib' compiler option to '{2}' or later."
+arity = 3
+
+[[diagnostic]]
 code = "TS2551"
 category = "Error"
 source = "typescript"
@@ -559,6 +599,14 @@ source = "typescript"
 support = "emitted"
 message = "Expected at least {0} arguments, but got {1}."
 arity = 2
+
+[[diagnostic]]
+code = "TS2556"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A spread argument must either have a tuple type or be passed to a rest parameter."
+arity = 0
 
 [[diagnostic]]
 code = "TS2576"
@@ -1449,11 +1497,27 @@ message = "A member initializer in a enum declaration cannot reference members d
 arity = 0
 
 [[diagnostic]]
+code = "TS2721"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot invoke an object which is possibly 'null'."
+arity = 0
+
+[[diagnostic]]
 code = "TS2722"
 category = "Error"
 source = "typescript"
 support = "emitted"
 message = "Cannot invoke an object which is possibly 'undefined'."
+arity = 0
+
+[[diagnostic]]
+code = "TS2723"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot invoke an object which is possibly 'null' or 'undefined'."
 arity = 0
 
 [[diagnostic]]
@@ -1470,22 +1534,6 @@ category = "Error"
 source = "typescript"
 support = "emitted"
 message = "Only a void function can be called with the 'new' keyword."
-arity = 0
-
-[[diagnostic]]
-code = "TS2721"
-category = "Error"
-source = "typescript"
-support = "emitted"
-message = "Cannot invoke an object which is possibly 'null'."
-arity = 0
-
-[[diagnostic]]
-code = "TS2531"
-category = "Error"
-source = "typescript"
-support = "emitted"
-message = "Object is possibly 'null'."
 arity = 0
 
 [[diagnostic]]

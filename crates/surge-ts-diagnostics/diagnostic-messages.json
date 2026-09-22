@@ -272,9 +272,41 @@
     "support": "emitted"
   },
   {
+    "code": "TS2531",
+    "category": "Error",
+    "message": "Object is possibly 'null'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2533",
+    "category": "Error",
+    "message": "Object is possibly 'null' or 'undefined'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18047",
+    "category": "Error",
+    "message": "'{0}' is possibly 'null'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS18048",
     "category": "Error",
     "message": "'{0}' is possibly 'undefined'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18049",
+    "category": "Error",
+    "message": "'{0}' is possibly 'null' or 'undefined'.",
     "source": "typescript",
     "arity": 1,
     "support": "emitted"
@@ -528,6 +560,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2550",
+    "category": "Error",
+    "message": "Property '{0}' does not exist on type '{1}'. Do you need to change your target library? Try changing the 'lib' compiler option to '{2}' or later.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
     "code": "TS2551",
     "category": "Error",
     "message": "Property '{0}' does not exist on type '{1}'. Did you mean '{2}'?",
@@ -557,6 +597,14 @@
     "message": "Expected at least {0} arguments, but got {1}.",
     "source": "typescript",
     "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2556",
+    "category": "Error",
+    "message": "A spread argument must either have a tuple type or be passed to a rest parameter.",
+    "source": "typescript",
+    "arity": 0,
     "support": "emitted"
   },
   {
@@ -1448,9 +1496,25 @@
     "support": "emitted"
   },
   {
+    "code": "TS2721",
+    "category": "Error",
+    "message": "Cannot invoke an object which is possibly 'null'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2722",
     "category": "Error",
     "message": "Cannot invoke an object which is possibly 'undefined'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2723",
+    "category": "Error",
+    "message": "Cannot invoke an object which is possibly 'null' or 'undefined'.",
     "source": "typescript",
     "arity": 0,
     "support": "emitted"
@@ -1467,22 +1531,6 @@
     "code": "TS2350",
     "category": "Error",
     "message": "Only a void function can be called with the 'new' keyword.",
-    "source": "typescript",
-    "arity": 0,
-    "support": "emitted"
-  },
-  {
-    "code": "TS2721",
-    "category": "Error",
-    "message": "Cannot invoke an object which is possibly 'null'.",
-    "source": "typescript",
-    "arity": 0,
-    "support": "emitted"
-  },
-  {
-    "code": "TS2531",
-    "category": "Error",
-    "message": "Object is possibly 'null'.",
     "source": "typescript",
     "arity": 0,
     "support": "emitted"

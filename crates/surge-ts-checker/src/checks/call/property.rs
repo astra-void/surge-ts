@@ -189,11 +189,11 @@ fn filtered_element_type(
         ParsedExpression::Identifier { name, .. } => {
             crate::checks::function::predicate_target_of_value(name, symbols, ctx)
         }
-        // An inline `(x): x is T => …` carries its predicate on the arrow's
-        // written return type.
         ParsedExpression::ArrowFunction(arrow) if arrow.return_type.is_none() => {
             inferred_predicate_target(arrow, element, symbols)
         }
+        // An inline `(x): x is T => …` carries its predicate on the arrow's
+        // written return type.
         ParsedExpression::ArrowFunction(arrow) => {
             let Some(ParsedType::Predicate(predicate)) = &arrow.return_type else {
                 return None;
@@ -216,40 +216,116 @@ fn filtered_element_type(
     }
 }
 
-/// tsc's `getTypePredicateFromBody`: an unannotated single-parameter arrow
+/// tsc's `getTypePredicateFromBody`: a callback with no return annotation
 /// whose body is one boolean expression is a type predicate when that
-/// expression narrows the parameter in its true branch and the narrowed type
-/// cannot survive the false branch (`(op) => op.type === 'state'`). The
-/// predicate's target is the true-branch type.
+/// expression narrows its first parameter in its true branch and the narrowed
+/// type cannot survive the false branch (`(op) => op.type === 'state'`), so
+/// `xs.filter(x => x !== null)` yields `number[]` (TS 5.5). Only the first
+/// parameter is read, which is the one `filter`'s predicate overload tests.
+/// The predicate's target is the true-branch type.
 fn inferred_predicate_target(
     arrow: &surge_ts_syntax::ParsedArrowFunction,
     element: &Type,
     symbols: &SymbolTable,
 ) -> Option<Type> {
-    let [parameter] = arrow.parameters.as_slice() else {
-        return None;
-    };
-    if parameter.rest || parameter.declared_type.is_some() || arrow.is_async || arrow.is_generator {
+    if arrow.return_type.is_some()
+        || arrow.is_async
+        || arrow.is_generator
+        || !arrow.type_parameters.is_empty()
+    {
         return None;
     }
-    let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } = &parameter.binding_name else {
+    let parameter = arrow.parameters.first()?;
+    if parameter.rest {
+        return None;
+    }
+    let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } = &parameter.binding_name
+    else {
         return None;
     };
-    let condition = match &arrow.body {
-        surge_ts_syntax::ParsedArrowFunctionBody::Expression(expression) => expression.as_ref(),
-        surge_ts_syntax::ParsedArrowFunctionBody::Block(statements) => match statements.as_slice() {
-            [surge_ts_syntax::ParsedFunctionBodyStatement::Return(statement)] => {
-                statement.expression.as_ref()?
-            }
-            _ => return None,
-        },
-    };
+    let condition = single_returned_expression(&arrow.body)?;
+    // tsc requires the body to be boolean-typed: `(x) => x` narrows `x` in its
+    // true branch but returns `x`, not a boolean, so it is no predicate.
+    if !is_boolean_shaped(condition) {
+        return None;
+    }
     let true_type = narrow_by_branch(condition, element, name, true, symbols)?;
     if true_type == *element || true_type.is_unknown() {
         return None;
     }
     let false_type = narrow_by_branch(condition, &true_type, name, false, symbols)?;
-    is_never(&false_type).then_some(true_type)
+    if is_never(&false_type) {
+        return Some(true_type);
+    }
+    // The shared narrowers only split unions, so a lone `{ a: 1 }` that the
+    // false branch of `x !== undefined` cannot reach comes back unchanged.
+    // Narrowing the element instead asks the same question through the union
+    // split: the predicate holds when no true-branch member survives the false
+    // branch.
+    let element_false = narrow_by_branch(condition, element, name, false, symbols)?;
+    let false_members = union_members(&element_false);
+    union_members(&true_type)
+        .iter()
+        .all(|member| !false_members.contains(member))
+        .then_some(true_type)
+}
+
+/// The one expression a predicate body can consist of: an expression body, or a
+/// block whose only statement is a `return`. tsc refuses to infer from anything
+/// with more than one return.
+fn single_returned_expression(
+    body: &surge_ts_syntax::ParsedArrowFunctionBody,
+) -> Option<&ParsedExpression> {
+    match body {
+        surge_ts_syntax::ParsedArrowFunctionBody::Expression(expression) => Some(expression),
+        surge_ts_syntax::ParsedArrowFunctionBody::Block(statements) => match statements.as_slice() {
+            [surge_ts_syntax::ParsedFunctionBodyStatement::Return(statement)] => {
+                statement.expression.as_ref()
+            }
+            _ => None,
+        },
+    }
+}
+
+fn is_boolean_shaped(expression: &ParsedExpression) -> bool {
+    use surge_ts_syntax::{ParsedBinaryOperator as Op, ParsedLogicalOperator, ParsedUnaryOperator};
+    match expression {
+        ParsedExpression::BooleanLiteral(_)
+        | ParsedExpression::Call { .. }
+        | ParsedExpression::PropertyCall { .. }
+        | ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            ..
+        } => true,
+        ParsedExpression::Binary { operator, .. } => matches!(
+            operator,
+            Op::StrictEquals
+                | Op::StrictNotEquals
+                | Op::Equals
+                | Op::NotEquals
+                | Op::LessThan
+                | Op::LessThanEquals
+                | Op::GreaterThan
+                | Op::GreaterThanEquals
+                | Op::In
+                | Op::Instanceof
+        ),
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::And | ParsedLogicalOperator::Or,
+            right,
+            ..
+        } => is_boolean_shaped(left) && is_boolean_shaped(right),
+        _ => false,
+    }
+}
+
+fn union_members(ty: &Type) -> Vec<Type> {
+    match ty {
+        Type::Union(union) => union.types().to_vec(),
+        _ if is_never(ty) => Vec::new(),
+        _ => vec![ty.clone()],
+    }
 }
 
 fn is_never(ty: &Type) -> bool {
@@ -319,7 +395,11 @@ fn narrow_by_discriminant_leaf(
             let Type::Object(object) = member.peeled() else {
                 return true;
             };
-            match object.properties.get(property_name.as_str()).map(|property| property.ty.peeled()) {
+            match object
+                .properties
+                .get(property_name.as_str())
+                .map(|property| property.ty.peeled())
+            {
                 Some(value @ (Type::StringLiteral(_) | Type::BooleanLiteral(_))) => {
                     (value == literal) == keep_equal
                 }
@@ -327,7 +407,11 @@ fn narrow_by_discriminant_leaf(
             }
         })
         .collect();
-    Some(if kept.is_empty() { Type::Never } else { union_type(kept) })
+    Some(if kept.is_empty() {
+        Type::Never
+    } else {
+        union_type(kept)
+    })
 }
 
 /// `ty` narrowed by `condition` holding (or failing), composed over `&&`, `||`
@@ -356,7 +440,11 @@ fn narrow_by_branch(
             operator,
             right,
             ..
-        } if matches!(operator, ParsedLogicalOperator::And | ParsedLogicalOperator::Or) => {
+        } if matches!(
+            operator,
+            ParsedLogicalOperator::And | ParsedLogicalOperator::Or
+        ) =>
+        {
             let conjunction = matches!(operator, ParsedLogicalOperator::And);
             // The side on which the left operand decides the outcome.
             let left_decides = narrow_by_branch(left, ty, name, !conjunction, symbols)?;
@@ -369,13 +457,20 @@ fn narrow_by_branch(
                 .into_iter()
                 .filter(|member| !is_never(member))
                 .collect();
-            Some(if reachable.is_empty() { Type::Never } else { union_type(reachable) })
+            Some(if reachable.is_empty() {
+                Type::Never
+            } else {
+                union_type(reachable)
+            })
         }
-        _ if let Some(narrowed) = narrow_by_discriminant_leaf(condition, ty, name, branch_is_true) => {
+        _ if let Some(narrowed) =
+            narrow_by_discriminant_leaf(condition, ty, name, branch_is_true) =>
+        {
             Some(narrowed)
         }
         _ => {
-            let mut scope = symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+            let mut scope =
+                symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
             scope.insert(
                 name.to_string(),
                 crate::symbols::SymbolInfo {
@@ -384,7 +479,11 @@ fn narrow_by_branch(
                     function_signature: None,
                 },
             );
-            match crate::checks::function::narrow_condition_symbol_table(condition, &scope, branch_is_true) {
+            match crate::checks::function::narrow_condition_symbol_table(
+                condition,
+                &scope,
+                branch_is_true,
+            ) {
                 Some(narrowed) => Some(narrowed.get(name)?.ty.clone()),
                 None => Some(ty.clone()),
             }
@@ -469,7 +568,44 @@ pub(crate) fn check_property_call_like(
     };
 
     if property_name == "all" && is_promise_all_receiver(&object_ty) {
-        return check_promise_all_call(arguments, call_span.or(property_span), symbols, ctx);
+        return check_promise_all_call(
+            arguments,
+            call_span.or(property_span),
+            expected_return_type,
+            symbols,
+            ctx,
+        );
+    }
+    // Only with the promise kept as a type: collapsed, the result would be a
+    // bare `T`, which the "a primitive is no promise" rule then rejects where
+    // a `Promise<T>` is expected (`return Promise.resolve("")`).
+    if property_name == "resolve"
+        && promise_nominal_enabled()
+        && arguments.len() <= 1
+        && type_arguments.is_empty()
+        && !arguments.iter().any(|argument| argument.spread)
+        && is_promise_all_receiver(&object_ty)
+    {
+        return check_promise_resolve_call(arguments, expected_return_type, symbols, ctx);
+    }
+    if property_name == "race"
+        && type_arguments.is_empty()
+        && is_promise_all_receiver(&object_ty)
+        && let Some(result) = check_promise_race_call(arguments, symbols, ctx)
+    {
+        return Some(result);
+    }
+    // `Promise.reject(reason)` is a `Promise<never>`. Only with the promise
+    // kept as a type: collapsed, it would be a bare `never`, and a call typed
+    // `never` ends the flow it sits in.
+    if property_name == "reject"
+        && promise_nominal_enabled()
+        && arguments.len() <= 1
+        && type_arguments.is_empty()
+        && is_promise_all_receiver(&object_ty)
+    {
+        evaluate_arguments_context_free(object, arguments, symbols, ctx);
+        return Some(promise_of(&Type::Never, ctx));
     }
     // `Promise<T>` is modeled as its awaited `T`, so a `.then`/`.catch`/`.finally`
     // chained on a promise-returning call lands on the value type and would be
@@ -557,6 +693,20 @@ pub(crate) fn check_property_call_like(
             symbols,
             ctx,
         ),
+        Type::Array(element_type)
+            if matches!(property_name, "reduce" | "reduceRight")
+                && matches!(arguments.len(), 1 | 2)
+                && type_arguments.len() <= 1
+                && !arguments.iter().any(|argument| argument.spread) =>
+        {
+            Some(check_array_reduce_call(
+                element_type.as_ref(),
+                type_arguments,
+                arguments,
+                symbols,
+                ctx,
+            ))
+        }
         Type::Array(element_type) if property_name == "find" => check_array_find_call(
             element_type.as_ref(),
             property_span,
@@ -572,9 +722,34 @@ pub(crate) fn check_property_call_like(
             if union_type.types().iter().any(Type::is_unknown) {
                 return None;
             }
+            // The property is looked up on the union before anything is called:
+            // a member lacking it is the error, whatever the others hold.
+            let lacks_member = |ty: &Type| {
+                !matches!(ty, Type::Undefined | Type::Null)
+                    && ty.get_property_access_type(property_name).is_none()
+                    && !ty.peeled().is_unknown()
+                    && !matches!(ty, Type::Array(_) | Type::Tuple(_))
+            };
+            if union_type.types().iter().any(lacks_member)
+                && !union_type
+                    .types()
+                    .iter()
+                    .any(|ty| crate::checks::expr::carries_leaked_type_parameter(ty, ctx))
+            {
+                ctx.push(diagnostic_with_syntax_span(
+                    crate::checks::expr::missing_property_diagnostic(
+                        property_name,
+                        &Type::Union(union_type.clone()),
+                        symbols,
+                        ctx.file_name.clone(),
+                    ),
+                    crate::spans::choose_span(property_span, object_span),
+                ));
+                return None;
+            }
             let mut result_types = vec![];
             for ty in union_type.types() {
-                if *ty == Type::Undefined {
+                if matches!(ty, Type::Undefined | Type::Null) {
                     result_types.push(Type::Undefined);
                     continue;
                 }
@@ -717,7 +892,18 @@ pub(crate) fn check_property_call_like(
                 );
             }
 
-            let Some(property_type) = object_ty.get_property_access_type(property_name) else {
+            let property_type =
+                (!crate::infer::expression::lib_lacks_builtin_member(&object_ty, property_name, ctx))
+                    .then(|| object_ty.get_property_access_type(property_name))
+                    .flatten()
+                    .or_else(|| {
+                        crate::infer::expression::lib_builtin_member_type(
+                            &object_ty,
+                            property_name,
+                            ctx,
+                        )
+                    });
+            let Some(property_type) = property_type else {
                 if no_lib_array_member(&object_ty, ctx) {
                     return Some(Type::Any);
                 }
@@ -740,10 +926,18 @@ pub(crate) fn check_property_call_like(
                     }
                     return Some(Type::Any);
                 }
+                let lib_feature =
+                    crate::checks::expr::lib_feature_of_missing_member(&object_ty, property_name);
                 let diagnostic = match crate::checks::expr::property_spelling_suggestion(
                     property_name,
                     &object_ty,
                 ) {
+                    _ if lib_feature.is_some() => Diagnostic::ts2550(
+                        property_name,
+                        &object_type_name,
+                        lib_feature.unwrap_or_default(),
+                        ctx.file_name.clone(),
+                    ),
                     Some(suggestion) => Diagnostic::ts2551(
                         property_name,
                         &object_type_name,
@@ -880,7 +1074,17 @@ fn check_promise_then_call(
         | InferredExpression::Unknown => Type::Unknown,
     };
 
-    Some(next_value)
+    // A `then` answers a promise; only with `Promise<T>` collapsed is that its
+    // value. The receiver can reach here as a promise too, when its interface
+    // did not resolve where `then` was looked up.
+    // `TResult1` is inferred from the callback's return, which widens its
+    // fresh literals (`() => ({ data: 5 })` is `Promise<{ data: number }>`).
+    let next_value = if promise_nominal_enabled() {
+        crate::checks::expr::widen_type(&next_value)
+    } else {
+        next_value
+    };
+    Some(promise_of(&next_value, ctx))
 }
 
 /// Whether `ty` answers `name` from a member of its own, as opposed to from an
@@ -909,6 +1113,64 @@ pub(crate) fn promise_like_awaited_type(ty: &Type) -> Type {
     }
 
     ty.clone()
+}
+
+/// `Promise<value>` — what an async function returns for a body that
+/// completes with `value` (tsc's `createPromiseReturnType`). The awaited value
+/// is what gets wrapped, so a body returning a promise does not nest. Without a
+/// lib `Promise` the value is kept as it is.
+pub(crate) fn promise_of(value: &Type, ctx: &mut CheckerContext) -> Type {
+    if !promise_nominal_enabled() {
+        return value.clone();
+    }
+    // Unwrapped by its rendering alone: forcing a lazy value (`awaited_type`
+    // peels for a thenable) resolves it here, outside the scope that binds
+    // the names it was written in (`core.output<typeof schema>` inside the
+    // arrow whose parameter `schema` is).
+    let value = promise_like_awaited_type(value);
+    if value.is_unknown() {
+        return value;
+    }
+    // The slot is named after the value: a reference renders its written
+    // argument, and the instantiation is cached by its resolved arguments, so
+    // any other name would be the display every later `Promise<value>` gets.
+    let slot = value.name();
+    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    substitution.insert(slot.clone(), value.clone());
+    let named = |name: &str, type_arguments| {
+        ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            name: name.to_string(),
+            span: None,
+            type_arguments,
+        }))
+    };
+    let reported = ctx.diagnostics().len();
+    let promise = crate::infer::map_parsed_type_with_substitution(
+        named("Promise", vec![named(&slot, Vec::new())]),
+        ctx,
+        &substitution,
+    );
+    ctx.truncate_diagnostics(reported);
+    match promise {
+        // The reference renders its written argument, which is the slot name.
+        Type::Reference(mut reference) => {
+            reference.display = format!("Promise<{}>", value.name()).into();
+            Type::Reference(reference)
+        }
+        promise if promise.is_unknown() => value,
+        promise => promise,
+    }
+}
+
+/// `SURGE_PROMISE_NOMINAL=1`: keep the lib's `Promise<T>` / `PromiseLike<T>` as
+/// the interface it is instead of collapsing it to its awaited `T`. The
+/// collapse dates from when `await` was erased at parse time; it makes
+/// `Promise<T> | undefined` read as `T | undefined` and hides every misuse of
+/// a promise as its value. Off until the corpora are clean under it — see
+/// CURRENT_STATUS.md, semantic compatibility gates.
+pub(crate) fn promise_nominal_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SURGE_PROMISE_NOMINAL").is_some())
 }
 
 /// The type `await ty` produces, following tsc's `getAwaitedTypeNoAlias`:
@@ -1016,7 +1278,7 @@ pub(crate) fn check_optional_property_call(
     // arguments, and returning here skipped it — everything inside a callback on
     // an unmodelled receiver (`messages?.map((item) => <article>…</article>)`)
     // went unchecked, which is where trpc's missing UMD-global reports live.
-    let base_type = surge_ts_types::remove_undefined(&object_type);
+    let base_type = surge_ts_types::remove_nullish(&object_type);
     crate::checks::expr::check_member_accessibility(
         object,
         &base_type,
@@ -1077,7 +1339,7 @@ pub(crate) fn check_optional_property_call(
         Type::Union(union_type) => {
             let mut result_types = vec![];
             for ty in union_type.types() {
-                if *ty == Type::Undefined {
+                if matches!(ty, Type::Undefined | Type::Null) {
                     result_types.push(Type::Undefined);
                     continue;
                 }
@@ -1118,7 +1380,7 @@ pub(crate) fn check_optional_property_call(
                     return None;
                 };
 
-                let property_type_base = surge_ts_types::remove_undefined(&property_type);
+                let property_type_base = surge_ts_types::remove_nullish(&property_type);
 
                 let declared_member = property_type_base.clone();
                 match callable_property_signature(property_type_base) {
@@ -1236,7 +1498,7 @@ pub(crate) fn check_optional_property_call(
                 return None;
             };
 
-            let property_type_base = surge_ts_types::remove_undefined(&property_type);
+            let property_type_base = surge_ts_types::remove_nullish(&property_type);
 
             let declared_member = property_type_base.clone();
             match callable_property_signature(property_type_base) {

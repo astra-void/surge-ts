@@ -359,6 +359,11 @@ pub(crate) fn predicate_target_of_value(
     if !signature.type_parameters.is_empty() {
         return None;
     }
+    if signature.return_type.is_none()
+        && let Some(inferred) = &signature.inferred_predicate
+    {
+        return (inferred.parameter_index == 0).then(|| inferred.target.clone());
+    }
     let surge_ts_syntax::ParsedType::Predicate(predicate) = signature.return_type.as_ref()? else {
         return None;
     };
@@ -512,6 +517,13 @@ pub(super) fn resolve_predicate_type_in_declaring_scope(
     substitution: &crate::infer::TypeParameterSubstitution,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    if !matches!(
+        guard.signature.return_type,
+        Some(surge_ts_syntax::ParsedType::Predicate(_))
+    ) && let Some(inferred) = &guard.signature.inferred_predicate
+    {
+        return Some(inferred.target.clone());
+    }
     resolve_predicate_type_under(
         guard.predicate_type.clone(),
         guard.declaring_file.as_deref(),
@@ -1164,4 +1176,94 @@ pub(super) fn narrow_predicate_reference_guards_in_scope(
         },
         scopes,
     );
+}
+
+/// tsc's `getTypePredicateFromBody`: the predicate a body that is one returned
+/// condition implies over one of its parameters. The condition has to split
+/// the parameter's type exactly — `x => !!x` keeps `number` when true but
+/// proves nothing when false (`0` is falsy), so it is no predicate.
+pub(crate) fn infer_predicate_from_body(
+    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
+    parameter_types: &[Type],
+    returned: &ParsedExpression,
+    symbols: &SymbolTable,
+) -> Option<crate::symbols::InferredPredicate> {
+    let named = |parameter: &surge_ts_syntax::ParsedFunctionParameter| match &parameter.binding_name {
+        surge_ts_syntax::ParsedBindingName::Identifier { name, .. } if !parameter.rest => {
+            Some(name.clone())
+        }
+        _ => None,
+    };
+    let mut scope = symbols.clone();
+    for (parameter, ty) in parameters.iter().zip(parameter_types) {
+        if let Some(name) = named(parameter) {
+            scope.insert(
+                name,
+                SymbolInfo {
+                    ty: ty.clone(),
+                    kind: crate::symbols::SymbolKind::Parameter,
+                    function_signature: None,
+                },
+            );
+        }
+    }
+    parameters
+        .iter()
+        .zip(parameter_types)
+        .enumerate()
+        .find_map(|(parameter_index, (parameter, declared))| {
+            let name = named(parameter)?;
+            if declared.is_unknown() || matches!(declared, Type::Any) {
+                return None;
+            }
+            let narrowed = |branch_is_true: bool| {
+                super::narrow_condition_symbol_table(returned, &scope, branch_is_true)
+                    .and_then(|narrowed| narrowed.get(&name).map(|symbol| symbol.ty.clone()))
+            };
+            let target = narrowed(true)?;
+            if target.is_unknown() || target == *declared {
+                return None;
+            }
+            // tsc's test is "if and only if": the two branches have to split
+            // the declared type exactly, so `x => !!x` (`0` is falsy) is none.
+            let holds = narrowed(false)
+                .is_some_and(|rejected| predicate_partitions(declared, &target, &rejected));
+            holds.then_some(crate::symbols::InferredPredicate {
+                parameter_index,
+                target,
+            })
+        })
+}
+
+/// Whether `a` and `b` are exactly the two halves `declared` splits into.
+pub(crate) fn predicate_partitions(declared: &Type, a: &Type, b: &Type) -> bool {
+    let members = |ty: &Type| match ty {
+        Type::Union(union) => union.types().to_vec(),
+        Type::Never => Vec::new(),
+        other => vec![other.clone()],
+    };
+    let declared = members(declared);
+    let mut halves = members(a);
+    halves.extend(members(b));
+    declared.len() == halves.len()
+        && declared.iter().all(|member| halves.contains(member))
+        && halves.iter().all(|member| declared.contains(member))
+}
+
+/// The expression a predicate body returns: tsc wants exactly one `return`.
+/// Plain expression statements may come before it (`console.log(x)`); anything
+/// that could branch, rebind or reassign first is left alone, since the
+/// condition is then no longer a statement about the parameter as declared.
+pub(crate) fn single_returned_statement_expression(
+    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+) -> Option<&ParsedExpression> {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+    let (Statement::Return(statement), before) = body.split_last()? else {
+        return None;
+    };
+    before
+        .iter()
+        .all(|statement| matches!(statement, Statement::Expression(_)))
+        .then(|| statement.expression.as_ref())
+        .flatten()
 }

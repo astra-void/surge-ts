@@ -101,13 +101,24 @@ fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
         Type::Tuple(elements) => elements
             .iter()
             .any(|element| contains_unknown(element, sentinel_only)),
+        // A generic member signature has its own type parameters erased to
+        // the sentinel when it is resolved (only their rendering is kept), and
+        // a self-reference instantiated with one (`map<U>(…): Box<U>`) resolves
+        // to the sentinel too. Reading those as gaps made every interface with
+        // a generic method "contain unknown", which silenced each mismatch
+        // against it — `return 1` from a function declared to return
+        // `Box<string>`. The sentinel is permissive in a relation, so it is
+        // never what makes one fail.
+        Type::Function(function) if function.type_parameter_head().is_some() => false,
         Type::Function(function) => {
             !crate::checks::call::is_generic_signature(function)
-                && (function
-                    .parameters()
-                    .iter()
-                    .any(|parameter| contains_unknown(parameter, sentinel_only))
-                    || contains_unknown(function.return_type(), sentinel_only))
+                && crate::checks::assign::with_signature_type_parameters(function, || {
+                    function
+                        .parameters()
+                        .iter()
+                        .any(|parameter| contains_unknown(parameter, sentinel_only))
+                        || contains_unknown(function.return_type(), sentinel_only)
+                })
         }
         Type::Object(object) => {
             object
@@ -333,19 +344,19 @@ pub(crate) fn check_function_body(
                 ctx,
             );
             ctx.symbols = saved_symbols;
+            let signature_info =
+                crate::checks::function::signature::function_declaration_signature_info(
+                    function,
+                    &function_type,
+                    scopes.visible_symbols(),
+                    &ctx.file_name,
+                );
             scopes.insert_current_handle(
                 function.name.as_str(),
                 std::sync::Arc::new(SymbolInfo {
                     ty: Type::Function(function_type),
                     kind: crate::symbols::SymbolKind::Function,
-                    function_signature: Some(
-                        crate::checks::function::signature::function_signature_info(
-                            &function.type_parameters,
-                            &function.parameters,
-                            function.return_type.as_ref(),
-                            &ctx.file_name,
-                        ),
-                    ),
+                    function_signature: Some(signature_info),
                 }),
             );
         }
@@ -590,6 +601,7 @@ fn collect_body_local_type_declarations(
                     interface.string_index_type.clone(),
                     interface.number_index_type.clone(),
                     interface.call_signature.clone(),
+                    interface.call_signature_overloads.clone(),
                     interface.construct_signatures.clone(),
                     None,
                 );

@@ -345,12 +345,52 @@ pub const TS2532: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2531: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2531",
+    number: Some(2531),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Object is possibly 'null'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2533: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2533",
+    number: Some(2533),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Object is possibly 'null' or 'undefined'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS18047: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS18047",
+    number: Some(18047),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' is possibly 'null'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS18048: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS18048",
     number: Some(18048),
     source: DiagnosticSource::TypeScript,
     category: DiagnosticCategory::Error,
     message_template: "'{0}' is possibly 'undefined'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS18049: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS18049",
+    number: Some(18049),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' is possibly 'null' or 'undefined'.",
     argument_count: 1,
     support: DiagnosticSupport::Emitted,
 };
@@ -665,6 +705,16 @@ pub const TS2538: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2550: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2550",
+    number: Some(2550),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Property '{0}' does not exist on type '{1}'. Do you need to change your target library? Try changing the 'lib' compiler option to '{2}' or later.",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2551: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2551",
     number: Some(2551),
@@ -702,6 +752,16 @@ pub const TS2555: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Expected at least {0} arguments, but got {1}.",
     argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2556: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2556",
+    number: Some(2556),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A spread argument must either have a tuple type or be passed to a rest parameter.",
+    argument_count: 0,
     support: DiagnosticSupport::Emitted,
 };
 
@@ -1815,12 +1875,32 @@ pub const TS2651: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2721: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2721",
+    number: Some(2721),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot invoke an object which is possibly 'null'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2722: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2722",
     number: Some(2722),
     source: DiagnosticSource::TypeScript,
     category: DiagnosticCategory::Error,
     message_template: "Cannot invoke an object which is possibly 'undefined'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2723: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2723",
+    number: Some(2723),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot invoke an object which is possibly 'null' or 'undefined'.",
     argument_count: 0,
     support: DiagnosticSupport::Emitted,
 };
@@ -1841,26 +1921,6 @@ pub const TS2350: DiagnosticDescriptor = DiagnosticDescriptor {
     source: DiagnosticSource::TypeScript,
     category: DiagnosticCategory::Error,
     message_template: "Only a void function can be called with the 'new' keyword.",
-    argument_count: 0,
-    support: DiagnosticSupport::Emitted,
-};
-
-pub const TS2721: DiagnosticDescriptor = DiagnosticDescriptor {
-    code: "TS2721",
-    number: Some(2721),
-    source: DiagnosticSource::TypeScript,
-    category: DiagnosticCategory::Error,
-    message_template: "Cannot invoke an object which is possibly 'null'.",
-    argument_count: 0,
-    support: DiagnosticSupport::Emitted,
-};
-
-pub const TS2531: DiagnosticDescriptor = DiagnosticDescriptor {
-    code: "TS2531",
-    number: Some(2531),
-    source: DiagnosticSource::TypeScript,
-    category: DiagnosticCategory::Error,
-    message_template: "Object is possibly 'null'.",
     argument_count: 0,
     support: DiagnosticSupport::Emitted,
 };
@@ -3940,7 +4000,11 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2820,
     TS18046,
     TS2532,
+    TS2531,
+    TS2533,
+    TS18047,
     TS18048,
+    TS18049,
     TS2571,
     TS18050,
     TS2339,
@@ -3972,10 +4036,12 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS4104,
     TS2536,
     TS2538,
+    TS2550,
     TS2551,
     TS2552,
     TS2554,
     TS2555,
+    TS2556,
     TS2576,
     TS2588,
     TS2580,
@@ -4087,11 +4153,11 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2403,
     TS2449,
     TS2651,
+    TS2721,
     TS2722,
+    TS2723,
     TS7009,
     TS2350,
-    TS2721,
-    TS2531,
     TS2407,
     TS2724,
     TS2729,
@@ -4655,9 +4721,37 @@ impl Diagnostic {
     }
 
     #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2531(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2531, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2533(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2533, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts18047(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS18047,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
     pub fn ts18048(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS18048,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts18049(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS18049,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
@@ -4933,6 +5027,24 @@ impl Diagnostic {
     }
 
     #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2550(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2550,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
     pub fn ts2551(
         arg0: impl ToString,
         arg1: impl ToString,
@@ -4984,6 +5096,11 @@ impl Diagnostic {
             ],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2556(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2556, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -5969,8 +6086,18 @@ impl Diagnostic {
     }
 
     #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2721(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2721, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
     pub fn ts2722(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2722, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2723(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2723, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -5981,16 +6108,6 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2350(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2350, Vec::<DiagnosticArg>::new(), file_name)
-    }
-
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn ts2721(file_name: impl Into<String>) -> Self {
-        Self::from_descriptor(&TS2721, Vec::<DiagnosticArg>::new(), file_name)
-    }
-
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn ts2531(file_name: impl Into<String>) -> Self {
-        Self::from_descriptor(&TS2531, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

@@ -59,6 +59,7 @@ pub enum Type {
     BigInt,
     Symbol,
     Undefined,
+    Null,
     Void,
     Any,
     Unknown,
@@ -259,7 +260,9 @@ impl Type {
     pub fn property_only_from_string_index(&self, name: &str) -> bool {
         match self {
             Type::Object(object) => {
-                object.get_property(name).is_none()
+                object
+                    .get_property(name)
+                    .is_none_or(|property| property.index_slot)
                     && object.allows_string_index_access()
                     && !object.synthetic_open_index
             }
@@ -283,8 +286,58 @@ impl Type {
         }
     }
 
-    pub fn get_property_access_type(&self, name: &str) -> Option<Type> {
+    /// [`Self::property_only_from_string_index`] where no guard has narrowed
+    /// the slot yet: the read `noUncheckedIndexedAccess` still widens with
+    /// `undefined`. A narrowed slot already holds what its guard proved.
+    pub fn reads_unnarrowed_string_index(&self, name: &str) -> bool {
         match self {
+            Type::Object(object) => {
+                object.get_property(name).is_none() && self.property_only_from_string_index(name)
+            }
+            Type::Reference(reference) => reference.resolve().reads_unnarrowed_string_index(name),
+            Type::Union(union) => {
+                self.property_only_from_string_index(name)
+                    && union
+                        .types()
+                        .iter()
+                        .filter(|member| !matches!(member, Type::Undefined | Type::Void))
+                        .any(|member| member.reads_unnarrowed_string_index(name))
+            }
+            _ => false,
+        }
+    }
+
+    pub fn get_property_access_type(&self, name: &str) -> Option<Type> {
+        let own = self.own_property_access_type(name);
+        // A primitive's, array's or function's apparent type is a lib interface
+        // (`Number`, `Array<T>`, `Function`), and every object type answers the
+        // global `Object` members its own declaration does not restate —
+        // `getPropertyOfType`'s final `globalObjectType` fallback. Without it
+        // `var o: Object = 1` was rejected for lacking `hasOwnProperty`.
+        match self {
+            Type::String
+            | Type::StringLiteral(_)
+            | Type::Number
+            | Type::NumberLiteral(_)
+            | Type::BigInt
+            | Type::Symbol
+            | Type::Boolean
+            | Type::BooleanLiteral(_)
+            | Type::Function(_)
+            | Type::Array(_)
+            | Type::Tuple(_)
+            | Type::OpenTuple(_) => {
+                own.or_else(|| crate::object::object_prototype_member_type(name))
+            }
+            _ => own,
+        }
+    }
+
+    fn own_property_access_type(&self, name: &str) -> Option<Type> {
+        match self {
+            Type::Boolean | Type::BooleanLiteral(_) if name == "valueOf" => {
+                Some(function_type(vec![], Type::Boolean, false, 0))
+            }
             Type::Object(object) => object
                 .get_property_access_type(name)
                 .or_else(|| {
@@ -346,9 +399,7 @@ impl Type {
 
     pub fn builtin_constructor_result_type(name: &str) -> Option<Type> {
         match name {
-            "Date" => Some(Type::Any),
             "Array" => Some(Type::Array(Box::new(Type::Any))),
-            "Uint8Array" => Some(Type::Array(Box::new(Type::Number))),
             "Map" => Some(Type::Object(ObjectType::new(
                 {
                     let mut properties = crate::PropertyMap::default();
@@ -414,12 +465,12 @@ impl Type {
             Type::BigInt => "bigint".to_string(),
             Type::Symbol => "symbol".to_string(),
             Type::Undefined => "undefined".to_string(),
+            Type::Null => "null".to_string(),
             Type::Void => "void".to_string(),
             // tsc prints its error type as the `any` it is.
             Type::Any | Type::ErrorType => "any".to_string(),
-            Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
-                "unknown".to_string()
-            }
+            Type::Unknown | Type::GenuineUnknown => "unknown".to_string(),
+            Type::TypeParameter(parameter) => parameter.name.to_string(),
             Type::Never => "never".to_string(),
             Type::StringLiteral(value) => format!("{value:?}"),
             Type::NumberLiteral(value) => value.value.clone(),
@@ -429,7 +480,6 @@ impl Type {
                 if let Some(alias_name) = &object.alias_name {
                     return alias_name.to_string();
                 }
-
                 return object_structural_name(object);
             }
             Type::Array(element) => format!("{}[]", array_element_name(element)),
@@ -464,12 +514,27 @@ fn object_structural_name(object: &crate::ObjectType) -> String {
                 let mut parts = object
                     .properties
                     .iter()
-                    .map(|(name, property)| {
-                        if property.is_optional() {
+                    .flat_map(|(name, property)| {
+                        // tsc prints a member declared with method syntax as
+                        // one, overload by overload: `f(s: string): number`.
+                        if property.method
+                            && let Type::Function(function) = &property.ty
+                            && function.alias_name().is_none()
+                        {
+                            let optional = if property.is_optional() { "?" } else { "" };
+                            return match function.overloads() {
+                                Some(overloads) => overloads
+                                    .iter()
+                                    .map(|overload| format!("{name}{optional}{}", overload.member_name()))
+                                    .collect(),
+                                None => vec![format!("{name}{optional}{}", function.member_name())],
+                            };
+                        }
+                        vec![if property.is_optional() {
                             format!("{name}?: {}", optional_property_display(&property.ty))
                         } else {
                             format!("{name}: {}", property.ty.name())
-                        }
+                        }]
                     })
                     .collect::<Vec<_>>();
 
@@ -483,10 +548,42 @@ fn object_structural_name(object: &crate::ObjectType) -> String {
 
                 let properties = parts.join("; ");
 
+                // An object that is nothing but one signature prints as that
+                // signature, as tsc prints `new (x: number) => T` and
+                // `(x: string) => string`.
+                if properties.is_empty() {
+                    match (object.call_signature(), object.construct_signature()) {
+                        (Some(call), None) => return Type::Function(call.clone()).name(),
+                        (None, Some(construct)) => {
+                            return format!("new {}", Type::Function(construct.clone()).name());
+                        }
+                        _ => {}
+                    }
+                }
+
                 if properties.is_empty() {
                     if object.non_primitive { "object" } else { "{}" }.to_string()
                 } else {
-                    format!("{{ {}; }}", properties)
+                    // tsc prints an object type's signatures ahead of its
+                    // properties.
+                    let signatures = |signature: &FunctionType, prefix: &str| -> Vec<String> {
+                        match signature.overloads() {
+                            Some(overloads) => overloads
+                                .iter()
+                                .map(|overload| format!("{prefix}{}", overload.member_name()))
+                                .collect(),
+                            None => vec![format!("{prefix}{}", signature.member_name())],
+                        }
+                    };
+                    let mut members = Vec::new();
+                    if let Some(call) = object.call_signature() {
+                        members.extend(signatures(call, ""));
+                    }
+                    if let Some(construct) = object.construct_signature() {
+                        members.extend(signatures(construct, "new "));
+                    }
+                    members.push(properties);
+                    format!("{{ {}; }}", members.join("; "))
                 }
     }
 }
@@ -658,7 +755,9 @@ fn array_iteration_callback(element: &Type, return_type: Type) -> Type {
         ],
         return_type,
         false,
-        1,
+        // All three are required in the lib's signature; the target passes
+        // every one, and a callback is free to declare fewer.
+        3,
     )
 }
 
@@ -795,7 +894,8 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
                     ],
                     Type::Any,
                     false,
-                    2,
+                    // All four are required in the lib's signature.
+                    4,
                 ),
                 Type::Any,
             ],

@@ -1,5 +1,5 @@
 use surge_ts_syntax::{ParsedExpression, ParsedUnaryOperator};
-use surge_ts_types::{Type, TypeCopyReason, union_type};
+use surge_ts_types::{Type, TypeCopyReason, is_assignable_to, union_type};
 
 use crate::symbols::{SymbolInfo, SymbolTable};
 
@@ -25,9 +25,29 @@ pub(super) fn typeof_tag_of(member: &Type) -> Option<&'static str> {
         {
             Some("function")
         }
-        Type::Object(_) | Type::Array(_) | Type::Tuple(_) => Some("object"),
+        Type::Object(_) | Type::Array(_) | Type::Tuple(_) | Type::Null => Some("object"),
         _ => None,
     }
+}
+
+/// Every `typeof` tag a value of `ty` can report, or `None` when some member's
+/// tag cannot be decided (`any`, `unknown`, an unmodelled shape).
+pub(crate) fn typeof_tags_of(ty: &Type) -> Option<Vec<&'static str>> {
+    let members: Vec<Type> = match ty.peeled() {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other],
+    };
+    let mut tags = Vec::new();
+    for member in &members {
+        let tag = match member {
+            Type::Boolean | Type::BooleanLiteral(_) => "boolean",
+            other => typeof_tag_of(other)?,
+        };
+        if !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    Some(tags)
 }
 
 /// Narrows a union by a `typeof x === "tag"` guard. `keep_matching` keeps the
@@ -48,20 +68,86 @@ pub(super) fn type_for_typeof_tag(tag: &str) -> Option<Type> {
     }
 }
 
+/// tsc's `getNarrowedType` for a receiver that is not a union: the tag's own
+/// type stands in when it is a subtype of what the receiver holds
+/// (`let a: {}` tested `typeof a === "number"` is a `number`), the receiver
+/// stands when it is the narrower of the two (`{ q: number }` tested for
+/// `"object"`), and a tag the receiver can never report leaves the branch
+/// unreachable.
+fn narrow_non_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Option<Type> {
+    // A lone primitive the test rules out leaves the branch unreachable
+    // (`typeof x === "number"` after `x` narrowed to `string`), which is how an
+    // exhaustive chain of `typeof` checks reaches `never`. Object and function
+    // tags are left alone: surge's object shapes do not always carry the call
+    // signature that decides between them.
+    let ruled_out = || {
+        typeof_tag_of(ty)
+            .filter(|member_tag| !matches!(*member_tag, "object" | "function"))
+            .filter(|member_tag| (*member_tag == tag) != keep_matching)
+            .map(|_| Type::Never)
+    };
+    if !keep_matching {
+        return ruled_out();
+    }
+    if matches!(
+        ty,
+        Type::Any | Type::Unknown | Type::ErrorType | Type::TypeParameter(_)
+    ) {
+        return None;
+    }
+    let Some(candidate) = type_for_typeof_tag(tag) else {
+        return ruled_out();
+    };
+    if matches!(ty, Type::GenuineUnknown) {
+        return Some(candidate);
+    }
+    if is_assignable_to(&candidate, ty) {
+        return (candidate != *ty).then_some(candidate);
+    }
+    if is_assignable_to(ty, &candidate) {
+        return None;
+    }
+    ruled_out().or(Some(Type::Never))
+}
+
+/// A tag no value reports (`typeof x === "Object"`, already TS2367): tsc still
+/// narrows by it, and the two branches split the subject by primitiveness —
+/// nothing primitive can be hiding behind an unrecognized tag, and nothing
+/// else can be ruled out by one.
+fn narrow_by_unmatched_typeof_tag(ty: &Type, keep_matching: bool) -> Option<Type> {
+    let members: Vec<Type> = match ty {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other.clone()],
+    };
+    let primitive = |member: &Type| {
+        matches!(
+            typeof_tag_of(member),
+            Some("string" | "number" | "boolean" | "bigint" | "symbol" | "undefined")
+        )
+    };
+    let kept: Vec<Type> = members
+        .iter()
+        .filter(|member| primitive(member) != keep_matching)
+        .cloned()
+        .collect();
+    if kept.is_empty() {
+        return Some(Type::Never);
+    }
+    if kept.len() == members.len() {
+        return None;
+    }
+    Some(union_type(kept))
+}
+
 pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Option<Type> {
     if let Some(flattened) = surge_ts_types::flatten_reference_unions(ty) {
         return narrow_union_by_typeof(&flattened, tag, keep_matching);
     }
+    if type_for_typeof_tag(tag).is_none() && !matches!(tag, "object" | "function") {
+        return narrow_by_unmatched_typeof_tag(ty, keep_matching);
+    }
     let Type::Union(union) = ty else {
-        // A lone primitive the test rules out leaves the branch unreachable
-        // (`typeof x === "number"` after `x` narrowed to `string`), which is how
-        // an exhaustive chain of `typeof` checks reaches `never`. Object and
-        // function tags are left alone: surge's object shapes do not always
-        // carry the call signature that decides between them.
-        return typeof_tag_of(ty)
-            .filter(|member_tag| !matches!(*member_tag, "object" | "function"))
-            .filter(|member_tag| (*member_tag == tag) != keep_matching)
-            .map(|_| Type::Never);
+        return narrow_non_union_by_typeof(ty, tag, keep_matching);
     };
     let kept: Vec<Type> = union
         .types()

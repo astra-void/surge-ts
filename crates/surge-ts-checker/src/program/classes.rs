@@ -32,8 +32,8 @@ pub(crate) fn class_instance_interface_info(
 ) -> InterfaceInfo {
     // A generic class's `this` needs its own type parameters in scope, which the
     // member inference does not model yet; those members stay `any`.
-    let infer_members = class.type_parameters.is_empty()
-        && crate::checks::function::lazy_body_returns(&file_name);
+    let infer_members =
+        class.type_parameters.is_empty() && crate::checks::function::lazy_body_returns(&file_name);
     let mut members: Vec<_> = class
         .members
         .iter()
@@ -51,6 +51,7 @@ pub(crate) fn class_instance_interface_info(
         class.string_index_type.clone(),
         class.number_index_type.clone(),
         None,
+        Vec::new(),
         Vec::new(),
         None,
     );
@@ -75,9 +76,10 @@ fn class_member_to_interface_member(
                 optional: property.optional,
                 is_abstract: property.is_abstract,
                 is_method: false,
-                ty: property.declared_type.clone().unwrap_or_else(|| {
-                    inferred_property_type(class, property, infer_members)
-                }),
+                ty: property
+                    .declared_type
+                    .clone()
+                    .unwrap_or_else(|| inferred_property_type(class, property, infer_members)),
                 readonly: property.readonly,
                 write_ty: None,
             })
@@ -212,7 +214,9 @@ fn inferred_accessor_type(
     accessor: &ParsedClassAccessor,
     infer_members: bool,
 ) -> Option<ParsedType> {
-    if !infer_members || accessor.getter_return_type.is_some() || accessor.setter_param_type.is_some()
+    if !infer_members
+        || accessor.getter_return_type.is_some()
+        || accessor.setter_param_type.is_some()
     {
         return None;
     }
@@ -220,13 +224,15 @@ fn inferred_accessor_type(
         .declarations
         .iter()
         .find(|declaration| declaration.is_getter && declaration.has_body)?;
-    Some(ParsedType::InferredMember(Arc::new(surge_ts_syntax::ParsedInferredMember {
-        class_name: class.name.clone(),
-        member_start: accessor.name_span.map_or(0, |span| span.start),
-        member_name: accessor.name.clone(),
-        keep_literal: false,
-        source: surge_ts_syntax::ParsedInferredMemberSource::GetterBody(getter.body.clone()),
-    })))
+    Some(ParsedType::InferredMember(Arc::new(
+        surge_ts_syntax::ParsedInferredMember {
+            class_name: class.name.clone(),
+            member_start: accessor.name_span.map_or(0, |span| span.start),
+            member_name: accessor.name.clone(),
+            keep_literal: false,
+            source: surge_ts_syntax::ParsedInferredMemberSource::GetterBody(getter.body.clone()),
+        },
+    )))
 }
 
 fn accessor_property_type(accessor: &ParsedClassAccessor) -> ParsedType {
@@ -238,11 +244,29 @@ fn accessor_property_type(accessor: &ParsedClassAccessor) -> ParsedType {
 }
 
 fn method_function_type(class: &ParsedClassDeclaration, method: &ParsedClassMethod) -> ParsedType {
+    // tsc's `addOptionality`, as `build_function_type` applies it to a
+    // declaration: a defaulted parameter a required one follows is written
+    // `T | undefined` for its callers.
+    let required = crate::checks::function::required_parameter_count(&method.parameters);
     ParsedType::Function(std::sync::Arc::new(ParsedFunctionType {
         parameters: method
             .parameters
             .iter()
-            .map(parameter_to_type_parameter)
+            .enumerate()
+            .map(|(index, parameter)| {
+                let mut lowered = parameter_to_type_parameter(parameter);
+                if parameter.initializer.is_some()
+                    && index < required
+                    && !matches!(lowered.ty, ParsedType::Any)
+                {
+                    lowered.ty = ParsedType::Union(std::sync::Arc::new(vec![
+                        lowered.ty,
+                        ParsedType::Undefined,
+                    ]));
+                    lowered.optional = false;
+                }
+                lowered
+            })
             .collect(),
         return_type: Box::new(
             method
@@ -275,7 +299,12 @@ fn syntactic_method_return_type(
         class: &ParsedClassDeclaration,
         expression: &ParsedExpression,
     ) -> Option<ParsedType> {
-        let ParsedExpression::New { callee, type_arguments, .. } = expression else {
+        let ParsedExpression::New {
+            callee,
+            type_arguments,
+            ..
+        } = expression
+        else {
             return None;
         };
         let ParsedExpression::Identifier { name, .. } = callee.as_ref() else {
@@ -324,7 +353,9 @@ fn syntactic_method_return_type(
                     collect(class, &if_statement.then_body, kinds, bare_return)?;
                     collect(class, &if_statement.else_body, kinds, bare_return)?;
                 }
-                Statement::While(while_statement) => collect(class, &while_statement.body, kinds, bare_return)?,
+                Statement::While(while_statement) => {
+                    collect(class, &while_statement.body, kinds, bare_return)?
+                }
                 Statement::ForOf(for_of) => collect(class, &for_of.body, kinds, bare_return)?,
                 Statement::Switch(switch_statement) => {
                     for case in &switch_statement.cases {
@@ -543,8 +574,7 @@ pub(crate) fn build_class_value_symbol_with_scope(
     }
 
     let instance_type = class_instance_type(class, ctx);
-    let construct_signature =
-        class_construct_signature(class, instance_type.clone(), scope, ctx);
+    let construct_signature = class_construct_signature(class, instance_type.clone(), scope, ctx);
 
     // Statics are inherited: `class D extends B {}` makes every static of `B`
     // reachable as `D.x`. The base's static side is a value, not part of the
@@ -1148,21 +1178,21 @@ fn constructor_writable_members(
     constructor: &surge_ts_syntax::ParsedClassConstructor,
 ) -> Vec<String> {
     let properties = class.members.iter().filter_map(|member| match member {
-        ParsedClassMember::Property(property) if !property.is_static => {
-            Some(property.name.clone())
-        }
+        ParsedClassMember::Property(property) if !property.is_static => Some(property.name.clone()),
         _ => None,
     });
-    let parameter_properties = constructor.parameters.iter().filter_map(|parameter| {
-        match &parameter.binding_name {
-            surge_ts_syntax::ParsedBindingName::Identifier { name, .. }
-                if parameter.is_parameter_property =>
-            {
-                Some(name.clone())
-            }
-            _ => None,
-        }
-    });
+    let parameter_properties =
+        constructor
+            .parameters
+            .iter()
+            .filter_map(|parameter| match &parameter.binding_name {
+                surge_ts_syntax::ParsedBindingName::Identifier { name, .. }
+                    if parameter.is_parameter_property =>
+                {
+                    Some(name.clone())
+                }
+                _ => None,
+            });
     properties.chain(parameter_properties).collect()
 }
 
@@ -1266,11 +1296,12 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
             .then_some((instance, constructor))
     });
     let previous_super = ctx.symbols.remove("super");
-    ctx.enclosing_class_members.push(crate::checks::expr::EnclosingClassMembers {
-        class_name: class.name.clone(),
-        instance_type: instance_type.clone(),
-        static_type: static_type.clone(),
-    });
+    ctx.enclosing_class_members
+        .push(crate::checks::expr::EnclosingClassMembers {
+            class_name: class.name.clone(),
+            instance_type: instance_type.clone(),
+            static_type: static_type.clone(),
+        });
 
     let class_type_parameter_depth = ctx
         .type_parameter_scopes
@@ -1318,7 +1349,9 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
                     Some(constructor_writable_members(class, constructor));
                 let outer_super_constructor = std::mem::replace(
                     &mut ctx.super_constructor_type,
-                    super_types.as_ref().map(|(_, constructor)| constructor.clone()),
+                    super_types
+                        .as_ref()
+                        .map(|(_, constructor)| constructor.clone()),
                 );
                 check_function_body_with_signature_and_this(
                     None,
@@ -1332,6 +1365,7 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
                     Some(instance_type.clone()),
                     true,
                     None,
+                    false,
                     false,
                     false,
                     ctx,
@@ -1376,6 +1410,7 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
                     false,
                     method.has_body.then(|| method.body_reads.as_slice()),
                     method.is_generator,
+                    method.is_async,
                     false,
                     ctx,
                 );
@@ -1425,6 +1460,7 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
                     Some(static_type.clone()),
                     false,
                     Some(block.body_reads.as_slice()),
+                    false,
                     false,
                     false,
                     ctx,
@@ -1486,6 +1522,7 @@ fn check_class_accessor_body(
             Some(this_type),
             false,
             Some(declaration.body_reads.as_slice()),
+            false,
             false,
             false,
             ctx,

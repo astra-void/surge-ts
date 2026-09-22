@@ -4,11 +4,12 @@ use surge_ts_syntax::{
     ParsedFunctionBodyStatement,
     ParsedUnaryOperator,
 };
-use surge_ts_types::{Type, TypeCopyReason, union_type, with_type_copy_reason};
+use surge_ts_types::Type;
 
 use crate::context::CheckerContext;
 use crate::flow::FunctionFlowState;
-use crate::symbols::{ScopeStack, SymbolInfo};
+use crate::infer::InferredExpression;
+use crate::symbols::{DestructureKey, ScopeStack, SymbolTable, TupleDestructureBinding};
 use super::super::{downgrade_genuine_unknown_in_scope, narrow_discriminant_in_scope};
 
 /// Whether an initializer is plainly a boolean condition — a logical chain, a
@@ -29,136 +30,110 @@ pub(crate) fn is_condition_shaped(expression: &ParsedExpression) -> bool {
                 | ParsedBinaryOperator::Equals
                 | ParsedBinaryOperator::StrictNotEquals
                 | ParsedBinaryOperator::NotEquals
+                | ParsedBinaryOperator::Instanceof
         ),
         _ => false,
     }
 }
 
-/// The `(source, index)` an array-destructured binding was lowered from
-/// (`const [a, b] = xs` lowers each binding to `xs[0]`, `xs[1]`).
-pub(super) fn tuple_destructure_source(expression: &ParsedExpression) -> Option<(String, usize)> {
-    let ParsedExpression::IndexAccess {
-        object_name, index, ..
-    } = expression
-    else {
-        return None;
+/// The tuple element an array-destructured binding was lowered from: `const
+/// [a, b] = xs` lowers each binding to `xs[0]`, `xs[1]`, and a pattern over any
+/// other expression to an element access on that expression. Only a source
+/// that is a union of tuples makes the bindings dependent, so nothing else is
+/// recorded for the expression form.
+pub(super) fn tuple_destructure_binding(
+    expression: &ParsedExpression,
+    pattern_span: Option<surge_ts_syntax::TextSpan>,
+    from_binding_pattern: bool,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<TupleDestructureBinding> {
+    let literal_index = |index: &ParsedExpression| match index {
+        ParsedExpression::NumberLiteral(value) => value.parse::<usize>().ok(),
+        _ => None,
     };
-    let ParsedExpression::NumberLiteral(value) = index.as_ref() else {
-        return None;
-    };
-    Some((object_name.clone(), value.parse::<usize>().ok()?))
-}
-
-/// The binding an `if` condition proves truthy (`true`) or falsy (`false`),
-/// when the condition is exactly that binding or its negation.
-pub(super) fn truthiness_tested_binding(
-    condition: &ParsedExpression,
-    branch_is_true: bool,
-) -> Option<(&str, bool)> {
-    match condition {
-        ParsedExpression::Identifier { name, .. } => Some((name.as_str(), branch_is_true)),
-        ParsedExpression::Unary {
-            operator: ParsedUnaryOperator::Not,
-            operand,
+    match expression {
+        ParsedExpression::IndexAccess {
+            object_name, index, ..
+        } => Some(TupleDestructureBinding {
+            source: object_name.as_str().into(),
+            key: DestructureKey::Index(literal_index(index)?),
+            source_type: None,
+        }),
+        // `const { kind, payload } = action` lowers each binding to a property
+        // read. One written on its own (`const kind = action.kind`) has no
+        // siblings and is the discriminant-alias case instead.
+        ParsedExpression::PropertyAccess {
+            object,
+            object_span,
+            property_name,
             ..
-        } => truthiness_tested_binding(operand, !branch_is_true),
+        } if from_binding_pattern => match object.as_ref() {
+            ParsedExpression::Identifier { name, .. } => Some(TupleDestructureBinding {
+                source: name.as_str().into(),
+                key: DestructureKey::Property(property_name.as_str().into()),
+                source_type: None,
+            }),
+            source => {
+                let object_span = (*object_span)?;
+                let InferredExpression::Known(source_type) =
+                    crate::infer::infer_expression(source, symbols, ctx)
+                else {
+                    return None;
+                };
+                matches!(source_type.peeled(), Type::Union(_)).then(|| TupleDestructureBinding {
+                    source: format!("\0pattern@{}", object_span.start).into(),
+                    key: DestructureKey::Property(property_name.as_str().into()),
+                    source_type: Some(source_type),
+                })
+            }
+        },
+        ParsedExpression::ElementAccess { object, index, .. } => {
+            let index = literal_index(index)?;
+            let pattern_span = pattern_span?;
+            let InferredExpression::Known(source_type) =
+                crate::infer::infer_expression(object, symbols, ctx)
+            else {
+                return None;
+            };
+            let Type::Union(union) = source_type.peeled() else {
+                return None;
+            };
+            if !union
+                .types()
+                .iter()
+                .all(|member| matches!(member.peeled(), Type::Tuple(_)))
+            {
+                return None;
+            }
+            Some(TupleDestructureBinding {
+                source: format!("\0pattern@{}", pattern_span.start).into(),
+                key: DestructureKey::Index(index),
+                source_type: Some(source_type),
+            })
+        }
         _ => None,
     }
 }
 
-/// Applies tsc's destructured-discriminated-union narrowing: `const [error,
-/// value] = tuple` over a *union of tuples* binds dependent names, so proving
-/// `error` falsy rules out the union members whose first element is not
-/// nullish, and `value` is retyped from the survivors.
-///
-/// Only the source's own union is filtered — each sibling is re-derived from
-/// it, never narrowed on its own — so a binding whose element is identical in
-/// every surviving member keeps exactly the type it already had.
+/// Applies the destructured-discriminated-union narrowing to the current scope
+/// (see [`tuple_destructure_sibling_narrowings`]).
 pub(super) fn narrow_tuple_destructure_siblings(
     condition: &ParsedExpression,
     scopes: &mut ScopeStack,
     branch_is_true: bool,
-    flow_state: &FunctionFlowState,
 ) {
-    let Some((tested, holds)) = truthiness_tested_binding(condition, branch_is_true) else {
-        return;
-    };
-    let Some((source, tested_index)) = flow_state.tuple_destructure_binding(tested) else {
-        return;
-    };
-    let source = source.to_string();
-    let Some(symbol) = scopes.resolve(&source) else {
-        return;
-    };
-    let Type::Union(union) = symbol.ty.peeled() else {
-        return;
-    };
-    let members: Vec<Type> = union.types().iter().map(Type::peeled).collect();
-    if !members.iter().all(|member| matches!(member, Type::Tuple(_))) {
-        return;
-    }
-
-    let kept: Vec<&Type> = members
-        .iter()
-        .filter(|member| {
-            let Type::Tuple(elements) = member else {
-                return false;
-            };
-            match elements.get(tested_index) {
-                // Truthy rules out an element that can only be nullish; falsy
-                // rules out one that can never be. Anything else stays: this is
-                // a discriminant test, not a general truthiness analysis.
-                Some(element) => element_is_nullish(element) != holds,
-                None => false,
-            }
-        })
-        .collect();
-    if kept.is_empty() || kept.len() == members.len() {
-        return;
-    }
-
-    for (name, index) in flow_state.tuple_destructure_siblings(&source) {
-        let Some(symbol) = scopes.resolve(&name) else {
-            continue;
-        };
-        let declared = symbol.ty.clone();
-        let kind = symbol.kind;
-        let function_signature = symbol.function_signature.clone();
-        let selected: Vec<Type> = kept
-            .iter()
-            .filter_map(|member| match member {
-                Type::Tuple(elements) => elements.get(index).cloned(),
-                _ => None,
-            })
-            .collect();
-        if selected.len() != kept.len() {
-            continue;
-        }
-        let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-            union_type(selected)
-        });
-        if narrowed == declared {
-            continue;
-        }
-        let _ = scopes.insert_current_narrowed(
-            name,
-            SymbolInfo {
-                ty: narrowed,
-                kind,
-                function_signature,
-            },
-            declared,
-        );
+    let narrowings = crate::checks::function::narrowing::tuple_destructure_sibling_narrowings(
+        condition,
+        scopes.visible_symbols(),
+        branch_is_true,
+    );
+    for (name, symbol, declared) in narrowings {
+        let _ = scopes.insert_current_narrowed(name.to_string(), symbol, declared);
     }
 }
 
-/// Whether a tuple element can only be `undefined`/`null` — the shape a
-/// discriminated result tuple uses for its "absent" slot.
-pub(super) fn element_is_nullish(element: &Type) -> bool {
-    matches!(element, Type::Undefined | Type::Void | Type::Never)
-}
-
-/// Narrows by a condition and, when it named a discriminant alias, by the/// Narrows by a condition and, when it named a discriminant alias, by the
+/// Narrows by a condition and, when it named a discriminant alias, by the
 /// rewritten form as well. Both are applied: the written condition narrows the
 /// alias binding itself (`if (transformer)` proves the local non-nullish), the
 /// rewrite narrows the object it came from (`opts.transformer`).
@@ -168,7 +143,6 @@ pub(super) fn narrow_condition_and_aliases_in_scope(
     alias_source: Option<&ParsedExpression>,
     scopes: &mut ScopeStack,
     branch_is_true: bool,
-    flow_state: &FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
     narrow_discriminant_in_scope(base, scopes, branch_is_true, ctx);
@@ -182,17 +156,19 @@ pub(super) fn narrow_condition_and_aliases_in_scope(
     if let Some(alias_source) = alias_source {
         narrow_discriminant_in_scope(alias_source, scopes, branch_is_true, ctx);
     }
-    narrow_tuple_destructure_siblings(base, scopes, branch_is_true, flow_state);
+    narrow_tuple_destructure_siblings(base, scopes, branch_is_true);
 }
 
-/// Whether an initializer is a static property reference over identifiers
-/// (`opts.direction`, `node.kind.value`) — the shape a discriminant alias takes.
+/// Whether an initializer is a static property reference over identifiers or
+/// `this` (`opts.direction`, `node.kind.value`, `this.test.type`) — the shape a discriminant alias takes.
 pub(super) fn is_property_reference(expression: &ParsedExpression) -> bool {
     match expression {
         ParsedExpression::PropertyAccess { object, .. }
         | ParsedExpression::OptionalPropertyAccess { object, .. } => {
-            matches!(object.as_ref(), ParsedExpression::Identifier { .. })
-                || is_property_reference(object)
+            matches!(
+                object.as_ref(),
+                ParsedExpression::Identifier { .. } | ParsedExpression::This { .. }
+            ) || is_property_reference(object)
         }
         _ => false,
     }

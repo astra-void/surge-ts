@@ -2,7 +2,7 @@ use super::*;
 
 use surge_ts_types::{ObjectType, PropertyMap};
 
-use crate::metrics::alloc_object_type;
+use crate::metrics::{alloc_function_type, alloc_object_type};
 
 /// Reference-only intersections remain nominal during declaration indexing.
 /// Without this companion to dependency-alias deferral, constructing
@@ -61,7 +61,11 @@ pub(crate) fn resolve_intersection_type(
         let lost_operand = resolved_types.iter().any(Type::is_unknown);
         let merged = merge_intersection_members(resolved_types);
         return ResolvedType {
-            ty: if lost_operand { open_object_arms(merged) } else { merged },
+            ty: if lost_operand {
+                open_object_arms(merged)
+            } else {
+                merged
+            },
             had_error: true,
         };
     }
@@ -80,9 +84,14 @@ fn open_object_arms(ty: Type) -> Type {
             }
             Type::Object(object.with_open_index_marker())
         }
-        Type::Union(union) => {
-            surge_ts_types::union_type(union.types().iter().cloned().map(open_object_arms).collect())
-        }
+        Type::Union(union) => surge_ts_types::union_type(
+            union
+                .types()
+                .iter()
+                .cloned()
+                .map(open_object_arms)
+                .collect(),
+        ),
         other => other,
     }
 }
@@ -447,7 +456,7 @@ pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
         && product <= MAX_DISTRIBUTED_UNION_ARITY
         && let Some(_guard) = DistributionDepth::enter()
     {
-        let operand_names: Vec<String> = members.iter().map(Type::name).collect();
+        let operand_names: Vec<String> = members.iter().map(intersection_operand_name).collect();
         let mut distributed = Vec::with_capacity(product);
         for selection in 0..product {
             let mut operands = members.clone();
@@ -456,7 +465,7 @@ pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
             for (index, arms) in &union_operands {
                 let arm = &arms[remaining % arms.len()];
                 remaining /= arms.len();
-                names[*index] = arm.name();
+                names[*index] = intersection_operand_name(arm);
                 operands[*index] = arm.clone();
             }
             // tsc builds each arm through the same ordered set as any other
@@ -479,7 +488,7 @@ pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
     let display_name = (!members.is_empty()).then(|| {
         members
             .iter()
-            .map(Type::name)
+            .map(intersection_operand_name)
             .collect::<Vec<_>>()
             .join(" & ")
     });
@@ -631,7 +640,7 @@ impl surge_ts_types::ResolveReference for LazyIntersectionMerge {
         let display_name = (!self.members.is_empty()).then(|| {
             self.members
                 .iter()
-                .map(Type::name)
+                .map(intersection_operand_name)
                 .collect::<Vec<_>>()
                 .join(" & ")
         });
@@ -743,7 +752,7 @@ fn merge_intersection_members_now(
     // unmodelled: the surviving object may not be the whole story.
     if !dropped_unmodelled_operand
         && !object_members.is_empty()
-        && members.iter().any(|ty| matches!(ty, Type::Undefined))
+        && members.iter().any(|ty| matches!(ty, Type::Undefined | Type::Null))
     {
         return Type::Never;
     }
@@ -754,7 +763,8 @@ fn merge_intersection_members_now(
     // distributed to `string | undefined` (`undefined & string` kept its first
     // operand) instead of `string`. A dropped unmodelled operand cannot make a
     // disjoint pair inhabited, so this holds regardless.
-    if members.iter().any(|ty| matches!(ty, Type::Never)) || has_disjoint_primitive_domains(&members)
+    if members.iter().any(|ty| matches!(ty, Type::Never))
+        || has_disjoint_primitive_domains(&members)
     {
         return Type::Never;
     }
@@ -824,6 +834,8 @@ fn merge_intersection_members_now(
                             optional: existing.is_optional() && property.is_optional(),
                             method: existing.method,
                             readonly: false,
+                            restriction: existing.restriction.clone(),
+                            index_slot: existing.index_slot,
                         };
                         properties.insert(name.clone(), merged_property);
                     }
@@ -849,9 +861,15 @@ fn merge_intersection_members_now(
                     None => std::sync::Arc::new(object_call_signature.clone()),
                 });
             }
-            if construct_signature.is_none() {
-                construct_signature = object.construct_signature.clone();
-            }
+        }
+        let constructors: Vec<&surge_ts_types::FunctionType> = object_members
+            .iter()
+            .filter_map(|object| object.construct_signature.as_deref())
+            .collect();
+        if let Some(mixed) = mixin_construct_signature(&constructors) {
+            construct_signature = Some(std::sync::Arc::new(mixed));
+        } else if let Some(first) = constructors.first() {
+            construct_signature = Some(std::sync::Arc::new((*first).clone()));
         }
 
         let mut merged = alloc_object_type(properties, string_index_type)
@@ -1058,4 +1076,83 @@ fn is_phantom_member_type(ty: &Type) -> bool {
         }
         _ => false,
     }
+}
+
+/// An intersection operand as tsc prints it: a function or union type is
+/// parenthesized, since `() => void & T` would read as a function returning
+/// the intersection.
+pub(crate) fn intersection_operand_name(ty: &Type) -> String {
+    let name = ty.name();
+    match ty {
+        Type::Function(_) => format!("({name})"),
+        // A named union prints as its alias and needs no parentheses.
+        Type::Union(_) if name.contains(" | ") => format!("({name})"),
+        _ => name,
+    }
+}
+
+/// tsc's `isMixinConstructorType`: one construct signature taking only
+/// `...args: any[]`.
+fn is_mixin_constructor(signature: &surge_ts_types::FunctionType) -> bool {
+    signature.overloads().is_none()
+        && signature.type_parameter_head().is_none()
+        && signature.is_variadic()
+        && matches!(
+            signature.parameters(),
+            [Type::Any] | [Type::Array(_)]
+        )
+        && match signature.parameters() {
+            [Type::Array(element)] => matches!(element.as_ref(), Type::Any),
+            _ => true,
+        }
+}
+
+/// The construct signature of an intersection that mixes constructors in
+/// (tsc's `resolveIntersectionTypeMembers`): what the first constituent that is
+/// not a mixin takes, returning its own instance type intersected with every
+/// mixin's. With nothing but mixins the first one stands in for it. `None`
+/// when no constituent is a mixin.
+fn mixin_construct_signature(
+    constructors: &[&surge_ts_types::FunctionType],
+) -> Option<surge_ts_types::FunctionType> {
+    let mut is_mixin: Vec<bool> = constructors
+        .iter()
+        .map(|signature| is_mixin_constructor(signature))
+        .collect();
+    if constructors.len() < 2 || !is_mixin.contains(&true) {
+        return None;
+    }
+    if is_mixin.iter().all(|mixin| *mixin) {
+        is_mixin[0] = false;
+    }
+    let base_index = is_mixin.iter().position(|mixin| !mixin)?;
+    let base = constructors[base_index];
+    let with_mixins = |own_return: &Type| -> Type {
+        let mut instances: Vec<Type> = Vec::with_capacity(constructors.len());
+        for (index, signature) in constructors.iter().enumerate() {
+            if index == base_index {
+                instances.push(own_return.clone());
+            } else if is_mixin[index] {
+                instances.push(signature.return_type().clone());
+            }
+        }
+        merge_intersection_members(instances)
+    };
+    let rebuild = |signature: &surge_ts_types::FunctionType| {
+        let rebuilt = alloc_function_type(
+            signature.parameters().to_vec(),
+            with_mixins(signature.return_type()),
+            signature.is_variadic(),
+            signature.required_parameter_count(),
+        );
+        match signature.parameter_names() {
+            Some(names) => rebuilt.with_parameter_names(names.to_vec()),
+            None => rebuilt,
+        }
+    };
+    let mixed = rebuild(base);
+    Some(match base.overloads() {
+        Some(overloads) => mixed.with_overloads(overloads.iter().map(rebuild).collect()),
+        None => mixed,
+    })
 }

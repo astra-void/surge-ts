@@ -121,6 +121,8 @@ pub(crate) struct InterfaceBody {
     /// See [`surge_ts_syntax::ParsedObjectType::number_index_type`].
     pub(crate) number_index_type: Option<ParsedType>,
     pub(crate) call_signature: Option<ParsedFunctionType>,
+    /// See [`surge_ts_syntax::ParsedInterfaceDeclaration::call_signature_overloads`].
+    pub(crate) call_signature_overloads: Vec<ParsedFunctionType>,
     pub(crate) construct_signatures: Vec<ParsedFunctionType>,
     pub(crate) declaration_fragments: Vec<InterfaceDeclarationFragmentId>,
     pub(crate) member_fragments: Vec<InterfaceDeclarationFragmentId>,
@@ -174,12 +176,23 @@ impl Clone for InterfaceBody {
             string_index_type: self.string_index_type.clone(),
             number_index_type: self.number_index_type.clone(),
             call_signature: self.call_signature.clone(),
+            call_signature_overloads: self.call_signature_overloads.clone(),
             construct_signatures: self.construct_signatures.clone(),
             declaration_fragments: self.declaration_fragments.clone(),
             member_fragments: self.member_fragments.clone(),
             fragment_scopes: self.fragment_scopes.clone(),
             restricted_members: self.restricted_members.clone(),
         }
+    }
+}
+
+/// Every call signature a body declares: the overload list when it has one,
+/// otherwise the single signature it folded to.
+fn declared_call_signatures(body: &InterfaceBody) -> Vec<ParsedFunctionType> {
+    if body.call_signature_overloads.is_empty() {
+        body.call_signature.clone().into_iter().collect()
+    } else {
+        body.call_signature_overloads.clone()
     }
 }
 
@@ -226,6 +239,7 @@ impl InterfaceInfo {
         string_index_type: Option<ParsedType>,
         number_index_type: Option<ParsedType>,
         call_signature: Option<ParsedFunctionType>,
+        call_signature_overloads: Vec<ParsedFunctionType>,
         construct_signatures: Vec<ParsedFunctionType>,
         resolution_scope: Option<Arc<TypeDeclarationScope>>,
     ) -> Self {
@@ -250,6 +264,7 @@ impl InterfaceInfo {
                 string_index_type,
                 number_index_type,
                 call_signature,
+                call_signature_overloads,
                 construct_signatures,
                 declaration_fragments: vec![declaration_fragment],
                 member_fragments,
@@ -386,6 +401,13 @@ pub(crate) fn merge_interface_infos(
             .call_signature
             .clone()
             .or_else(|| incoming.body.call_signature.clone()),
+        {
+            // Merged declarations contribute their call signatures in
+            // declaration order, so a call resolves against any of them.
+            let mut merged = declared_call_signatures(&existing.body);
+            merged.extend(declared_call_signatures(&incoming.body));
+            if merged.len() > 1 { merged } else { Vec::new() }
+        },
         {
             let mut merged = existing.body.construct_signatures.clone();
             merged.extend(incoming.body.construct_signatures.iter().cloned());
@@ -965,6 +987,7 @@ mod tests {
             None,
             None,
             Vec::new(),
+            Vec::new(),
             None,
         ));
 
@@ -1055,6 +1078,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
             Vec::new(),
             None,
         ));

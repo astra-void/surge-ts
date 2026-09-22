@@ -27,7 +27,7 @@ pub(crate) fn narrow_optional_chain_base(
     if !optional_access || !keep_matching || *literal == Type::Undefined {
         return None;
     }
-    let narrowed = surge_ts_types::remove_undefined(subject_ty);
+    let narrowed = surge_ts_types::remove_nullish(subject_ty);
     (narrowed != *subject_ty && !narrowed.is_unknown()).then_some(narrowed)
 }
 
@@ -93,9 +93,25 @@ pub(crate) fn parse_discriminant_condition_with<'a>(
             ..
         } = access
         {
-            return Some((object.as_ref(), property_name.as_str(), literal, eq));
+            return Some((
+                without_non_null_assertions(object),
+                property_name.as_str(),
+                literal,
+                eq,
+            ));
         }
         None
+    }
+
+    // tsc's `isMatchingReference` looks through `!`: `w.thing!.kind === "a"`
+    // discriminates `w.thing` exactly as `w.thing.kind === "a"` does.
+    fn without_non_null_assertions(expression: &ParsedExpression) -> &ParsedExpression {
+        match expression {
+            ParsedExpression::NonNullAssertion { expression, .. } => {
+                without_non_null_assertions(expression)
+            }
+            other => other,
+        }
     }
 
     discriminant_side(left, right, eq, resolve_literal)
@@ -116,6 +132,32 @@ pub(crate) fn narrow_discriminant_symbol_table(
             const_member_literal_value(expression, symbols)
         })?;
     let keep_matching = branch_is_true == eq;
+
+    if let Some((base, path)) = super::super::reference_path(discriminant_object)
+        && path.len() > 1
+    {
+        let symbol = symbols.get(&base)?;
+        let narrowed = super::super::narrowed_reference_type(
+            &symbol.ty,
+            &path,
+            super::super::ReferenceGuard::Discriminant {
+                property,
+                literal: &literal,
+                keep_matching,
+            },
+        )?;
+        let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+        narrowed_symbols.insert_narrowed(
+            base,
+            SymbolInfo {
+                ty: narrowed,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            },
+            symbol.ty.clone(),
+        );
+        return Some(narrowed_symbols);
+    }
 
     match discriminant_object {
         ParsedExpression::Identifier { name, .. } => {
@@ -144,8 +186,13 @@ pub(crate) fn narrow_discriminant_symbol_table(
             property_name: base_property,
             ..
         } => {
-            let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
-                return None;
+            // `this.state.kind === "a"` narrows `this.state` as `p.state.kind`
+            // narrows `p.state`: `this` is bound like any other name.
+            let this_name = "this".to_string();
+            let name = match object.as_ref() {
+                ParsedExpression::Identifier { name, .. } => name,
+                ParsedExpression::This { .. } => &this_name,
+                _ => return None,
             };
             let symbol = symbols.get(name)?;
             // `draft` may be typed by a named declaration (nominal reference);
@@ -171,6 +218,8 @@ pub(crate) fn narrow_discriminant_symbol_table(
                     optional: base_property_type.optional,
                     method: base_property_type.method,
                     readonly: base_property_type.readonly,
+                    restriction: base_property_type.restriction.clone(),
+                    index_slot: base_property_type.index_slot,
                 },
             );
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);

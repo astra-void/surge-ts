@@ -21,7 +21,7 @@ pub(super) fn evaluate_optional_index_access(
         }
     };
 
-    let base_type = surge_ts_types::remove_undefined(&object_type);
+    let base_type = surge_ts_types::remove_nullish(&object_type);
 
     match base_type {
         Type::Any => InferredExpression::Known(Type::Any),
@@ -191,11 +191,18 @@ pub(super) fn evaluate_index_access(
             Type::OpenTuple(tuple) => Type::Array(Box::new(tuple.element_union())),
             _ => receiver_type,
         },
-        // An open tuple has no fixed length to index by, so a read off it is a
-        // read off the array of everything it can hold.
-        Type::OpenTuple(tuple) => Type::Array(Box::new(tuple.element_union())),
         _ => receiver_type,
     };
+
+    if let Type::OpenTuple(tuple) = &receiver_type {
+        return crate::infer::expression::infer_open_tuple_index_access(
+            tuple,
+            index,
+            &index_span,
+            symbols,
+            ctx,
+        );
+    }
 
     match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
@@ -291,6 +298,7 @@ pub(super) fn evaluate_index_access(
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
         | Type::Undefined
+        | Type::Null
         | Type::Reference(_)
         | Type::Union(_) => {
             let index_result =
@@ -511,6 +519,41 @@ fn report_non_numeric_index(
         Diagnostic::ts7015(ctx.file_name.clone()),
         span,
     ));
+}
+
+/// What `receiver[index]` reads off an object receiver, for the
+/// diagnostic-free inference path: the member a literal key names, or the
+/// applicable index signature. `None` wherever the checked path would report.
+pub(crate) fn object_element_read(
+    receiver_type: &Type,
+    index: &ParsedExpression,
+    index_type: &Type,
+    symbols: &SymbolTable,
+    ctx: &CheckerContext,
+) -> Option<Type> {
+    let peeled = receiver_type.peeled();
+    let index_is_numeric =
+        is_assignable_to(index_type, &Type::Number) || indexes_as_number(index, symbols);
+    let Some(key) = literal_index_key(index_type) else {
+        let Type::Object(object_type) = &peeled else {
+            return None;
+        };
+        return match object_type.applicable_index_type(index_is_numeric) {
+            Some(index_value) => Some(crate::infer::unchecked_index_read(index_value.clone(), ctx)),
+            None => union_literal_index_read(object_type, index_type),
+        };
+    };
+    if let Some(element_type) = literal_tuple_element(&peeled, &key) {
+        return Some(element_type);
+    }
+    let Type::Object(object_type) = &peeled else {
+        return None;
+    };
+    object_type.get_property_access_type(&key).or_else(|| {
+        object_type
+            .applicable_index_type(index_is_numeric)
+            .map(|index_value| crate::infer::unchecked_index_read(index_value.clone(), ctx))
+    })
 }
 
 fn indexes_as_number(index: &ParsedExpression, symbols: &SymbolTable) -> bool {

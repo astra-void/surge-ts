@@ -2186,19 +2186,21 @@ pub(crate) fn refine_imported_value_exports(
             degraded_imports_when_analyzed[file_index] = degraded_imports;
 
             let diagnostics_before = ctx.diagnostics().len();
-            let refined = analyze_module(
-                file_index,
-                parsed_file,
-                local_type_declarations_by_module,
-                module_import_bindings,
-                false,
-                false,
-                true,
-                analysis_round,
-                None,
-                ctx,
-                timings,
-            );
+            let refined = crate::modules::exports::with_source_exports_sharing_environment_store(|| {
+                analyze_module(
+                    file_index,
+                    parsed_file,
+                    local_type_declarations_by_module,
+                    module_import_bindings,
+                    false,
+                    false,
+                    true,
+                    analysis_round,
+                    None,
+                    ctx,
+                    timings,
+                )
+            });
             ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
             let Some(refined) = refined else {
                 continue;

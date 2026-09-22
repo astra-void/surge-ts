@@ -22,6 +22,8 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
                         optional: v.optional,
                         method: v.method,
                         readonly: false,
+                        restriction: v.restriction.clone(),
+                        index_slot: v.index_slot,
                     },
                 );
             }
@@ -56,12 +58,18 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
 
 /// `true` if `ty` is a literal type or a union containing one. tsc keeps the
 /// source literal in assignability messages when the target is literal-like.
-/// tsc's `isUnitType`: a literal, or `undefined`.
+/// tsc's `isUnitType`: a literal, `null` or `undefined`. An enum is a union
+/// of enum literal types.
 fn is_unit_type(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) | Type::Undefined
-    )
+    match ty {
+        Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::Null
+        | Type::Undefined => true,
+        Type::Reference(reference) => reference.enum_owner.is_some(),
+        _ => false,
+    }
 }
 
 /// tsc's `isLiteralType`, which `reportRelationError` generalizes. An object
@@ -69,7 +77,10 @@ fn is_unit_type(ty: &Type) -> bool {
 fn is_literal_like(ty: &Type) -> bool {
     match ty {
         Type::Boolean | Type::Object(_) | Type::Array(_) | Type::Tuple(_) => true,
-        Type::Union(union) => union.types().iter().all(|member| is_unit_type(member) || *member == Type::Boolean),
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .all(|member| is_unit_type(member) || *member == Type::Boolean),
         other => is_unit_type(other),
     }
 }
@@ -79,6 +90,13 @@ fn could_have_singleton_types(ty: &Type) -> bool {
     match ty {
         Type::Boolean => false,
         Type::Union(union) => union.types().iter().any(could_have_singleton_types),
+        // A template literal or string mapping type is not a unit type, but
+        // it can hold one.
+        ty if surge_ts_types::is_template_literal_type(ty)
+            || surge_ts_types::string_mapping_parts(ty).is_some() =>
+        {
+            true
+        }
         other => is_unit_type(other),
     }
 }
@@ -129,7 +147,11 @@ pub(crate) fn global_this_missing_member(
     let block_scoped = ctx.block_scoped_globals.contains(property_name);
     let file_name = ctx.file_name.clone();
     Some(if block_scoped {
-        Some(Diagnostic::ts2339(property_name, "typeof globalThis", file_name))
+        Some(Diagnostic::ts2339(
+            property_name,
+            "typeof globalThis",
+            file_name,
+        ))
     } else if ctx.options.no_implicit_any {
         Some(Diagnostic::ts7017("typeof globalThis", file_name))
     } else {
@@ -155,10 +177,93 @@ pub(crate) fn missing_property_diagnostic(
         );
     }
 
+    // tsc asks this before looking for a misspelling (`at` is no typo of `map`).
+    if let Some(lib) = lib_feature_of_missing_member(object_type, property_name) {
+        return Diagnostic::ts2550(property_name, &object_type_name, lib, file_name);
+    }
     if let Some(suggestion) = property_spelling_suggestion(property_name, object_type) {
         return Diagnostic::ts2551(property_name, &object_type_name, suggestion, file_name);
     }
     Diagnostic::ts2339(property_name, &object_type_name, file_name)
+}
+
+/// tsc's `getScriptTargetFeatures`, for the receivers surge answers from its
+/// own tables: the lib that first declares `member` on an array or a string.
+/// A member listed here that a receiver lacks is a lib the project did not
+/// ask for, which tsc says (TS2550) instead of calling the member unknown.
+pub(crate) fn lib_feature_of_missing_member(receiver: &Type, member: &str) -> Option<&'static str> {
+    const ARRAY: &[(&str, &[&str])] = &[
+        ("es2015", &["find", "findIndex", "fill", "copyWithin", "entries", "keys", "values"]),
+        ("es2016", &["includes"]),
+        ("es2019", &["flat", "flatMap"]),
+        ("es2022", &["at"]),
+        ("es2023", &["findLast", "findLastIndex", "toReversed", "toSorted", "toSpliced", "with"]),
+    ];
+    const STRING: &[(&str, &[&str])] = &[
+        (
+            "es2015",
+            &[
+                "codePointAt", "includes", "endsWith", "normalize", "repeat", "startsWith", "anchor",
+                "big", "blink", "bold", "fixed", "fontcolor", "fontsize", "italics", "link", "small",
+                "strike", "sub", "sup",
+            ],
+        ),
+        ("es2017", &["padStart", "padEnd"]),
+        ("es2019", &["trimStart", "trimEnd", "trimLeft", "trimRight"]),
+        ("es2020", &["matchAll"]),
+        ("es2021", &["replaceAll"]),
+        ("es2022", &["at"]),
+        ("esnext", &["isWellFormed", "toWellFormed"]),
+    ];
+    // Receivers resolved from the lib itself, keyed — as tsc keys them — by
+    // the name of the interface the member would have been declared on.
+    const OBJECT_CONSTRUCTOR: &[(&str, &[&str])] = &[
+        ("es2015", &["assign", "getOwnPropertySymbols", "keys", "is", "setPrototypeOf"]),
+        ("es2017", &["values", "entries", "getOwnPropertyDescriptors"]),
+        ("es2019", &["fromEntries"]),
+        ("es2022", &["hasOwn"]),
+        ("es2024", &["groupBy"]),
+    ];
+    const ARRAY_CONSTRUCTOR: &[(&str, &[&str])] =
+        &[("es2015", &["from", "of"]), ("esnext", &["fromAsync"])];
+    const NUMBER_CONSTRUCTOR: &[(&str, &[&str])] = &[(
+        "es2015",
+        &["isFinite", "isInteger", "isNaN", "isSafeInteger", "parseFloat", "parseInt"],
+    )];
+    const MATH: &[(&str, &[&str])] = &[
+        (
+            "es2015",
+            &[
+                "clz32", "imul", "sign", "log10", "log2", "log1p", "expm1", "cosh", "sinh", "tanh",
+                "acosh", "asinh", "atanh", "hypot", "trunc", "fround", "cbrt",
+            ],
+        ),
+        ("es2025", &["f16round"]),
+    ];
+    const PROMISE_CONSTRUCTOR: &[(&str, &[&str])] = &[
+        ("es2015", &["all", "race", "reject", "resolve"]),
+        ("es2020", &["allSettled"]),
+        ("es2021", &["any"]),
+        ("es2024", &["withResolvers"]),
+        ("es2025", &["try"]),
+    ];
+    let features = match receiver {
+        Type::Array(_) | Type::Tuple(_) => ARRAY,
+        Type::String | Type::StringLiteral(_) => STRING,
+        Type::Object(_) | Type::Reference(_) => match receiver.name().as_str() {
+            "ObjectConstructor" => OBJECT_CONSTRUCTOR,
+            "ArrayConstructor" => ARRAY_CONSTRUCTOR,
+            "NumberConstructor" => NUMBER_CONSTRUCTOR,
+            "Math" => MATH,
+            "PromiseConstructor" => PROMISE_CONSTRUCTOR,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    features
+        .iter()
+        .find(|(_, members)| members.contains(&member))
+        .map(|(lib, _)| *lib)
 }
 
 /// `String.prototype` members in lib declaration order, which breaks ties
@@ -180,6 +285,22 @@ const NUMBER_MEMBERS: &[&str] =
 /// the members every constituent shares, which the reported member type does
 /// not say.
 pub(crate) fn property_spelling_suggestion(name: &str, object_type: &Type) -> Option<String> {
+    // A union has the properties every member has, and tsc suggests among
+    // those alone: `u.property1` on `{ property1 } | { property2 }` is a plain
+    // TS2339, not a misspelling of the other member's `property2`.
+    if let Type::Union(union) = object_type {
+        let mut members = union
+            .types()
+            .iter()
+            .filter(|member| !matches!(member, Type::Undefined | Type::Null | Type::Void));
+        let first = members.next()?;
+        let rest: Vec<&Type> = members.collect();
+        let suggestion = property_spelling_suggestion(name, first)?;
+        return rest
+            .iter()
+            .all(|member| member.get_property_access_type(&suggestion).is_some())
+            .then_some(suggestion);
+    }
     let candidates: Vec<String> = match object_type {
         Type::Reference(_) => match object_type.peeled() {
             Type::Reference(_) => return None,
@@ -297,12 +418,33 @@ pub(super) fn maybe_emit_index_signature_access(
         return;
     }
     if let InferredExpression::Known(object_type) = infer_expression(object, symbols, ctx) {
-        if object_type.property_only_from_string_index(property_name) {
-            ctx.push(diagnostic_with_syntax_span(
-                Diagnostic::ts4111(property_name, ctx.file_name.clone()),
-                choose_span(property_span, fallback_span),
-            ));
-        }
+        emit_index_signature_access_on(
+            &object_type,
+            property_name,
+            choose_span(property_span, fallback_span),
+            ctx,
+        );
+    }
+}
+
+/// [`maybe_emit_index_signature_access`] for a receiver whose type is already
+/// known, as a member write has it.
+pub(crate) fn emit_index_signature_access_on(
+    object_type: &Type,
+    property_name: &str,
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if !ctx.options.no_property_access_from_index_signature
+        || OBJECT_PROTOTYPE_MEMBERS.contains(&property_name)
+    {
+        return;
+    }
+    if object_type.property_only_from_string_index(property_name) {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts4111(property_name, ctx.file_name.clone()),
+            span,
+        ));
     }
 }
 
@@ -334,6 +476,50 @@ fn static_member_owner_for_missing_instance_property(
     }
 }
 
+/// The target a relation failure is reported against. tsc's `isRelatedTo`
+/// relates a definitely non-nullable source to a `T | null | undefined` target
+/// as `T` alone, so the message names `T`.
+pub(crate) fn reported_relation_target(source: &Type, target: &Type) -> Type {
+    let peeled_source;
+    let source = match source {
+        Type::Reference(_) => {
+            peeled_source = source.peeled();
+            &peeled_source
+        }
+        other => other,
+    };
+    let definitely_non_nullable = matches!(
+        source,
+        Type::String
+            | Type::Number
+            | Type::Boolean
+            | Type::BigInt
+            | Type::Symbol
+            | Type::StringLiteral(_)
+            | Type::NumberLiteral(_)
+            | Type::BooleanLiteral(_)
+            | Type::Object(_)
+            | Type::Function(_)
+            | Type::Array(_)
+            | Type::Tuple(_)
+            | Type::OpenTuple(_)
+    );
+    let Type::Union(union) = target else {
+        return target.clone();
+    };
+    if !definitely_non_nullable || union.types().len() > 3 {
+        return target.clone();
+    }
+    let mut non_nullable = union
+        .types()
+        .iter()
+        .filter(|member| !matches!(member, Type::Null | Type::Undefined));
+    match (non_nullable.next(), non_nullable.next()) {
+        (Some(only), None) => only.clone(),
+        _ => target.clone(),
+    }
+}
+
 pub(crate) fn source_display_name(source: &Type, target: &Type) -> String {
     // tsc does not generalize the source when the target is `never`, though
     // an object literal's own property types are already widened.
@@ -347,8 +533,39 @@ pub(crate) fn source_display_name(source: &Type, target: &Type) -> String {
         // a unit type: `1`, `"a" | "b"`, not `number | "x"`), and only toward a
         // target that could not hold it.
         source.name()
+    } else if let Some(enum_name) = enum_base_display(source) {
+        enum_name
     } else {
         widen_type(source).name()
+    }
+}
+
+/// `getBaseTypeOfLiteralType` for enum literals: an enum member type (or a
+/// union of one enum's members) generalizes to the enum itself.
+fn enum_base_display(source: &Type) -> Option<String> {
+    let member_base = |ty: &Type| -> Option<(std::sync::Arc<str>, String)> {
+        let Type::Reference(reference) = ty else {
+            return None;
+        };
+        let owner = reference.enum_owner.clone()?;
+        let display = reference.display.to_string();
+        let base = if *reference.id == *owner {
+            display
+        } else {
+            display.rsplit_once('.').map(|(base, _)| base.to_string())?
+        };
+        Some((owner, base))
+    };
+    match source {
+        Type::Reference(_) => member_base(source).map(|(_, base)| base),
+        Type::Union(union) => {
+            let mut members = union.types().iter().map(member_base);
+            let (owner, base) = members.next()??;
+            members
+                .all(|member| member.is_some_and(|(other, _)| other == owner))
+                .then_some(base)
+        }
+        _ => None,
     }
 }
 

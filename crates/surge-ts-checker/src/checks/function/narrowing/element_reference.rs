@@ -263,7 +263,7 @@ pub(super) fn collect_element_reference_guards<'a>(
                 ));
                 return;
             }
-            if let Some((subject, eq)) = parse_nullish_equality_condition(condition)
+            if let Some((subject, eq, test)) = parse_nullish_equality_condition(condition)
                 && matches!(
                     subject,
                     ParsedExpression::ElementAccess { .. }
@@ -275,6 +275,7 @@ pub(super) fn collect_element_reference_guards<'a>(
                     subject,
                     ReferenceGuard::Nullish {
                         keep_matching: branch_is_true == eq,
+                        test,
                     },
                 ));
             }

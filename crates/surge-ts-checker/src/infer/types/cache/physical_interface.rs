@@ -420,6 +420,7 @@ pub(super) fn canonical_type_identity(
         Type::BigInt => Some(CanonicalTypeIdentity::BigInt),
         Type::Symbol => Some(CanonicalTypeIdentity::Symbol),
         Type::Undefined => Some(CanonicalTypeIdentity::Undefined),
+        Type::Null => Some(CanonicalTypeIdentity::Null),
         Type::Void => Some(CanonicalTypeIdentity::Void),
         Type::Any => Some(CanonicalTypeIdentity::Any),
         Type::Never => Some(CanonicalTypeIdentity::Never),
@@ -544,7 +545,8 @@ pub(super) fn canonical_type_identity(
         Type::Function(_) | Type::Union(_) => {
             Err(InterfaceCacheSkipReason::UnsupportedTypeArgument)
         }
-        _ => unreachable!("primitive canonical identities returned above"),
+        // Anything without a canonical identity is simply not cached.
+        _ => Err(InterfaceCacheSkipReason::UnsupportedTypeArgument),
     }
 }
 
@@ -774,6 +776,7 @@ mod physical_interface_cache_tests {
             None,
             None,
             None,
+            Vec::new(),
             Vec::new(),
             None,
         )

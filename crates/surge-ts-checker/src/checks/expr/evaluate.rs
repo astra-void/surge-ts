@@ -21,7 +21,7 @@ pub(crate) fn check_computed_property_keys(
     }
 }
 
-/// tsc's `checkComputedPropertyName`: a key must be `undefined`-free
+/// tsc's `checkComputedPropertyName`: a key must be `null`/`undefined`-free
 /// and assignable to `string | number | symbol` — TS2464. A type parameter is
 /// left alone: without its constraint surge cannot tell `K extends string`
 /// from an unconstrained `T`.
@@ -42,7 +42,7 @@ pub(crate) fn report_invalid_computed_key(
 
 fn computed_key_type_is_invalid(ty: &Type) -> bool {
     match ty {
-        Type::Undefined => true,
+        Type::Undefined | Type::Null => true,
         _ if has_unmodelled_member(ty) => false,
         _ => !is_assignable_to(ty, &union_type(vec![Type::String, Type::Number, Type::Symbol])),
     }
@@ -190,8 +190,11 @@ fn evaluate_expression_unsettled(
                 }
                 if let Some(signature) = &tag_signature {
                     // The tag receives the strings array first, so interpolation
-                    // `index` is argument `index`.
-                    check_tagged_template_argument(signature, index, ty, interpolation_span, ctx);
+                    // `index` is argument `index`. tsc reports a call's first
+                    // inapplicable argument and stops.
+                    if check_tagged_template_argument(signature, index, ty, interpolation_span, ctx) {
+                        tag_signature = None;
+                    }
                 }
             }
             infer_expression(expression, symbols, ctx)
@@ -388,7 +391,8 @@ fn evaluate_expression_unsettled(
                 evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
             let mut right_result =
                 evaluate_expression(right, right_span.or(fallback_span), symbols, ctx);
-            if binary_operands_must_be_non_null(*operator, left, &left_result, right, &right_result) {
+            if binary_operands_must_be_non_null(*operator, left, &left_result, right, &right_result)
+            {
                 for (operand, result, span) in [
                     (&**left, &mut left_result, left_span.or(fallback_span)),
                     (&**right, &mut right_result, right_span.or(fallback_span)),
@@ -733,6 +737,7 @@ fn evaluate_expression_unsettled(
             let assignment = surge_ts_syntax::ParsedAssignment {
                 target_name: target_name.clone(),
                 target_span: *target_span,
+                written_target_span: *target_span,
                 value: value.as_ref().clone(),
                 value_span: *value_span,
             };
@@ -894,7 +899,9 @@ fn evaluate_logical(
     // what they assigned: `(next = it.next()) && !next.done`.
     let after_assignments = symbols_after_assignments(left, symbols, ctx);
     let symbols = after_assignments.as_ref().unwrap_or(symbols);
-    let tested = left.contains_assignment().then(|| left.with_assignments_as_reads());
+    let tested = left
+        .contains_assignment()
+        .then(|| left.with_assignments_as_reads());
     let left: &ParsedExpression = tested.as_ref().unwrap_or(left);
     // `a && b` only evaluates `b` when `a` is truthy, so narrow `b` by the
     // `a` guard: a structured guard (`x.kind === "k" && x.k`, `"p" in x &&
@@ -1064,13 +1071,15 @@ fn evaluate_optional_property_access(
     // `unknown` with `null` and `undefined` removed, which is `{}` — or on
     // `unknown` itself when those are in every type's domain.
     if !*is_bracketed && matches!(receiver, InferredExpression::Known(Type::GenuineUnknown)) {
-        let receiver_name = if surge_ts_types::strict_null_checks() { "{}" } else { "unknown" };
+        let receiver_name = if surge_ts_types::strict_null_checks() {
+            "{}"
+        } else {
+            "unknown"
+        };
         report_property_of_unknown(property_name, receiver_name, *property_span, ctx);
         return InferredExpression::Unknown;
     }
-    if !*is_bracketed
-        && let InferredExpression::Known(receiver_type) = &receiver
-    {
+    if !*is_bracketed && let InferredExpression::Known(receiver_type) = &receiver {
         check_member_accessibility(
             object,
             receiver_type,
@@ -1376,7 +1385,7 @@ fn evaluate_non_null_assertion(
 
     match inferred {
         InferredExpression::Known(ty) => {
-            let filtered = surge_ts_types::remove_undefined(&ty);
+            let filtered = surge_ts_types::remove_nullish(&ty);
             if *in_optional_chain {
                 InferredExpression::Known(surge_ts_types::union_type(vec![
                     filtered,
@@ -1624,13 +1633,13 @@ fn binary_operands_must_be_non_null(
     let string_like = |operand: &ParsedExpression, result: &InferredExpression| {
         !matches!(operand, ParsedExpression::NullLiteral)
             && match result {
-                InferredExpression::Known(ty) => surge_ts_types::is_assignable_to(ty, &Type::String),
+                InferredExpression::Known(ty) => {
+                    surge_ts_types::is_assignable_to(ty, &Type::String)
+                }
                 _ => true,
             }
     };
-    let symbol_like = |result: &InferredExpression| {
-        matches!(result, InferredExpression::Known(ty) if type_may_be_symbol(&ty.peeled()))
-    };
+    let symbol_like = |result: &InferredExpression| matches!(result, InferredExpression::Known(ty) if type_may_be_symbol(&ty.peeled()));
     match operator {
         Op::Subtract
         | Op::Multiply
@@ -1648,7 +1657,9 @@ fn binary_operands_must_be_non_null(
         Op::LessThan | Op::LessThanEquals | Op::GreaterThan | Op::GreaterThanEquals => {
             !symbol_like(left_result) && !symbol_like(right_result)
         }
-        Op::StrictEquals | Op::StrictNotEquals | Op::Equals | Op::NotEquals | Op::Instanceof => false,
+        Op::StrictEquals | Op::StrictNotEquals | Op::Equals | Op::NotEquals | Op::Instanceof => {
+            false
+        }
     }
 }
 
@@ -1782,8 +1793,18 @@ fn is_primitive_assertion_side(ty: &Type) -> bool {
 /// The signature a tagged template calls when surge can relate its arguments
 /// directly: a single, non-generic function with resolved parameters.
 pub(crate) fn tagged_template_signature(tag: &Type) -> Option<surge_ts_types::FunctionType> {
-    let Type::Function(function) = tag else {
-        return None;
+    let peeled;
+    let function = match tag {
+        Type::Function(function) => function,
+        Type::Reference(_) | Type::Object(_) => {
+            peeled = tag.peeled();
+            match &peeled {
+                Type::Function(function) => function,
+                Type::Object(object) => object.call_signature()?,
+                _ => return None,
+            }
+        }
+        _ => return None,
     };
     if function.overloads().is_some()
         || function
@@ -1803,27 +1824,29 @@ fn check_tagged_template_argument(
     argument: &Type,
     span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
-) {
+) -> bool {
     let parameters = signature.parameters();
     let parameter = if signature.is_variadic() && position + 1 >= parameters.len() {
         match parameters.last().map(Type::peeled) {
             Some(Type::Array(element)) => *element,
-            _ => return,
+            _ => return false,
         }
     } else {
         match parameters.get(position) {
             Some(parameter) => parameter.clone(),
-            None => return,
+            None => return false,
         }
     };
     if argument.is_unknown() || surge_ts_types::is_assignable_to(argument, &parameter) {
-        return;
+        return false;
     }
+    let parameter = super::reported_relation_target(argument, &parameter);
     let source_name = super::source_display_name(argument, &parameter);
     ctx.push(diagnostic_with_syntax_span(
         Diagnostic::ts2345(&source_name, &parameter.name(), ctx.file_name.clone()),
         span,
     ));
+    true
 }
 
 fn report_property_of_unknown(

@@ -169,7 +169,7 @@ fn restricted_class_members(class: &Class<'_>) -> Vec<ParsedRestrictedMember> {
         } else {
             match key {
                 PropertyKey::StaticIdentifier(key) => Some(key.name.to_string()),
-                _ => None,
+                key => super::types::computed_key_name(key),
             }
         };
         if let Some(name) = name {
@@ -306,10 +306,11 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                     let (name, name_span) = if method.computed {
                         (super::types::computed_key_name(&method.key)?, method.key.span())
                     } else {
-                        let PropertyKey::StaticIdentifier(key) = &method.key else {
-                            return None;
-                        };
-                        (key.name.to_string(), key.span)
+                        match &method.key {
+                            PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+                            // `1: T` and `"a": T` name members as their computed forms do.
+                            key => (super::types::computed_key_name(key)?, key.span()),
+                        }
                     };
                     let return_type = method
                         .value
@@ -347,10 +348,11 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                     let (name, name_span) = if method.computed {
                         (super::types::computed_key_name(&method.key)?, method.key.span())
                     } else {
-                        let PropertyKey::StaticIdentifier(key) = &method.key else {
-                            return None;
-                        };
-                        (key.name.to_string(), key.span)
+                        match &method.key {
+                            PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+                            // `1: T` and `"a": T` name members as their computed forms do.
+                            key => (super::types::computed_key_name(key)?, key.span()),
+                        }
                     };
 
                     let is_getter = matches!(method.kind, MethodDefinitionKind::Get);
@@ -407,10 +409,11 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             let (name, name_span) = if property.computed {
                 (super::types::computed_key_name(&property.key)?, property.key.span())
             } else {
-                let PropertyKey::StaticIdentifier(key) = &property.key else {
-                    return None;
-                };
-                (key.name.to_string(), key.span)
+                match &property.key {
+                    PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+                    // `1: T` and `"a": T` name members as their computed forms do.
+                    key => (super::types::computed_key_name(key)?, key.span()),
+                }
             };
 
             let declared_type = property
@@ -451,7 +454,49 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 body_reads: super::reads::collect_statement_reads(&block.body),
             }))
         }
-        // Index signatures and accessor properties are not part of this slice.
-        ClassElement::AccessorProperty(_) | ClassElement::TSIndexSignature(_) => None,
+        // An auto-accessor (`accessor x: T = v`) is a get/set pair over a private
+        // slot: for typing it is the property it looks like. Dropping it made
+        // every use of the member a missing property.
+        ClassElement::AccessorProperty(property) => {
+            let (name, name_span) = if property.computed {
+                (super::types::computed_key_name(&property.key)?, property.key.span())
+            } else {
+                match &property.key {
+                    PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+                    key => (super::types::computed_key_name(key)?, key.span()),
+                }
+            };
+            let declared_type = property
+                .type_annotation
+                .as_ref()
+                .and_then(|annotation| parse_type_annotation(annotation));
+            let (initializer, initializer_span) = match property.value.as_ref() {
+                Some(value) => {
+                    let (expression, span) = parse_expression(value);
+                    (Some(expression), Some(text_span_from_oxc_span(span)))
+                }
+                None => (None, None),
+            };
+            Some(ParsedClassMember::Property(ParsedClassProperty {
+                span: Some(text_span_from_oxc_span(property.span)),
+                name,
+                name_span: Some(text_span_from_oxc_span(name_span)),
+                is_static: property.r#static,
+                is_override: property.r#override,
+                is_abstract: matches!(
+                    property.r#type,
+                    oxc_ast::ast::AccessorPropertyType::TSAbstractAccessorProperty
+                ),
+                is_declare: false,
+                has_definite_assertion: property.definite,
+                optional: false,
+                readonly: false,
+                declared_type,
+                initializer,
+                initializer_span,
+            }))
+        }
+        // Index signatures are not part of this slice.
+        ClassElement::TSIndexSignature(_) => None,
     }
 }

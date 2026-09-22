@@ -39,7 +39,7 @@ pub(crate) fn nullish_coalescing_result(left_ty: Type, right_ty: Type) -> Type {
     if left_ty == Type::Any || (left_ty.is_unknown() && left_ty != Type::GenuineUnknown) {
         return left_ty;
     }
-    if left_ty == Type::Undefined {
+    if matches!(left_ty, Type::Undefined | Type::Null) {
         return right_ty;
     }
     let non_nullable = non_nullable_unknown(surge_ts_types::remove_nullish(&left_ty));
@@ -134,7 +134,7 @@ fn infer_expression_unsettled(
             InferredExpression::Known(Type::BooleanLiteral(*value))
         }
         ParsedExpression::UndefinedLiteral => InferredExpression::Known(Type::Undefined),
-        ParsedExpression::NullLiteral => InferredExpression::Known(Type::Any),
+        ParsedExpression::NullLiteral => InferredExpression::Known(Type::Null),
         ParsedExpression::Identifier { name, span } => {
             // The module-scope value table backs a binding declared later in the
             // file or block: a function body may legally reference it because the
@@ -197,16 +197,16 @@ fn infer_expression_unsettled(
                 );
             }
             symbols
-            .get("this")
-            .map(|symbol| {
-                InferredExpression::Known(clone_type_with_metrics(
-                    &symbol.ty,
-                    CopySource::Identifier,
-                ))
-            })
-            // Outside a class body `this` has no instance type here; stay
-            // conservative rather than emitting an unresolved-identifier error.
-            .unwrap_or(InferredExpression::Unknown)
+                .get("this")
+                .map(|symbol| {
+                    InferredExpression::Known(clone_type_with_metrics(
+                        &symbol.ty,
+                        CopySource::Identifier,
+                    ))
+                })
+                // Outside a class body `this` has no instance type here; stay
+                // conservative rather than emitting an unresolved-identifier error.
+                .unwrap_or(InferredExpression::Unknown)
         }
         ParsedExpression::ObjectLiteral { properties, .. } => {
             InferredExpression::Known(infer_object_literal(properties, symbols, ctx))
@@ -226,18 +226,21 @@ fn infer_expression_unsettled(
             ),
             other => other,
         },
-        ParsedExpression::Sequence { expressions } => match expressions.last() {
-            Some((last, _)) => infer_expression(last, symbols, ctx),
-            None => InferredExpression::Unknown,
-        },
-        ParsedExpression::Await { operand, .. } => {
-            match infer_expression(operand, symbols, ctx) {
-                InferredExpression::Known(ty) => {
-                    InferredExpression::Known(crate::checks::call::awaited_type(&ty))
-                }
-                other => other,
+        // tsc's comma operator: every operand is evaluated, the value is the
+        // last one's.
+        ParsedExpression::Sequence { expressions } => {
+            let mut result = InferredExpression::Unknown;
+            for (expression, _) in expressions {
+                result = infer_expression(expression, symbols, ctx);
             }
+            result
         }
+        ParsedExpression::Await { operand, .. } => match infer_expression(operand, symbols, ctx) {
+            InferredExpression::Known(ty) => {
+                InferredExpression::Known(crate::checks::call::awaited_type(&ty))
+            }
+            other => other,
+        },
         ParsedExpression::Binary {
             operator,
             left,
@@ -328,7 +331,7 @@ fn infer_expression_unsettled(
             let inferred = infer_expression(expression, symbols, ctx);
             match inferred {
                 InferredExpression::Known(ty) => {
-                    let filtered = surge_ts_types::remove_undefined(&ty);
+                    let filtered = surge_ts_types::remove_nullish(&ty);
                     if *in_optional_chain {
                         InferredExpression::Known(surge_ts_types::union_type(vec![
                             filtered,
@@ -461,13 +464,13 @@ fn infer_expression_unsettled(
                 _ => return InferredExpression::Unknown,
             };
 
-            let base_type = surge_ts_types::remove_undefined(&object_type);
+            let base_type = surge_ts_types::remove_nullish(&object_type);
 
             match base_type {
                 Type::Any => InferredExpression::Known(Type::Any),
                 _ => match base_type.get_property_access_type(property_name) {
                     Some(property_type) => {
-                        let prop_base = surge_ts_types::remove_undefined(&property_type);
+                        let prop_base = surge_ts_types::remove_nullish(&property_type);
                         if let Type::Function(function_type) = prop_base {
                             InferredExpression::Known(union_type(vec![
                                 clone_type_with_metrics(
@@ -505,7 +508,7 @@ fn infer_expression_unsettled(
                 _ => return InferredExpression::Unknown,
             };
 
-            let base_type = surge_ts_types::remove_undefined(&callee_type);
+            let base_type = surge_ts_types::remove_nullish(&callee_type);
 
             match base_type {
                 Type::Function(function_type) => InferredExpression::Known(union_type(vec![
@@ -537,10 +540,15 @@ fn infer_expression_unsettled(
                 let _ = infer_expression(expression, symbols, ctx);
             }
             if *is_tagged {
-                match expressions.first().map(|tag| infer_expression(tag, symbols, ctx)) {
+                match expressions
+                    .first()
+                    .map(|tag| infer_expression(tag, symbols, ctx))
+                {
                     Some(InferredExpression::Known(tag)) => {
                         match crate::checks::expr::tagged_template_signature(&tag) {
-                            Some(signature) => InferredExpression::Known(signature.return_type().clone()),
+                            Some(signature) => {
+                                InferredExpression::Known(signature.return_type().clone())
+                            }
                             None => InferredExpression::Unknown,
                         }
                     }
@@ -600,7 +608,9 @@ fn template_literal_type(expressions: &[ParsedExpression], quasis: &[Option<Stri
         match expression {
             ParsedExpression::StringLiteral(value) => Some(value.clone()),
             ParsedExpression::NumberLiteral(value)
-                if value.parse::<i64>().is_ok_and(|number| number.to_string() == *value) =>
+                if value
+                    .parse::<i64>()
+                    .is_ok_and(|number| number.to_string() == *value) =>
             {
                 Some(value.clone())
             }

@@ -18,10 +18,11 @@ pub(super) use arrayness::*;
 pub(super) use discriminant::*;
 pub(super) use instanceof::*;
 pub(super) use literal_equality::*;
-pub(super) use nullish::*;
+pub(crate) use nullish::*;
 pub(super) use predicate::*;
 pub(super) use property_presence::*;
 pub(super) use typeof_guard::*;
+pub(crate) use typeof_guard::typeof_tags_of;
 
 /// The identifier a single type guard tests, if the guard is one we model over a
 /// bare identifier (`x instanceof C`, `typeof x === "s"`, `Array.isArray(x)`,

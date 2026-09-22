@@ -498,7 +498,8 @@ fn lower_global_augmentation_values(
             if ctx.ambient_global_symbols.get(&var.name).is_none() {
                 crate::program::record_augmentation_value_insertion();
                 if !matches!(var.kind, surge_ts_syntax::ParsedVariableKind::Var) {
-                    Arc::make_mut(&mut ctx.block_scoped_globals).insert(Arc::from(var.name.as_str()));
+                    Arc::make_mut(&mut ctx.block_scoped_globals)
+                        .insert(Arc::from(var.name.as_str()));
                 }
                 ctx.ambient_global_symbols.insert(
                     var.name.clone(),
@@ -1005,6 +1006,7 @@ fn register_merged_namespace_interfaces(
                 interface.string_index_type.clone(),
                 interface.number_index_type.clone(),
                 interface.call_signature.clone(),
+                interface.call_signature_overloads.clone(),
                 interface.construct_signatures.clone(),
                 None,
             ),
@@ -1064,6 +1066,7 @@ fn collect_namespace_type_declarations_prefixed(
                         interface.string_index_type.clone(),
                         interface.number_index_type.clone(),
                         interface.call_signature.clone(),
+                        interface.call_signature_overloads.clone(),
                         interface.construct_signatures.clone(),
                         None,
                     );
@@ -1610,6 +1613,7 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
         interface.string_index_type.clone(),
         interface.number_index_type.clone(),
         interface.call_signature.clone(),
+        interface.call_signature_overloads.clone(),
         interface.construct_signatures.clone(),
         None,
     );
@@ -1744,6 +1748,7 @@ pub(crate) fn parsed_type_display(ty: &ParsedType) -> Option<String> {
         ParsedType::Number => "number".to_string(),
         ParsedType::Boolean => "boolean".to_string(),
         ParsedType::Undefined => "undefined".to_string(),
+        ParsedType::Null => "null".to_string(),
         ParsedType::Void => "void".to_string(),
         ParsedType::Any => "any".to_string(),
         ParsedType::Unknown | ParsedType::UnknownKeyword => "unknown".to_string(),

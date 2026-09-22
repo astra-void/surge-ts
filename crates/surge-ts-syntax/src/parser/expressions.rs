@@ -788,14 +788,34 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
             parse_unary_expression(unary_expression).unwrap_or(ParsedExpression::Unknown),
             argument.span(),
         ),
-        Argument::ParenthesizedExpression(parenthesized_expression) => (
-            parse_expression(&parenthesized_expression.expression).0,
+        // tsc reports an argument on its effective check node, which skips the
+        // parentheses around it.
+        Argument::ParenthesizedExpression(parenthesized_expression) => {
+            parse_expression(&parenthesized_expression.expression)
+        }
+        Argument::SequenceExpression(sequence) => (
+            ParsedExpression::Sequence {
+                expressions: sequence
+                    .expressions
+                    .iter()
+                    .map(|expression| {
+                        let (expression, span) = parse_expression(expression);
+                        (expression, Some(text_span_from_oxc_span(span)))
+                    })
+                    .collect(),
+            },
             argument.span(),
         ),
-        Argument::AwaitExpression(await_expression) => (
-            parse_expression(&await_expression.argument).0,
-            argument.span(),
-        ),
+        Argument::AwaitExpression(await_expression) => {
+            let (operand, operand_span) = parse_expression(&await_expression.argument);
+            (
+                ParsedExpression::Await {
+                    operand: Box::new(operand),
+                    operand_span: Some(text_span_from_oxc_span(operand_span)),
+                },
+                argument.span(),
+            )
+        }
         Argument::ConditionalExpression(conditional_expression) => (
             parse_conditional_expression(conditional_expression)
                 .unwrap_or(ParsedExpression::Unknown),
@@ -1263,7 +1283,7 @@ pub(crate) fn parse_object_properties(
                 PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
                 PropertyKey::StringLiteral(literal) => (literal.value.to_string(), literal.span),
                 PropertyKey::NumericLiteral(literal) => {
-                    (literal.raw_str().to_string(), literal.span)
+                    (literal.value.to_string(), literal.span)
                 }
                 _ => return None,
             };
@@ -1566,14 +1586,27 @@ pub(super) fn parse_computed_member_expression(
     //
     // Purely numeric keys (e.g. `arr["0"]`) are left on the index-access path so
     // existing array/tuple numeric-index behavior is preserved unchanged.
-    if let Expression::StringLiteral(string_literal) = &member_expression.expression {
-        let key = string_literal.value.as_str();
+    //
+    // A template without substitutions (`` obj[`key`] ``) is the same key: tsc
+    // treats both as string-literal-like.
+    let literal_key = match &member_expression.expression {
+        Expression::StringLiteral(string_literal) => {
+            Some((string_literal.value.to_string(), string_literal.span))
+        }
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+            .quasis
+            .first()
+            .and_then(|quasi| quasi.value.cooked.as_ref())
+            .map(|cooked| (cooked.to_string(), template.span)),
+        _ => None,
+    };
+    if let Some((key, key_span)) = literal_key {
         let is_numeric_index = !key.is_empty() && key.bytes().all(|byte| byte.is_ascii_digit());
 
         if !is_numeric_index {
             let (object, object_span) = parse_expression(&member_expression.object);
-            let property_name = string_literal.value.to_string();
-            let property_span = Some(text_span_from_oxc_span(string_literal.span));
+            let property_name = key;
+            let property_span = Some(text_span_from_oxc_span(key_span));
 
             if member_expression.optional {
                 return Some(ParsedExpression::OptionalPropertyAccess {

@@ -188,6 +188,27 @@ pub(crate) fn parameter_scope_type(
     parameter: &ParsedFunctionParameter,
     parameter_type: &Type,
 ) -> Type {
+    // The initializer stands in for `undefined`, so the body never sees it —
+    // whether the signature carries it (`(a = 1, b: T)`) or the annotation
+    // wrote it (`a: T | undefined = v`).
+    // An initializer that can itself be `undefined` fills nothing.
+    let initializer_fills_gap = parameter.initializer.as_ref().is_some_and(|initializer| {
+        !matches!(
+            initializer,
+            surge_ts_syntax::ParsedExpression::UndefinedLiteral
+                | surge_ts_syntax::ParsedExpression::Unary {
+                    operator: surge_ts_syntax::ParsedUnaryOperator::Void,
+                    ..
+                }
+        ) && !matches!(initializer, surge_ts_syntax::ParsedExpression::Identifier { name, .. } if name == "undefined")
+    });
+    let without_default_gap;
+    let parameter_type = if initializer_fills_gap && matches!(parameter_type, Type::Union(_)) {
+        without_default_gap = surge_ts_types::remove_undefined(parameter_type);
+        &without_default_gap
+    } else {
+        parameter_type
+    };
     match &parameter.binding_name {
         ParsedBindingName::Identifier { .. } => {
             let ty =
@@ -221,6 +242,7 @@ pub(crate) fn insert_binding_name(
 ) {
     match binding_name {
         ParsedBindingName::Identifier { name, .. } => {
+            scopes.record_tuple_destructure(name, None);
             scopes.insert_current(
                 name.as_str(),
                 SymbolInfo {
@@ -279,7 +301,10 @@ pub(crate) fn insert_array_binding_pattern_bindings(
 }
 
 /// Evaluates the defaults a destructuring pattern writes (`{ c = fallback }`)
-/// in the scope the pattern binds into, for their own diagnostics.
+/// in the scope the pattern binds into, for their own diagnostics. Where the
+/// bound type is known this is tsc's `checkBindingElement`: the initializer of
+/// `{ a = value }` is contextually typed by, and has to be assignable to, the
+/// type the pattern reads at that position.
 pub(crate) fn check_binding_pattern_defaults(
     binding: &ParsedBindingName,
     bound_type: Option<&Type>,
@@ -289,27 +314,52 @@ pub(crate) fn check_binding_pattern_defaults(
     match binding {
         ParsedBindingName::ObjectPattern(pattern) => {
             for element in &pattern.elements {
+                let read_type =
+                    bound_type.map(|ty| object_binding_element_type(ty, &element.property_name));
+                // A nested pattern over a possibly-missing property with no
+                // default of its own is the error (TS2339), and tsc checks
+                // nothing beneath it.
+                if let Some(read_type) = &read_type
+                    && element.default_value.is_none()
+                    && !matches!(element.binding_name, ParsedBindingName::Identifier { .. })
+                    && !matches!(read_type, Type::Any)
+                    && !read_type.is_unknown()
+                    && (surge_ts_types::is_assignable_to(&Type::Undefined, read_type)
+                        || surge_ts_types::is_assignable_to(&Type::Null, read_type))
+                {
+                    if ctx.options.strict_null_checks
+                        && !crate::checks::function::type_contains_unknown(read_type)
+                        && let ParsedBindingName::ObjectPattern(nested) = &element.binding_name
+                    {
+                        for nested_element in &nested.elements {
+                            ctx.push(crate::spans::diagnostic_with_syntax_span(
+                                Diagnostic::ts2339(
+                                    &nested_element.property_name,
+                                    read_type.name(),
+                                    ctx.file_name.clone(),
+                                ),
+                                nested_element.span,
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 // The destructured member's own type is the default's
                 // contextual type, which is what types an arrow default's
                 // parameters (`{ reducer = (items, chunk) => … }`).
-                let member_type = bound_type
-                    .map(Type::peeled)
-                    .and_then(|ty| ty.get_property_access_type(&element.property_name))
-                    .map(|ty| surge_ts_types::remove_nullish(&ty));
-                if let Some(default) = element.default_value.as_deref() {
-                    let (expression, span) = default;
-                    let _ = crate::checks::expected::evaluate_expression_with_expected_type(
-                        expression,
-                        *span,
-                        member_type.as_ref(),
-                        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
-                        scopes.visible_symbols(),
+                let element_type = read_type.map(|ty| surge_ts_types::remove_undefined(&ty));
+                if let Some(default_value) = element.default_value.as_deref() {
+                    check_binding_element_default(
+                        default_value,
+                        element,
+                        element_type.as_ref(),
+                        scopes,
                         ctx,
                     );
                 }
                 check_binding_pattern_defaults(
                     &element.binding_name,
-                    member_type.as_ref(),
+                    element_type.as_ref(),
                     scopes,
                     ctx,
                 );
@@ -324,16 +374,76 @@ pub(crate) fn check_binding_pattern_defaults(
     }
 }
 
+fn check_binding_element_default(
+    default_value: &surge_ts_syntax::ParsedExpression,
+    element: &ParsedObjectBindingElement,
+    element_type: Option<&Type>,
+    scopes: &ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    let diagnostics_before = ctx.diagnostics().len();
+    let default_type = crate::checks::expected::evaluate_expression_with_expected_type(
+        default_value,
+        element.default_span,
+        element_type,
+        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+        scopes.visible_symbols(),
+        ctx,
+    );
+    let Some(element_type) = element_type.filter(|ty| !matches!(ty, Type::Any) && !ty.is_unknown())
+    else {
+        return;
+    };
+    // A mismatch inside the initializer is reported where it is; one of the
+    // whole value is reported here, on the binding element.
+    if ctx.diagnostics().len() == diagnostics_before
+        && let InferredExpression::Known(default_type) = default_type
+        && !default_type.is_unknown()
+        && !crate::checks::function::type_contains_unknown(&default_type)
+        && !crate::checks::function::type_contains_unknown(element_type)
+        && !surge_ts_types::is_assignable_to(&default_type, element_type)
+    {
+        let reported_target =
+            crate::checks::expr::reported_relation_target(&default_type, element_type);
+        let source_name = crate::checks::expr::source_display_name(&default_type, &reported_target);
+        ctx.push(crate::spans::diagnostic_with_syntax_span(
+            crate::checks::expr::type_not_assignable_diagnostic(
+                &default_type,
+                &reported_target,
+                &source_name,
+                &reported_target.name(),
+                ctx.file_name.clone(),
+            ),
+            element.span.or(element.default_span),
+        ));
+    }
+}
+
 pub(crate) fn insert_parameter_bindings(
     parameter: &ParsedFunctionParameter,
     parameter_type: &Type,
     scopes: &mut ScopeStack,
 ) {
-    insert_binding_name(
-        &parameter.binding_name,
-        parameter_scope_type(parameter, parameter_type),
-        scopes,
-    );
+    let scope_type = parameter_scope_type(parameter, parameter_type);
+    // `x: T | undefined = v` reads `T` but is still declared `T | undefined`:
+    // `x = undefined` in the body is a valid write.
+    if let ParsedBindingName::Identifier { name, .. } = &parameter.binding_name
+        && parameter.initializer.is_some()
+        && scope_type != *parameter_type
+    {
+        scopes.record_tuple_destructure(name, None);
+        let _ = scopes.insert_current_narrowed(
+            name.as_str(),
+            SymbolInfo {
+                ty: scope_type,
+                kind: SymbolKind::Parameter,
+                function_signature: None,
+            },
+            parameter_type.clone(),
+        );
+        return;
+    }
+    insert_binding_name(&parameter.binding_name, scope_type, scopes);
 }
 
 pub(crate) fn insert_object_binding_pattern_bindings(
@@ -349,6 +459,24 @@ pub(crate) fn insert_object_binding_pattern_bindings(
             element_type = surge_ts_types::remove_undefined(&element_type);
         }
         insert_object_binding_element_binding(element, element_type, scopes);
+        // `function f({ kind, payload }: Action)`: the names are dependent when
+        // the parameter is a union, exactly as a destructuring `const` is. A
+        // name with a default is not a plain read of its property.
+        if let (ParsedBindingName::Identifier { name, .. }, false, Some(span)) =
+            (&element.binding_name, element.has_default, pattern.span)
+            && matches!(parameter_type.peeled(), Type::Union(_))
+        {
+            scopes.record_tuple_destructure(
+                name,
+                Some(crate::symbols::TupleDestructureBinding {
+                    source: format!("\0pattern@{}", span.start).into(),
+                    key: crate::symbols::DestructureKey::Property(
+                        element.property_name.as_str().into(),
+                    ),
+                    source_type: Some(parameter_type.clone()),
+                }),
+            );
+        }
     }
     // `{ a, ...rest }` binds `rest` to the remaining properties.
     if let Some(rest) = &pattern.rest {
@@ -525,9 +653,12 @@ pub(crate) fn map_function_signature(
             );
 
             match inferred_initializer {
-                InferredExpression::Known(ty) => {
-                    widen_implicit_variable_initializer_type(SymbolKind::Let, initializer, &ty, false)
-                }
+                InferredExpression::Known(ty) => widen_implicit_variable_initializer_type(
+                    SymbolKind::Let,
+                    initializer,
+                    &ty,
+                    false,
+                ),
                 InferredExpression::UnresolvedIdentifier { .. }
                 | InferredExpression::MissingProperty { .. }
                 | InferredExpression::Unknown => Type::Unknown,
@@ -556,6 +687,21 @@ pub(crate) fn map_function_signature(
             parameter_bindings.push((name.to_string(), parameter_binding_type));
         }
 
+        // tsc's `addOptionality`: a parameter with an initializer accepts
+        // `undefined` from its callers wherever it stands. A trailing one is
+        // optional and widened at the call; one a required parameter follows
+        // (`reducer(state = initial, action)`) carries it in its type. The
+        // body binding above stays `T` — the initializer fills the gap.
+        let inferred_parameter_type = if parameter.initializer.is_some()
+            && ctx.options.strict_null_checks
+            && index < required_parameter_count(parameters)
+            && !inferred_parameter_type.is_unknown()
+            && !matches!(inferred_parameter_type, Type::Any)
+        {
+            surge_ts_types::union_type(vec![inferred_parameter_type, Type::Undefined])
+        } else {
+            inferred_parameter_type
+        };
         parameter_types.push(inferred_parameter_type);
 
         if ctx.options.no_implicit_any {
@@ -747,6 +893,7 @@ fn defer_dependency_signature_annotation(annotation: &ParsedType) -> bool {
         | ParsedType::BigInt
         | ParsedType::Symbol
         | ParsedType::Undefined
+        | ParsedType::Null
         | ParsedType::Void
         | ParsedType::Any
         | ParsedType::ErrorType
@@ -841,7 +988,56 @@ pub(crate) fn function_signature_info(
         namespace_prefix: None,
         predicate_overload: None,
         overload_alternatives: Vec::new(),
+        inferred_predicate: None,
     })
+}
+
+/// [`function_signature_info`] for a declaration with a body, which may imply
+/// a type predicate its signature does not write (see
+/// [`FunctionSignatureInfo::inferred_predicate`]).
+pub(crate) fn function_declaration_signature_info(
+    function: &surge_ts_syntax::ParsedFunctionDeclaration,
+    function_type: &FunctionType,
+    symbols: &SymbolTable,
+    declaring_file: &str,
+) -> Arc<FunctionSignatureInfo> {
+    let info = function_signature_info(
+        &function.type_parameters,
+        &function.parameters,
+        function.return_type.as_ref(),
+        declaring_file,
+    );
+    if function.return_type.is_some()
+        || function.is_async
+        || function.is_generator
+        || !function.type_parameters.is_empty()
+    {
+        return info;
+    }
+    let inferred = crate::checks::function::single_returned_statement_expression(&function.body)
+        .and_then(|returned| {
+            crate::checks::function::infer_predicate_from_body(
+                &function.parameters,
+                function_type.parameters(),
+                returned,
+                symbols,
+            )
+        });
+    with_inferred_predicate(info, inferred)
+}
+
+pub(crate) fn with_inferred_predicate(
+    info: Arc<FunctionSignatureInfo>,
+    inferred: Option<crate::symbols::InferredPredicate>,
+) -> Arc<FunctionSignatureInfo> {
+    match inferred {
+        Some(inferred) => {
+            let mut info = (*info).clone();
+            info.inferred_predicate = Some(inferred);
+            Arc::new(info)
+        }
+        None => info,
+    }
 }
 
 /// [`function_signature_info`] for a value whose *annotation* is a generic
@@ -877,6 +1073,7 @@ pub(crate) fn function_type_signature_info(
         namespace_prefix: None,
         predicate_overload: None,
         overload_alternatives: Vec::new(),
+        inferred_predicate: None,
     })
 }
 
@@ -912,7 +1109,10 @@ pub(crate) fn check_type_parameter_declarations(
     }
     with_type_parameter_scope(type_parameters, ctx, |ctx| {
         for parameter in type_parameters {
-            for written in [&parameter.constraint, &parameter.default_type].into_iter().flatten() {
+            for written in [&parameter.constraint, &parameter.default_type]
+                .into_iter()
+                .flatten()
+            {
                 let _ = crate::infer::map_parsed_type(written.clone(), ctx);
             }
         }
@@ -1468,6 +1668,7 @@ pub(crate) fn check_function_body_with_signature(
     missing_return_span: Option<TextSpan>,
     body_reads: Option<&[String]>,
     is_generator: bool,
+    is_async: bool,
     has_this_parameter: bool,
     this_parameter_type: Option<ParsedType>,
     ctx: &mut CheckerContext,
@@ -1490,6 +1691,7 @@ pub(crate) fn check_function_body_with_signature(
         false,
         body_reads,
         is_generator,
+        is_async,
         has_this_parameter,
         ctx,
     );
@@ -1516,6 +1718,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
     is_constructor: bool,
     body_reads: Option<&[String]>,
     is_generator: bool,
+    is_async: bool,
     // `function f(this: T)`: oxc keeps the `this` parameter out of the parameter
     // list, so the caller has to report whether one was written.
     has_this_parameter: bool,
@@ -1553,8 +1756,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
     // reports a read of it under `noImplicitThis`. A constructor and a method
     // both arrive here with a `this` type, which clears it.
     let outer_this_is_implicitly_any = ctx.this_is_implicitly_any;
-    ctx.this_is_implicitly_any =
-        this_type.is_none() && !is_constructor && !has_this_parameter;
+    ctx.this_is_implicitly_any = this_type.is_none() && !is_constructor && !has_this_parameter;
     let outer_constructor_writable_members = if is_constructor {
         None
     } else {
@@ -1595,10 +1797,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
         emit_unused_locals(&body, reads, ctx);
     }
 
-    for (parameter, parameter_type) in parameters
-        .iter()
-        .zip(function_type.parameters().iter())
-    {
+    for (parameter, parameter_type) in parameters.iter().zip(function_type.parameters().iter()) {
         insert_parameter_bindings(parameter, parameter_type, &mut scopes);
     }
     // A default is written inside the signature, so the function's own type
@@ -1620,6 +1819,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
         // its returns are checked. Opening one stops a nested declaration from
         // recording into an enclosing arrow's frame.
         ctx.open_contextual_return_frame();
+        let outer_async_body = std::mem::replace(&mut ctx.in_async_body, is_async && !is_generator);
         // Every caller is a declaration or a class member, neither of which is
         // ever contextually typed, so an unannotated one's returns relate to
         // nothing — Go checks a return only against the annotation.
@@ -1633,6 +1833,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
             &mut flow_state,
             ctx,
         );
+        ctx.in_async_body = outer_async_body;
         ctx.close_contextual_return_frame()
     });
     ctx.inherited_never_initialized = saved_never_initialized;
@@ -1654,9 +1855,8 @@ pub(crate) fn check_function_body_with_signature_and_this(
             crate::flow::with_non_exhaustive_switches(
                 &ctx.non_exhaustive_switches,
                 &ctx.exhaustive_switches,
-                || {
-                analyze_function_body_flow(&body)
-            })
+                || analyze_function_body_flow(&body),
+            )
         }
         _ => body_flow,
     };
@@ -1666,10 +1866,17 @@ pub(crate) fn check_function_body_with_signature_and_this(
         return;
     }
 
-    if has_explicit_return_type && should_check_missing_return(function_type.return_type()) {
+    // tsc's `unwrapReturnType`: an async body owes the awaited return type,
+    // so `async (): Promise<void>` with no `return` is exempt like `(): void`.
+    let unwrapped_return_type = if is_async && !is_generator {
+        crate::checks::call::awaited_type(function_type.return_type())
+    } else {
+        function_type.return_type().clone()
+    };
+    if has_explicit_return_type && should_check_missing_return(&unwrapped_return_type) {
         emit_missing_return_diagnostic(
             body_flow,
-            function_type.return_type(),
+            &unwrapped_return_type,
             missing_return_span,
             ctx,
         );

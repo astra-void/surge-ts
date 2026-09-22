@@ -134,6 +134,17 @@ pub(crate) fn check_function_return_statement(
         return;
     };
 
+    // tsc's `unwrapReturnType`: what an async function returns is related — and
+    // contextually typed — by the awaited return type, so `return { … }` under
+    // `Promise<R>` is read against `R`.
+    let awaited_return_type;
+    let return_type = if ctx.in_async_body {
+        awaited_return_type = crate::checks::call::awaited_type(return_type);
+        &awaited_return_type
+    } else {
+        return_type
+    };
+
     // Only the mismatch verdicts raised while checking this value belong to the
     // contextual-return frame; everything else the expression reports is
     // unrelated and must survive.
@@ -154,15 +165,31 @@ pub(crate) fn check_function_return_statement(
     // cannot answer this — it reports per branch and yields the sentinel on a
     // mismatch — so ask the diagnostic-free inference path for the value's own
     // type, which for `cond ? anyValue : { … }` is the union tsc would form.
-    if ctx.in_contextual_return_body()
-        && may_infer_as_any(expression)
-        && returns_any(&crate::infer::infer_expression(expression, symbols, ctx))
-    {
-        ctx.note_contextual_return_is_any();
+    if ctx.in_contextual_return_body() && may_infer_as_any(expression) {
+        // Diagnostic-free: the value was already checked above, and a type
+        // query in it (`as Out<typeof schema>`) is resolved here without the
+        // arrow's own parameters in scope.
+        let reported = ctx.diagnostics().len();
+        let inferred = crate::infer::infer_expression(expression, symbols, ctx);
+        ctx.truncate_diagnostics(reported);
+        if returns_any(&inferred) {
+            ctx.note_contextual_return_is_any();
+        }
     }
 
     match inferred_expression {
         InferredExpression::Known(source_type) => {
+            // tsc's `unwrapReturnType`: an async function relates the awaited
+            // value to the awaited return type, and that is what its body is
+            // taken to return (`return this.p` of a `Promise<void>` is a
+            // void-like return under `noImplicitReturns`).
+            let unwrapped_return_type;
+            let (source_type, return_type) = if ctx.in_async_body {
+                unwrapped_return_type = crate::checks::call::awaited_type(return_type);
+                (crate::checks::call::awaited_type(&source_type), &unwrapped_return_type)
+            } else {
+                (source_type, return_type)
+            };
             ctx.note_contextual_return_type(&source_type);
             // A sentinel anywhere in either side means surge lost part of the
             // shape, so a mismatch reflects the modelling gap rather than the
@@ -189,12 +216,14 @@ pub(crate) fn check_function_return_statement(
                 {
                     return;
                 }
+                let reported_target =
+                    crate::checks::expr::reported_relation_target(&source_type, &return_type);
                 let source_type_name =
-                    crate::checks::expr::source_display_name(&source_type, &return_type);
-                let target_type_name = return_type.name();
+                    crate::checks::expr::source_display_name(&source_type, &reported_target);
+                let target_type_name = reported_target.name();
                 let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
                     &source_type,
-                    &return_type,
+                    &reported_target,
                     &source_type_name,
                     &target_type_name,
                     ctx.file_name.clone(),

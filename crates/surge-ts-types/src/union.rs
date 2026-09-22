@@ -298,12 +298,12 @@ pub fn remove_nullish(ty: &Type) -> Type {
             let filtered: Vec<Type> = union
                 .types()
                 .iter()
-                .filter(|t| **t != Type::Undefined && **t != Type::Void)
+                .filter(|t| !matches!(t, Type::Undefined | Type::Null | Type::Void))
                 .cloned()
                 .collect();
             union_type(filtered)
         }
-        Type::Undefined | Type::Void => Type::Unknown,
+        Type::Undefined | Type::Null | Type::Void => Type::Unknown,
         _ => ty.clone(),
     }
 }
@@ -338,11 +338,10 @@ pub fn union_type(types: Vec<Type>) -> Type {
     absorb_empty_array_members(&mut flattened);
     // Without `strictNullChecks` tsc's `addTypeToUnion` never adds `undefined`
     // or `null` beside another member: they are already in its domain.
-    if flattened.iter().any(|ty| matches!(ty, Type::Undefined))
-        && flattened.iter().any(|ty| !matches!(ty, Type::Undefined))
-        && !crate::strict_null_checks()
+    if !crate::strict_null_checks()
+        && flattened.iter().any(|ty| !matches!(ty, Type::Null | Type::Undefined))
     {
-        flattened.retain(|ty| !matches!(ty, Type::Undefined));
+        flattened.retain(|ty| !matches!(ty, Type::Null | Type::Undefined));
     }
 
     let unique = order_tuple_members(fold_boolean_literals(dedup_members(flattened)));
@@ -359,8 +358,8 @@ pub fn union_type(types: Vec<Type>) -> Type {
 /// keyword types the checker creates first (`string`, `number`, `bigint`,
 /// `boolean`, `symbol`, `void`, `object`) lead in that order, and literal and
 /// object types follow as they were first seen (measured on the 7.0.2 oracle:
-/// a lone `true`/`false` after the other literals); `formatUnionTypes` then
-/// moves `undefined` to the end.
+/// a lone `true`/`false` after the other literals); the `null` and
+/// `undefined` intrinsics sort after every other constituent.
 fn display_rank(member: &Type) -> u8 {
     match member {
         Type::String => 0,
@@ -372,7 +371,8 @@ fn display_rank(member: &Type) -> u8 {
         Type::Object(object) if object.non_primitive && object.properties.is_empty() => 6,
         // A lone `true`/`false` prints after the other literals.
         Type::BooleanLiteral(_) => 8,
-        Type::Undefined => 9,
+        Type::Null => 9,
+        Type::Undefined => 10,
         _ => 7,
     }
 }
@@ -1009,6 +1009,7 @@ mod tests {
                 is_intersection: false,
                 synthetic_open_index: false,
                 non_primitive: false,
+                without_inferable_index: false,
                 intersection_operands: None,
             })
         };
@@ -1143,6 +1144,7 @@ mod tests {
                     is_intersection: false,
                     synthetic_open_index: false,
                     non_primitive: false,
+                    without_inferable_index: false,
                 intersection_operands: None,
                 })
             })
@@ -1178,6 +1180,7 @@ mod tests {
                 is_intersection: false,
                 synthetic_open_index: false,
                 non_primitive: false,
+                without_inferable_index: false,
                 intersection_operands: None,
             })
         };
@@ -1225,6 +1228,7 @@ mod tests {
                 is_intersection: false,
                 synthetic_open_index: false,
                 non_primitive: false,
+                without_inferable_index: false,
                 intersection_operands: None,
             })
         };

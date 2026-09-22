@@ -93,6 +93,9 @@ pub(crate) fn collect_function_signatures_from_statements(
             &declaration_counts,
         );
     }
+    // Expando members are hoisted with the function they are written on, so a
+    // function declared earlier in the file can already read them.
+    crate::modules::exports::apply_expando_members(statements, symbols, ctx);
     ctx.collecting_signatures = outer_collecting_signatures;
 }
 

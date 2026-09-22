@@ -246,6 +246,12 @@ oracle = [
   "possibly-undefined-invocation-basic",
 ]
 
+[TS2723]
+status = "emitted"
+oracle = [
+  "null-type-basic",
+]
+
 [TS7009]
 status = "emitted"
 oracle = [
@@ -261,12 +267,14 @@ fixtures = [
 [TS2721]
 status = "emitted"
 oracle = [
+  "null-type-basic",
   "nullish-operand-basic",
 ]
 
 [TS2531]
 status = "emitted"
 oracle = [
+  "null-type-basic",
   "nullish-operand-basic",
 ]
 
@@ -1387,6 +1395,12 @@ oracle = [
   "possibly-undefined-receiver-basic and no-unchecked-indexed-access-basic presets",
 ]
 
+[TS18047]
+status = "emitted"
+oracle = [
+  "null-type-basic",
+]
+
 [TS18048]
 status = "emitted"
 fixtures = [
@@ -1873,6 +1887,18 @@ reason = "oxc classifies this failure and surge now carries its code, but no fix
 [TS8037]
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+
+[TS18049]
+status = "emitted"
+oracle = [
+  "null-type-basic",
+]
+
+[TS2533]
+status = "emitted"
+oracle = [
+  "null-type-basic",
+]
 
 [TS2302]
 status = "emitted"

@@ -71,6 +71,152 @@ pub(crate) fn branch_assigned_names(body: &[ParsedFunctionBodyStatement], names:
     }
 }
 
+/// The bindings a loop's exit joins: an assignment nested in a branch of the
+/// body still reaches the exit, and the inner join has already written it to
+/// the declaring frame.
+pub(super) fn loop_join_names(body: &[ParsedFunctionBodyStatement]) -> Vec<String> {
+    let mut names = Vec::new();
+    branch_assigned_names(body, &mut names);
+    loop_assigned_names(body, &mut names);
+    names
+}
+
+/// Every plain binding a loop body assigns, at any depth. Unlike a branch, a
+/// loop's nested assignments reach its head through the back edge.
+fn loop_assigned_names(body: &[ParsedFunctionBodyStatement], names: &mut Vec<String>) {
+    for statement in body {
+        match statement {
+            ParsedFunctionBodyStatement::Assignment(assignment) => {
+                if !names.iter().any(|name| *name == assignment.target_name) {
+                    names.push(assignment.target_name.clone());
+                }
+            }
+            ParsedFunctionBodyStatement::Block(block) => loop_assigned_names(block, names),
+            ParsedFunctionBodyStatement::If(if_statement) => {
+                loop_assigned_names(&if_statement.then_body, names);
+                loop_assigned_names(&if_statement.else_body, names);
+            }
+            ParsedFunctionBodyStatement::While(while_statement) => {
+                loop_assigned_names(&while_statement.body, names);
+            }
+            ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
+                loop_assigned_names(&for_of_statement.body, names);
+            }
+            ParsedFunctionBodyStatement::Switch(switch_statement) => {
+                for case in &switch_statement.cases {
+                    loop_assigned_names(&case.consequent, names);
+                }
+            }
+            ParsedFunctionBodyStatement::Try(try_statement) => {
+                loop_assigned_names(&try_statement.block, names);
+                if let Some(handler) = &try_statement.handler {
+                    loop_assigned_names(&handler.body, names);
+                }
+                loop_assigned_names(&try_statement.finalizer, names);
+            }
+            _ => {}
+        }
+    }
+}
+
+thread_local! {
+    static IN_LOOP_PREPASS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(super) fn in_loop_prepass() -> bool {
+    IN_LOOP_PREPASS.with(std::cell::Cell::get)
+}
+
+/// tsc types a binding at a loop head as the union of the entry edge and every
+/// back edge, so `let min: number | null = null` does not read as `null`
+/// throughout a loop that assigns it.
+pub(super) fn widen_loop_assigned_bindings(
+    body: &[ParsedFunctionBodyStatement],
+    return_type: Option<&Type>,
+    scopes: &mut ScopeStack,
+    flow_state: &mut crate::flow::FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    let names = deep_assigned_names(&[body]);
+    if names.is_empty() {
+        return;
+    }
+    // A loop nested inside the body being pre-checked settles for the
+    // declarations, so nesting costs one extra pass, not one per level.
+    if IN_LOOP_PREPASS.with(std::cell::Cell::get) {
+        widen_assigned_bindings(&[body], scopes);
+        return;
+    }
+    // The back edge carries what the body leaves each binding as: check the
+    // body once with nothing reported, read those types, and start the real
+    // pass at the union of the entry and back-edge types.
+    let entry_types = branch_assignment_types(&names, scopes);
+    let saved_scopes = scopes.clone();
+    let saved_flow = flow_state.clone();
+    let diagnostics_before = ctx.diagnostics().len();
+    IN_LOOP_PREPASS.with(|flag| flag.set(true));
+    scopes.push_child();
+    crate::checks::function::check_function_body(body.to_vec(), return_type, scopes, flow_state, ctx);
+    let back_edge_types = branch_assignment_types(&names, scopes);
+    IN_LOOP_PREPASS.with(|flag| flag.set(false));
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    *scopes = saved_scopes;
+    *flow_state = saved_flow;
+    let head_types: Vec<(String, Type)> = entry_types
+        .iter()
+        .filter_map(|(name, entry)| {
+            let back_edge = back_edge_types.iter().find(|(other, _)| other == name)?;
+            let joined = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                union_type(vec![entry.clone(), back_edge.1.clone()])
+            });
+            (joined != *entry).then(|| (name.clone(), joined))
+        })
+        .collect();
+    adopt_branch_assignments(&head_types, scopes);
+}
+
+/// Every plain binding any of `bodies` assigns, at any depth.
+pub(super) fn deep_assigned_names(bodies: &[&[ParsedFunctionBodyStatement]]) -> Vec<String> {
+    let mut names = Vec::new();
+    for body in bodies {
+        loop_assigned_names(body, &mut names);
+    }
+    names
+}
+
+/// Widens each binding `bodies` assign to its declared type, for code that
+/// can be reached from any point inside them — a loop head through its back
+/// edge, a `catch` or `finally` from wherever the `try` threw.
+pub(super) fn widen_assigned_bindings(
+    bodies: &[&[ParsedFunctionBodyStatement]],
+    scopes: &mut ScopeStack,
+) {
+    for name in deep_assigned_names(bodies) {
+        let Some(symbol) = scopes.resolve(&name) else {
+            continue;
+        };
+        let Some(declared) = scopes.visible_symbols().declared_type(&name).cloned() else {
+            continue;
+        };
+        if declared == symbol.ty || declared.is_unknown() {
+            continue;
+        }
+        let widened = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+            union_type(vec![symbol.ty.clone(), declared])
+        });
+        let kind = symbol.kind;
+        let function_signature = symbol.function_signature.clone();
+        let _ = scopes.update_visible(
+            &name,
+            SymbolInfo {
+                ty: widened,
+                kind,
+                function_signature,
+            },
+        );
+    }
+}
+
 /// Joins a then-branch's end types with the fall-through (condition-false) types
 /// for the bindings it assigned. tsc types the code after `if (!x) { x = … }`
 /// from both incoming edges; surge's branch scope discards the assignment

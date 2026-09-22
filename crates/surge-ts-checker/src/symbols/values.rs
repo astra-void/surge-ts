@@ -81,6 +81,57 @@ pub(crate) struct FunctionSignatureInfo {
     /// alongside restores the fold at the instantiated level, so an argument
     /// written for a later overload is not reported against the first.
     pub(crate) overload_alternatives: Vec<Arc<FunctionSignatureInfo>>,
+    /// tsc's `getTypePredicateFromBody`: a function with no return annotation
+    /// whose body is one `return` of a condition that splits a parameter's
+    /// type exactly in two *is* a type predicate over that parameter (TS 5.5).
+    /// Computed where the signature is collected, which is where the
+    /// parameter types are known; guard narrowing reads it as it reads a
+    /// written `x is T`.
+    pub(crate) inferred_predicate: Option<InferredPredicate>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct InferredPredicate {
+    pub(crate) parameter_index: usize,
+    pub(crate) target: Type,
+}
+
+
+/// One name of `const [error, value] = source`: element `index` of `source`.
+/// `source` names a binding, whose current type is read when narrowing; a
+/// pattern over any other expression keys its group by the pattern and keeps
+/// the type that expression had.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TupleDestructureBinding {
+    pub(crate) source: Arc<str>,
+    pub(crate) key: DestructureKey,
+    pub(crate) source_type: Option<Type>,
+}
+
+/// What a destructured binding reads off its source: a tuple element, or a
+/// property of an object pattern (`const { kind, payload } = action`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum DestructureKey {
+    Index(usize),
+    Property(Arc<str>),
+}
+
+impl DestructureKey {
+    /// The type this key reads off one member of the source union.
+    pub(crate) fn read(&self, member: &Type) -> Option<Type> {
+        match (self, member) {
+            (DestructureKey::Index(index), Type::Tuple(elements)) => elements.get(*index).cloned(),
+            (DestructureKey::Property(name), Type::Object(object)) => {
+                let property = object.properties.get(name)?;
+                Some(if property.is_optional() {
+                    surge_ts_types::union_type(vec![property.ty.clone(), Type::Undefined])
+                } else {
+                    property.ty.clone()
+                })
+            }
+            _ => None,
+        }
+    }
 }
 
 /// A local tsc types by control flow under `noImplicitAny` — `let x;`,
@@ -153,7 +204,9 @@ impl AutoArrayBinding {
     pub(crate) fn never_initialized(&self) -> bool {
         self.is_let
             && !self.initialized
-            && self.assignments.is_some_and(|summary| !summary.definitely_assigned)
+            && self
+                .assignments
+                .is_some_and(|summary| !summary.definitely_assigned)
     }
 }
 
@@ -191,6 +244,12 @@ pub(crate) struct SymbolTable {
     // condition exactly as an `if (ok)` does. Written only by the function-body
     // declaration path; empty in nearly every table.
     alias_conditions: Option<Arc<HashMap<Arc<str>, Arc<ParsedExpression>, FxBuildHasher>>>,
+    // `const [error, value] = tuple` binds dependent names: each records the
+    // `(source, index)` it was destructured from, so a truthiness test on one
+    // retypes the others. Same discipline as `alias_conditions`.
+    // `None` marks a name redeclared since, which hides a parent's binding.
+    tuple_destructures:
+        Option<Arc<HashMap<Arc<str>, Option<TupleDestructureBinding>, FxBuildHasher>>>,
     // Function-local `[]`-initialized bindings tsc types by control flow
     // (`autoArrayType`); see [`AutoArrayBinding`]. Empty in nearly every table.
     auto_arrays: Option<Arc<HashMap<Arc<str>, AutoArrayBinding, FxBuildHasher>>>,
@@ -206,6 +265,10 @@ pub(crate) struct SymbolTable {
     // Mutations and `iter*` operate on `symbols` alone; `parent` is only ever set
     // on transient, lookup-only scope roots that are never iterated.
     parent: Option<Arc<SymbolTable>>,
+    // A block-scoped declaration boundary over `parent`: a namespace body is
+    // its own scope, so an enclosing `let`/`const` of the same name is shadowed
+    // rather than redeclared.
+    declaration_scope_root: bool,
 }
 
 impl Clone for SymbolTable {
@@ -220,9 +283,11 @@ impl Clone for SymbolTable {
             function_implementations: Arc::clone(&self.function_implementations),
             declared_types: self.declared_types.clone(),
             alias_conditions: self.alias_conditions.clone(),
+            tuple_destructures: self.tuple_destructures.clone(),
             auto_arrays: self.auto_arrays.clone(),
             function_boundary: self.function_boundary,
             parent: self.parent.clone(),
+            declaration_scope_root: self.declaration_scope_root,
         }
     }
 }
@@ -246,9 +311,11 @@ impl SymbolTable {
             function_implementations: Arc::new(HashSet::default()),
             declared_types: self.declared_types.clone(),
             alias_conditions: self.alias_conditions.clone(),
+            tuple_destructures: self.tuple_destructures.clone(),
             auto_arrays: None,
             function_boundary: false,
             parent: self.parent.clone(),
+            declaration_scope_root: self.declaration_scope_root,
         }
     }
 
@@ -261,9 +328,11 @@ impl SymbolTable {
             function_implementations: Arc::new(HashSet::default()),
             declared_types: None,
             alias_conditions: None,
+            tuple_destructures: None,
             auto_arrays: None,
             function_boundary: false,
             parent: Some(parent),
+            declaration_scope_root: false,
         }
     }
 
@@ -288,9 +357,11 @@ impl SymbolTable {
             function_implementations: Arc::clone(&parent.function_implementations),
             declared_types: parent.declared_types.clone(),
             alias_conditions: parent.alias_conditions.clone(),
+            tuple_destructures: parent.tuple_destructures.clone(),
             auto_arrays: None,
             function_boundary: false,
             parent: Some(parent),
+            declaration_scope_root: false,
         }
     }
 }
@@ -456,6 +527,51 @@ impl SymbolTable {
         }
     }
 
+    pub(crate) fn set_tuple_destructure(
+        &mut self,
+        name: Arc<str>,
+        binding: Option<TupleDestructureBinding>,
+    ) {
+        let bindings = self.tuple_destructures.get_or_insert_with(Default::default);
+        Arc::make_mut(bindings).insert(name, binding);
+    }
+
+    pub(crate) fn tuple_destructure(&self, name: &str) -> Option<TupleDestructureBinding> {
+        if let Some(binding) = self
+            .tuple_destructures
+            .as_ref()
+            .and_then(|bindings| bindings.get(name))
+        {
+            return binding.clone();
+        }
+        self.parent
+            .as_ref()
+            .and_then(|parent| parent.tuple_destructure(name))
+    }
+
+    /// Every binding destructured out of `source`, with its index.
+    pub(crate) fn tuple_destructure_siblings(&self, source: &str) -> Vec<(Arc<str>, DestructureKey)> {
+        let mut names: Vec<Arc<str>> = Vec::new();
+        let mut table = Some(self);
+        while let Some(current) = table {
+            for name in current.tuple_destructures.iter().flat_map(|bindings| bindings.keys()) {
+                if !names.contains(name) {
+                    names.push(Arc::clone(name));
+                }
+            }
+            table = current.parent.as_deref();
+        }
+        let mut siblings: Vec<(Arc<str>, DestructureKey)> = names
+            .into_iter()
+            .filter_map(|name| {
+                let binding = self.tuple_destructure(&name)?;
+                (&*binding.source == source).then_some((name, binding.key))
+            })
+            .collect();
+        siblings.sort_by(|left, right| left.0.cmp(&right.0));
+        siblings
+    }
+
     /// The evolving-array state of `name`, and whether it belongs to an
     /// enclosing function (or the module) rather than this one. Like
     /// `declared_type`, a scope that declares its own `name` stops the search.
@@ -478,7 +594,9 @@ impl SymbolTable {
     }
 
     pub(crate) fn has_auto_arrays(&self) -> bool {
-        self.auto_arrays.as_ref().is_some_and(|bindings| !bindings.is_empty())
+        self.auto_arrays
+            .as_ref()
+            .is_some_and(|bindings| !bindings.is_empty())
     }
 
     /// Installs (or, with `None`, clears) this table's own entry for `name`,
@@ -612,9 +730,19 @@ impl SymbolTable {
         if let Some(existing) = self.symbols.get(name) {
             return matches!(existing.as_ref().kind, SymbolKind::Let | SymbolKind::Const);
         }
-        self.parent
-            .as_ref()
-            .is_some_and(|parent| parent.contains_let_or_const(name))
+        !self.declaration_scope_root
+            && self
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent.contains_let_or_const(name))
+    }
+
+    /// A lookup-only scope over `parent` that starts a new block-scoped
+    /// declaration space (see `declaration_scope_root`).
+    pub(crate) fn declaration_scope(parent: Arc<SymbolTable>) -> Self {
+        let mut table = Self::with_parent(parent);
+        table.declaration_scope_root = true;
+        table
     }
 
     /// Records the name span of the first declaration of `name` in this scope so

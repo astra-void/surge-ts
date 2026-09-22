@@ -74,6 +74,12 @@ pub struct ObjectType {
     /// but assignability refuses a primitive source. Excluded from equality
     /// like the other markers.
     pub non_primitive: bool,
+    /// Set for an object resolved from an `interface` or `class` declaration.
+    /// tsc gives only object and type literals an implicit index signature
+    /// (`isObjectTypeWithInferableIndex`), so such a source answers a target
+    /// index signature with one it declares or not at all. Excluded from
+    /// equality like the other markers.
+    pub without_inferable_index: bool,
     /// The nominal reference operands of the intersection this object was
     /// merged from (`Matcher<unknown, string> & Omit<…>` keeps the `Matcher`
     /// reference). An `infer` pattern naming that declaration binds its
@@ -130,6 +136,23 @@ pub struct ObjectProperty {
     /// fingerprint — two objects differing only here land in one bucket and are
     /// told apart by equality.
     pub readonly: bool,
+    /// A class member declared `private` or `protected`, with the declaration
+    /// it belongs to. tsc relates such a member only to itself (private) or to
+    /// a restricted member (protected), whatever its type. Participates in
+    /// equality but not in the property fingerprint, like `readonly`.
+    pub restriction: Option<MemberRestriction>,
+    /// Not a declaration: the slot of the string index signature this name
+    /// reads, recorded by flow narrowing (`if (env.URL) env.URL`). It answers
+    /// reads like a property but still *comes from* the index signature, which
+    /// is what `noPropertyAccessFromIndexSignature` asks.
+    pub index_slot: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberRestriction {
+    pub private: bool,
+    /// Identity of the declaring class: its file and the offset of its name.
+    pub owner: Arc<str>,
 }
 
 impl ObjectProperty {
@@ -139,6 +162,8 @@ impl ObjectProperty {
             optional: false,
             method: false,
             readonly: false,
+            restriction: None,
+            index_slot: false,
         }
     }
 
@@ -148,6 +173,8 @@ impl ObjectProperty {
             optional: true,
             method: false,
             readonly: false,
+            restriction: None,
+            index_slot: false,
         }
     }
 
@@ -198,6 +225,7 @@ impl ObjectType {
             is_intersection: false,
             synthetic_open_index: false,
             non_primitive: false,
+            without_inferable_index: false,
             intersection_operands: None,
         }
     }
@@ -274,6 +302,12 @@ impl ObjectType {
     /// rather than a declared `[key: string]: T`.
     pub fn with_open_index_marker(mut self) -> Self {
         self.synthetic_open_index = true;
+        self
+    }
+
+    /// Marks this object as resolved from an `interface` or `class` declaration.
+    pub fn with_nominal_declaration_marker(mut self) -> Self {
+        self.without_inferable_index = true;
         self
     }
 
@@ -383,7 +417,7 @@ pub fn is_numeric_key(name: &str) -> bool {
 /// type of every non-nullish value. Parameter types are approximated as `any`
 /// (the real signatures take `PropertyKey`/`Object`) since only arity and the
 /// return type matter for the diagnostics surge emits.
-fn object_prototype_member_type(name: &str) -> Option<Type> {
+pub fn object_prototype_member_type(name: &str) -> Option<Type> {
     let member = match name {
         "toString" | "toLocaleString" => FunctionType::new(vec![], Type::String, false, 0),
         "valueOf" => FunctionType::new(vec![], Type::Any, false, 0),
@@ -410,6 +444,7 @@ impl Clone for ObjectType {
             is_intersection: self.is_intersection,
             synthetic_open_index: self.synthetic_open_index,
             non_primitive: self.non_primitive,
+            without_inferable_index: self.without_inferable_index,
             intersection_operands: self.intersection_operands.clone(),
         }
     }

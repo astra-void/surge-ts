@@ -14,6 +14,7 @@ fn check(source_text: &str) -> Vec<surge_ts_diagnostics::Diagnostic> {
         CheckerOptions {
             no_implicit_any: true,
             strict_property_initialization: false,
+            strict_null_checks: true,
             use_unknown_in_catch_variables: false,
             ..Default::default()
         },

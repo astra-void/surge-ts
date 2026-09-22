@@ -383,7 +383,7 @@ pub(crate) fn resolve_interface(
                     had_error: false,
                 };
             }
-            "Promise" | "PromiseLike" => {
+            "Promise" | "PromiseLike" if !crate::checks::call::promise_nominal_enabled() => {
                 let ty = local_substitution
                     .get("T")
                     .cloned()
@@ -425,7 +425,7 @@ pub(crate) fn resolve_interface(
             // `PromiseLike<T>` as their resolved value `T` (an implicit await
             // everywhere). `.then()`-style chaining on a raw promise remains a
             // documented limitation.
-            "Promise" | "PromiseLike" => {
+            "Promise" | "PromiseLike" if !crate::checks::call::promise_nominal_enabled() => {
                 let ty = local_substitution
                     .get("T")
                     .cloned()
@@ -654,6 +654,7 @@ pub(crate) fn resolve_interface(
                     interface.body.string_index_type.as_ref(),
                     interface.body.number_index_type.as_ref(),
                     interface.body.call_signature.as_ref(),
+                    &interface.body.call_signature_overloads,
                     &interface.body.construct_signatures,
                     ctx,
                     resolving,
@@ -703,7 +704,7 @@ pub(crate) fn resolve_interface(
     let degraded_during_expansion =
         crate::program::expansion_degradation_epoch() != degradation_before;
     let clean = !had_error && !emitted_diagnostics && !degraded_during_expansion;
-    let mut ty = resolved.ty;
+    let mut ty = attach_member_restrictions(resolved.ty, &interface);
     if cache_eligible
         && (physical_default_lib || cycle_free)
         && physical_interface_cache_enabled()
@@ -841,6 +842,7 @@ pub(crate) fn resolve_interface_declaration(
     string_index_type: Option<&ParsedType>,
     number_index_type: Option<&ParsedType>,
     call_signature: Option<&ParsedFunctionType>,
+    call_signature_overloads: &[ParsedFunctionType],
     construct_signatures: &[ParsedFunctionType],
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
@@ -873,6 +875,7 @@ pub(crate) fn resolve_interface_declaration(
     let mut properties = PropertyMap::default();
     let mut had_error = false;
     let mut inherited_index_type: Option<Type> = None;
+    let mut inherited_number_index_type: Option<Type> = None;
     let mut inherited_call_signature: Option<FunctionType> = None;
     let mut inherited_construct_signature: Option<FunctionType> = None;
     // A base that resolves to `any` (e.g. a mixin) leaves the derived member set
@@ -963,6 +966,11 @@ pub(crate) fn resolve_interface_declaration(
                 {
                     inherited_index_type = Some(index_type.as_ref().clone());
                 }
+                if inherited_number_index_type.is_none()
+                    && let Some(index_type) = &object_type.number_index_type
+                {
+                    inherited_number_index_type = Some(index_type.as_ref().clone());
+                }
                 // Call/construct signatures are inherited like members: React's
                 // `ForwardRefExoticComponent extends ExoticComponent` carries its
                 // callability entirely from the base, and dropping it here strips
@@ -990,6 +998,9 @@ pub(crate) fn resolve_interface_declaration(
             // surface is a name lookup, not a property map, so materialize it
             // here or every inherited `forEach`/`length` is a false TS2339.
             Type::Array(element) => {
+                if inherited_number_index_type.is_none() {
+                    inherited_number_index_type = Some(element.as_ref().clone());
+                }
                 for name in surge_ts_types::array_property_names() {
                     if properties.contains_key(*name) {
                         continue;
@@ -1359,6 +1370,14 @@ pub(crate) fn resolve_interface_declaration(
                     None => merged,
                 }
             };
+            // The fold answers every consumer that wants one signature; the
+            // members ride along, as they do for the interface's own call
+            // signatures, so a call resolves against the candidate whose arity
+            // fits and reports TS2769 when several fit and none accepts it.
+            let mut members = Vec::new();
+            existing_fn.push_overload_members(&mut members);
+            incoming.push_overload_members(&mut members);
+            let merged = merged.with_overloads(members);
             let optional = existing.optional && member.optional;
             properties.insert(
                 member.name.as_str().into(),
@@ -1417,17 +1436,20 @@ pub(crate) fn resolve_interface_declaration(
     // A numeric index signature is resolved alongside the string one: a numeric
     // key prefers it, and its presence alone is what makes a *string* key an
     // implicit `any` rather than a resolved member.
-    let resolved_number_index_type = number_index_type.map(|parsed| {
-        let resolved = crate::program::with_dts_expansion_reason(
-            crate::program::DtsExpansionReason::InterfaceIndexSignatureMapping,
-            || resolve_parsed_type(parsed.clone(), ctx, resolving, substitution),
-        );
-        had_error |= resolved.had_error;
-        resolved.ty
-    });
+    let resolved_number_index_type = number_index_type
+        .map(|parsed| {
+            let resolved = crate::program::with_dts_expansion_reason(
+                crate::program::DtsExpansionReason::InterfaceIndexSignatureMapping,
+                || resolve_parsed_type(parsed.clone(), ctx, resolving, substitution),
+            );
+            had_error |= resolved.had_error;
+            resolved.ty
+        })
+        .or(inherited_number_index_type);
 
     let mut object_type = alloc_object_type(properties, resolved_index_type)
-        .with_number_index_type(resolved_number_index_type);
+        .with_number_index_type(resolved_number_index_type)
+        .with_nominal_declaration_marker();
     if openness_is_synthetic {
         object_type = object_type.with_open_index_marker();
     }
@@ -1445,6 +1467,32 @@ pub(crate) fn resolve_interface_declaration(
         );
         had_error |= resolved.had_error;
         if let Type::Function(function_type) = resolved.ty {
+            // The fold answers every consumer that wants one signature; the
+            // overloads ride along so a call resolves against the candidate
+            // whose arity and arguments fit, as tsc's `chooseOverload` does.
+            let mut resolved_overloads: Vec<FunctionType> = Vec::new();
+            for overload in call_signature_overloads {
+                let resolved = crate::program::with_dts_expansion_reason(
+                    crate::program::DtsExpansionReason::InterfaceCallSignatureMapping,
+                    || {
+                        resolve_parsed_type(
+                            ParsedType::Function(std::sync::Arc::new(overload.clone())),
+                            ctx,
+                            resolving,
+                            substitution,
+                        )
+                    },
+                );
+                had_error |= resolved.had_error;
+                if let Type::Function(overload) = resolved.ty {
+                    resolved_overloads.push(overload);
+                }
+            }
+            let function_type = if resolved_overloads.len() > 1 {
+                function_type.with_overloads(resolved_overloads)
+            } else {
+                function_type
+            };
             object_type = object_type.with_call_signature(function_type);
         }
     } else if let Some(inherited) = inherited_call_signature {
@@ -1716,4 +1764,47 @@ pub(crate) fn generated_default_lib_map_instance_type() -> Type {
     properties.insert("size".into(), ObjectProperty::required(Type::Number));
 
     Type::Object(alloc_object_type(properties, None))
+}
+
+/// Marks the instance members a class declares `private` or `protected` with
+/// the class they belong to, for the relation's modifier rules. Inherited
+/// members already carry their own declaring class's mark. A member whose
+/// accessor pair splits its modifiers is left unmarked.
+fn attach_member_restrictions(ty: Type, interface: &InterfaceInfo) -> Type {
+    if interface.body.restricted_members.is_empty() {
+        return ty;
+    }
+    let Some(name_span) = interface.name_span else {
+        return ty;
+    };
+    let Type::Object(mut object) = ty else {
+        return ty;
+    };
+    let owner: std::sync::Arc<str> = format!("{}\0{}", interface.file_name, name_span.start).into();
+    let mut properties = None;
+    for restricted in &interface.body.restricted_members {
+        if restricted.is_static || restricted.accessor_side.is_some() {
+            continue;
+        }
+        let Some(property) = object.properties.get(restricted.name.as_str()) else {
+            continue;
+        };
+        let restriction = surge_ts_types::MemberRestriction {
+            private: restricted.accessibility == surge_ts_syntax::ParsedMemberAccessibility::Private,
+            owner: owner.clone(),
+        };
+        if property.restriction.as_ref() == Some(&restriction) {
+            continue;
+        }
+        let mut property = property.clone();
+        property.restriction = Some(restriction);
+        properties
+            .get_or_insert_with(|| (*object.properties).clone())
+            .insert(restricted.name.as_str().into(), property);
+    }
+    if let Some(properties) = properties {
+        object.properties = std::sync::Arc::new(properties);
+        object.property_map_id = None;
+    }
+    Type::Object(object)
 }

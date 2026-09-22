@@ -34,7 +34,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSNumberKeyword(_) => Some(ParsedType::Number),
         TSType::TSBooleanKeyword(_) => Some(ParsedType::Boolean),
         TSType::TSUndefinedKeyword(_) => Some(ParsedType::Undefined),
-        TSType::TSNullKeyword(_) => Some(ParsedType::Undefined),
+        TSType::TSNullKeyword(_) => Some(ParsedType::Null),
         // `object` is every non-primitive: the empty object type models its
         // member surface exactly (a property read off it is an error, an
         // assignment out of it is checked), and the marker is what keeps a
@@ -1058,10 +1058,13 @@ pub(crate) fn parse_type_method_signature(
         parameters.push(parse_function_type_rest_parameter(rest)?);
     }
 
-    let return_type = method_signature
-        .return_type
-        .as_ref()
-        .and_then(|annotation| parse_type_annotation(annotation.as_ref()))?;
+    // A method signature written without a return type returns an implicit
+    // `any` (and is TS7010 under `noImplicitAny`); dropping the member instead
+    // made every use of it a missing property.
+    let return_type = match method_signature.return_type.as_ref() {
+        Some(annotation) => parse_type_annotation(annotation.as_ref())?,
+        None => ParsedType::Any,
+    };
 
     Some(ParsedObjectTypeProperty {
         name,
@@ -1154,7 +1157,7 @@ pub(crate) fn computed_key_name(key: &PropertyKey<'_>) -> Option<String> {
         // `interface StoreMutators<S, A> { ['zustand/immer']: WithImmer<S> }`
         // augmentation contributed nothing at all.
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
-        PropertyKey::NumericLiteral(literal) => Some(literal.raw_str().to_string()),
+        PropertyKey::NumericLiteral(literal) => Some(literal.value.to_string()),
         // `[-1]` names the property `-1`, as a written literal key would.
         PropertyKey::UnaryExpression(unary) => {
             super::expressions::signed_number_literal_text(unary)
@@ -1211,15 +1214,20 @@ pub(crate) fn parse_type_property_signature(
     // chain degrades to `{}` regardless.
     let (name, key_span) = match &property_signature.key {
         PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
-        PropertyKey::NumericLiteral(literal) => (literal.raw_str().to_string(), literal.span),
+        // A numeric name is the number's canonical string: `1.0` and `1.`
+        // name the same member as `1`.
+        PropertyKey::NumericLiteral(literal) => (literal.value.to_string(), literal.span),
         PropertyKey::StringLiteral(literal) => (literal.value.to_string(), literal.span),
         _ => return None,
     };
 
-    let type_annotation = property_signature
-        .type_annotation
-        .as_ref()
-        .and_then(|annotation| parse_type_annotation(annotation))?;
+    // A member written without a type (`k;`) is an implicit `any` (TS7008), not
+    // an absent member: dropping it reported every read of it as TS2339 and
+    // left the interface requiring nothing.
+    let type_annotation = match property_signature.type_annotation.as_ref() {
+        Some(annotation) => parse_type_annotation(annotation)?,
+        None => ParsedType::Any,
+    };
 
     Some(ParsedObjectTypeProperty {
         name,

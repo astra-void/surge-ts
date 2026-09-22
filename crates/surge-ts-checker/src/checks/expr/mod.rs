@@ -19,6 +19,7 @@ pub(crate) use evaluate::*;
 pub(crate) use guarded_unknown::downgrade_guarded_genuine_unknown;
 use guarded_unknown::downgrade_predicate_guarded_genuine_unknown;
 use index_access::*;
+pub(crate) use index_access::object_element_read;
 pub(crate) use inferred::*;
 pub(crate) use operand_types::{
     check_instanceof_left_operand, check_instanceof_right_operand, check_iterable_operand,
@@ -91,9 +92,181 @@ pub(crate) fn assignability_mismatch_diagnostic(
         return surge_ts_diagnostics::Diagnostic::ts4104(source_name, target_name, file_name);
     }
     if argument_position {
-        surge_ts_diagnostics::Diagnostic::ts2345(source_name, target_name, file_name)
+        argument_not_assignable_diagnostic(source, target, source_name, target_name, file_name)
     } else {
         type_not_assignable_diagnostic(source, target, source_name, target_name, file_name)
+    }
+}
+
+/// TS2345, or the missing-property report that replaces it (see
+/// [`missing_properties_report`]).
+pub(crate) fn argument_not_assignable_diagnostic(
+    source: &Type,
+    target: &Type,
+    source_name: &str,
+    target_name: &str,
+    file_name: impl Into<String>,
+) -> surge_ts_diagnostics::Diagnostic {
+    let file_name = file_name.into();
+    missing_properties_report(source, target, source_name, target_name, &file_name)
+        .unwrap_or_else(|| {
+            surge_ts_diagnostics::Diagnostic::ts2345(source_name, target_name, file_name)
+        })
+}
+
+/// tsc's `reportRelationError` suppresses its own head (TS2322, TS2345) when
+/// the chain beneath it is a missing-property report for the same pair, and
+/// `propertiesRelatedTo` looks for a missing property before it compares any
+/// property's type. So an object source that lacks a required member of an
+/// object target reports TS2741 for one missing member, TS2739 for up to five
+/// and TS2740 beyond, whatever else is wrong with it.
+pub(crate) fn missing_properties_report(
+    source: &Type,
+    target: &Type,
+    source_name: &str,
+    target_name: &str,
+    file_name: &str,
+) -> Option<surge_ts_diagnostics::Diagnostic> {
+    let missing = missing_required_properties(source, target)?;
+    let first = missing.first()?.clone();
+    Some(missing_properties_diagnostic(
+        &first,
+        &missing,
+        source_name,
+        target_name,
+        file_name,
+    ))
+}
+
+/// The members of the global `Array` an object source lacks, in the order the
+/// lib declares them (tsc lists the first four). The count beyond those follows
+/// surge's own table of array members, not the configured lib's.
+fn missing_array_members(source: &Type) -> Option<Vec<String>> {
+    const DECLARATION_ORDER: [&str; 20] = [
+        "length", "pop", "push", "concat", "join", "reverse", "shift", "slice", "sort", "splice",
+        "unshift", "indexOf", "lastIndexOf", "every", "some", "forEach", "map", "filter", "reduce",
+        "reduceRight",
+    ];
+    let Type::Object(object) = source else {
+        return None;
+    };
+    if object.is_intersection
+        || object.synthetic_open_index
+        || object.non_primitive
+        || object.call_signature().is_some()
+        || object.construct_signature().is_some()
+        || object.alias_name.as_deref() == Some("Object")
+    {
+        return None;
+    }
+    let missing: Vec<String> = DECLARATION_ORDER
+        .iter()
+        .chain(
+            surge_ts_types::array_property_names()
+                .iter()
+                .filter(|name| !DECLARATION_ORDER.contains(name)),
+        )
+        .filter(|name| {
+            !object.properties.contains_key(**name)
+                && surge_ts_types::object_prototype_member_type(name).is_none()
+        })
+        .map(|name| name.to_string())
+        .collect();
+    (!missing.is_empty()).then_some(missing)
+}
+
+fn missing_required_properties(source: &Type, target: &Type) -> Option<Vec<String>> {
+    // Two instantiations of one generic relate through their type arguments,
+    // so any missing member is reported for an argument pair, beneath the head.
+    if let (Type::Reference(source), Type::Reference(target)) = (source, target)
+        && source.id == target.id
+    {
+        return None;
+    }
+    let source = source.peeled();
+    let target = target.peeled();
+    if let Type::Array(_) = &target {
+        return missing_array_members(&source);
+    }
+    let Type::Object(target_object) = &target else {
+        return None;
+    };
+    if target_object.is_intersection
+        || target_object.synthetic_open_index
+        || target_object.properties.values().any(|property| property.ty.is_unknown())
+    {
+        return None;
+    }
+    let has_property = |name: &str| -> bool {
+        match &source {
+            Type::Object(object) => {
+                object.properties.contains_key(name)
+                    || surge_ts_types::object_prototype_member_type(name).is_some()
+                    || ((object.call_signature().is_some() || object.construct_signature().is_some())
+                        && source.get_property_access_type(name).is_some())
+            }
+            _ => source.get_property_access_type(name).is_some(),
+        }
+    };
+    // An intersection with a primitive operand (`number & { __brand: T }`)
+    // relates through its apparent type, so tsc names the missing members
+    // beneath the plain head rather than as it. One of object types alone is
+    // reported like any object.
+    let relates_through_apparent_type = |object: &surge_ts_types::ObjectType| {
+        object.is_intersection
+            && object.intersection_operands.as_deref().is_some_and(|operands| {
+                operands
+                    .iter()
+                    .any(|operand| !matches!(operand, Type::Reference(_) | Type::Object(_)))
+            })
+    };
+    // A function source keeps the plain head, as does the global `Object`
+    // (tsc chains its "assignable to very few other types" hint beneath it).
+    match &source {
+        Type::Object(object)
+            if !relates_through_apparent_type(object)
+                && !object.synthetic_open_index
+                && object.alias_name.as_deref() != Some("Object")
+                && !object.non_primitive
+                && (object.call_signature().is_none() && object.construct_signature().is_none()
+                    || !object.properties.is_empty()) => {}
+        Type::Array(_) | Type::Tuple(_) => {}
+        _ => return None,
+    }
+    let missing: Vec<String> = target_object
+        .required_properties()
+        .filter(|(name, _)| !has_property(name))
+        .map(|(name, _)| name.to_string())
+        .collect();
+    (!missing.is_empty()).then_some(missing)
+}
+
+/// tsc names *every* missing required property, and picks the code by how many
+/// there are: one is TS2741, two to five are listed in full as TS2739, and six
+/// or more list the first four as TS2740 with the rest counted.
+pub(crate) fn missing_properties_diagnostic(
+    first_missing: &str,
+    missing: &[String],
+    source_type_name: &str,
+    target_type_name: &str,
+    file_name: &str,
+) -> surge_ts_diagnostics::Diagnostic {
+    use surge_ts_diagnostics::Diagnostic;
+    const LISTED_WHEN_TRUNCATED: usize = 4;
+    const MAX_LISTED: usize = 5;
+
+    match missing.len() {
+        0 | 1 => Diagnostic::ts2741(first_missing, source_type_name, target_type_name, file_name),
+        count if count <= MAX_LISTED => {
+            Diagnostic::ts2739(source_type_name, target_type_name, missing.join(", "), file_name)
+        }
+        count => Diagnostic::ts2740(
+            source_type_name,
+            target_type_name,
+            missing[..LISTED_WHEN_TRUNCATED].join(", "),
+            count - LISTED_WHEN_TRUNCATED,
+            file_name,
+        ),
     }
 }
 
@@ -107,6 +280,12 @@ pub(crate) fn type_not_assignable_diagnostic(
     target_name: &str,
     file_name: impl Into<String>,
 ) -> surge_ts_diagnostics::Diagnostic {
+    let file_name = file_name.into();
+    if let Some(diagnostic) =
+        missing_properties_report(source, target, source_name, target_name, &file_name)
+    {
+        return diagnostic;
+    }
     match suggested_string_literal_member(source, target) {
         Some(suggestion) => surge_ts_diagnostics::Diagnostic::ts2820(
             source_name,
@@ -210,6 +389,8 @@ pub(crate) fn evaluate_const_expression(
                         // `as const` makes every property read-only, which is
                         // what turns a write to one into TS2540.
                         readonly: true,
+                        restriction: None,
+                        index_slot: false,
                     },
                 );
             }
@@ -221,6 +402,26 @@ pub(crate) fn evaluate_const_expression(
                 ctx,
             );
             result
+        }
+        // A template in a const context is typed by its own pattern (tsc's
+        // `checkTemplateExpression`); its interpolations are still checked as
+        // the expressions they are.
+        ParsedExpression::TemplateLiteral {
+            expressions,
+            quasis,
+            is_tagged: false,
+            ..
+        } if !expressions.is_empty() => {
+            let evaluated = evaluate_expression(expression, fallback_span, symbols, ctx);
+            match crate::infer::expression::template_expression_pattern_type(
+                expressions,
+                quasis,
+                symbols,
+                ctx,
+            ) {
+                Some(pattern) => InferredExpression::Known(pattern),
+                None => evaluated,
+            }
         }
         // Primitives just evaluate normally without widening
         _ => evaluate_expression(expression, fallback_span, symbols, ctx),

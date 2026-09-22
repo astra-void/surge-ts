@@ -46,7 +46,8 @@ pub(super) fn narrow_instanceof_in_scope(
     let Some((base, path)) = reference_path(operand) else {
         return false;
     };
-    let instance = resolve_constructor_instance_type(ctor_name, ctx);
+    let constructor_value = scopes.resolve(ctor_name).map(|symbol| symbol.ty.clone());
+    let instance = resolve_constructor_instance_type(ctor_name, constructor_value.as_ref(), ctx);
     narrow_reference_in_scope(
         &base,
         &path,
@@ -64,6 +65,34 @@ pub(super) fn narrow_instanceof_in_scope(
 /// when the name does not resolve to a type — the guard then falls back to
 /// nominal union filtering.
 pub(super) fn resolve_constructor_instance_type(
+    ctor_name: &str,
+    constructor_value: Option<&Type>,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    resolve_named_constructor_instance_type(ctor_name, ctx)
+        .or_else(|| constructor_value.and_then(instance_type_of_constructor_value))
+}
+
+/// tsc's `getInstanceType`, for a right operand that is a value rather than a
+/// class name: the type of its `prototype` member unless that is `any`, else
+/// what its construct signature returns.
+fn instance_type_of_constructor_value(constructor: &Type) -> Option<Type> {
+    let Type::Object(object) = constructor.peeled() else {
+        return None;
+    };
+    let usable = |ty: &Type| !matches!(ty, Type::Any) && !ty.is_unknown();
+    if let Some(prototype) = object.properties.get("prototype")
+        && usable(&prototype.ty)
+    {
+        return Some(prototype.ty.clone());
+    }
+    object
+        .construct_signature()
+        .map(|signature| signature.return_type().clone())
+        .filter(usable)
+}
+
+fn resolve_named_constructor_instance_type(
     ctor_name: &str,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
@@ -174,7 +203,7 @@ pub(super) fn narrow_nullish_equality_in_scope(
     scopes: &mut ScopeStack,
     branch_is_true: bool,
 ) -> bool {
-    let Some((subject, eq)) = parse_nullish_equality_condition(condition) else {
+    let Some((subject, eq, test)) = parse_nullish_equality_condition(condition) else {
         return false;
     };
     let Some((base, path)) = reference_path(subject) else {
@@ -185,6 +214,7 @@ pub(super) fn narrow_nullish_equality_in_scope(
         &path,
         ReferenceGuard::Nullish {
             keep_matching: branch_is_true == eq,
+            test,
         },
         scopes,
     );
@@ -283,7 +313,8 @@ pub(super) fn narrow_instanceof_heritage_symbol_table(
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
 
-    let instance = resolve_constructor_instance_type(ctor_name, ctx)?;
+    let constructor_value = symbols.get(ctor_name).map(|symbol| symbol.ty.clone());
+    let instance = resolve_constructor_instance_type(ctor_name, constructor_value.as_ref(), ctx)?;
     let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
         if path.is_empty() {
             // A non-union subject narrows down its subtype edge instead, the
@@ -339,6 +370,11 @@ pub(super) fn narrow_to_instanceof_subclass(
 ) -> Option<Type> {
     if !keep_matching || matches!(ty.peeled(), Type::Union(_)) {
         return None;
+    }
+    // `unknown` narrows to the candidate itself (tsc's `narrowTypeByInstanceof`
+    // reads it as the widest subject there is).
+    if matches!(ty, Type::GenuineUnknown) {
+        return instance.filter(|instance| !instance.is_unknown()).cloned();
     }
     // A subject that is already `any` or unresolved says nothing to narrow.
     if ty.is_unknown() || matches!(ty, Type::Any) {
@@ -409,7 +445,7 @@ pub(super) fn collect_equality_guard_subjects(
             }) {
                 Some((ParsedExpression::Identifier { name, .. }, _, _, _)) => Some(name.as_str()),
                 _ => match parse_nullish_equality_condition(condition) {
-                    Some((ParsedExpression::Identifier { name, .. }, _)) => Some(name.as_str()),
+                    Some((ParsedExpression::Identifier { name, .. }, _, _)) => Some(name.as_str()),
                     _ => parse_identifier_literal_equality(condition, scopes.visible_symbols())
                         .map(|(name, _, _)| name),
                 },
