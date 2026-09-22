@@ -606,6 +606,7 @@ export const fixturePresets: Record<string, string> = {
   'block-arrow-return-basic': path.join(workspaceRoot, 'tests/compat-projects/block-arrow-return-basic/tsconfig.json'),
   'generic-static-class-value-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-static-class-value-basic/tsconfig.json'),
   'conditional-parameter-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/conditional-parameter-inference-basic/tsconfig.json'),
+  'falsy-narrowing-filter-predicate-basic': path.join(workspaceRoot, 'tests/compat-projects/falsy-narrowing-filter-predicate-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -11,6 +11,10 @@ use super::narrow_to_instanceof_subclass;
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ReferenceGuard<'a> {
     Truthy,
+    /// The false branch of a truthiness test (tsc's `getTypeWithFacts(type,
+    /// TypeFacts.Falsy)`): members that are always truthy go, anything that
+    /// may be falsy stays whole (`string` keeps `string`, not `""`).
+    Falsy,
     Typeof {
         tag: &'a str,
         keep_matching: bool,
@@ -62,6 +66,10 @@ impl ReferenceGuard<'_> {
             Self::Truthy => {
                 let narrowed = surge_ts_types::remove_definitely_falsy(ty);
                 (optional || narrowed != *ty).then_some((narrowed, false))
+            }
+            Self::Falsy => {
+                let narrowed = remove_definitely_truthy(ty);
+                (narrowed != *ty).then_some((narrowed, optional))
             }
             // An optional property carries its `undefined` in the `optional` flag
             // rather than the type, so the tag test has to see it put back.
@@ -550,8 +558,30 @@ pub(super) fn collect_reference_guards<'a>(
         return;
     }
 
-    if branch_is_true && let Some((base, path)) = reference_path(condition) {
-        guards.push((base, path, ReferenceGuard::Truthy));
+    if let Some((base, path)) = reference_path(condition) {
+        if branch_is_true {
+            guards.push((base, path, ReferenceGuard::Truthy));
+        } else if path.is_empty() {
+            guards.push((base, path, ReferenceGuard::Falsy));
+        }
+    }
+}
+
+fn remove_definitely_truthy(ty: &Type) -> Type {
+    let is_truthy = |member: &Type| super::truthy::type_truthiness(&member.peeled()) == Some(true);
+    match ty {
+        Type::Union(union) => {
+            let kept: Vec<Type> = union.types().iter().filter(|member| !is_truthy(member)).cloned().collect();
+            if kept.len() == union.types().len() {
+                ty.clone()
+            } else if kept.is_empty() {
+                Type::Never
+            } else {
+                union_type(kept)
+            }
+        }
+        _ if is_truthy(ty) => Type::Never,
+        _ => ty.clone(),
     }
 }
 

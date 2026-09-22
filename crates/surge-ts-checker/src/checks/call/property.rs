@@ -244,12 +244,71 @@ fn inferred_predicate_target(
             _ => return None,
         },
     };
+    // tsc requires the body to be boolean-typed: `(x) => x` narrows `x` in its
+    // true branch but returns `x`, not a boolean, so it is no predicate.
+    if !is_boolean_shaped(condition) {
+        return None;
+    }
     let true_type = narrow_by_branch(condition, element, name, true, symbols)?;
     if true_type == *element || true_type.is_unknown() {
         return None;
     }
     let false_type = narrow_by_branch(condition, &true_type, name, false, symbols)?;
-    is_never(&false_type).then_some(true_type)
+    if is_never(&false_type) {
+        return Some(true_type);
+    }
+    // The shared narrowers only split unions, so a lone `{ a: 1 }` that the
+    // false branch of `x !== undefined` cannot reach comes back unchanged.
+    // Narrowing the element instead asks the same question through the union
+    // split: the predicate holds when no true-branch member survives the false
+    // branch.
+    let element_false = narrow_by_branch(condition, element, name, false, symbols)?;
+    let false_members = union_members(&element_false);
+    union_members(&true_type)
+        .iter()
+        .all(|member| !false_members.contains(member))
+        .then_some(true_type)
+}
+
+fn is_boolean_shaped(expression: &ParsedExpression) -> bool {
+    use surge_ts_syntax::{ParsedBinaryOperator as Op, ParsedLogicalOperator, ParsedUnaryOperator};
+    match expression {
+        ParsedExpression::BooleanLiteral(_)
+        | ParsedExpression::Call { .. }
+        | ParsedExpression::PropertyCall { .. }
+        | ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            ..
+        } => true,
+        ParsedExpression::Binary { operator, .. } => matches!(
+            operator,
+            Op::StrictEquals
+                | Op::StrictNotEquals
+                | Op::Equals
+                | Op::NotEquals
+                | Op::LessThan
+                | Op::LessThanEquals
+                | Op::GreaterThan
+                | Op::GreaterThanEquals
+                | Op::In
+                | Op::Instanceof
+        ),
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::And | ParsedLogicalOperator::Or,
+            right,
+            ..
+        } => is_boolean_shaped(left) && is_boolean_shaped(right),
+        _ => false,
+    }
+}
+
+fn union_members(ty: &Type) -> Vec<Type> {
+    match ty {
+        Type::Union(union) => union.types().to_vec(),
+        _ if is_never(ty) => Vec::new(),
+        _ => vec![ty.clone()],
+    }
 }
 
 fn is_never(ty: &Type) -> bool {
