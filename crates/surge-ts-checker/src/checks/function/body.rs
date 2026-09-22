@@ -70,12 +70,51 @@ fn return_type_admits_undefined(return_type: &Type) -> bool {
 }
 
 pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
-    contains_unknown(ty, false)
+    budgeted_contains_unknown(ty, false)
 }
 
 /// Like [`type_contains_unknown`], but a written `unknown` is a real type.
 pub(crate) fn type_contains_degradation(ty: &Type) -> bool {
-    contains_unknown(ty, true)
+    budgeted_contains_unknown(ty, true)
+}
+
+thread_local! {
+    /// Nodes the current outermost walk may still visit. The walk used to end
+    /// at the first generic method it met, which is what kept it off whole
+    /// library graphs; now that such a method is walked past, a walk that does
+    /// not finish within the budget answers "unmodelled" — the verdict it
+    /// always gave for those graphs, which only ever suppresses a report.
+    static WALK_BUDGET: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+const WALK_BUDGET_NODES: u32 = 100_000;
+
+fn budgeted_contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
+    let outermost = WALK_BUDGET.with(|budget| {
+        if budget.get().is_none() {
+            budget.set(Some(WALK_BUDGET_NODES));
+            true
+        } else {
+            false
+        }
+    });
+    let verdict = contains_unknown(ty, sentinel_only);
+    if outermost {
+        WALK_BUDGET.with(|budget| budget.set(None));
+    }
+    verdict
+}
+
+/// Spends one node of the walk's budget; `false` once it is exhausted.
+fn walk_budget_allows() -> bool {
+    WALK_BUDGET.with(|budget| match budget.get() {
+        Some(0) => false,
+        Some(left) => {
+            budget.set(Some(left - 1));
+            true
+        }
+        None => true,
+    })
 }
 
 fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
@@ -87,6 +126,9 @@ fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
         static VISITING_REFERENCES: std::cell::RefCell<Vec<(std::sync::Arc<str>, std::sync::Arc<[Type]>)>> =
             const { std::cell::RefCell::new(Vec::new()) };
     }
+    if !walk_budget_allows() {
+        return true;
+    }
     match ty {
         Type::Unknown | Type::TypeParameter(_) => true,
         Type::GenuineUnknown => !sentinel_only,
@@ -94,12 +136,23 @@ fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
         Type::Tuple(elements) => elements
             .iter()
             .any(|element| contains_unknown(element, sentinel_only)),
+        // A generic member signature has its own type parameters erased to
+        // the sentinel when it is resolved (only their rendering is kept), and
+        // a self-reference instantiated with one (`map<U>(…): Box<U>`) resolves
+        // to the sentinel too. Reading those as gaps made every interface with
+        // a generic method "contain unknown", which silenced each mismatch
+        // against it — `return 1` from a function declared to return
+        // `Box<string>`. The sentinel is permissive in a relation, so it is
+        // never what makes one fail.
+        Type::Function(function) if function.type_parameter_head().is_some() => false,
         Type::Function(function) => {
-            function
-                .parameters()
-                .iter()
-                .any(|parameter| contains_unknown(parameter, sentinel_only))
-                || contains_unknown(function.return_type(), sentinel_only)
+            crate::checks::assign::with_signature_type_parameters(function, || {
+                function
+                    .parameters()
+                    .iter()
+                    .any(|parameter| contains_unknown(parameter, sentinel_only))
+                    || contains_unknown(function.return_type(), sentinel_only)
+            })
         }
         Type::Object(object) => {
             object

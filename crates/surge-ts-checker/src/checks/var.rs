@@ -669,6 +669,11 @@ fn type_contains_unknown(ty: &Type) -> bool {
         Type::TypeParameter(parameter) => !crate::checks::assign::is_bound_type_parameter(parameter),
         Type::Array(element) => type_contains_unknown(element),
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
+        // A resolved generic member signature carries the sentinel where its
+        // own type parameters (and a self-reference instantiated with them)
+        // were erased; that is a bound name, not a gap — see the same arm in
+        // `checks::function::body::contains_unknown`.
+        Type::Function(function) if function.type_parameter_head().is_some() => false,
         Type::Function(function) => crate::checks::assign::with_signature_type_parameters(function, || {
             function.parameters().iter().any(type_contains_unknown)
                 || type_contains_unknown(function.return_type())
