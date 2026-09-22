@@ -37,6 +37,32 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
+/// Under node16/nodenext resolution, the files whose imports resolve in ESM
+/// mode. Set for the length of one program check; every checking thread
+/// resolves through it, which is why it is not thread-local.
+static NODE_ESM_FILES: std::sync::RwLock<Option<Arc<std::collections::HashSet<String>>>> =
+    std::sync::RwLock::new(None);
+
+pub(crate) fn set_node_esm_files(files: Option<Arc<std::collections::HashSet<String>>>) {
+    if let Ok(mut policy) = NODE_ESM_FILES.write() {
+        *policy = files;
+    }
+}
+
+/// tsc's ESM-mode rule under node16/nodenext: a relative import whose last
+/// segment has no extension does not resolve (TS2834/TS2835 report it).
+pub(crate) fn is_unresolvable_extensionless_esm_import(importer_file_name: &str, specifier: &str) -> bool {
+    let last_segment = specifier.rsplit(['/', '\\']).next().unwrap_or(specifier);
+    if last_segment.contains('.') {
+        return false;
+    }
+    NODE_ESM_FILES
+        .read()
+        .ok()
+        .and_then(|policy| policy.as_ref().map(|files| files.contains(importer_file_name)))
+        .unwrap_or(false)
+}
+
 /// Clears the per-thread relative-module resolution cache. Called at the start
 /// of a program check so resolved indices from a prior run are never reused.
 pub(crate) fn clear_relative_module_cache() {
@@ -49,7 +75,9 @@ pub(crate) fn resolve_relative_module(
     program_files: &[ParsedProgramFile],
     file_index_by_identity: &surge_ts_types::fx::FxHashMap<Arc<str>, usize>,
 ) -> Option<ModuleResolution> {
-    if !is_relative_specifier(specifier) {
+    if !is_relative_specifier(specifier)
+        || is_unresolvable_extensionless_esm_import(importer_file_name, specifier)
+    {
         return None;
     }
 

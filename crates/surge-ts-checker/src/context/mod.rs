@@ -282,6 +282,12 @@ pub(crate) struct CheckerContext {
     /// Scoped to that argument's own span, so a call nested inside it still
     /// reports its own first mismatch.
     pub(crate) suppressed_argument_mismatch_span: Option<DiagnosticTextSpan>,
+    /// Spans the grammar pass has already answered for, with the codes tsc
+    /// does not also report there: a renamed binding in a bodyless signature
+    /// (TS2842) is not an implicit `any` (TS7031), and a parameter initializer
+    /// naming its own or a later parameter (TS2372/TS2373) resolves the name —
+    /// surge's scope lacks the later parameter, which is not a TS2304.
+    pub(crate) grammar_answered_spans: Vec<(DiagnosticTextSpan, &'static [u32])>,
     /// Parameters already bound while a signature's annotations are being
     /// mapped, so a later annotation's `typeof <earlier parameter>` resolves the
     /// way tsc's parameter scope does. Empty outside signature mapping.
@@ -723,6 +729,7 @@ impl CheckerContext {
             options,
             diagnostics: Vec::new(),
             suppressed_argument_mismatch_span: None,
+            grammar_answered_spans: Vec::new(),
             signature_parameter_bindings: Vec::new(),
             diagnostic_keys: HashSet::default(),
             diagnostic_keys_len: 0,
@@ -882,6 +889,7 @@ impl CheckerContext {
             options: data.options.clone(),
             diagnostics: Vec::new(),
             suppressed_argument_mismatch_span: None,
+            grammar_answered_spans: Vec::new(),
             signature_parameter_bindings: Vec::new(),
             diagnostic_keys: HashSet::default(),
             diagnostic_keys_len: 0,
@@ -1480,6 +1488,7 @@ impl CheckerContext {
         self.file_type_only_import_names.clear();
         self.file_type_only_import_names_owner = None;
         self.checked_function_declaration_names.clear();
+        self.grammar_answered_spans.clear();
         self.definite_writes = Arc::default();
         self.inherited_never_initialized.clear();
         self.never_initialized_constraint_exempt.clear();
@@ -1919,6 +1928,15 @@ impl CheckerContext {
     }
 
     pub(crate) fn push(&mut self, diagnostic: Diagnostic) {
+        if let (surge_ts_diagnostics::DiagnosticCode::TypeScript(code), Some(span)) =
+            (&diagnostic.code, diagnostic.span)
+            && self
+                .grammar_answered_spans
+                .iter()
+                .any(|(answered, codes)| *answered == span && codes.contains(code))
+        {
+            return;
+        }
         if self.should_suppress(&diagnostic) {
             self.record_suppressed(&diagnostic);
             return;

@@ -85,6 +85,30 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
         members,
         restricted_members: restricted_class_members(class),
         span: Some(text_span_from_oxc_span(class.span)),
+        computed_keys: class
+            .body
+            .body
+            .iter()
+            .filter_map(|element| {
+                let (key, computed) = match element {
+                    ClassElement::MethodDefinition(member) => (&member.key, member.computed),
+                    ClassElement::PropertyDefinition(member) => (&member.key, member.computed),
+                    ClassElement::AccessorProperty(member) => (&member.key, member.computed),
+                    _ => return None,
+                };
+                let expression = key.as_expression().filter(|_| computed)?;
+                let (parsed, _) = parse_expression(expression);
+                // The name's `[`, which the key's own span leaves out.
+                let span = key.span();
+                Some((
+                    parsed,
+                    Some(crate::TextSpan {
+                        start: (span.start as usize).saturating_sub(1),
+                        end: span.end as usize + 1,
+                    }),
+                ))
+            })
+            .collect(),
     })
 }
 

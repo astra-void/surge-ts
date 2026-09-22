@@ -10,6 +10,8 @@ pub struct ParserError {
     /// oxc's own rendering, used when the code is unknown or uncatalogued.
     pub message: String,
     pub span: Option<TextSpan>,
+    /// The source text under `span`: the modifier a modifier error names.
+    pub span_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -205,6 +207,15 @@ pub enum ParsedGrammarDiagnosticKind {
     ParameterPropertyOutsideImplementation,
     /// A parameter default on a signature with no body — TS2371.
     ParameterInitializerOutsideImplementation,
+    /// A grammar error identified by its TypeScript number alone; `name`
+    /// holds the message arguments separated by NULs.
+    Ts(u32),
+    /// A [`Self::Ts`] error that holds only under `strictNullChecks`.
+    TsUnderStrictNullChecks(u32),
+    /// Not an error: a name in a parameter initializer's deferred function
+    /// that resolves to a later parameter, which the checker's scope does not
+    /// hold while the initializer is checked.
+    LaterParameterReference,
 }
 
 /// A leading `/// <reference types="..." />` directive. Only the `types` form is
@@ -655,6 +666,9 @@ pub struct ParsedTypeAliasDeclaration {
     /// Whether that `enum` was exported. tsc qualifies an exported enum's type
     /// as `import("<module>").Color` and names a file-local one bare.
     pub enum_exported: bool,
+    /// Whether that `enum` was a `const enum`, which has no runtime binding to
+    /// be used before its declaration.
+    pub enum_is_const: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -733,6 +747,10 @@ pub struct ParsedClassDeclaration {
     pub string_index_type: Option<ParsedType>,
     pub number_index_type: Option<ParsedType>,
     pub span: Option<TextSpan>,
+    /// Every member's computed key (`[expr]`), with the bracketed name's span:
+    /// each is checked as an expression (tsc's `checkComputedPropertyName`)
+    /// whether or not the member it names could be modelled.
+    pub computed_keys: Vec<(ParsedExpression, Option<TextSpan>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1309,6 +1327,13 @@ pub enum ParsedExpression {
     Sequence {
         expressions: Vec<(ParsedExpression, Option<TextSpan>)>,
     },
+    /// The `rest` of `const { a, ...rest } = source`: `source` without the
+    /// properties the pattern names (tsc's `getRestType`). Synthesized by the
+    /// destructuring lowering, never written.
+    ObjectRest {
+        source: Box<ParsedExpression>,
+        omitted: Vec<String>,
+    },
     Unknown,
 }
 
@@ -1591,6 +1616,8 @@ pub struct ParsedTryStatement {
 pub struct ParsedCatchClause {
     pub binding_name: Option<ParsedBindingName>,
     pub declared_type: Option<ParsedType>,
+    /// The written annotation's type node, where tsc anchors TS1196.
+    pub declared_type_span: Option<TextSpan>,
     pub body: Vec<ParsedFunctionBodyStatement>,
     pub span: Option<TextSpan>,
 }
@@ -2029,6 +2056,7 @@ impl ParsedExpression {
             ParsedExpression::Unary { operand, .. }
             | ParsedExpression::Update { operand, .. }
             | ParsedExpression::Await { operand, .. } => visit(operand),
+            ParsedExpression::ObjectRest { source, .. } => visit(source),
             ParsedExpression::Binary { left, right, .. }
             | ParsedExpression::Logical { left, right, .. }
             | ParsedExpression::NullishCoalescing { left, right, .. } => {

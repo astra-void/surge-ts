@@ -352,10 +352,17 @@ pub(crate) fn check_call_like_with_expected_type(
                 };
                 eprintln!("[call] not callable: {shown} in {}", ctx.file_name);
             }
-            ctx.push(diagnostic_with_syntax_span(
-                Diagnostic::ts2349(ctx.file_name.clone()),
-                callee_span,
-            ));
+            // tsc's `resolveCallExpression`: a callee that can only be
+            // constructed is TS2348, which names it and suggests `new`.
+            let diagnostic = match other {
+                Type::Object(object)
+                    if object.construct_signature().is_some() && object.call_signature().is_none() =>
+                {
+                    Diagnostic::ts2348(other.name(), ctx.file_name.clone())
+                }
+                _ => Diagnostic::ts2349(ctx.file_name.clone()),
+            };
+            ctx.push(diagnostic_with_syntax_span(diagnostic, callee_span));
             None
         }
     };

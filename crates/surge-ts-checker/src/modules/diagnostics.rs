@@ -14,7 +14,7 @@ use surge_ts_syntax::{
 };
 
 use crate::context::{CheckerContext, FileKind, convert_span};
-use crate::paths::canonicalize_if_exists_string;
+use crate::paths::{canonicalize_if_exists_string, normalize_path_string};
 use crate::program::ParsedProgramFile;
 
 /// Wraps a module specifier in double quotes so TS2305 matches tsc, which
@@ -45,8 +45,44 @@ fn unresolved_module_diagnostic(ctx: &CheckerContext, module_specifier: &str) ->
         return Diagnostic::ts2732(module_specifier, ctx.file_name.clone());
     }
 
+    if is_relative_specifier(module_specifier)
+        && is_unresolvable_extensionless_esm_import(&ctx.file_name, module_specifier)
+    {
+        return match suggested_import_extension(ctx, module_specifier) {
+            Some(extension) => {
+                Diagnostic::ts2835(&format!("{module_specifier}{extension}"), ctx.file_name.clone())
+            }
+            None => Diagnostic::ts2834(ctx.file_name.clone()),
+        };
+    }
+
     cannot_resolve_module_name_error_for_specific_module(ctx, module_specifier)
         .unwrap_or_else(|| Diagnostic::ts2307(module_specifier, ctx.file_name.clone()))
+}
+
+/// tsc's `getSuggestedImportExtension`: the output extension of the file the
+/// extensionless path names directly (a directory's index gets none).
+fn suggested_import_extension(ctx: &CheckerContext, module_specifier: &str) -> Option<&'static str> {
+    let importer_dir = module_directory(&ctx.file_name);
+    let specifier = normalize_path_string(module_specifier);
+    let base = if importer_dir.is_empty() {
+        specifier
+    } else {
+        normalize_path_string(&format!("{importer_dir}/{specifier}"))
+    };
+    [
+        (".ts", ".js"),
+        (".tsx", ".js"),
+        (".d.ts", ".js"),
+        (".mts", ".mjs"),
+        (".cts", ".cjs"),
+    ]
+    .into_iter()
+    .find(|(source, _)| {
+        let identity = canonical_file_identity(&format!("{base}{source}"));
+        ctx.module_file_index_by_identity.contains_key(identity.as_str())
+    })
+    .map(|(_, output)| output)
 }
 
 /// A relative specifier that names an *existing* JavaScript file with no

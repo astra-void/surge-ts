@@ -17,21 +17,70 @@ pub(crate) fn parser_error_diagnostic(
     error: &surge_ts_syntax::ParserError,
     file_name: &str,
 ) -> Diagnostic {
-    let Some(descriptor) = error
-        .code
-        .and_then(surge_ts_diagnostics::emitted_descriptor_for_number)
+    let Some((descriptor, args)) = error.code.and_then(|code| parser_error_descriptor(code, error))
     else {
         return Diagnostic::surge_parser_error(error.message.clone(), file_name.to_string());
     };
 
     crate::spans::diagnostic_with_syntax_span(
-        Diagnostic::from_descriptor(
-            descriptor,
-            Vec::<surge_ts_diagnostics::DiagnosticArg>::new(),
-            file_name.to_string(),
-        ),
+        Diagnostic::from_descriptor(descriptor, args, file_name.to_string()),
         error.span,
     )
+}
+
+/// Codes whose one argument is the modifier oxc's label covers. oxc words
+/// some of them differently from tsc (TS1031 on a constructor, TS1273), so
+/// the argument cannot always be read back out of its message.
+const MODIFIER_LABEL_CODES: &[u32] = &[1030, 1031, 1070, 1071, 1090, 1273];
+
+fn parser_error_descriptor(
+    code: u32,
+    error: &surge_ts_syntax::ParserError,
+) -> Option<(
+    &'static surge_ts_diagnostics::DiagnosticDescriptor,
+    Vec<surge_ts_diagnostics::DiagnosticArg>,
+)> {
+    if let Some(descriptor) = surge_ts_diagnostics::emitted_descriptor_for_number(code) {
+        return Some((descriptor, Vec::new()));
+    }
+    let descriptor = surge_ts_diagnostics::emitted_descriptor_for_number_with_arity(code, 1)?;
+    let argument = match_message_template(descriptor.message_template, &error.message)
+        .and_then(|mut args| (args.len() == 1).then(|| args.remove(0)))
+        .or_else(|| {
+            MODIFIER_LABEL_CODES
+                .contains(&code)
+                .then(|| error.span_text.clone())
+                .flatten()
+        })?;
+    Some((descriptor, vec![argument.into()]))
+}
+
+/// The arguments that fill `template`'s `{n}` placeholders to produce
+/// `message`, tolerating a missing final period.
+fn match_message_template(template: &str, message: &str) -> Option<Vec<String>> {
+    let template = template.strip_suffix('.').unwrap_or(template);
+    let message = message.strip_suffix('.').unwrap_or(message);
+    let mut pieces = Vec::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let close = rest[open..].find('}')? + open;
+        pieces.push(&rest[..open]);
+        rest = &rest[close + 1..];
+    }
+    let (first, literals) = pieces.split_first().map_or((rest, &[][..]), |(f, l)| (*f, l));
+    let mut remaining = message.strip_prefix(first)?;
+    let mut args = Vec::new();
+    for literal in literals.iter().copied().chain(std::iter::once(rest)) {
+        if literal.is_empty() {
+            args.push(remaining.to_string());
+            remaining = "";
+            continue;
+        }
+        let at = remaining.find(literal)?;
+        args.push(remaining[..at].to_string());
+        remaining = &remaining[at + literal.len()..];
+    }
+    (remaining.is_empty() && !pieces.is_empty()).then_some(args)
 }
 
 pub(super) fn emit_parser_diagnostics(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {

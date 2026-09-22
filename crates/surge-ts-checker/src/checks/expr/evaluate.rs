@@ -11,16 +11,49 @@ pub(crate) fn check_computed_property_keys(
 ) {
     for property in properties {
         if let Some(key) = property.computed_key.as_deref() {
-            let _ = evaluate_expression(
-                key,
-                property.name_span.or(property.span).or(fallback_span),
-                symbols,
-                ctx,
-            );
+            let key_span = property.name_span.or(property.span).or(fallback_span);
+            let key_result = evaluate_expression(key, key_span, symbols, ctx);
+            report_invalid_computed_key(&key_result, key_span, ctx);
         }
         if let Some(value) = property.unnamed_key_value.as_deref() {
             let _ = evaluate_expression(value, property.span.or(fallback_span), symbols, ctx);
         }
+    }
+}
+
+/// tsc's `checkComputedPropertyName`: a key must be `undefined`-free
+/// and assignable to `string | number | symbol` — TS2464. A type parameter is
+/// left alone: without its constraint surge cannot tell `K extends string`
+/// from an unconstrained `T`.
+pub(crate) fn report_invalid_computed_key(
+    key: &InferredExpression,
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    let (InferredExpression::Known(ty), Some(span)) = (key, span) else {
+        return;
+    };
+    if !computed_key_type_is_invalid(ty) {
+        return;
+    }
+    let diagnostic = Diagnostic::ts2464(ctx.file_name.clone());
+    ctx.push(diagnostic.with_span(crate::context::convert_span(span)));
+}
+
+fn computed_key_type_is_invalid(ty: &Type) -> bool {
+    match ty {
+        Type::Undefined => true,
+        _ if has_unmodelled_member(ty) => false,
+        _ => !is_assignable_to(ty, &union_type(vec![Type::String, Type::Number, Type::Symbol])),
+    }
+}
+
+fn has_unmodelled_member(ty: &Type) -> bool {
+    match ty {
+        Type::Any | Type::Unknown | Type::ErrorType | Type::TypeParameter(_) => true,
+        Type::Union(union) => union.types().iter().any(has_unmodelled_member),
+        Type::Reference(reference) => has_unmodelled_member(&reference.resolve()),
+        _ => false,
     }
 }
 
@@ -85,7 +118,11 @@ fn evaluate_expression_unsettled(
             let inferred_expression = infer_expression(expression, symbols, ctx);
 
             check_computed_property_keys(properties, fallback_span, symbols, ctx);
+            let mut explicit_properties: Vec<(&str, Option<SyntaxTextSpan>)> = Vec::new();
             for property in properties {
+                if !property.is_spread && !property.is_accessor && property.computed_key.is_none() {
+                    explicit_properties.push((&property.name, property.name_span));
+                }
                 // Method and accessor shorthand is checked by the inference pass
                 // itself, which must route it through the arrow-checking path to
                 // honor its declared signature; evaluating it here as well would
@@ -108,6 +145,9 @@ fn evaluate_expression_unsettled(
                         property.span.or(property.value_span).or(fallback_span),
                         ctx,
                     );
+                    if property.unnamed_key_value.is_none() {
+                        report_overwritten_properties(&property_result, &explicit_properties, ctx);
+                    }
                 }
                 if property.is_shorthand {
                     ctx.shorthand_property_depth -= 1;
@@ -400,6 +440,9 @@ fn evaluate_expression_unsettled(
         } => {
             let operand_result =
                 evaluate_expression(operand, operand_span.or(fallback_span), symbols, ctx);
+            if *operator == ParsedUnaryOperator::Not {
+                report_void_truthiness(&operand_result, operand_span.or(fallback_span), ctx);
+            }
 
             if matches!(
                 operator,
@@ -441,6 +484,14 @@ fn evaluate_expression_unsettled(
             );
 
             super::update_result_type(&operand_result)
+        }
+        ParsedExpression::ObjectRest { source, omitted } => {
+            match evaluate_expression(source, fallback_span, symbols, ctx) {
+                InferredExpression::Known(ty) => InferredExpression::Known(
+                    crate::checks::function::object_rest_type(&ty, omitted),
+                ),
+                other => other,
+            }
         }
         ParsedExpression::Sequence { expressions } => {
             let mut result = InferredExpression::Unknown;
@@ -764,6 +815,69 @@ fn evaluate_nullish_coalescing(
     }
 }
 
+/// tsc's `checkSpreadPropOverrides`: a property written before a spread whose
+/// type always has it (neither optional nor missing from some union member)
+/// is overwritten — TS2783, under `strictNullChecks` only.
+pub(crate) fn report_overwritten_properties(
+    spread: &InferredExpression,
+    explicit_properties: &[(&str, Option<SyntaxTextSpan>)],
+    ctx: &mut CheckerContext,
+) {
+    if !ctx.options.strict_null_checks || explicit_properties.is_empty() {
+        return;
+    }
+    let InferredExpression::Known(ty) = spread else {
+        return;
+    };
+    // A type parameter spreads its constraint's properties (tsc reads them
+    // through `getPropertiesOfType`, which goes to the apparent type).
+    let constrained;
+    let ty = match ty {
+        Type::TypeParameter(parameter) => match ctx.type_parameter_constraint(&parameter.name).cloned() {
+            Some(constraint) => {
+                constrained = crate::infer::map_parsed_type(constraint, ctx);
+                &constrained
+            }
+            None => return,
+        },
+        other => other,
+    };
+    for (name, span) in explicit_properties {
+        if let Some(span) = span
+            && spread_always_writes(ty, name)
+        {
+            let diagnostic = Diagnostic::ts2783(name, ctx.file_name.clone());
+            ctx.push(diagnostic.with_span(crate::context::convert_span(*span)));
+        }
+    }
+}
+
+fn spread_always_writes(ty: &Type, name: &str) -> bool {
+    match ty {
+        Type::Object(object) => object
+            .properties
+            .get(name)
+            .is_some_and(|property| !property.optional),
+        Type::Reference(reference) => spread_always_writes(&reference.resolve(), name),
+        Type::Union(union) => union.types().iter().all(|member| spread_always_writes(member, name)),
+        _ => false,
+    }
+}
+
+/// tsc's `checkTruthinessOfType` for a `void` operand — TS1345.
+pub(crate) fn report_void_truthiness(
+    result: &InferredExpression,
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if let InferredExpression::Known(Type::Void) = result
+        && let Some(span) = span
+    {
+        let diagnostic = Diagnostic::ts1345(ctx.file_name.clone());
+        ctx.push(diagnostic.with_span(crate::context::convert_span(span)));
+    }
+}
+
 fn evaluate_logical(
     left: &Box<ParsedExpression>,
     left_span: &Option<SyntaxTextSpan>,
@@ -775,6 +889,7 @@ fn evaluate_logical(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
+    report_void_truthiness(&left_result, left_span.or(fallback_span), ctx);
     // The right operand runs after the left's assignments, and is narrowed by
     // what they assigned: `(next = it.next()) && !next.done`.
     let after_assignments = symbols_after_assignments(left, symbols, ctx);
@@ -865,6 +980,7 @@ fn evaluate_conditional(
 ) -> InferredExpression {
     let condition_result =
         evaluate_expression(condition, condition_span.or(fallback_span), symbols, ctx);
+    report_void_truthiness(&condition_result, condition_span.or(fallback_span), ctx);
     // Narrow a discriminated union per branch so `x.kind === "a" ? x.a :
     // x.b` checks `x.a` against the `"a"` member only.
     let true_symbols =

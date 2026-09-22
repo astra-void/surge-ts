@@ -54,6 +54,7 @@ fn member_type_aliases<'a>(
         type_span: member.name_span,
         enum_name: Some(type_alias.name.clone()),
         enum_exported: type_alias.enum_exported,
+        enum_is_const: type_alias.enum_is_const,
     })
 }
 
@@ -138,6 +139,7 @@ fn lower_enum_declaration(
             type_span: name_span,
             enum_name: Some(declaration.id.name.to_string()),
             enum_exported: exported,
+            enum_is_const: declaration.r#const,
         },
         ParsedVariableDeclaration {
             // The object side has no written initializer to check, and an `enum`

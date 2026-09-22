@@ -149,6 +149,9 @@ pub(crate) fn check_expression_flow_impl(
             statement_index,
             ctx,
         ),
+        ParsedExpression::ObjectRest { source, .. } => {
+            check_expression_flow_impl(source, fallback_span, flow_state, statement_index, ctx)
+        }
         ParsedExpression::Sequence { expressions } => {
             for (expression, span) in expressions {
                 blocked |= check_expression_flow_impl(

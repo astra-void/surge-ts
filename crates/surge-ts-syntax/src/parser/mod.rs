@@ -18,6 +18,7 @@ mod expressions;
 mod function_types;
 mod functions;
 mod grammar;
+mod grammar_context;
 mod import_calls;
 mod imports;
 mod interfaces;
@@ -612,7 +613,25 @@ fn parse_object_pattern_declarations(
     }
 
     // `const { a, ...rest } = obj` binds `rest` to the remaining properties.
+    // A computed key may name any property, so only a pattern of static keys
+    // knows what the rest omits.
     if let Some(rest) = object_pattern.rest.as_deref() {
+        let omitted: Option<Vec<String>> = object_pattern
+            .properties
+            .iter()
+            .map(|property| match &property.key {
+                PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
+                PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
+                _ => None,
+            })
+            .collect();
+        let initializer = match omitted {
+            Some(omitted) => ParsedExpression::ObjectRest {
+                source: Box::new(initializer),
+                omitted,
+            },
+            None => initializer,
+        };
         declarations.extend(parse_binding_pattern_declarations(
             &rest.argument,
             Some(initializer),

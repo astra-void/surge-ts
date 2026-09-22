@@ -76,9 +76,20 @@ pub(crate) fn emit_parameter_diagnostics(
             if contextual_type.is_some() {
                 return;
             }
-            let diagnostic = Diagnostic::ts7006(name, ctx.file_name.clone());
+            // A rest parameter's implicit type is `any[]` (TS7019), reported
+            // from its `...`, which the lowered parameter keeps no span for:
+            // it sits right before the name.
+            let (diagnostic, span) = if parameter.rest {
+                let span = span.map(|span| surge_ts_syntax::TextSpan {
+                    start: span.start.saturating_sub(3),
+                    end: span.end,
+                });
+                (Diagnostic::ts7019(name, ctx.file_name.clone()), span)
+            } else {
+                (Diagnostic::ts7006(name, ctx.file_name.clone()), *span)
+            };
             let diagnostic = match span {
-                Some(span) => diagnostic.with_span(convert_span(*span)),
+                Some(span) => diagnostic.with_span(convert_span(span)),
                 None => diagnostic,
             };
             ctx.push(diagnostic);
@@ -339,15 +350,63 @@ pub(crate) fn insert_object_binding_pattern_bindings(
         }
         insert_object_binding_element_binding(element, element_type, scopes);
     }
-    // `{ a, ...rest }` binds `rest` to the remaining properties. The exact
-    // `Omit<T, ...>` shape is not modelled; binding it to the source type keeps
-    // `rest` in scope (and spreadable via `{...rest}`) without a TS2304 cascade.
+    // `{ a, ...rest }` binds `rest` to the remaining properties.
     if let Some(rest) = &pattern.rest {
+        let omitted: Vec<String> = pattern
+            .elements
+            .iter()
+            .map(|element| element.property_name.clone())
+            .collect();
         insert_binding_name(
             rest,
-            with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || parameter_type.clone()),
+            with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || {
+                object_rest_type(&parameter_type, &omitted)
+            }),
             scopes,
         );
+    }
+}
+
+/// tsc's `getRestType`: `source` without the `omitted` properties, taken
+/// member by member from a union and with `undefined` dropped. A type surge
+/// cannot enumerate — a sentinel, a type parameter (tsc's `Omit<T, K>`) —
+/// stays as it is, and so does a non-object type.
+pub(crate) fn object_rest_type(source: &Type, omitted: &[String]) -> Type {
+    match source {
+        Type::Reference(reference) => {
+            let resolved = reference.resolve();
+            if matches!(resolved, Type::Object(_) | Type::Union(_)) {
+                object_rest_type(&resolved, omitted)
+            } else {
+                source.clone()
+            }
+        }
+        Type::Union(union) => surge_ts_types::union_type(
+            union
+                .types()
+                .iter()
+                .filter(|member| !matches!(member, Type::Undefined))
+                .map(|member| object_rest_type(member, omitted))
+                .collect(),
+        ),
+        Type::Object(object) => {
+            let properties: surge_ts_types::PropertyMap = object
+                .properties
+                .iter()
+                .filter(|(name, _)| !omitted.iter().any(|omitted| omitted.as_str() == name.as_ref()))
+                .map(|(name, property)| (name.clone(), property.clone()))
+                .collect();
+            let mut rest = crate::metrics::alloc_object_type(
+                properties,
+                object.string_index_type.as_deref().cloned(),
+            )
+            .with_number_index_type(object.number_index_type.as_deref().cloned());
+            if object.synthetic_open_index {
+                rest = rest.with_open_index_marker();
+            }
+            Type::Object(rest)
+        }
+        _ => source.clone(),
     }
 }
 

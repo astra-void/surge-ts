@@ -28,6 +28,7 @@ pub(crate) fn collect_grammar_diagnostics(
 ) -> (Vec<ParsedGrammarDiagnostic>, Vec<ParenthesizedExpressionSpan>) {
     let mut collector = GrammarCollector::default();
     collector.visit_program(program);
+    super::grammar_context::collect_context_grammar_diagnostics(program, &mut collector.diagnostics);
     let mut parenthesized = collector.parenthesized_expressions;
     parenthesized.sort_unstable_by_key(|span| (span.inner.start, span.inner.end));
     (collector.diagnostics, parenthesized)
@@ -37,9 +38,6 @@ pub(crate) fn collect_grammar_diagnostics(
 struct GrammarCollector {
     diagnostics: Vec<ParsedGrammarDiagnostic>,
     parenthesized_expressions: Vec<ParenthesizedExpressionSpan>,
-    /// Whether the file is strict-mode code, which a few rules are specific to.
-    /// An ES module always is; a script only with an explicit `"use strict"`.
-    strict_mode: bool,
     /// Whether each enclosing function is `async`, innermost last. Empty at the
     /// top level, where a module may `await`.
     function_async: Vec<bool>,
@@ -657,64 +655,154 @@ impl GrammarCollector {
         }
     }
 
-    /// An overload group with no implementation anywhere in its container. The
-    /// narrower "implementation is not *immediately* following" half of tsc's
-    /// check is deliberately left out: only a group that has no body at all
-    /// reports here.
+    /// tsc's `checkFunctionOrConstructorSymbol` for the function declarations
+    /// of one statement list.
     fn check_function_implementations(&mut self, statements: &[Statement<'_>]) {
-        if self.is_ambient() {
-            return;
-        }
+        let siblings: Vec<OverloadSibling> = statements
+            .iter()
+            .map(|statement| {
+                let (function, exported) = match statement {
+                    Statement::FunctionDeclaration(function) => (Some(&**function), false),
+                    Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                        Some(Declaration::FunctionDeclaration(function)) => (Some(&**function), true),
+                        _ => (None, false),
+                    },
+                    _ => (None, false),
+                };
+                let Some(function) = function else {
+                    return OverloadSibling::other();
+                };
+                let Some(id) = function.id.as_ref() else {
+                    return OverloadSibling::other();
+                };
+                OverloadSibling {
+                    kind: SiblingKind::Function,
+                    name: Some(id.name.to_string()),
+                    name_span: id.span,
+                    is_static: false,
+                    has_body: function.body.is_some(),
+                    ambient: function.declare || self.is_ambient(),
+                    exported,
+                    accessibility: None,
+                    is_abstract: false,
+                    optional: false,
+                }
+            })
+            .collect();
+        self.check_overload_groups(&siblings);
+    }
 
-        let mut groups: Vec<(&str, Vec<&Function<'_>>)> = Vec::new();
-        for statement in statements {
-            let function = match statement {
-                Statement::FunctionDeclaration(function) => Some(&**function),
-                Statement::ExportNamedDeclaration(export) => match &export.declaration {
-                    Some(Declaration::FunctionDeclaration(function)) => Some(&**function),
-                    _ => None,
-                },
-                _ => None,
-            };
-            let Some(function) = function else {
+    /// The overload half of tsc's `checkFunctionOrConstructorSymbolWorker`
+    /// over one container's declarations, grouped the way the binder forms
+    /// symbols: by name, and for class members by staticness.
+    fn check_overload_groups(&mut self, siblings: &[OverloadSibling]) {
+        let mut groups: Vec<(&str, bool, Vec<usize>)> = Vec::new();
+        for (index, sibling) in siblings.iter().enumerate() {
+            let Some(name) = sibling.name.as_deref() else {
                 continue;
             };
-            let Some(id) = function.id.as_ref() else {
+            if sibling.kind == SiblingKind::Other {
                 continue;
-            };
+            }
             match groups
                 .iter_mut()
-                .find(|(name, _)| *name == id.name.as_str())
+                .find(|(group, is_static, _)| *group == name && *is_static == sibling.is_static)
             {
-                Some((_, declarations)) => declarations.push(function),
-                None => groups.push((id.name.as_str(), vec![function])),
+                Some((_, _, indices)) => indices.push(index),
+                None => groups.push((name, sibling.is_static, vec![index])),
             }
         }
-
-        for (_, declarations) in groups {
-            if declarations
-                .iter()
-                .any(|function| function.body.is_some() || function.declare)
-            {
-                continue;
+        for (_, _, indices) in groups {
+            let mut previous: Option<usize> = None;
+            let mut last_non_ambient: Option<usize> = None;
+            let mut body_seen = false;
+            for &index in &indices {
+                let sibling = &siblings[index];
+                if sibling.ambient {
+                    previous = None;
+                }
+                if !(sibling.has_body && body_seen)
+                    && let Some(previous) = previous
+                    && previous + 1 != index
+                {
+                    self.report_implementation_expected(siblings, previous);
+                }
+                body_seen |= sibling.has_body;
+                previous = Some(index);
+                if !sibling.ambient {
+                    last_non_ambient = Some(index);
+                }
             }
-            let Some(last) = declarations.last() else {
-                continue;
-            };
-            let Some(id) = last.id.as_ref() else {
-                continue;
-            };
-            self.push(Kind::FunctionImplementationMissing, id.span, None);
+            if let Some(last) = last_non_ambient
+                && !siblings[last].has_body
+                && !siblings[last].is_abstract
+                && !siblings[last].optional
+            {
+                self.report_implementation_expected(siblings, last);
+            }
+            if indices.iter().any(|&index| !siblings[index].has_body) {
+                self.check_overload_flag_agreement(siblings, &indices);
+            }
         }
     }
 
-    /// Everything one class body can say wrong about its own members: an
-    /// overload group with no implementation (TS2391/TS2390), two
-    /// implementations of one name (TS2393/TS2392), and two members declaring
-    /// the same name where neither is an overload of the other (TS2300).
-    ///
-    /// Static and instance members are separate names, and an `abstract` or
-    /// ambient member has no implementation to miss.
+    /// tsc's `reportImplementationExpectedError`: the declaration right after
+    /// a bodyless one decides the message.
+    fn report_implementation_expected(&mut self, siblings: &[OverloadSibling], index: usize) {
+        let node = &siblings[index];
+        if let Some(next) = siblings.get(index + 1)
+            && next.kind == node.kind
+        {
+            if next.name.is_some() && next.name == node.name {
+                if node.kind == SiblingKind::Method && node.is_static != next.is_static {
+                    let code = if node.is_static { 2387 } else { 2388 };
+                    self.push(Kind::Ts(code), next.name_span, None);
+                }
+                return;
+            }
+            if next.has_body {
+                self.push(Kind::Ts(2389), next.name_span, node.name.as_deref());
+                return;
+            }
+        }
+        self.push(Kind::FunctionImplementationMissing, node.name_span, None);
+    }
+
+    /// tsc's `checkFlagAgreementBetweenOverloads` and
+    /// `checkQuestionTokenAgreementBetweenOverloads`, measured against the
+    /// implementation when there is one and the first declaration otherwise.
+    fn check_overload_flag_agreement(&mut self, siblings: &[OverloadSibling], indices: &[usize]) {
+        let canonical = indices
+            .iter()
+            .copied()
+            .find(|&index| siblings[index].has_body)
+            .unwrap_or(indices[0]);
+        let canonical = &siblings[canonical];
+        for &index in indices {
+            let sibling = &siblings[index];
+            let code = if sibling.exported != canonical.exported {
+                Some(2383)
+            } else if sibling.ambient != canonical.ambient {
+                Some(2384)
+            } else if sibling.accessibility != canonical.accessibility {
+                Some(2385)
+            } else if sibling.is_abstract != canonical.is_abstract {
+                Some(2512)
+            } else {
+                None
+            };
+            if let Some(code) = code {
+                self.push(Kind::Ts(code), sibling.name_span, None);
+            }
+        }
+        for &index in indices {
+            let sibling = &siblings[index];
+            if sibling.optional != canonical.optional {
+                self.push(Kind::Ts(2386), sibling.name_span, None);
+            }
+        }
+    }
+
     /// tsc's `checkGrammarModifiers` ordering rules for class members: an
     /// accessibility modifier precedes `static`, `override`, `readonly`, `async`
     /// and `abstract`; `static` precedes `override`, `readonly` and `async`;
@@ -953,6 +1041,69 @@ impl GrammarCollector {
         }
     }
 
+    /// The class-method overload checks. A name that is also a property or an
+    /// accessor is a duplicate, not an overload set, and reports as one.
+    fn check_method_overloads(&mut self, class: &Class<'_>) {
+        let conflicting: Vec<(String, bool)> = class
+            .body
+            .body
+            .iter()
+            .filter_map(|element| match element {
+                ClassElement::PropertyDefinition(property) => {
+                    property_key_name(&property.key).map(|name| (name, property.r#static))
+                }
+                ClassElement::MethodDefinition(method)
+                    if matches!(method.kind, MethodDefinitionKind::Get | MethodDefinitionKind::Set) =>
+                {
+                    property_key_name(&method.key).map(|name| (name, method.r#static))
+                }
+                _ => None,
+            })
+            .collect();
+        let siblings: Vec<OverloadSibling> = class
+            .body
+            .body
+            .iter()
+            .map(|element| {
+                let ClassElement::MethodDefinition(method) = element else {
+                    return OverloadSibling::other();
+                };
+                if method.kind != MethodDefinitionKind::Method || method.computed {
+                    return OverloadSibling::other();
+                }
+                let Some(name) = property_key_name(&method.key) else {
+                    return OverloadSibling::other();
+                };
+                if conflicting.iter().any(|(other, is_static)| *other == name && *is_static == method.r#static) {
+                    return OverloadSibling::other();
+                }
+                OverloadSibling {
+                    kind: SiblingKind::Method,
+                    name: Some(name),
+                    name_span: method.key.span(),
+                    is_static: method.r#static,
+                    has_body: method.value.body.is_some(),
+                    ambient: false,
+                    exported: false,
+                    accessibility: method.accessibility.filter(|accessibility| {
+                        *accessibility != oxc_ast::ast::TSAccessibility::Public
+                    }),
+                    is_abstract: method.r#type == MethodDefinitionType::TSAbstractMethodDefinition,
+                    optional: method.optional,
+                }
+            })
+            .collect();
+        self.check_overload_groups(&siblings);
+    }
+
+    /// Everything one class body can say wrong about its own members: a
+    /// constructor group with no implementation (TS2390), two implementations
+    /// of one name (TS2393/TS2392), two members declaring the same name where
+    /// neither is an overload of the other (TS2300), and the method overload
+    /// checks of [`Self::check_method_overloads`].
+    ///
+    /// Static and instance members are separate names, and an `abstract` or
+    /// ambient member has no implementation to miss.
     fn check_class_members(&mut self, class: &Class<'_>) {
         let ambient = self.is_ambient() || class.declare;
         let mut groups: Vec<MemberGroup> = Vec::new();
@@ -1024,7 +1175,10 @@ impl GrammarCollector {
         }
 
         for group in &groups {
-            self.report_member_group(group, ambient);
+            self.report_member_group(group);
+        }
+        if !ambient {
+            self.check_method_overloads(class);
         }
         self.check_accessor_pairs(class);
 
@@ -1091,7 +1245,7 @@ impl GrammarCollector {
     /// signatures is an overload set, so it reports only about implementations;
     /// as soon as a property is in the group nothing there is an overload of
     /// anything and every member is a duplicate.
-    fn report_member_group(&mut self, group: &MemberGroup, ambient: bool) {
+    fn report_member_group(&mut self, group: &MemberGroup) {
         let has_property = group
             .members
             .iter()
@@ -1125,23 +1279,6 @@ impl GrammarCollector {
             return;
         }
 
-        let declares_method = group
-            .members
-            .iter()
-            .any(|(_, member)| matches!(member, MemberKind::Method { .. }));
-        if ambient || !declares_method || !implementations.is_empty() {
-            return;
-        }
-        if group
-            .members
-            .iter()
-            .any(|(_, member)| matches!(member, MemberKind::AbstractMethod))
-        {
-            return;
-        }
-        if let Some((span, _)) = group.members.last() {
-            self.push(Kind::FunctionImplementationMissing, *span, None);
-        }
     }
 
     /// An interface reports the duplicate half only: a bodyless method there is
@@ -1249,14 +1386,17 @@ impl GrammarCollector {
             return;
         }
 
-        if declaration.kind != VariableDeclarationKind::Const {
-            return;
-        }
+        // tsc's `checkGrammarVariableDeclaration`: a pattern without an
+        // initializer is TS1182 whatever its keyword, ahead of the `const` rule.
         for declarator in &declaration.declarations {
             if declarator.init.is_some() {
                 continue;
             }
-            self.push(Kind::ConstNotInitialized, declarator.id.span(), None);
+            if !matches!(declarator.id, oxc_ast::ast::BindingPattern::BindingIdentifier(_)) {
+                self.push(Kind::Ts(1182), declarator.id.span(), None);
+            } else if declaration.kind == VariableDeclarationKind::Const {
+                self.push(Kind::ConstNotInitialized, declarator.id.span(), None);
+            }
         }
     }
 
@@ -1268,6 +1408,10 @@ impl GrammarCollector {
         let mut seen: Vec<String> = Vec::new();
         let mut methods: Vec<(String, Vec<Span>)> = Vec::new();
         let mut accessors: Vec<String> = Vec::new();
+        // The accessor kinds seen per name (1 = get, 2 = set): a second
+        // accessor of a kind already seen is TS1118, after which tsc's
+        // `checkGrammarObjectLiteralExpression` stops looking at the literal.
+        let mut accessor_kinds: Vec<(String, u8)> = Vec::new();
 
         for property in &object.properties {
             let ObjectPropertyKind::ObjectProperty(property) = property else {
@@ -1275,6 +1419,16 @@ impl GrammarCollector {
             };
             if property.kind != PropertyKind::Init {
                 if let Some(name) = property_key_name(&property.key) {
+                    let kind = if property.kind == PropertyKind::Get { 1 } else { 2 };
+                    match accessor_kinds.iter_mut().find(|(other, _)| *other == name) {
+                        Some((_, seen_kinds)) if *seen_kinds == 3 || *seen_kinds == kind => {
+                            self.push(Kind::Ts(1118), property.key.span(), None);
+                            self.report_duplicate_accessors(object, &name);
+                            return;
+                        }
+                        Some((_, seen_kinds)) => *seen_kinds |= kind,
+                        None => accessor_kinds.push((name.clone(), kind)),
+                    }
                     if seen.contains(&name)
                         || methods.iter().any(|(other, _)| *other == name)
                     {
@@ -1331,6 +1485,31 @@ impl GrammarCollector {
         }
     }
 
+    /// The binder's duplicate-symbol error for two accessors of one kind in an
+    /// object literal: TS2300 at every accessor of that name and kind.
+    fn report_duplicate_accessors(&mut self, object: &ObjectExpression<'_>, name: &str) {
+        for kind in [PropertyKind::Get, PropertyKind::Set] {
+            let spans: Vec<Span> = object
+                .properties
+                .iter()
+                .filter_map(|property| match property {
+                    ObjectPropertyKind::ObjectProperty(property)
+                        if property.kind == kind
+                            && property_key_name(&property.key).as_deref() == Some(name) =>
+                    {
+                        Some(property.key.span())
+                    }
+                    _ => None,
+                })
+                .collect();
+            if spans.len() > 1 {
+                for span in spans {
+                    self.push(Kind::DuplicateMember, span, Some(name));
+                }
+            }
+        }
+    }
+
     /// A signature with neither a body nor a written return type has an
     /// implicit `any` return — the overload signatures of a function that *does*
     /// have an implementation included, which is why this does not look at the
@@ -1343,6 +1522,46 @@ impl GrammarCollector {
             return;
         };
         self.push(Kind::ImplicitAnyReturn, id.span, Some(id.name.as_str()));
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SiblingKind {
+    Function,
+    Method,
+    Other,
+}
+
+/// One entry of a container's declaration list, as the overload checks see
+/// it; everything that is not a function or method is `Other`, kept so that
+/// adjacency is measured against the real next sibling.
+struct OverloadSibling {
+    kind: SiblingKind,
+    name: Option<String>,
+    name_span: Span,
+    is_static: bool,
+    has_body: bool,
+    ambient: bool,
+    exported: bool,
+    accessibility: Option<oxc_ast::ast::TSAccessibility>,
+    is_abstract: bool,
+    optional: bool,
+}
+
+impl OverloadSibling {
+    fn other() -> Self {
+        Self {
+            kind: SiblingKind::Other,
+            name: None,
+            name_span: Span::default(),
+            is_static: false,
+            has_body: false,
+            ambient: false,
+            exported: false,
+            accessibility: None,
+            is_abstract: false,
+            optional: false,
+        }
     }
 }
 
@@ -1592,11 +1811,6 @@ fn property_key_name(key: &PropertyKey<'_>) -> Option<String> {
 impl<'a> Visit<'a> for GrammarCollector {
     fn visit_program(&mut self, program: &Program<'a>) {
         self.source_text = program.source_text.to_string();
-        self.strict_mode = program.source_type.is_module()
-            || program
-                .directives
-                .iter()
-                .any(|directive| directive.directive == "use strict");
         self.collect_top_level_constants(&program.body);
         self.check_member_kind_overrides(&program.body);
         self.check_circular_type_aliases(&program.body);
@@ -1648,14 +1862,14 @@ impl<'a> Visit<'a> for GrammarCollector {
     }
 
     // `delete x` on a direct binding reference is a strict-mode syntax error
-    // (tsc's `checkStrictModeDeleteExpression`, binder.go:1409). `delete o.p`,
+    // (tsc's `checkStrictModeDeleteExpression`, binder.go:1409), and tsgo
+    // checks every file as strict-mode code. `delete o.p`,
     // the legal form, is checked by the checker's own operand rules.
     fn visit_unary_expression(&mut self, unary: &oxc_ast::ast::UnaryExpression<'a>) {
         if unary.operator == UnaryOperator::LogicalNot {
             self.check_truthiness(&unary.argument);
         }
-        if self.strict_mode
-            && unary.operator == oxc_syntax::operator::UnaryOperator::Delete
+        if unary.operator == oxc_syntax::operator::UnaryOperator::Delete
             && let Expression::Identifier(identifier) = &unary.argument
         {
             self.push(Kind::DeleteOnIdentifierInStrictMode, identifier.span, None);

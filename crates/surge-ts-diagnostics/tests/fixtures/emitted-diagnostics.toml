@@ -1015,8 +1015,10 @@ oracle = [
 ]
 
 [TS7019]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "self-reference-and-placement-basic",
+]
 
 [TS4111]
 status = "emitted"
@@ -1416,6 +1418,7 @@ fixtures = [
 ]
 oracle = [
   "delete-operator-operand-rules-basic",
+  "strict-mode-names-basic",
 ]
 
 [TS2703]
@@ -1531,8 +1534,11 @@ oracle = [
 ]
 
 [TS2683]
-status = "catalog-only"
-reason = "Withheld: an object-literal accessor under a contextual type reaches the check through a path that does not clear the implicit-this flag, so zod's `get shape() { … this.shape … }` was a false positive"
+status = "emitted"
+oracle = [
+  "function-expression-this-basic",
+  "super-and-this-placement-basic",
+]
 
 [TS2571]
 status = "emitted"
@@ -1718,8 +1724,11 @@ oracle = [
   "parser-grammar-codes-basic",
 ]
 [TS1047]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "parser-classified-modifier-errors-basic",
+]
+
 [TS1051]
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
@@ -1750,17 +1759,26 @@ oracle = [
   "parser-grammar-codes-basic",
 ]
 [TS1184]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "call-and-modifier-context-basic",
+]
+
 [TS1249]
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
 [TS1263]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "declaration-form-grammar-basic",
+]
+
 [TS1264]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "declaration-form-grammar-basic",
+]
+
 [TS1318]
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
@@ -1773,20 +1791,32 @@ oracle = [
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
 [TS1477]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "instantiation-expression-access-basic",
+]
+
 [TS1490]
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
 [TS1502]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "regexp-flag-conflict-basic",
+]
+
 [TS1545]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "parser-classified-modifier-errors-basic",
+]
+
 [TS1546]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "parser-classified-modifier-errors-basic",
+]
+
 [TS17000]
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
@@ -1872,4 +1902,702 @@ oracle = [
 status = "emitted"
 oracle = [
   "jsx-missing-intrinsic-elements-basic",
+]
+
+[TS1030]
+status = "emitted"
+oracle = [
+  "parser-classified-modifier-errors-basic",
+]
+
+[TS1031]
+status = "emitted"
+oracle = [
+  "parser-classified-modifier-errors-basic",
+]
+
+[TS1036]
+status = "emitted"
+oracle = [
+  "ambient-and-signature-grammar-basic",
+]
+
+[TS1038]
+status = "emitted"
+oracle = [
+  "ambient-and-signature-grammar-basic",
+]
+
+[TS1070]
+status = "emitted"
+oracle = [
+  "parser-classified-modifier-errors-basic",
+]
+
+[TS1071]
+status = "emitted"
+oracle = [
+  "parser-classified-modifier-errors-basic",
+]
+
+[TS1090]
+status = "emitted"
+oracle = [
+  "parser-classified-modifier-errors-basic",
+]
+
+[TS1100]
+status = "emitted"
+oracle = [
+  "strict-mode-names-basic",
+]
+
+[TS1101]
+status = "emitted"
+oracle = [
+  "strict-mode-names-basic",
+]
+
+[TS1103]
+status = "emitted"
+oracle = [
+  "catch-yield-await-placement-basic",
+]
+
+[TS1104]
+status = "emitted"
+oracle = [
+  "jump-targets-and-labels-basic",
+]
+
+[TS1105]
+status = "emitted"
+oracle = [
+  "jump-targets-and-labels-basic",
+]
+
+[TS1107]
+status = "emitted"
+oracle = [
+  "jump-targets-and-labels-basic",
+]
+
+[TS1114]
+status = "emitted"
+oracle = [
+  "jump-targets-and-labels-basic",
+]
+
+[TS1115]
+status = "emitted"
+oracle = [
+  "jump-targets-and-labels-basic",
+]
+
+[TS1116]
+status = "emitted"
+oracle = [
+  "jump-targets-and-labels-basic",
+]
+
+[TS1163]
+status = "emitted"
+oracle = [
+  "catch-yield-await-placement-basic",
+]
+
+[TS1182]
+status = "emitted"
+oracle = [
+  "ambient-and-signature-grammar-basic",
+]
+
+[TS1210]
+status = "emitted"
+oracle = [
+  "strict-mode-names-basic",
+]
+
+[TS1212]
+status = "emitted"
+oracle = [
+  "strict-mode-names-basic",
+]
+
+[TS1213]
+status = "emitted"
+oracle = [
+  "strict-mode-names-basic",
+]
+
+[TS1214]
+status = "emitted"
+oracle = [
+  "strict-mode-names-basic",
+]
+
+[TS1215]
+status = "emitted"
+oracle = [
+  "strict-mode-names-basic",
+]
+
+[TS1248]
+status = "emitted"
+oracle = [
+  "parser-classified-modifier-errors-basic",
+]
+
+[TS1268]
+status = "emitted"
+oracle = [
+  "ambient-and-signature-grammar-basic",
+]
+
+[TS1273]
+status = "emitted"
+oracle = [
+  "parser-classified-modifier-errors-basic",
+]
+
+[TS1337]
+status = "emitted"
+oracle = [
+  "ambient-and-signature-grammar-basic",
+]
+
+[TS1338]
+status = "emitted"
+oracle = [
+  "this-container-rules-basic",
+]
+
+[TS1344]
+status = "emitted"
+oracle = [
+  "jump-targets-and-labels-basic",
+]
+
+[TS1345]
+status = "emitted"
+oracle = [
+  "operand-type-rules-basic",
+]
+
+[TS2309]
+status = "emitted"
+oracle = [
+  "export-assignment-conflicts-basic",
+]
+
+[TS2331]
+status = "emitted"
+oracle = [
+  "super-and-this-placement-basic",
+]
+
+[TS2332]
+status = "emitted"
+oracle = [
+  "super-and-this-placement-basic",
+]
+
+[TS2335]
+status = "emitted"
+oracle = [
+  "super-and-this-placement-basic",
+]
+
+[TS2337]
+status = "emitted"
+oracle = [
+  "super-and-this-placement-basic",
+]
+
+[TS2359]
+status = "emitted"
+oracle = [
+  "operand-type-rules-basic",
+]
+
+[TS2368]
+status = "emitted"
+oracle = [
+  "this-container-rules-basic",
+]
+
+[TS2370]
+status = "emitted"
+oracle = [
+  "parser-classified-modifier-errors-basic",
+]
+
+[TS2374]
+status = "emitted"
+oracle = [
+  "ambient-and-signature-grammar-basic",
+]
+
+[TS2383]
+status = "emitted"
+oracle = [
+  "overload-agreement-basic",
+]
+
+[TS2384]
+status = "emitted"
+oracle = [
+  "overload-agreement-basic",
+]
+
+[TS2385]
+status = "emitted"
+oracle = [
+  "overload-agreement-basic",
+]
+
+[TS2386]
+status = "emitted"
+oracle = [
+  "overload-agreement-basic",
+]
+
+[TS2387]
+status = "emitted"
+oracle = [
+  "overload-agreement-basic",
+]
+
+[TS2388]
+status = "emitted"
+oracle = [
+  "overload-agreement-basic",
+]
+
+[TS2389]
+status = "emitted"
+oracle = [
+  "overload-agreement-basic",
+]
+
+[TS2395]
+status = "emitted"
+oracle = [
+  "merged-declaration-consistency-basic",
+]
+
+[TS2410]
+status = "emitted"
+oracle = [
+  "strict-mode-names-basic",
+]
+
+[TS2414]
+status = "emitted"
+oracle = [
+  "this-container-rules-basic",
+]
+
+[TS2427]
+status = "emitted"
+oracle = [
+  "this-container-rules-basic",
+]
+
+[TS2428]
+status = "emitted"
+oracle = [
+  "merged-declaration-consistency-basic",
+]
+
+[TS2431]
+status = "emitted"
+oracle = [
+  "this-container-rules-basic",
+]
+
+[TS2457]
+status = "emitted"
+oracle = [
+  "this-container-rules-basic",
+]
+
+[TS2464]
+status = "emitted"
+oracle = [
+  "class-computed-member-names-basic",
+  "operand-type-rules-basic",
+]
+
+[TS2465]
+status = "emitted"
+oracle = [
+  "super-and-this-placement-basic",
+]
+
+[TS2466]
+status = "emitted"
+oracle = [
+  "super-and-this-placement-basic",
+]
+
+[TS2480]
+status = "emitted"
+oracle = [
+  "strict-mode-names-basic",
+]
+
+[TS2492]
+status = "emitted"
+oracle = [
+  "catch-yield-await-placement-basic",
+]
+
+[TS2512]
+status = "emitted"
+oracle = [
+  "overload-agreement-basic",
+]
+
+[TS2523]
+status = "emitted"
+oracle = [
+  "catch-yield-await-placement-basic",
+]
+
+[TS2524]
+status = "emitted"
+oracle = [
+  "catch-yield-await-placement-basic",
+]
+
+[TS2526]
+status = "emitted"
+oracle = [
+  "this-container-rules-basic",
+]
+
+[TS2567]
+status = "emitted"
+oracle = [
+  "ambient-and-signature-grammar-basic",
+]
+
+[TS2628]
+status = "emitted"
+oracle = [
+  "write-target-kinds-basic",
+]
+
+[TS2629]
+status = "emitted"
+oracle = [
+  "write-target-kinds-basic",
+]
+
+[TS2630]
+status = "emitted"
+oracle = [
+  "write-target-kinds-basic",
+]
+
+[TS2631]
+status = "emitted"
+oracle = [
+  "write-target-kinds-basic",
+]
+
+[TS2660]
+status = "emitted"
+oracle = [
+  "super-and-this-placement-basic",
+]
+
+[TS2783]
+status = "emitted"
+oracle = [
+  "object-spread-overwrite-basic",
+]
+
+[TS17013]
+status = "emitted"
+oracle = [
+  "this-container-rules-basic",
+]
+
+[TS18037]
+status = "emitted"
+oracle = [
+  "catch-yield-await-placement-basic",
+]
+
+[TS2450]
+status = "emitted"
+oracle = [
+  "enum-used-before-declaration-basic",
+]
+
+[TS1118]
+status = "emitted"
+oracle = [
+  "declaration-form-grammar-basic",
+]
+
+[TS1255]
+status = "emitted"
+oracle = [
+  "declaration-form-grammar-basic",
+]
+
+[TS1156]
+status = "emitted"
+oracle = [
+  "declaration-form-grammar-basic",
+]
+
+[TS2411]
+status = "emitted"
+oracle = [
+  "interface-index-constraint-basic",
+]
+
+[TS2804]
+status = "emitted"
+oracle = [
+  "self-reference-and-placement-basic",
+]
+
+[TS2502]
+status = "emitted"
+oracle = [
+  "self-reference-and-placement-basic",
+]
+
+[TS2313]
+status = "emitted"
+oracle = [
+  "self-reference-and-placement-basic",
+]
+
+[TS1330]
+status = "emitted"
+oracle = [
+  "self-reference-and-placement-basic",
+]
+
+[TS1331]
+status = "emitted"
+oracle = [
+  "self-reference-and-placement-basic",
+]
+
+[TS1332]
+status = "emitted"
+oracle = [
+  "self-reference-and-placement-basic",
+]
+
+[TS1335]
+status = "emitted"
+oracle = [
+  "self-reference-and-placement-basic",
+]
+
+[TS1206]
+status = "emitted"
+oracle = [
+  "self-reference-and-placement-basic",
+]
+
+[TS1147]
+status = "emitted"
+oracle = [
+  "self-reference-and-placement-basic",
+]
+
+[TS2372]
+status = "emitted"
+oracle = [
+  "self-reference-and-placement-basic",
+]
+
+[TS2373]
+status = "emitted"
+oracle = [
+  "self-reference-and-placement-basic",
+]
+
+[TS2842]
+status = "emitted"
+oracle = [
+  "self-reference-and-placement-basic",
+]
+
+[TS2880]
+status = "emitted"
+oracle = [
+  "import-assertion-keyword-basic",
+]
+
+[TS2348]
+status = "emitted"
+oracle = [
+  "call-and-modifier-context-basic",
+]
+
+[TS2539]
+status = "emitted"
+oracle = [
+  "call-and-modifier-context-basic",
+]
+
+[TS1089]
+status = "emitted"
+oracle = [
+  "call-and-modifier-context-basic",
+]
+
+[TS1202]
+status = "emitted"
+oracle = [
+  "esm-module-assignment-basic",
+]
+
+[TS1203]
+status = "emitted"
+oracle = [
+  "default-module-from-target-basic",
+  "esm-module-assignment-basic",
+]
+
+[TS2699]
+status = "emitted"
+oracle = [
+  "static-function-property-names-basic",
+]
+
+[TS1274]
+status = "emitted"
+oracle = [
+  "variance-annotation-placement-basic",
+]
+
+[TS2637]
+status = "emitted"
+oracle = [
+  "variance-annotation-placement-basic",
+]
+
+[TS1091]
+status = "emitted"
+oracle = [
+  "for-declaration-grammar-basic",
+]
+
+[TS1188]
+status = "emitted"
+oracle = [
+  "for-declaration-grammar-basic",
+]
+
+[TS1189]
+status = "emitted"
+oracle = [
+  "for-declaration-grammar-basic",
+]
+
+[TS1190]
+status = "emitted"
+oracle = [
+  "for-declaration-grammar-basic",
+]
+
+[TS1333]
+status = "emitted"
+oracle = [
+  "for-declaration-grammar-basic",
+]
+
+[TS1334]
+status = "emitted"
+oracle = [
+  "for-declaration-grammar-basic",
+]
+
+[TS2404]
+status = "emitted"
+oracle = [
+  "for-declaration-grammar-basic",
+]
+
+[TS2483]
+status = "emitted"
+oracle = [
+  "for-declaration-grammar-basic",
+]
+
+[TS2364]
+status = "emitted"
+oracle = [
+  "invalid-write-target-basic",
+]
+
+[TS2357]
+status = "emitted"
+oracle = [
+  "invalid-write-target-basic",
+]
+
+[TS2779]
+status = "emitted"
+oracle = [
+  "invalid-write-target-basic",
+]
+
+[TS2777]
+status = "emitted"
+oracle = [
+  "invalid-write-target-basic",
+]
+
+[TS1014]
+status = "emitted"
+oracle = [
+  "invalid-write-target-basic",
+]
+
+[TS2462]
+status = "emitted"
+oracle = [
+  "invalid-write-target-basic",
+]
+
+[TS1166]
+status = "emitted"
+oracle = [
+  "class-computed-member-names-basic",
+]
+
+[TS1169]
+status = "emitted"
+oracle = [
+  "class-computed-member-names-basic",
+]
+
+[TS1170]
+status = "emitted"
+oracle = [
+  "class-computed-member-names-basic",
+]
+
+[TS2834]
+status = "emitted"
+oracle = [
+  "node-esm-relative-extension-basic",
+]
+
+[TS2835]
+status = "emitted"
+oracle = [
+  "node-esm-relative-extension-basic",
 ]

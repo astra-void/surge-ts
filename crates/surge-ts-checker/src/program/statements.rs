@@ -446,12 +446,13 @@ pub(crate) fn check_module_if_statement(
         &symbols,
         ctx,
     );
-    let _ = crate::checks::expr::evaluate_expression(
+    let condition = crate::checks::expr::evaluate_expression(
         &if_statement.condition,
         if_statement.condition_span,
         &symbols,
         ctx,
     );
+    crate::checks::expr::report_void_truthiness(&condition, if_statement.condition_span, ctx);
     let mut assigned = Vec::new();
     crate::checks::function::branch_assigned_names(&if_statement.then_body, &mut assigned);
     crate::checks::function::branch_assigned_names(&if_statement.else_body, &mut assigned);
@@ -733,6 +734,7 @@ fn check_program_statement_itself(
                 ctx,
             );
             super::heritage::check_interface_heritage(&interface, ctx);
+            super::heritage::check_interface_index_constraints(&interface, ctx);
         }
         ParsedStatement::ClassDeclaration(class) => {
             with_module_declared_only(ctx, |ctx| super::check_class_declaration(&class, ctx));

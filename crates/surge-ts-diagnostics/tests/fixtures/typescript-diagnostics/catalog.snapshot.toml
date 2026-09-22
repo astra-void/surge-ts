@@ -788,7 +788,7 @@ arity = 2
 code = "TS7019"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Rest parameter '{0}' implicitly has an 'any[]' type."
 arity = 1
 
@@ -1516,7 +1516,7 @@ arity = 1
 code = "TS2683"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "'this' implicitly has type 'any' because it does not have a type annotation."
 arity = 0
 
@@ -1556,7 +1556,7 @@ arity = 0
 code = "TS1047"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "A rest parameter cannot be optional."
 arity = 0
 
@@ -1708,7 +1708,7 @@ arity = 0
 code = "TS1184"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Modifiers cannot appear here."
 arity = 0
 
@@ -1740,7 +1740,7 @@ arity = 0
 code = "TS1263"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Declarations with initializers cannot also have definite assignment assertions."
 arity = 0
 
@@ -1748,7 +1748,7 @@ arity = 0
 code = "TS1264"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Declarations with definite assignment assertions must also have type annotations."
 arity = 0
 
@@ -1804,7 +1804,7 @@ arity = 0
 code = "TS1477"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "An instantiation expression cannot be followed by a property access."
 arity = 0
 
@@ -1820,7 +1820,7 @@ arity = 0
 code = "TS1502"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "The Unicode (u) flag and the Unicode Sets (v) flag cannot be set simultaneously."
 arity = 0
 
@@ -1828,7 +1828,7 @@ arity = 0
 code = "TS1545"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "'using' declarations are not allowed in ambient contexts."
 arity = 0
 
@@ -1836,7 +1836,7 @@ arity = 0
 code = "TS1546"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "'await using' declarations are not allowed in ambient contexts."
 arity = 0
 
@@ -2190,5 +2190,933 @@ category = "Error"
 source = "typescript"
 support = "emitted"
 message = "Element implicitly has an 'any' type because type '{0}' has no index signature."
+arity = 1
+
+[[diagnostic]]
+code = "TS1107"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Jump target cannot cross function boundary."
+arity = 0
+
+[[diagnostic]]
+code = "TS1115"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'continue' statement can only jump to a label of an enclosing iteration statement."
+arity = 0
+
+[[diagnostic]]
+code = "TS1116"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'break' statement can only jump to a label of an enclosing statement."
+arity = 0
+
+[[diagnostic]]
+code = "TS1105"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'break' statement can only be used within an enclosing iteration or switch statement."
+arity = 0
+
+[[diagnostic]]
+code = "TS1104"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'continue' statement can only be used within an enclosing iteration statement."
+arity = 0
+
+[[diagnostic]]
+code = "TS1114"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Duplicate label '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS1344"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A label is not allowed here."
+arity = 0
+
+[[diagnostic]]
+code = "TS1101"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'with' statements are not allowed in strict mode."
+arity = 0
+
+[[diagnostic]]
+code = "TS2410"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'."
+arity = 0
+
+[[diagnostic]]
+code = "TS1100"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Invalid use of '{0}' in strict mode."
+arity = 1
+
+[[diagnostic]]
+code = "TS1210"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Code contained in a class is evaluated in JavaScript's strict mode which does not allow this use of '{0}'. For more information, see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Strict_mode."
+arity = 1
+
+[[diagnostic]]
+code = "TS1215"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Invalid use of '{0}'. Modules are automatically in strict mode."
+arity = 1
+
+[[diagnostic]]
+code = "TS1212"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Identifier expected. '{0}' is a reserved word in strict mode."
+arity = 1
+
+[[diagnostic]]
+code = "TS1213"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Identifier expected. '{0}' is a reserved word in strict mode. Class definitions are automatically in strict mode."
+arity = 1
+
+[[diagnostic]]
+code = "TS1214"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Identifier expected. '{0}' is a reserved word in strict mode. Modules are automatically in strict mode."
+arity = 1
+
+[[diagnostic]]
+code = "TS17013"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Meta-property '{0}' is only allowed in the body of a function declaration, function expression, or constructor."
+arity = 1
+
+[[diagnostic]]
+code = "TS2526"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'this' type is available only in a non-static member of a class or interface."
+arity = 0
+
+[[diagnostic]]
+code = "TS1338"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'infer' declarations are only permitted in the 'extends' clause of a conditional type."
+arity = 0
+
+[[diagnostic]]
+code = "TS2427"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Interface name cannot be '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2457"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type alias name cannot be '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2431"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Enum name cannot be '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2368"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type parameter name cannot be '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2414"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class name cannot be '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2492"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot redeclare identifier '{0}' in catch clause."
+arity = 1
+
+[[diagnostic]]
+code = "TS2480"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'let' is not allowed to be used as a name in 'let' or 'const' declarations."
+arity = 0
+
+[[diagnostic]]
+code = "TS1163"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'yield' expression is only allowed in a generator body."
+arity = 0
+
+[[diagnostic]]
+code = "TS2523"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'yield' expressions cannot be used in a parameter initializer."
+arity = 0
+
+[[diagnostic]]
+code = "TS2524"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'await' expressions cannot be used in a parameter initializer."
+arity = 0
+
+[[diagnostic]]
+code = "TS18037"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'await' expression cannot be used inside a class static block."
+arity = 0
+
+[[diagnostic]]
+code = "TS1103"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'for await' loops are only allowed within async functions and at the top levels of modules."
+arity = 0
+
+[[diagnostic]]
+code = "TS2335"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'super' can only be referenced in a derived class."
+arity = 0
+
+[[diagnostic]]
+code = "TS2337"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Super calls are not permitted outside constructors or in nested functions inside constructors."
+arity = 0
+
+[[diagnostic]]
+code = "TS2660"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'super' can only be referenced in members of derived classes or object literal expressions."
+arity = 0
+
+[[diagnostic]]
+code = "TS2466"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'super' cannot be referenced in a computed property name."
+arity = 0
+
+[[diagnostic]]
+code = "TS2465"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'this' cannot be referenced in a computed property name."
+arity = 0
+
+[[diagnostic]]
+code = "TS2331"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'this' cannot be referenced in a module or namespace body."
+arity = 0
+
+[[diagnostic]]
+code = "TS2332"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'this' cannot be referenced in current location."
+arity = 0
+
+[[diagnostic]]
+code = "TS1036"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Statements are not allowed in ambient contexts."
+arity = 0
+
+[[diagnostic]]
+code = "TS1038"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'declare' modifier cannot be used in an already ambient context."
+arity = 0
+
+[[diagnostic]]
+code = "TS1337"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An index signature parameter type cannot be a literal type or generic type. Consider using a mapped object type instead."
+arity = 0
+
+[[diagnostic]]
+code = "TS1268"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An index signature parameter type must be 'string', 'number', 'symbol', or a template literal type."
+arity = 0
+
+[[diagnostic]]
+code = "TS2374"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Duplicate index signature for type '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2567"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Enum declarations can only merge with namespace or other enum declarations."
+arity = 0
+
+[[diagnostic]]
+code = "TS1182"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A destructuring declaration must have an initializer."
+arity = 0
+
+[[diagnostic]]
+code = "TS1070"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier cannot appear on a type member."
+arity = 1
+
+[[diagnostic]]
+code = "TS1071"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier cannot appear on an index signature."
+arity = 1
+
+[[diagnostic]]
+code = "TS1090"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier cannot appear on a parameter."
+arity = 1
+
+[[diagnostic]]
+code = "TS1273"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier cannot appear on a type parameter"
+arity = 1
+
+[[diagnostic]]
+code = "TS1031"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier cannot appear on class elements of this kind."
+arity = 1
+
+[[diagnostic]]
+code = "TS1248"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A class member cannot have the '{0}' keyword."
+arity = 1
+
+[[diagnostic]]
+code = "TS2628"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot assign to '{0}' because it is an enum."
+arity = 1
+
+[[diagnostic]]
+code = "TS2629"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot assign to '{0}' because it is a class."
+arity = 1
+
+[[diagnostic]]
+code = "TS2630"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot assign to '{0}' because it is a function."
+arity = 1
+
+[[diagnostic]]
+code = "TS2631"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot assign to '{0}' because it is a namespace."
+arity = 1
+
+[[diagnostic]]
+code = "TS1345"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An expression of type 'void' cannot be tested for truthiness."
+arity = 0
+
+[[diagnostic]]
+code = "TS2783"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is specified more than once, so this usage will be overwritten."
+arity = 1
+
+[[diagnostic]]
+code = "TS2464"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A computed property name must be of type 'string', 'number', 'symbol', or 'any'."
+arity = 0
+
+[[diagnostic]]
+code = "TS2359"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The right-hand side of an 'instanceof' expression must be either of type 'any', a class, function, or other type assignable to the 'Function' interface type, or an object type with a 'Symbol.hasInstance' method."
+arity = 0
+
+[[diagnostic]]
+code = "TS2383"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Overload signatures must all be exported or non-exported."
+arity = 0
+
+[[diagnostic]]
+code = "TS2384"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Overload signatures must all be ambient or non-ambient."
+arity = 0
+
+[[diagnostic]]
+code = "TS2385"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Overload signatures must all be public, private or protected."
+arity = 0
+
+[[diagnostic]]
+code = "TS2386"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Overload signatures must all be optional or required."
+arity = 0
+
+[[diagnostic]]
+code = "TS2387"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Function overload must be static."
+arity = 0
+
+[[diagnostic]]
+code = "TS2388"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Function overload must not be static."
+arity = 0
+
+[[diagnostic]]
+code = "TS2389"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Function implementation name must be '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2512"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Overload signatures must all be abstract or non-abstract."
+arity = 0
+
+[[diagnostic]]
+code = "TS2309"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An export assignment cannot be used in a module with other exported elements."
+arity = 0
+
+[[diagnostic]]
+code = "TS2395"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Individual declarations in merged declaration '{0}' must be all exported or all local."
+arity = 1
+
+[[diagnostic]]
+code = "TS2428"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "All declarations of '{0}' must have identical type parameters."
+arity = 1
+
+[[diagnostic]]
+code = "TS2370"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A rest parameter must be of an array type."
+arity = 0
+
+[[diagnostic]]
+code = "TS1030"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier already seen."
+arity = 1
+
+[[diagnostic]]
+code = "TS2450"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Enum '{0}' used before its declaration."
+arity = 1
+
+[[diagnostic]]
+code = "TS1118"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An object literal cannot have multiple get/set accessors with the same name."
+arity = 0
+
+[[diagnostic]]
+code = "TS1255"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A definite assignment assertion '!' is not permitted in this context."
+arity = 0
+
+[[diagnostic]]
+code = "TS1156"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' declarations can only be declared inside a block."
+arity = 1
+
+[[diagnostic]]
+code = "TS2411"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' of type '{1}' is not assignable to '{2}' index type '{3}'."
+arity = 4
+
+[[diagnostic]]
+code = "TS2842"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is an unused renaming of '{1}'. Did you intend to use it as a type annotation?"
+arity = 2
+
+[[diagnostic]]
+code = "TS2372"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Parameter '{0}' cannot reference itself."
+arity = 1
+
+[[diagnostic]]
+code = "TS2373"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Parameter '{0}' cannot reference identifier '{1}' declared after it."
+arity = 2
+
+[[diagnostic]]
+code = "TS2804"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Duplicate identifier '{0}'. Static and instance elements cannot share the same private name."
+arity = 1
+
+[[diagnostic]]
+code = "TS2502"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is referenced directly or indirectly in its own type annotation."
+arity = 1
+
+[[diagnostic]]
+code = "TS2313"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type parameter '{0}' has a circular constraint."
+arity = 1
+
+[[diagnostic]]
+code = "TS1330"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A property of an interface or type literal whose type is a 'unique symbol' type must be 'readonly'."
+arity = 0
+
+[[diagnostic]]
+code = "TS1331"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A property of a class whose type is a 'unique symbol' type must be both 'static' and 'readonly'."
+arity = 0
+
+[[diagnostic]]
+code = "TS1332"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A variable whose type is a 'unique symbol' type must be 'const'."
+arity = 0
+
+[[diagnostic]]
+code = "TS1335"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'unique symbol' types are not allowed here."
+arity = 0
+
+[[diagnostic]]
+code = "TS1206"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Decorators are not valid here."
+arity = 0
+
+[[diagnostic]]
+code = "TS1147"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Import declarations in a namespace cannot reference a module."
+arity = 0
+
+[[diagnostic]]
+code = "TS2880"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Import assertions have been replaced by import attributes. Use 'with' instead of 'assert'."
+arity = 0
+
+[[diagnostic]]
+code = "TS2348"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Value of type '{0}' is not callable. Did you mean to include 'new'?"
+arity = 1
+
+[[diagnostic]]
+code = "TS2539"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot assign to '{0}' because it is not a variable."
+arity = 1
+
+[[diagnostic]]
+code = "TS1089"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier cannot appear on a constructor declaration."
+arity = 1
+
+[[diagnostic]]
+code = "TS1202"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Import assignment cannot be used when targeting ECMAScript modules. Consider using 'import * as ns from \"mod\"', 'import {a} from \"mod\"', 'import d from \"mod\"', or another module format instead."
+arity = 0
+
+[[diagnostic]]
+code = "TS1203"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Export assignment cannot be used when targeting ECMAScript modules. Consider using 'export default' or another module format instead."
+arity = 0
+
+[[diagnostic]]
+code = "TS2699"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Static property '{0}' conflicts with built-in property 'Function.{0}' of constructor function '{1}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS1274"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier can only appear on a type parameter of a class, interface or type alias"
+arity = 1
+
+[[diagnostic]]
+code = "TS2637"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Variance annotations are only supported in type aliases for object, function, constructor, and mapped types."
+arity = 0
+
+[[diagnostic]]
+code = "TS1333"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'unique symbol' types may not be used on a variable declaration with a binding name."
+arity = 0
+
+[[diagnostic]]
+code = "TS1334"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'unique symbol' types are only allowed on variables in a variable statement."
+arity = 0
+
+[[diagnostic]]
+code = "TS1091"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Only a single variable declaration is allowed in a 'for...in' statement."
+arity = 0
+
+[[diagnostic]]
+code = "TS1188"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Only a single variable declaration is allowed in a 'for...of' statement."
+arity = 0
+
+[[diagnostic]]
+code = "TS1189"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The variable declaration of a 'for...in' statement cannot have an initializer."
+arity = 0
+
+[[diagnostic]]
+code = "TS1190"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The variable declaration of a 'for...of' statement cannot have an initializer."
+arity = 0
+
+[[diagnostic]]
+code = "TS2404"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of a 'for...in' statement cannot use a type annotation."
+arity = 0
+
+[[diagnostic]]
+code = "TS2483"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of a 'for...of' statement cannot use a type annotation."
+arity = 0
+
+[[diagnostic]]
+code = "TS2364"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of an assignment expression must be a variable or a property access."
+arity = 0
+
+[[diagnostic]]
+code = "TS2357"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The operand of an increment or decrement operator must be a variable or a property access."
+arity = 0
+
+[[diagnostic]]
+code = "TS2779"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of an assignment expression may not be an optional property access."
+arity = 0
+
+[[diagnostic]]
+code = "TS2777"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The operand of an increment or decrement operator may not be an optional property access."
+arity = 0
+
+[[diagnostic]]
+code = "TS1014"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A rest parameter must be last in a parameter list."
+arity = 0
+
+[[diagnostic]]
+code = "TS2462"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A rest element must be last in a destructuring pattern."
+arity = 0
+
+[[diagnostic]]
+code = "TS1166"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type."
+arity = 0
+
+[[diagnostic]]
+code = "TS1169"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A computed property name in an interface must refer to an expression whose type is a literal type or a 'unique symbol' type."
+arity = 0
+
+[[diagnostic]]
+code = "TS1170"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A computed property name in a type literal must refer to an expression whose type is a literal type or a 'unique symbol' type."
+arity = 0
+
+[[diagnostic]]
+code = "TS2834"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Consider adding an extension to the import path."
+arity = 0
+
+[[diagnostic]]
+code = "TS2835"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '{0}'?"
 arity = 1
 

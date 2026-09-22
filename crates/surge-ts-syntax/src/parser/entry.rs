@@ -49,6 +49,97 @@ pub fn parse_source(source_text: &str, file_name: &str) -> ParsedSource {
 /// `allocator` ends inside this function: the returned [`ParsedSource`] holds
 /// no references, pointers, or arena-backed strings, which is what makes
 /// resetting the allocator between calls sound.
+/// The TypeScript number of a failure oxc reports without one, where tsc
+/// reports the same construct as a grammar error: an invalid write target —
+/// TS2364 for an assignment, TS2357 for `++`/`--`, TS2779/TS2777 when it is an
+/// optional chain — and a misplaced rest parameter (TS1014) or rest element
+/// (TS2462). oxc stops parsing the file at these, so they are all that is
+/// left to report for it.
+fn classify_uncoded_parser_error(
+    message: &str,
+    span: crate::TextSpan,
+    source_text: &str,
+) -> Option<(u32, crate::TextSpan)> {
+    let text = source_text.get(span.start..span.end)?;
+    match message {
+        "Cannot assign to this expression" => {
+            // tsc's target node keeps the parentheses oxc's label drops.
+            let mut span = span;
+            loop {
+                let before = source_text[..span.start].trim_end();
+                let after = source_text[span.end..].trim_start();
+                if !(before.ends_with('(') && after.starts_with(')')) {
+                    break;
+                }
+                span = crate::TextSpan {
+                    start: before.len() - 1,
+                    end: source_text.len() - after.len() + 1,
+                };
+            }
+            let before = source_text[..span.start].trim_end();
+            let after = source_text[span.end..].trim_start();
+            let is_update = before.ends_with("++")
+                || before.ends_with("--")
+                || after.starts_with("++")
+                || after.starts_with("--");
+            let optional = text.contains("?.");
+            let code = match (is_update, optional) {
+                (false, false) => 2364,
+                (false, true) => 2779,
+                (true, false) => 2357,
+                (true, true) => 2777,
+            };
+            Some((code, span))
+        }
+        "A rest parameter must be last in a parameter list" => Some((1014, span)),
+        // tsc reports the rest element at its name, past the `...`.
+        "A rest element must be last in a destructuring pattern" => {
+            let name = text.strip_prefix("...").map_or(text, str::trim_start);
+            let start = span.end - name.len();
+            Some((2462, crate::TextSpan { start, end: span.end }))
+        }
+        _ => None,
+    }
+}
+
+/// Where tsc anchors a failure oxc labels elsewhere: the name after a
+/// `const` class member modifier (TS1248), the `<` of an instantiation
+/// expression (TS1477), the second of the `u`/`v` flags (TS1502), and the
+/// first keyword of an ambient `using` or `await using` (TS1545/TS1546).
+fn tsc_anchor_for_parser_error(
+    code: Option<u32>,
+    span: crate::TextSpan,
+    source_text: &str,
+) -> crate::TextSpan {
+    let text = |start: usize, end: usize| source_text.get(start..end).unwrap_or("");
+    let at = |start: usize, len: usize| crate::TextSpan { start, end: start + len };
+    match code {
+        Some(1248) => {
+            let rest = text(span.end, source_text.len());
+            let skipped = rest.len() - rest.trim_start().len();
+            let start = span.end + skipped;
+            let len = text(start, source_text.len())
+                .find(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '$'))
+                .unwrap_or(0);
+            at(start, len)
+        }
+        Some(1477) => match text(span.start, span.end).find('<') {
+            Some(offset) => at(span.start + offset, 1),
+            None => span,
+        },
+        Some(1502) if span.end > span.start => at(span.end - 1, 1),
+        Some(1545) => match text(0, span.start).rfind("using") {
+            Some(start) => at(start, 5),
+            None => span,
+        },
+        Some(1546) => match text(0, span.start).rfind("await") {
+            Some(start) => at(start, 5),
+            None => span,
+        },
+        _ => span,
+    }
+}
+
 fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) -> ParsedSource {
     // A `.json` file holds a value, not a program. Handing it to the TypeScript
     // parser produces nothing usable (and a pile of syntax errors), so it takes
@@ -128,7 +219,18 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
                     start: label.offset(),
                     end: label.offset() + label.len(),
                 });
-            crate::ParserError { code, message: error.to_string(), span }
+            let (code, span) = match (code, span) {
+                (None, Some(span)) => match classify_uncoded_parser_error(&error.to_string(), span, source_text) {
+                    Some((code, span)) => (Some(code), Some(span)),
+                    None => (None, Some(span)),
+                },
+                other => other,
+            };
+            let span = span.map(|span| tsc_anchor_for_parser_error(code, span, source_text));
+            let span_text = span
+                .and_then(|span| source_text.get(span.start..span.end))
+                .map(str::to_string);
+            crate::ParserError { code, message: error.to_string(), span, span_text }
         })
         .collect();
 

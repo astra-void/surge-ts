@@ -11,7 +11,7 @@ use surge_ts_types::{Type, union_type};
 use crate::checks::function::property_write_is_readonly;
 use crate::context::{CheckerContext, convert_span};
 use crate::infer::{InferredExpression, infer_expression};
-use crate::symbols::{SymbolKind, SymbolTable};
+use crate::symbols::SymbolTable;
 
 /// The member a `delete` or update operand names, with the receiver it is read
 /// from. `None` for anything that is not a property reference.
@@ -254,9 +254,12 @@ pub(crate) fn check_update_operand(
 
     if let ParsedExpression::Identifier { name, .. } = operand {
         if let Some(symbol) = symbols.get(name) {
-            if matches!(symbol.kind, SymbolKind::Const) {
-                let file_name = ctx.file_name.clone();
-                ctx.push(Diagnostic::ts2588(name, file_name).with_span(convert_span(span)));
+            if let Some(diagnostic) = crate::checks::assign::unwritable_binding_diagnostic(
+                name,
+                &symbol,
+                ctx.file_name.clone(),
+            ) {
+                ctx.push(diagnostic.with_span(convert_span(span)));
                 return;
             }
         }

@@ -1875,10 +1875,18 @@ fn evaluate_object_literal_with_expected_type(
     // reports — the `@ts-expect-error` a test wrote over the property then does
     // not cover it. Withhold the missing-property report in that case.
     let mut degraded_property_comparison = false;
+    let mut explicit_properties: Vec<(&str, Option<SyntaxTextSpan>)> = Vec::new();
 
     for property in properties {
         if property.is_spread {
+            if property.unnamed_key_value.is_none() && !explicit_properties.is_empty() {
+                let spread = crate::infer::infer_expression(&property.value, symbols, ctx);
+                super::expr::report_overwritten_properties(&spread, &explicit_properties, ctx);
+            }
             continue;
+        }
+        if !property.is_accessor && property.computed_key.is_none() {
+            explicit_properties.push((&property.name, property.name_span));
         }
         record_object_literal_property_check();
         let expected_property = if let Some(expected_property) =

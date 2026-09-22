@@ -540,6 +540,17 @@ pub(crate) fn evaluate_condition_expression_with_truthy_guards(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    let result = evaluate_guarded_condition(expression, fallback_span, symbols, ctx);
+    crate::checks::expr::report_void_truthiness(&result, fallback_span, ctx);
+    result
+}
+
+fn evaluate_guarded_condition(
+    expression: &ParsedExpression,
+    fallback_span: Option<surge_ts_syntax::TextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
     match expression {
         ParsedExpression::Logical {
             left,
@@ -549,18 +560,15 @@ pub(crate) fn evaluate_condition_expression_with_truthy_guards(
             right_span,
             ..
         } => {
-            let left_result = evaluate_condition_expression_with_truthy_guards(
-                left,
-                left_span.or(fallback_span),
-                symbols,
-                ctx,
-            );
+            let left_result =
+                evaluate_guarded_condition(left, left_span.or(fallback_span), symbols, ctx);
+            crate::checks::expr::report_void_truthiness(&left_result, left_span.or(fallback_span), ctx);
             // `b` in `a || b` runs only when `a` is falsy, so it also sees the
             // guards that falsity proves.
             let falsy = narrow_falsy_operand_symbol_table(left, symbols);
             let narrowed_symbols =
                 narrow_truthy_guarded_symbol_table(left, falsy.as_ref().unwrap_or(symbols));
-            let right_result = evaluate_condition_expression_with_truthy_guards(
+            let right_result = evaluate_guarded_condition(
                 right,
                 right_span.or(fallback_span),
                 &narrowed_symbols,

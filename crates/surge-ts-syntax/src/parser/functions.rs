@@ -783,9 +783,16 @@ fn parse_catch_clause(catch_clause: &CatchClause<'_>) -> crate::ParsedCatchClaus
         .as_ref()
         .map(|param| parse_binding_name(&param.pattern));
 
+    let declared_type_span = catch_clause
+        .param
+        .as_ref()
+        .and_then(|param| param.type_annotation.as_ref())
+        .map(|annotation| text_span_from_oxc_span(annotation.type_annotation.span()));
+
     crate::ParsedCatchClause {
         binding_name,
         declared_type,
+        declared_type_span,
         body: parse_block_statement_as_function_body(&catch_clause.body),
         span: Some(text_span_from_oxc_span(catch_clause.span)),
     }

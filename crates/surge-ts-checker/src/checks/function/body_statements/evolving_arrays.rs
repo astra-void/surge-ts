@@ -444,6 +444,7 @@ fn collect_expression_mutations(
         ParsedExpression::Unary { operand, .. }
         | ParsedExpression::Update { operand, .. }
         | ParsedExpression::Await { operand, .. } => recurse(operand, mutations),
+        ParsedExpression::ObjectRest { source, .. } => recurse(source, mutations),
         ParsedExpression::Sequence { expressions } => {
             for (expression, _) in expressions {
                 recurse(expression, mutations);

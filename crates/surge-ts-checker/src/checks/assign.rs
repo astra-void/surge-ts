@@ -13,6 +13,33 @@ use crate::program::{
 };
 use crate::symbols::{SymbolKind, SymbolTable};
 
+/// tsc's `checkIdentifier` write rejection, by what the name declares: an
+/// enum (TS2628), a class (TS2629), a function (TS2630), or a `const`
+/// (TS2588). Enum and class values are bound as `const`s whose static side
+/// carries the `typeof Name` display; a class's alone can be constructed.
+pub(crate) fn unwritable_binding_diagnostic(
+    name: &str,
+    symbol: &crate::symbols::SymbolInfo,
+    file_name: String,
+) -> Option<Diagnostic> {
+    match symbol.kind {
+        SymbolKind::Function => Some(Diagnostic::ts2630(name, file_name)),
+        SymbolKind::Const => {
+            if let surge_ts_types::Type::Object(object) = &symbol.ty
+                && object.alias_name.as_deref() == Some(format!("typeof {name}").as_str())
+            {
+                return Some(if object.construct_signature.is_some() {
+                    Diagnostic::ts2629(name, file_name)
+                } else {
+                    Diagnostic::ts2628(name, file_name)
+                });
+            }
+            Some(Diagnostic::ts2588(name, file_name))
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn check_assignment(assignment: ParsedAssignment, ctx: &mut CheckerContext) {
     let symbols = ctx.symbols.clone();
     check_assignment_with_symbols(assignment, &symbols, false, ctx);
@@ -29,6 +56,20 @@ pub(crate) fn check_assignment_with_symbols(
     };
 
     let Some(target) = symbols.get(&assignment.target_name) else {
+        // `undefined` is not a variable to tsc (`checkIdentifier` finds its
+        // symbol and rejects the write) — TS2539.
+        if assignment.target_name == "undefined" {
+            let diagnostic = Diagnostic::ts2539("undefined", ctx.file_name.clone())
+                .with_span(convert_span(target_span));
+            ctx.push(diagnostic);
+            return;
+        }
+        if ctx.namespace_meaning(&assignment.target_name) == Some(true) {
+            let diagnostic = Diagnostic::ts2631(&assignment.target_name, ctx.file_name.clone())
+                .with_span(convert_span(target_span));
+            ctx.push(diagnostic);
+            return;
+        }
         crate::checks::expr::report_unresolved_value_name(
             &assignment.target_name,
             Some(target_span),
@@ -46,10 +87,10 @@ pub(crate) fn check_assignment_with_symbols(
         return;
     }
 
-    if matches!(target.kind, SymbolKind::Const) {
-        let diagnostic = Diagnostic::ts2588(&assignment.target_name, ctx.file_name.clone())
-            .with_span(convert_span(target_span));
-        ctx.push(diagnostic);
+    if let Some(diagnostic) =
+        unwritable_binding_diagnostic(&assignment.target_name, target, ctx.file_name.clone())
+    {
+        ctx.push(diagnostic.with_span(convert_span(target_span)));
         return;
     }
 

@@ -176,9 +176,10 @@ fn infer_expression_unsettled(
                 })
         }
         ParsedExpression::This { span } => {
-            // tsc gates this on `noImplicitThis`; surge models no such flag, so
-            // it rides `noImplicitAny` — both derive from `strict`.
-            // TS2683 is withheld: an object-literal accessor under a
+            // The containers tsc answers without types — a function
+            // declaration, a namespace, an enum — are reported by the grammar
+            // pass under `noImplicitThis`. This path stays withheld: an
+            // object-literal accessor under a
             // contextual type reaches this through a path that does not clear
             // the flag, so zod's `const def: core.$ZodObjectDef = { get shape()
             // { … this.shape … } }` was a false positive. Re-enable with the
@@ -219,6 +220,12 @@ fn infer_expression_unsettled(
         ParsedExpression::Update { operand, .. } => {
             crate::checks::expr::update_result_type(&infer_expression(operand, symbols, ctx))
         }
+        ParsedExpression::ObjectRest { source, omitted } => match infer_expression(source, symbols, ctx) {
+            InferredExpression::Known(ty) => InferredExpression::Known(
+                crate::checks::function::object_rest_type(&ty, omitted),
+            ),
+            other => other,
+        },
         ParsedExpression::Sequence { expressions } => match expressions.last() {
             Some((last, _)) => infer_expression(last, symbols, ctx),
             None => InferredExpression::Unknown,

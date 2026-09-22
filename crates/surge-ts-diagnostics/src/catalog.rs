@@ -50,6 +50,19 @@ pub fn emitted_descriptor_for_number(number: u32) -> Option<&'static DiagnosticD
     })
 }
 
+/// The emitted descriptor for a TypeScript error number whose arguments the
+/// caller already holds, for grammar findings classified by number alone.
+pub fn emitted_descriptor_for_number_with_arity(
+    number: u32,
+    argument_count: usize,
+) -> Option<&'static DiagnosticDescriptor> {
+    DIAGNOSTIC_CATALOG.iter().find(|descriptor| {
+        descriptor.support == DiagnosticSupport::Emitted
+            && descriptor.argument_count == argument_count
+            && descriptor.number == Some(number)
+    })
+}
+
 pub fn cataloged_typescript_diagnostics() -> &'static [DiagnosticDescriptor] {
     cataloged_diagnostic_descriptors()
 }

@@ -828,6 +828,16 @@ pub(crate) fn emit_grammar_diagnostics(
     ctx: &mut CheckerContext,
 ) {
     for finding in findings {
+        let answered: &'static [u32] = match finding.kind {
+            surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2842) => &[7031],
+            surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2372 | 2373)
+            | surge_ts_syntax::ParsedGrammarDiagnosticKind::LaterParameterReference => &[2304, 2552],
+            _ => &[],
+        };
+        if !answered.is_empty() {
+            ctx.grammar_answered_spans
+                .push((crate::context::convert_span(finding.span), answered));
+        }
         if let Some(diagnostic) = grammar_finding_diagnostic(finding, ctx) {
             ctx.push(diagnostic);
         }
@@ -851,9 +861,44 @@ pub(crate) fn unclaimed_parser_errors<'a>(
             surge_ts_diagnostics::DiagnosticCode::Custom(_) => None,
         })
         .collect();
-    errors
+    // tsc's `checkGrammarModifiers` returns at the first modifier it rejects,
+    // so an `abstract` member outside an abstract class (TS1244/TS1253) never
+    // reaches the repeated-modifier check oxc reports as TS1030.
+    let abstract_members: Vec<surge_ts_syntax::TextSpan> = findings
         .iter()
-        .filter(move |error| !error.code.is_some_and(|code| claimed.contains(&code)))
+        .filter(|finding| {
+            matches!(
+                finding.kind,
+                surge_ts_syntax::ParsedGrammarDiagnosticKind::AbstractMethodOutsideAbstractClass
+                    | surge_ts_syntax::ParsedGrammarDiagnosticKind::AbstractPropertyOutsideAbstractClass
+            )
+        })
+        .map(|finding| finding.span)
+        .collect();
+    errors.iter().filter(move |error| {
+        if error.code.is_some_and(|code| claimed.contains(&code)) {
+            return false;
+        }
+        !(error.code == Some(1030)
+            && error.span.is_some_and(|span| {
+                abstract_members
+                    .iter()
+                    .any(|member| member.start <= span.start && span.end <= member.end)
+            }))
+    })
+}
+
+/// tsc's `checkExportAssignment` condition: `module` of ES2015 or later, not
+/// `preserve`, and a file whose emit format is not CommonJS (an explicit
+/// `.cts`/`.cjs`, or under node16/nodenext any file whose implied format is
+/// not ESM).
+fn export_assignment_targets_esm(ctx: &CheckerContext) -> bool {
+    let module = ctx.options.module_emit;
+    if module.is_node() {
+        return ctx.options.esm_module_files.contains(ctx.file_name.as_str());
+    }
+    let lower = ctx.file_name.to_ascii_lowercase();
+    module.is_ecmascript() && !lower.ends_with(".cts") && !lower.ends_with(".cjs")
 }
 
 fn grammar_finding_diagnostic(
@@ -863,6 +908,24 @@ fn grammar_finding_diagnostic(
     use surge_ts_syntax::ParsedGrammarDiagnosticKind as Kind;
 
     let diagnostic = match finding.kind {
+        Kind::LaterParameterReference => return None,
+        Kind::Ts(2683) if !ctx.options.no_implicit_this => return None,
+        Kind::Ts(1202) if !ctx.options.module_emit.is_ecmascript() => return None,
+        Kind::Ts(1203) if !export_assignment_targets_esm(ctx) => return None,
+        Kind::Ts(2699) if ctx.options.use_define_for_class_fields => return None,
+        Kind::TsUnderStrictNullChecks(_) if !ctx.options.strict_null_checks => return None,
+        Kind::Ts(number) | Kind::TsUnderStrictNullChecks(number) => {
+            let args: Vec<surge_ts_diagnostics::DiagnosticArg> = finding
+                .name
+                .as_deref()
+                .map(|names| names.split('\0').map(Into::into).collect())
+                .unwrap_or_default();
+            let descriptor = surge_ts_diagnostics::emitted_descriptor_for_number_with_arity(
+                number,
+                args.len(),
+            )?;
+            Diagnostic::from_descriptor(descriptor, args, ctx.file_name.clone())
+        }
         Kind::ConstNotInitialized => Diagnostic::ts1155(ctx.file_name.clone()),
         Kind::AwaitOutsideAsyncFunction => Diagnostic::ts1308(ctx.file_name.clone()),
         Kind::ExportDeclarationInNamespace => Diagnostic::ts1194(ctx.file_name.clone()),

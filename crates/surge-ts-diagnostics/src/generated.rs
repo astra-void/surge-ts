@@ -992,7 +992,7 @@ pub const TS7019: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Rest parameter '{0}' implicitly has an 'any[]' type.",
     argument_count: 1,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS4111: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -1902,7 +1902,7 @@ pub const TS2683: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "'this' implicitly has type 'any' because it does not have a type annotation.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1019: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -1952,7 +1952,7 @@ pub const TS1047: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "A rest parameter cannot be optional.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1051: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -2142,7 +2142,7 @@ pub const TS1184: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Modifiers cannot appear here.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1187: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -2182,7 +2182,7 @@ pub const TS1263: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Declarations with initializers cannot also have definite assignment assertions.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1264: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -2192,7 +2192,7 @@ pub const TS1264: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Declarations with definite assignment assertions must also have type annotations.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1265: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -2262,7 +2262,7 @@ pub const TS1477: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "An instantiation expression cannot be followed by a property access.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1490: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -2282,7 +2282,7 @@ pub const TS1502: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "The Unicode (u) flag and the Unicode Sets (v) flag cannot be set simultaneously.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1545: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -2292,7 +2292,7 @@ pub const TS1545: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "'using' declarations are not allowed in ambient contexts.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1546: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -2302,7 +2302,7 @@ pub const TS1546: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "'await using' declarations are not allowed in ambient contexts.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS2206: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -2745,6 +2745,1166 @@ pub const TS7017: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1107: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1107",
+    number: Some(1107),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Jump target cannot cross function boundary.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1115: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1115",
+    number: Some(1115),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A 'continue' statement can only jump to a label of an enclosing iteration statement.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1116: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1116",
+    number: Some(1116),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A 'break' statement can only jump to a label of an enclosing statement.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1105: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1105",
+    number: Some(1105),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A 'break' statement can only be used within an enclosing iteration or switch statement.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1104: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1104",
+    number: Some(1104),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A 'continue' statement can only be used within an enclosing iteration statement.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1114: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1114",
+    number: Some(1114),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Duplicate label '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1344: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1344",
+    number: Some(1344),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A label is not allowed here.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1101: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1101",
+    number: Some(1101),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'with' statements are not allowed in strict mode.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2410: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2410",
+    number: Some(2410),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1100: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1100",
+    number: Some(1100),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Invalid use of '{0}' in strict mode.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1210: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1210",
+    number: Some(1210),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Code contained in a class is evaluated in JavaScript's strict mode which does not allow this use of '{0}'. For more information, see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Strict_mode.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1215: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1215",
+    number: Some(1215),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Invalid use of '{0}'. Modules are automatically in strict mode.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1212: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1212",
+    number: Some(1212),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Identifier expected. '{0}' is a reserved word in strict mode.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1213: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1213",
+    number: Some(1213),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Identifier expected. '{0}' is a reserved word in strict mode. Class definitions are automatically in strict mode.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1214: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1214",
+    number: Some(1214),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Identifier expected. '{0}' is a reserved word in strict mode. Modules are automatically in strict mode.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS17013: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS17013",
+    number: Some(17013),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Meta-property '{0}' is only allowed in the body of a function declaration, function expression, or constructor.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2526: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2526",
+    number: Some(2526),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A 'this' type is available only in a non-static member of a class or interface.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1338: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1338",
+    number: Some(1338),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'infer' declarations are only permitted in the 'extends' clause of a conditional type.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2427: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2427",
+    number: Some(2427),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Interface name cannot be '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2457: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2457",
+    number: Some(2457),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type alias name cannot be '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2431: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2431",
+    number: Some(2431),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Enum name cannot be '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2368: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2368",
+    number: Some(2368),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type parameter name cannot be '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2414: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2414",
+    number: Some(2414),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Class name cannot be '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2492: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2492",
+    number: Some(2492),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot redeclare identifier '{0}' in catch clause.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2480: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2480",
+    number: Some(2480),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'let' is not allowed to be used as a name in 'let' or 'const' declarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1163: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1163",
+    number: Some(1163),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A 'yield' expression is only allowed in a generator body.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2523: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2523",
+    number: Some(2523),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'yield' expressions cannot be used in a parameter initializer.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2524: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2524",
+    number: Some(2524),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'await' expressions cannot be used in a parameter initializer.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS18037: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS18037",
+    number: Some(18037),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'await' expression cannot be used inside a class static block.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1103: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1103",
+    number: Some(1103),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'for await' loops are only allowed within async functions and at the top levels of modules.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2335: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2335",
+    number: Some(2335),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'super' can only be referenced in a derived class.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2337: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2337",
+    number: Some(2337),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Super calls are not permitted outside constructors or in nested functions inside constructors.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2660: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2660",
+    number: Some(2660),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'super' can only be referenced in members of derived classes or object literal expressions.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2466: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2466",
+    number: Some(2466),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'super' cannot be referenced in a computed property name.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2465: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2465",
+    number: Some(2465),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'this' cannot be referenced in a computed property name.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2331: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2331",
+    number: Some(2331),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'this' cannot be referenced in a module or namespace body.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2332: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2332",
+    number: Some(2332),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'this' cannot be referenced in current location.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1036: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1036",
+    number: Some(1036),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Statements are not allowed in ambient contexts.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1038: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1038",
+    number: Some(1038),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A 'declare' modifier cannot be used in an already ambient context.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1337: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1337",
+    number: Some(1337),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An index signature parameter type cannot be a literal type or generic type. Consider using a mapped object type instead.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1268: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1268",
+    number: Some(1268),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An index signature parameter type must be 'string', 'number', 'symbol', or a template literal type.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2374: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2374",
+    number: Some(2374),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Duplicate index signature for type '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2567: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2567",
+    number: Some(2567),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Enum declarations can only merge with namespace or other enum declarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1182: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1182",
+    number: Some(1182),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A destructuring declaration must have an initializer.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1070: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1070",
+    number: Some(1070),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' modifier cannot appear on a type member.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1071: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1071",
+    number: Some(1071),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' modifier cannot appear on an index signature.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1090: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1090",
+    number: Some(1090),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' modifier cannot appear on a parameter.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1273: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1273",
+    number: Some(1273),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' modifier cannot appear on a type parameter",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1031: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1031",
+    number: Some(1031),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' modifier cannot appear on class elements of this kind.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1248: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1248",
+    number: Some(1248),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A class member cannot have the '{0}' keyword.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2628: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2628",
+    number: Some(2628),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot assign to '{0}' because it is an enum.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2629: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2629",
+    number: Some(2629),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot assign to '{0}' because it is a class.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2630: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2630",
+    number: Some(2630),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot assign to '{0}' because it is a function.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2631: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2631",
+    number: Some(2631),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot assign to '{0}' because it is a namespace.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1345: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1345",
+    number: Some(1345),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An expression of type 'void' cannot be tested for truthiness.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2783: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2783",
+    number: Some(2783),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' is specified more than once, so this usage will be overwritten.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2464: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2464",
+    number: Some(2464),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2359: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2359",
+    number: Some(2359),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The right-hand side of an 'instanceof' expression must be either of type 'any', a class, function, or other type assignable to the 'Function' interface type, or an object type with a 'Symbol.hasInstance' method.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2383: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2383",
+    number: Some(2383),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Overload signatures must all be exported or non-exported.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2384: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2384",
+    number: Some(2384),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Overload signatures must all be ambient or non-ambient.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2385: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2385",
+    number: Some(2385),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Overload signatures must all be public, private or protected.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2386: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2386",
+    number: Some(2386),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Overload signatures must all be optional or required.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2387: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2387",
+    number: Some(2387),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Function overload must be static.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2388: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2388",
+    number: Some(2388),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Function overload must not be static.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2389: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2389",
+    number: Some(2389),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Function implementation name must be '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2512: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2512",
+    number: Some(2512),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Overload signatures must all be abstract or non-abstract.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2309: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2309",
+    number: Some(2309),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An export assignment cannot be used in a module with other exported elements.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2395: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2395",
+    number: Some(2395),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Individual declarations in merged declaration '{0}' must be all exported or all local.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2428: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2428",
+    number: Some(2428),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "All declarations of '{0}' must have identical type parameters.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2370: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2370",
+    number: Some(2370),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A rest parameter must be of an array type.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1030: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1030",
+    number: Some(1030),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' modifier already seen.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2450: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2450",
+    number: Some(2450),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Enum '{0}' used before its declaration.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1118: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1118",
+    number: Some(1118),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An object literal cannot have multiple get/set accessors with the same name.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1255: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1255",
+    number: Some(1255),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A definite assignment assertion '!' is not permitted in this context.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1156: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1156",
+    number: Some(1156),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' declarations can only be declared inside a block.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2411: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2411",
+    number: Some(2411),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Property '{0}' of type '{1}' is not assignable to '{2}' index type '{3}'.",
+    argument_count: 4,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2842: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2842",
+    number: Some(2842),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' is an unused renaming of '{1}'. Did you intend to use it as a type annotation?",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2372: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2372",
+    number: Some(2372),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Parameter '{0}' cannot reference itself.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2373: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2373",
+    number: Some(2373),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Parameter '{0}' cannot reference identifier '{1}' declared after it.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2804: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2804",
+    number: Some(2804),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Duplicate identifier '{0}'. Static and instance elements cannot share the same private name.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2502: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2502",
+    number: Some(2502),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' is referenced directly or indirectly in its own type annotation.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2313: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2313",
+    number: Some(2313),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type parameter '{0}' has a circular constraint.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1330: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1330",
+    number: Some(1330),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A property of an interface or type literal whose type is a 'unique symbol' type must be 'readonly'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1331: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1331",
+    number: Some(1331),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A property of a class whose type is a 'unique symbol' type must be both 'static' and 'readonly'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1332: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1332",
+    number: Some(1332),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A variable whose type is a 'unique symbol' type must be 'const'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1335: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1335",
+    number: Some(1335),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'unique symbol' types are not allowed here.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1206: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1206",
+    number: Some(1206),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Decorators are not valid here.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1147: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1147",
+    number: Some(1147),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Import declarations in a namespace cannot reference a module.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2880: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2880",
+    number: Some(2880),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Import assertions have been replaced by import attributes. Use 'with' instead of 'assert'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2348: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2348",
+    number: Some(2348),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Value of type '{0}' is not callable. Did you mean to include 'new'?",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2539: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2539",
+    number: Some(2539),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot assign to '{0}' because it is not a variable.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1089: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1089",
+    number: Some(1089),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' modifier cannot appear on a constructor declaration.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1202: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1202",
+    number: Some(1202),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Import assignment cannot be used when targeting ECMAScript modules. Consider using 'import * as ns from \"mod\"', 'import {a} from \"mod\"', 'import d from \"mod\"', or another module format instead.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1203: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1203",
+    number: Some(1203),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Export assignment cannot be used when targeting ECMAScript modules. Consider using 'export default' or another module format instead.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2699: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2699",
+    number: Some(2699),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Static property '{0}' conflicts with built-in property 'Function.{0}' of constructor function '{1}'.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1274: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1274",
+    number: Some(1274),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' modifier can only appear on a type parameter of a class, interface or type alias",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2637: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2637",
+    number: Some(2637),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Variance annotations are only supported in type aliases for object, function, constructor, and mapped types.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1333: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1333",
+    number: Some(1333),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'unique symbol' types may not be used on a variable declaration with a binding name.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1334: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1334",
+    number: Some(1334),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'unique symbol' types are only allowed on variables in a variable statement.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1091: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1091",
+    number: Some(1091),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Only a single variable declaration is allowed in a 'for...in' statement.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1188: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1188",
+    number: Some(1188),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Only a single variable declaration is allowed in a 'for...of' statement.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1189: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1189",
+    number: Some(1189),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The variable declaration of a 'for...in' statement cannot have an initializer.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1190: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1190",
+    number: Some(1190),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The variable declaration of a 'for...of' statement cannot have an initializer.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2404: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2404",
+    number: Some(2404),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The left-hand side of a 'for...in' statement cannot use a type annotation.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2483: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2483",
+    number: Some(2483),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The left-hand side of a 'for...of' statement cannot use a type annotation.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2364: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2364",
+    number: Some(2364),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The left-hand side of an assignment expression must be a variable or a property access.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2357: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2357",
+    number: Some(2357),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The operand of an increment or decrement operator must be a variable or a property access.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2779: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2779",
+    number: Some(2779),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The left-hand side of an assignment expression may not be an optional property access.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2777: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2777",
+    number: Some(2777),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The operand of an increment or decrement operator may not be an optional property access.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1014: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1014",
+    number: Some(1014),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A rest parameter must be last in a parameter list.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2462: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2462",
+    number: Some(2462),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A rest element must be last in a destructuring pattern.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1166: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1166",
+    number: Some(1166),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1169: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1169",
+    number: Some(1169),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A computed property name in an interface must refer to an expression whose type is a literal type or a 'unique symbol' type.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1170: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1170",
+    number: Some(1170),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A computed property name in a type literal must refer to an expression whose type is a literal type or a 'unique symbol' type.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2834: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2834",
+    number: Some(2834),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Consider adding an extension to the import path.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2835: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2835",
+    number: Some(2835),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '{0}'?",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
     TS5112,
@@ -3020,6 +4180,122 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1308,
     TS7026,
     TS7017,
+    TS1107,
+    TS1115,
+    TS1116,
+    TS1105,
+    TS1104,
+    TS1114,
+    TS1344,
+    TS1101,
+    TS2410,
+    TS1100,
+    TS1210,
+    TS1215,
+    TS1212,
+    TS1213,
+    TS1214,
+    TS17013,
+    TS2526,
+    TS1338,
+    TS2427,
+    TS2457,
+    TS2431,
+    TS2368,
+    TS2414,
+    TS2492,
+    TS2480,
+    TS1163,
+    TS2523,
+    TS2524,
+    TS18037,
+    TS1103,
+    TS2335,
+    TS2337,
+    TS2660,
+    TS2466,
+    TS2465,
+    TS2331,
+    TS2332,
+    TS1036,
+    TS1038,
+    TS1337,
+    TS1268,
+    TS2374,
+    TS2567,
+    TS1182,
+    TS1070,
+    TS1071,
+    TS1090,
+    TS1273,
+    TS1031,
+    TS1248,
+    TS2628,
+    TS2629,
+    TS2630,
+    TS2631,
+    TS1345,
+    TS2783,
+    TS2464,
+    TS2359,
+    TS2383,
+    TS2384,
+    TS2385,
+    TS2386,
+    TS2387,
+    TS2388,
+    TS2389,
+    TS2512,
+    TS2309,
+    TS2395,
+    TS2428,
+    TS2370,
+    TS1030,
+    TS2450,
+    TS1118,
+    TS1255,
+    TS1156,
+    TS2411,
+    TS2842,
+    TS2372,
+    TS2373,
+    TS2804,
+    TS2502,
+    TS2313,
+    TS1330,
+    TS1331,
+    TS1332,
+    TS1335,
+    TS1206,
+    TS1147,
+    TS2880,
+    TS2348,
+    TS2539,
+    TS1089,
+    TS1202,
+    TS1203,
+    TS2699,
+    TS1274,
+    TS2637,
+    TS1333,
+    TS1334,
+    TS1091,
+    TS1188,
+    TS1189,
+    TS1190,
+    TS2404,
+    TS2483,
+    TS2364,
+    TS2357,
+    TS2779,
+    TS2777,
+    TS1014,
+    TS2462,
+    TS1166,
+    TS1169,
+    TS1170,
+    TS2834,
+    TS2835,
 ];
 
 impl Diagnostic {
@@ -5280,6 +6556,786 @@ impl Diagnostic {
     pub fn ts7017(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS7017,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1107(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1107, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1115(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1115, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1116(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1116, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1105(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1105, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1104(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1104, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1114(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1114,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1344(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1344, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1101(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1101, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2410(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2410, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1100(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1100,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1210(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1210,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1215(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1215,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1212(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1212,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1213(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1213,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1214(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1214,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts17013(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS17013,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2526(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2526, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1338(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1338, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2427(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2427,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2457(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2457,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2431(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2431,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2368(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2368,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2414(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2414,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2492(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2492,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2480(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2480, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1163(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1163, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2523(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2523, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2524(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2524, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts18037(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS18037, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1103(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1103, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2335(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2335, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2337(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2337, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2660(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2660, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2466(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2466, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2465(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2465, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2331(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2331, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2332(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2332, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1036(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1036, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1038(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1038, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1337(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1337, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1268(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1268, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2374(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2374,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2567(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2567, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1182(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1182, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1070(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1070,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1071(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1071,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1090(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1090,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1273(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1273,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1031(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1031,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1248(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1248,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2628(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2628,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2629(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2629,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2630(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2630,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2631(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2631,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1345(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1345, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2783(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2783,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2464(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2464, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2359(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2359, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2383(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2383, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2384(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2384, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2385(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2385, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2386(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2386, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2387(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2387, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2388(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2388, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2389(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2389,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2512(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2512, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2309(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2309, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2395(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2395,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2428(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2428,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2370(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2370, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1030(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1030,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2450(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2450,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1118(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1118, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1255(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1255, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1156(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1156,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2411(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        arg3: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2411,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+                DiagnosticArg::from(arg3.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2842(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2842,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2372(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2372,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2373(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2373,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2804(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2804,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2502(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2502,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2313(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2313,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1330(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1330, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1331(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1331, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1332(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1332, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1335(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1335, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1206(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1206, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1147(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1147, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2880(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2880, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2348(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2348,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2539(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2539,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1089(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1089,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1202(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1202, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1203(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1203, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2699(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2699,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1274(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1274,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2637(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2637, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1333(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1333, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1334(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1334, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1091(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1091, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1188(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1188, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1189(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1189, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1190(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1190, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2404(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2404, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2483(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2483, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2364(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2364, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2357(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2357, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2779(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2779, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2777(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2777, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1014(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1014, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2462(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2462, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1166(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1166, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1169(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1169, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1170(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1170, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2834(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2834, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2835(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2835,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )

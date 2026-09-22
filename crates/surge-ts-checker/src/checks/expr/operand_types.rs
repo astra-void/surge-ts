@@ -120,6 +120,46 @@ pub(crate) fn check_instanceof_left_operand(
     ctx.push(Diagnostic::ts2358(file_name).with_span(convert_span(span)));
 }
 
+/// tsc's `resolveInstanceofExpression` failure — TS2359, on the right
+/// operand: not `any`, no `[Symbol.hasInstance]`, no call or construct
+/// signature, and not a `Function`. Only the shapes surge sees whole are
+/// judged: primitives, and object types that carry none of those members.
+pub(crate) fn check_instanceof_right_operand(
+    right_result: &InferredExpression,
+    right_span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    let (InferredExpression::Known(ty), Some(span)) = (right_result, right_span) else {
+        return;
+    };
+    if !cannot_be_instanceof_target(ty) {
+        return;
+    }
+    let file_name = ctx.file_name.clone();
+    ctx.push(Diagnostic::ts2359(file_name).with_span(convert_span(span)));
+}
+
+fn cannot_be_instanceof_target(ty: &Type) -> bool {
+    match ty {
+        Type::Reference(reference) => cannot_be_instanceof_target(&reference.resolve()),
+        Type::Object(object) => {
+            object.construct_signature.is_none()
+                && object.call_signature.is_none()
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none()
+                && !object.is_intersection
+                && !object
+                    .alias_name
+                    .as_deref()
+                    .is_some_and(|name| name.ends_with("Function"))
+                && !object.properties.keys().any(|name| {
+                    matches!(name.as_ref(), "apply" | "call" | "bind") || name.contains("hasInstance")
+                })
+        }
+        other => !other.is_unknown() && is_all_primitive(other),
+    }
+}
+
 /// tsc's `getIteratedTypeOrElementType` failure (TS2488) for a type surge can
 /// see has no iteration protocol. `nullish_is_error` separates a spread, where
 /// `undefined` and `unknown` are themselves not iterable, from `for…of`, where

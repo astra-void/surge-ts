@@ -1248,5 +1248,6 @@ pub(crate) fn parse_type_alias_declaration(
         type_span: Some(text_span_from_oxc_span(declaration.type_annotation.span())),
         enum_name: None,
         enum_exported: false,
+        enum_is_const: false,
     })
 }

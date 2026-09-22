@@ -1,4 +1,4 @@
-//! Class used before its declaration (TS2449), ported from
+//! Class or enum used before its declaration (TS2449/TS2450), ported from
 //! `checkResolvedBlockScopedVariable` / `isBlockScopedNameDeclaredBeforeUse` in
 //! `tsc/internal/checker/checker.go`.
 //!
@@ -23,16 +23,26 @@ use surge_ts_syntax::{
 use crate::context::{CheckerContext, convert_span};
 use surge_ts_types::fx::FxHashMap;
 
-/// Where each non-ambient class in this file is declared. An ambient
-/// (`declare class`) declaration has no evaluation to be early of, which is why
-/// tsc exempts it.
-pub(crate) fn file_class_declarations(statements: &[ParsedStatement]) -> FxHashMap<String, TextSpan> {
+/// A declaration whose binding is in its temporal dead zone until evaluated.
+#[derive(Clone, Copy)]
+pub(crate) struct ForwardDeclaration {
+    span: TextSpan,
+    is_enum: bool,
+}
+
+/// Where each non-ambient class and regular enum in this file is declared. An
+/// ambient declaration has no evaluation to be early of, and a `const enum`
+/// no runtime binding at all (outside `isolatedModules`), which is why tsc
+/// exempts both.
+pub(crate) fn file_class_declarations(
+    statements: &[ParsedStatement],
+) -> FxHashMap<String, ForwardDeclaration> {
     let mut declarations = FxHashMap::default();
     collect(statements, &mut declarations);
     declarations
 }
 
-fn collect(statements: &[ParsedStatement], out: &mut FxHashMap<String, TextSpan>) {
+fn collect(statements: &[ParsedStatement], out: &mut FxHashMap<String, ForwardDeclaration>) {
     for statement in statements {
         match statement {
             ParsedStatement::ClassDeclaration(class) => {
@@ -40,7 +50,18 @@ fn collect(statements: &[ParsedStatement], out: &mut FxHashMap<String, TextSpan>
                     continue;
                 }
                 if let Some(span) = class.name_span {
-                    out.entry(class.name.clone()).or_insert(span);
+                    out.entry(class.name.clone())
+                        .or_insert(ForwardDeclaration { span, is_enum: false });
+                }
+            }
+            ParsedStatement::TypeAliasDeclaration(alias)
+                if alias.enum_name.as_deref() == Some(alias.name.as_str())
+                    && !alias.is_declare
+                    && !alias.enum_is_const =>
+            {
+                if let Some(span) = alias.name_span {
+                    out.entry(alias.name.clone())
+                        .or_insert(ForwardDeclaration { span, is_enum: true });
                 }
             }
             ParsedStatement::ExportDeclaration(export) => {
@@ -55,7 +76,7 @@ fn collect(statements: &[ParsedStatement], out: &mut FxHashMap<String, TextSpan>
 
 pub(crate) fn check_statement_forward_references(
     statement: &ParsedStatement,
-    classes: &FxHashMap<String, TextSpan>,
+    classes: &FxHashMap<String, ForwardDeclaration>,
     ctx: &mut CheckerContext,
 ) {
     if classes.is_empty() {
@@ -65,8 +86,12 @@ pub(crate) fn check_statement_forward_references(
     for_each_statement_expression(statement, &mut |expression| {
         walk(expression, classes, &mut reported);
     });
-    for (name, span) in reported {
-        let diagnostic = Diagnostic::ts2449(&name, ctx.file_name.clone());
+    for (name, span, is_enum) in reported {
+        let diagnostic = if is_enum {
+            Diagnostic::ts2450(&name, ctx.file_name.clone())
+        } else {
+            Diagnostic::ts2449(&name, ctx.file_name.clone())
+        };
         ctx.push(diagnostic.with_span(convert_span(span)));
     }
 }
@@ -98,15 +123,15 @@ fn for_each_statement_expression(
 
 fn walk(
     expression: &ParsedExpression,
-    classes: &FxHashMap<String, TextSpan>,
-    reported: &mut Vec<(String, TextSpan)>,
+    classes: &FxHashMap<String, ForwardDeclaration>,
+    reported: &mut Vec<(String, TextSpan, bool)>,
 ) {
     if let ParsedExpression::Identifier { name, span } = expression
-        && let Some(declared_at) = classes.get(name)
+        && let Some(declared) = classes.get(name)
         && let Some(use_span) = span
-        && use_span.start < declared_at.start
+        && use_span.start < declared.span.start
     {
-        reported.push((name.clone(), *use_span));
+        reported.push((name.clone(), *use_span, declared.is_enum));
         return;
     }
 
@@ -166,6 +191,7 @@ fn for_each_child_expression(
         ParsedExpression::Unary { operand, .. }
         | ParsedExpression::Update { operand, .. }
         | ParsedExpression::Await { operand, .. } => visit(operand),
+        ParsedExpression::ObjectRest { source, .. } => visit(source),
         ParsedExpression::Sequence { expressions } => {
             for (expression, _) in expressions {
                 visit(expression);

@@ -1,8 +1,8 @@
 
 use surge_ts_diagnostics::{Diagnostic, DiagnosticCode};
 use surge_ts_syntax::{
-    ParsedBindingName, ParsedExpression, ParsedForOfStatement, ParsedIfStatement,
-    ParsedSwitchStatement, ParsedTryStatement, ParsedType, ParsedWhileStatement,
+    ParsedExpression, ParsedForOfStatement, ParsedIfStatement, ParsedSwitchStatement,
+    ParsedTryStatement, ParsedType, ParsedWhileStatement,
 };
 use surge_ts_types::{Type, TypeCopyReason, union_type, with_type_copy_reason};
 
@@ -1152,10 +1152,8 @@ pub(crate) fn check_function_try_statement(
                             "Catch clause variable type annotation must be 'any' or 'unknown' if specified.",
                             ctx.file_name.clone(),
                         );
-                        if let ParsedBindingName::Identifier { span, .. } = binding_name {
-                            if let Some(span) = span {
-                                diagnostic = diagnostic.with_span(convert_span(*span));
-                            }
+                        if let Some(span) = handler_clause.declared_type_span {
+                            diagnostic = diagnostic.with_span(convert_span(span));
                         }
                         ctx.push(diagnostic);
                     }
@@ -1259,10 +1257,8 @@ pub(crate) fn check_function_try_statement(
                             "Catch clause variable type annotation must be 'any' or 'unknown' if specified.",
                             ctx.file_name.clone(),
                         );
-                        if let ParsedBindingName::Identifier { span, .. } = binding_name {
-                            if let Some(span) = span {
-                                diagnostic = diagnostic.with_span(convert_span(*span));
-                            }
+                        if let Some(span) = handler_clause.declared_type_span {
+                            diagnostic = diagnostic.with_span(convert_span(span));
                         }
                         ctx.push(diagnostic);
                     }

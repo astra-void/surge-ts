@@ -1127,6 +1127,11 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
             }
         }
     });
+    let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    for (key, span) in &class.computed_keys {
+        let key_type = crate::checks::expr::evaluate_expression(key, *span, &symbols, ctx);
+        crate::checks::expr::report_invalid_computed_key(&key_type, *span, ctx);
+    }
     // Everything checked from here on is lexically inside the class, which is
     // what decides whether its `private`/`protected` members are reachable.
     let lineage = crate::checks::expr::enclosing_class_lineage(class, ctx);

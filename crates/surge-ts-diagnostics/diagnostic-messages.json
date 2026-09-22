@@ -789,7 +789,7 @@
     "message": "Rest parameter '{0}' implicitly has an 'any[]' type.",
     "source": "typescript",
     "arity": 1,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS4111",
@@ -1517,7 +1517,7 @@
     "message": "'this' implicitly has type 'any' because it does not have a type annotation.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1019",
@@ -1557,7 +1557,7 @@
     "message": "A rest parameter cannot be optional.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1051",
@@ -1709,7 +1709,7 @@
     "message": "Modifiers cannot appear here.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1187",
@@ -1741,7 +1741,7 @@
     "message": "Declarations with initializers cannot also have definite assignment assertions.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1264",
@@ -1749,7 +1749,7 @@
     "message": "Declarations with definite assignment assertions must also have type annotations.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1265",
@@ -1805,7 +1805,7 @@
     "message": "An instantiation expression cannot be followed by a property access.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1490",
@@ -1821,7 +1821,7 @@
     "message": "The Unicode (u) flag and the Unicode Sets (v) flag cannot be set simultaneously.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1545",
@@ -1829,7 +1829,7 @@
     "message": "'using' declarations are not allowed in ambient contexts.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1546",
@@ -1837,7 +1837,7 @@
     "message": "'await using' declarations are not allowed in ambient contexts.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2206",
@@ -2187,6 +2187,934 @@
     "code": "TS7017",
     "category": "Error",
     "message": "Element implicitly has an 'any' type because type '{0}' has no index signature.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1107",
+    "category": "Error",
+    "message": "Jump target cannot cross function boundary.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1115",
+    "category": "Error",
+    "message": "A 'continue' statement can only jump to a label of an enclosing iteration statement.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1116",
+    "category": "Error",
+    "message": "A 'break' statement can only jump to a label of an enclosing statement.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1105",
+    "category": "Error",
+    "message": "A 'break' statement can only be used within an enclosing iteration or switch statement.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1104",
+    "category": "Error",
+    "message": "A 'continue' statement can only be used within an enclosing iteration statement.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1114",
+    "category": "Error",
+    "message": "Duplicate label '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1344",
+    "category": "Error",
+    "message": "A label is not allowed here.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1101",
+    "category": "Error",
+    "message": "'with' statements are not allowed in strict mode.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2410",
+    "category": "Error",
+    "message": "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1100",
+    "category": "Error",
+    "message": "Invalid use of '{0}' in strict mode.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1210",
+    "category": "Error",
+    "message": "Code contained in a class is evaluated in JavaScript's strict mode which does not allow this use of '{0}'. For more information, see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Strict_mode.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1215",
+    "category": "Error",
+    "message": "Invalid use of '{0}'. Modules are automatically in strict mode.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1212",
+    "category": "Error",
+    "message": "Identifier expected. '{0}' is a reserved word in strict mode.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1213",
+    "category": "Error",
+    "message": "Identifier expected. '{0}' is a reserved word in strict mode. Class definitions are automatically in strict mode.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1214",
+    "category": "Error",
+    "message": "Identifier expected. '{0}' is a reserved word in strict mode. Modules are automatically in strict mode.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17013",
+    "category": "Error",
+    "message": "Meta-property '{0}' is only allowed in the body of a function declaration, function expression, or constructor.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2526",
+    "category": "Error",
+    "message": "A 'this' type is available only in a non-static member of a class or interface.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1338",
+    "category": "Error",
+    "message": "'infer' declarations are only permitted in the 'extends' clause of a conditional type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2427",
+    "category": "Error",
+    "message": "Interface name cannot be '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2457",
+    "category": "Error",
+    "message": "Type alias name cannot be '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2431",
+    "category": "Error",
+    "message": "Enum name cannot be '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2368",
+    "category": "Error",
+    "message": "Type parameter name cannot be '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2414",
+    "category": "Error",
+    "message": "Class name cannot be '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2492",
+    "category": "Error",
+    "message": "Cannot redeclare identifier '{0}' in catch clause.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2480",
+    "category": "Error",
+    "message": "'let' is not allowed to be used as a name in 'let' or 'const' declarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1163",
+    "category": "Error",
+    "message": "A 'yield' expression is only allowed in a generator body.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2523",
+    "category": "Error",
+    "message": "'yield' expressions cannot be used in a parameter initializer.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2524",
+    "category": "Error",
+    "message": "'await' expressions cannot be used in a parameter initializer.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18037",
+    "category": "Error",
+    "message": "'await' expression cannot be used inside a class static block.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1103",
+    "category": "Error",
+    "message": "'for await' loops are only allowed within async functions and at the top levels of modules.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2335",
+    "category": "Error",
+    "message": "'super' can only be referenced in a derived class.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2337",
+    "category": "Error",
+    "message": "Super calls are not permitted outside constructors or in nested functions inside constructors.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2660",
+    "category": "Error",
+    "message": "'super' can only be referenced in members of derived classes or object literal expressions.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2466",
+    "category": "Error",
+    "message": "'super' cannot be referenced in a computed property name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2465",
+    "category": "Error",
+    "message": "'this' cannot be referenced in a computed property name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2331",
+    "category": "Error",
+    "message": "'this' cannot be referenced in a module or namespace body.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2332",
+    "category": "Error",
+    "message": "'this' cannot be referenced in current location.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1036",
+    "category": "Error",
+    "message": "Statements are not allowed in ambient contexts.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1038",
+    "category": "Error",
+    "message": "A 'declare' modifier cannot be used in an already ambient context.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1337",
+    "category": "Error",
+    "message": "An index signature parameter type cannot be a literal type or generic type. Consider using a mapped object type instead.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1268",
+    "category": "Error",
+    "message": "An index signature parameter type must be 'string', 'number', 'symbol', or a template literal type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2374",
+    "category": "Error",
+    "message": "Duplicate index signature for type '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2567",
+    "category": "Error",
+    "message": "Enum declarations can only merge with namespace or other enum declarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1182",
+    "category": "Error",
+    "message": "A destructuring declaration must have an initializer.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1070",
+    "category": "Error",
+    "message": "'{0}' modifier cannot appear on a type member.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1071",
+    "category": "Error",
+    "message": "'{0}' modifier cannot appear on an index signature.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1090",
+    "category": "Error",
+    "message": "'{0}' modifier cannot appear on a parameter.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1273",
+    "category": "Error",
+    "message": "'{0}' modifier cannot appear on a type parameter",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1031",
+    "category": "Error",
+    "message": "'{0}' modifier cannot appear on class elements of this kind.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1248",
+    "category": "Error",
+    "message": "A class member cannot have the '{0}' keyword.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2628",
+    "category": "Error",
+    "message": "Cannot assign to '{0}' because it is an enum.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2629",
+    "category": "Error",
+    "message": "Cannot assign to '{0}' because it is a class.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2630",
+    "category": "Error",
+    "message": "Cannot assign to '{0}' because it is a function.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2631",
+    "category": "Error",
+    "message": "Cannot assign to '{0}' because it is a namespace.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1345",
+    "category": "Error",
+    "message": "An expression of type 'void' cannot be tested for truthiness.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2783",
+    "category": "Error",
+    "message": "'{0}' is specified more than once, so this usage will be overwritten.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2464",
+    "category": "Error",
+    "message": "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2359",
+    "category": "Error",
+    "message": "The right-hand side of an 'instanceof' expression must be either of type 'any', a class, function, or other type assignable to the 'Function' interface type, or an object type with a 'Symbol.hasInstance' method.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2383",
+    "category": "Error",
+    "message": "Overload signatures must all be exported or non-exported.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2384",
+    "category": "Error",
+    "message": "Overload signatures must all be ambient or non-ambient.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2385",
+    "category": "Error",
+    "message": "Overload signatures must all be public, private or protected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2386",
+    "category": "Error",
+    "message": "Overload signatures must all be optional or required.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2387",
+    "category": "Error",
+    "message": "Function overload must be static.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2388",
+    "category": "Error",
+    "message": "Function overload must not be static.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2389",
+    "category": "Error",
+    "message": "Function implementation name must be '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2512",
+    "category": "Error",
+    "message": "Overload signatures must all be abstract or non-abstract.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2309",
+    "category": "Error",
+    "message": "An export assignment cannot be used in a module with other exported elements.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2395",
+    "category": "Error",
+    "message": "Individual declarations in merged declaration '{0}' must be all exported or all local.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2428",
+    "category": "Error",
+    "message": "All declarations of '{0}' must have identical type parameters.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2370",
+    "category": "Error",
+    "message": "A rest parameter must be of an array type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1030",
+    "category": "Error",
+    "message": "'{0}' modifier already seen.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2450",
+    "category": "Error",
+    "message": "Enum '{0}' used before its declaration.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1118",
+    "category": "Error",
+    "message": "An object literal cannot have multiple get/set accessors with the same name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1255",
+    "category": "Error",
+    "message": "A definite assignment assertion '!' is not permitted in this context.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1156",
+    "category": "Error",
+    "message": "'{0}' declarations can only be declared inside a block.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2411",
+    "category": "Error",
+    "message": "Property '{0}' of type '{1}' is not assignable to '{2}' index type '{3}'.",
+    "source": "typescript",
+    "arity": 4,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2842",
+    "category": "Error",
+    "message": "'{0}' is an unused renaming of '{1}'. Did you intend to use it as a type annotation?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2372",
+    "category": "Error",
+    "message": "Parameter '{0}' cannot reference itself.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2373",
+    "category": "Error",
+    "message": "Parameter '{0}' cannot reference identifier '{1}' declared after it.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2804",
+    "category": "Error",
+    "message": "Duplicate identifier '{0}'. Static and instance elements cannot share the same private name.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2502",
+    "category": "Error",
+    "message": "'{0}' is referenced directly or indirectly in its own type annotation.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2313",
+    "category": "Error",
+    "message": "Type parameter '{0}' has a circular constraint.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1330",
+    "category": "Error",
+    "message": "A property of an interface or type literal whose type is a 'unique symbol' type must be 'readonly'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1331",
+    "category": "Error",
+    "message": "A property of a class whose type is a 'unique symbol' type must be both 'static' and 'readonly'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1332",
+    "category": "Error",
+    "message": "A variable whose type is a 'unique symbol' type must be 'const'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1335",
+    "category": "Error",
+    "message": "'unique symbol' types are not allowed here.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1206",
+    "category": "Error",
+    "message": "Decorators are not valid here.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1147",
+    "category": "Error",
+    "message": "Import declarations in a namespace cannot reference a module.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2880",
+    "category": "Error",
+    "message": "Import assertions have been replaced by import attributes. Use 'with' instead of 'assert'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2348",
+    "category": "Error",
+    "message": "Value of type '{0}' is not callable. Did you mean to include 'new'?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2539",
+    "category": "Error",
+    "message": "Cannot assign to '{0}' because it is not a variable.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1089",
+    "category": "Error",
+    "message": "'{0}' modifier cannot appear on a constructor declaration.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1202",
+    "category": "Error",
+    "message": "Import assignment cannot be used when targeting ECMAScript modules. Consider using 'import * as ns from \"mod\"', 'import {a} from \"mod\"', 'import d from \"mod\"', or another module format instead.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1203",
+    "category": "Error",
+    "message": "Export assignment cannot be used when targeting ECMAScript modules. Consider using 'export default' or another module format instead.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2699",
+    "category": "Error",
+    "message": "Static property '{0}' conflicts with built-in property 'Function.{0}' of constructor function '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1274",
+    "category": "Error",
+    "message": "'{0}' modifier can only appear on a type parameter of a class, interface or type alias",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2637",
+    "category": "Error",
+    "message": "Variance annotations are only supported in type aliases for object, function, constructor, and mapped types.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1333",
+    "category": "Error",
+    "message": "'unique symbol' types may not be used on a variable declaration with a binding name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1334",
+    "category": "Error",
+    "message": "'unique symbol' types are only allowed on variables in a variable statement.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1091",
+    "category": "Error",
+    "message": "Only a single variable declaration is allowed in a 'for...in' statement.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1188",
+    "category": "Error",
+    "message": "Only a single variable declaration is allowed in a 'for...of' statement.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1189",
+    "category": "Error",
+    "message": "The variable declaration of a 'for...in' statement cannot have an initializer.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1190",
+    "category": "Error",
+    "message": "The variable declaration of a 'for...of' statement cannot have an initializer.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2404",
+    "category": "Error",
+    "message": "The left-hand side of a 'for...in' statement cannot use a type annotation.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2483",
+    "category": "Error",
+    "message": "The left-hand side of a 'for...of' statement cannot use a type annotation.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2364",
+    "category": "Error",
+    "message": "The left-hand side of an assignment expression must be a variable or a property access.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2357",
+    "category": "Error",
+    "message": "The operand of an increment or decrement operator must be a variable or a property access.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2779",
+    "category": "Error",
+    "message": "The left-hand side of an assignment expression may not be an optional property access.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2777",
+    "category": "Error",
+    "message": "The operand of an increment or decrement operator may not be an optional property access.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1014",
+    "category": "Error",
+    "message": "A rest parameter must be last in a parameter list.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2462",
+    "category": "Error",
+    "message": "A rest element must be last in a destructuring pattern.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1166",
+    "category": "Error",
+    "message": "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1169",
+    "category": "Error",
+    "message": "A computed property name in an interface must refer to an expression whose type is a literal type or a 'unique symbol' type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1170",
+    "category": "Error",
+    "message": "A computed property name in a type literal must refer to an expression whose type is a literal type or a 'unique symbol' type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2834",
+    "category": "Error",
+    "message": "Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Consider adding an extension to the import path.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2835",
+    "category": "Error",
+    "message": "Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '{0}'?",
     "source": "typescript",
     "arity": 1,
     "support": "emitted"
