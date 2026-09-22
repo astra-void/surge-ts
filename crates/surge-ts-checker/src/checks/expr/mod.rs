@@ -408,7 +408,6 @@ pub(crate) fn evaluate_const_expression(
         ParsedExpression::TemplateLiteral {
             expressions,
             quasis,
-            is_tagged: false,
             ..
         } if !expressions.is_empty() => {
             let evaluated = evaluate_expression(expression, fallback_span, symbols, ctx);

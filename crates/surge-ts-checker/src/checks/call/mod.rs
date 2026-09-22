@@ -2907,9 +2907,6 @@ fn is_unnarrowable_literal(expression: &ParsedExpression) -> bool {
             | ParsedExpression::BigIntLiteral(_)
             | ParsedExpression::ObjectLiteral { .. }
             | ParsedExpression::ArrayLiteral { .. }
-            | ParsedExpression::TemplateLiteral {
-                is_tagged: false,
-                ..
-            }
+            | ParsedExpression::TemplateLiteral { .. }
     )
 }

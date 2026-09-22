@@ -204,31 +204,8 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
                 .iter()
                 .map(|expression| Some(text_span_from_oxc_span(expression.span())))
                 .collect(),
-            is_tagged: false,
         },
-        Expression::TaggedTemplateExpression(tagged) => ParsedExpression::TemplateLiteral {
-            expressions: std::iter::once(parse_expression(&tagged.tag).0)
-                .chain(
-                    tagged
-                        .quasi
-                        .expressions
-                        .iter()
-                        .map(|expression| parse_expression(expression).0),
-                )
-                .collect(),
-            span: Some(text_span_from_oxc_span(tagged.span)),
-            quasis: Vec::new(),
-            expression_spans: std::iter::once(Some(text_span_from_oxc_span(tagged.tag.span())))
-                .chain(
-                    tagged
-                        .quasi
-                        .expressions
-                        .iter()
-                        .map(|expression| Some(text_span_from_oxc_span(expression.span()))),
-                )
-                .collect(),
-            is_tagged: true,
-        },
+        Expression::TaggedTemplateExpression(tagged) => parse_tagged_template(tagged),
         Expression::AssignmentExpression(assignment) => {
             parse_assignment_value(assignment).unwrap_or(ParsedExpression::Unknown)
         }
@@ -236,6 +213,64 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
     };
 
     (parsed_expression, expression.span())
+}
+
+/// `` tag`a${x}b` `` is a call of `tag` (tsc's `resolveTaggedTemplateExpression`):
+/// the effective arguments are the template's strings array, then each
+/// substitution, and the tag's type arguments are the call's.
+fn parse_tagged_template(tagged: &oxc_ast::ast::TaggedTemplateExpression<'_>) -> ParsedExpression {
+    let Some(type_arguments) = (match tagged.type_arguments.as_deref() {
+        Some(type_arguments) => parse_type_arguments(type_arguments),
+        None => Some(Vec::new()),
+    }) else {
+        return ParsedExpression::Unknown;
+    };
+    let template_span = Some(text_span_from_oxc_span(tagged.quasi.span));
+    let mut arguments = vec![ParsedCallArgument {
+        expression: ParsedExpression::TemplateStringsArray { span: template_span },
+        span: template_span,
+        spread: false,
+        expression_span: template_span,
+    }];
+    arguments.extend(tagged.quasi.expressions.iter().map(|expression| {
+        let span = Some(text_span_from_oxc_span(expression.span()));
+        ParsedCallArgument {
+            expression: parse_expression(expression).0,
+            span,
+            spread: false,
+            expression_span: span,
+        }
+    }));
+    let call_span = Some(text_span_from_oxc_span(tagged.span));
+    match &tagged.tag {
+        Expression::Identifier(callee) if callee.name != "undefined" => ParsedExpression::Call {
+            callee_name: callee.name.to_string(),
+            callee_span: Some(text_span_from_oxc_span(callee.span)),
+            type_arguments,
+            arguments,
+        },
+        Expression::StaticMemberExpression(member) if !member.optional => {
+            let (object, object_span) = parse_expression(&member.object);
+            ParsedExpression::PropertyCall {
+                object: Box::new(object),
+                object_span: Some(text_span_from_oxc_span(object_span)),
+                property_name: member.property.name.to_string(),
+                property_span: Some(text_span_from_oxc_span(member.property.span)),
+                call_span,
+                type_arguments,
+                arguments,
+            }
+        }
+        tag => {
+            let (callee, callee_span) = parse_expression(tag);
+            ParsedExpression::ExpressionCall {
+                callee: Box::new(callee),
+                callee_span: Some(text_span_from_oxc_span(callee_span)),
+                type_arguments,
+                arguments,
+            }
+        }
+    }
 }
 
 fn parse_jsx_element(element: &JSXElement<'_>) -> ParsedExpression {

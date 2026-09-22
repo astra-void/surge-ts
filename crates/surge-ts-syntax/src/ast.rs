@@ -1193,13 +1193,10 @@ pub enum ParsedExpression {
         expressions: Vec<ParsedExpression>,
         span: Option<TextSpan>,
         /// The cooked text around the interpolations (`None` for an invalid
-        /// escape), one more than `expressions` for an untagged template.
+        /// escape), one more than `expressions`.
         quasis: Vec<Option<String>>,
         /// Where each interpolation is written, in `expressions` order.
         expression_spans: Vec<Option<TextSpan>>,
-        /// A tagged template lowers here too, with the tag as the first
-        /// expression; its type is the tag call's, not a string.
-        is_tagged: bool,
     },
     Unary {
         operator: ParsedUnaryOperator,
@@ -1403,6 +1400,12 @@ pub enum ParsedExpression {
     /// is the last one's.
     Sequence {
         expressions: Vec<(ParsedExpression, Option<TextSpan>)>,
+    },
+    /// The strings array a tagged template passes as its tag's first argument
+    /// (`getEffectiveCallArguments`): a value of the global
+    /// `TemplateStringsArray`, spanning the template.
+    TemplateStringsArray {
+        span: Option<TextSpan>,
     },
     Unknown,
 }
@@ -2217,6 +2220,7 @@ impl ParsedExpression {
             | ParsedExpression::Identifier { .. }
             | ParsedExpression::This { .. }
             | ParsedExpression::ArrowFunction(_)
+            | ParsedExpression::TemplateStringsArray { .. }
             | ParsedExpression::Unknown => {}
         }
     }

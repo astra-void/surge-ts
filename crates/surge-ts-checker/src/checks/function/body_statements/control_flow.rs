@@ -845,7 +845,6 @@ pub(crate) fn check_function_switch_statement(
         if let Some(ParsedExpression::TemplateLiteral {
             expressions,
             quasis,
-            is_tagged: false,
             ..
         }) = &case.test
             && expressions.is_empty()
