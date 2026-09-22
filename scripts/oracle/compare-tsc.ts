@@ -619,6 +619,7 @@ export const fixturePresets: Record<string, string> = {
   'array-reduce-accumulator-basic': path.join(workspaceRoot, 'tests/compat-projects/array-reduce-accumulator-basic/tsconfig.json'),
   'promise-all-tuple-basic': path.join(workspaceRoot, 'tests/compat-projects/promise-all-tuple-basic/tsconfig.json'),
   'type-parameter-default-primitive-context-basic': path.join(workspaceRoot, 'tests/compat-projects/type-parameter-default-primitive-context-basic/tsconfig.json'),
+  'try-catch-never-call-basic': path.join(workspaceRoot, 'tests/compat-projects/try-catch-never-call-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

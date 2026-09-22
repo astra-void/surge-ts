@@ -967,6 +967,7 @@ pub(crate) fn check_function_try_statement(
         let handler_diverts = try_statement.handler.as_ref().is_none_or(|handler| {
             let flow = analyze_function_body_flow(&handler.body);
             flow.guarantees_value_return || flow.guarantees_exit
+                || body_ends_in_never_call(&handler.body, scopes)
         });
         let mut joinable_assignments = Vec::new();
         if handler_diverts && !try_guarantees_value_return {
@@ -996,7 +997,8 @@ pub(crate) fn check_function_try_statement(
             .unwrap_or_default();
         if let Some(handler_clause) = try_statement.handler {
             let catch_guarantees_value_return =
-                analyze_function_body_flow(&handler_clause.body).guarantees_value_return;
+                analyze_function_body_flow(&handler_clause.body).guarantees_value_return
+                    || body_ends_in_never_call(&handler_clause.body, scopes);
             // The handler can be entered from any point in the block.
             let before_catch = branch_assignment_types(&try_block_assigned, scopes);
             widen_assigned_bindings(&[&try_block_for_widening], scopes);
