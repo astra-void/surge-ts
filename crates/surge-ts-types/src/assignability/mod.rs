@@ -609,10 +609,20 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         // cross-realm `cls: {name: string}` idiom that accepts `typeof SomeClass`. A
         // construct-signature or index-signature target is left to the dedicated arms
         // above (or rejected), since a plain function value models neither.
+        // An index signature of type `any` admits every object source,
+        // functions included (tsc's `membersRelatedToIndexer` skips the members
+        // for an `any` indexer); any other index type asks for an index the
+        // function does not have.
         (Type::Function(source), Type::Object(target)) => {
             target.construct_signature().is_none()
-                && target.string_index_type.is_none()
-                && target.number_index_type.is_none()
+                && target
+                    .string_index_type
+                    .as_deref()
+                    .is_none_or(|index| matches!(index, Type::Any))
+                && target
+                    .number_index_type
+                    .as_deref()
+                    .is_none_or(|index| matches!(index, Type::Any))
                 && match target.call_signature() {
                     Some(call_signature) => is_function_assignable_to(source, call_signature),
                     None => true,

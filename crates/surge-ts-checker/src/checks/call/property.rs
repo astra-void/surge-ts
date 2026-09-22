@@ -177,6 +177,7 @@ fn name_is_genuine_any(name: &str, symbols: &SymbolTable, ctx: &CheckerContext) 
 /// argument's collected signature, not on its resolved callable type, so it is
 /// read from there; anything else falls through to the ordinary `filter` model.
 fn filtered_element_type(
+    element: &Type,
     arguments: &[ParsedCallArgument],
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
@@ -190,6 +191,9 @@ fn filtered_element_type(
         }
         // An inline `(x): x is T => …` carries its predicate on the arrow's
         // written return type.
+        ParsedExpression::ArrowFunction(arrow) if arrow.return_type.is_none() => {
+            inferred_predicate_target(arrow, element, symbols)
+        }
         ParsedExpression::ArrowFunction(arrow) => {
             let Some(ParsedType::Predicate(predicate)) = &arrow.return_type else {
                 return None;
@@ -210,6 +214,68 @@ fn filtered_element_type(
         }
         _ => None,
     }
+}
+
+/// tsc's `getTypePredicateFromBody`: an unannotated single-parameter arrow
+/// whose body is one boolean expression is a type predicate when that
+/// expression narrows the parameter in its true branch and the narrowed type
+/// cannot survive the false branch (`(op) => op.type === 'state'`). The
+/// predicate's target is the true-branch type.
+fn inferred_predicate_target(
+    arrow: &surge_ts_syntax::ParsedArrowFunction,
+    element: &Type,
+    symbols: &SymbolTable,
+) -> Option<Type> {
+    let [parameter] = arrow.parameters.as_slice() else {
+        return None;
+    };
+    if parameter.rest || parameter.declared_type.is_some() || arrow.is_async || arrow.is_generator {
+        return None;
+    }
+    let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } = &parameter.binding_name else {
+        return None;
+    };
+    let condition = match &arrow.body {
+        surge_ts_syntax::ParsedArrowFunctionBody::Expression(expression) => expression.as_ref(),
+        surge_ts_syntax::ParsedArrowFunctionBody::Block(statements) => match statements.as_slice() {
+            [surge_ts_syntax::ParsedFunctionBodyStatement::Return(statement)] => {
+                statement.expression.as_ref()?
+            }
+            _ => return None,
+        },
+    };
+    let bind = |ty: &Type| {
+        let mut scope = symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+        scope.insert(
+            name.clone(),
+            crate::symbols::SymbolInfo {
+                ty: ty.clone(),
+                kind: crate::symbols::SymbolKind::Parameter,
+                function_signature: None,
+            },
+        );
+        scope
+    };
+    let true_type = crate::checks::function::narrow_condition_symbol_table(
+        condition,
+        &bind(element),
+        true,
+    )?
+    .get(name)?
+    .ty
+    .clone();
+    if true_type == *element || true_type.is_unknown() {
+        return None;
+    }
+    let false_type = crate::checks::function::narrow_condition_symbol_table(
+        condition,
+        &bind(&true_type),
+        false,
+    )?
+    .get(name)?
+    .ty
+    .clone();
+    matches!(false_type, Type::Never).then_some(true_type)
 }
 
 pub(crate) fn check_property_call_like(
@@ -280,8 +346,10 @@ pub(crate) fn check_property_call_like(
 
     // Computed before the dispatch below so the narrowed element can be matched
     // on: `filter` with a type-predicate callback yields that predicate's type.
-    let filtered_element = if property_name == "filter" && matches!(object_ty, Type::Array(_)) {
-        filtered_element_type(arguments, symbols, ctx)
+    let filtered_element = if property_name == "filter"
+        && let Type::Array(element) = &object_ty
+    {
+        filtered_element_type(element, arguments, symbols, ctx)
     } else {
         None
     };

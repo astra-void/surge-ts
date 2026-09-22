@@ -3021,7 +3021,27 @@ pub(crate) fn widen_candidate_type(ty: &Type) -> Type {
                 })
                 .collect::<surge_ts_types::PropertyMap>();
 
-            Type::Object(alloc_object_type(properties, None))
+            // Only the members widen. The index signature, surge's openness
+            // marker and the signatures still describe the value: dropping the
+            // marker closed `makeAsyncResource({ ...degraded, k })`'s `T` and
+            // every member the spread stood for read as missing.
+            let mut widened = alloc_object_type(
+                properties,
+                object.string_index_type.as_deref().map(widen_candidate_type),
+            );
+            if object.synthetic_open_index {
+                widened = widened.with_open_index_marker();
+            }
+            if object.non_primitive {
+                widened = widened.with_non_primitive_marker();
+            }
+            if let Some(call_signature) = object.call_signature() {
+                widened = widened.with_call_signature(call_signature.clone());
+            }
+            if let Some(construct_signature) = object.construct_signature() {
+                widened = widened.with_construct_signature(construct_signature.clone());
+            }
+            Type::Object(widened)
         }
         Type::Union(union_payload) => surge_ts_types::union_type(
             union_payload
