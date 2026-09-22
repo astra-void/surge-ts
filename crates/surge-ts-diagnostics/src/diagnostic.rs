@@ -129,58 +129,32 @@ impl fmt::Display for Diagnostic {
     }
 }
 
+/// Fills `{N}` placeholders. Braces around anything but digits are literal
+/// text (TS1202's `import {a} from "mod"`).
 fn format_message(template: &str, args: &[DiagnosticArg]) -> String {
     let mut formatted = String::with_capacity(template.len());
-    let mut chars = template.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch != '{' {
-            formatted.push(ch);
-            continue;
-        }
-
-        let mut index_text = String::new();
-        while let Some(next) = chars.peek().copied() {
-            if next == '}' {
-                chars.next();
-                break;
-            }
-
-            if next.is_ascii_digit() {
-                index_text.push(next);
-                chars.next();
-                continue;
-            }
-
-            formatted.push('{');
-            formatted.push_str(&index_text);
-            formatted.push(next);
-            chars.next();
-            index_text.clear();
-            continue;
-        }
-
-        if index_text.is_empty() {
-            formatted.push('{');
-            continue;
-        }
-
-        match index_text.parse::<usize>() {
-            Ok(index) => match args.get(index) {
-                Some(arg) => formatted.push_str(&arg.to_string()),
-                None => {
-                    formatted.push('{');
-                    formatted.push_str(&index_text);
-                    formatted.push('}');
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        formatted.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        let placeholder = (digits > 0 && after.as_bytes().get(digits) == Some(&b'}'))
+            .then(|| after[..digits].parse::<usize>().ok())
+            .flatten();
+        match placeholder {
+            Some(index) => {
+                match args.get(index) {
+                    Some(arg) => formatted.push_str(&arg.to_string()),
+                    None => formatted.push_str(&rest[open..open + digits + 2]),
                 }
-            },
-            Err(_) => {
+                rest = &after[digits + 1..];
+            }
+            None => {
                 formatted.push('{');
-                formatted.push_str(&index_text);
-                formatted.push('}');
+                rest = after;
             }
         }
     }
-
+    formatted.push_str(rest);
     formatted
 }
