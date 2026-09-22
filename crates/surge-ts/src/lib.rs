@@ -523,8 +523,24 @@ impl Project {
         }
 
         surge_ts_checker::set_fast_process_exit(options.fast_process_exit);
+        let node_module_resolution = matches!(
+            loaded.compiler_options.module_resolution,
+            surge_ts_config::ModuleResolutionKind::Node16
+                | surge_ts_config::ModuleResolutionKind::Node20
+                | surge_ts_config::ModuleResolutionKind::NodeNext
+        );
+        let esm_module_files = if node_module_resolution {
+            esm_format_files(sources.iter().map(|(path, name, _)| (path.as_path(), name.as_str())))
+        } else {
+            Default::default()
+        };
         let checker_options = CheckerOptions {
             no_implicit_any: loaded.compiler_options.no_implicit_any,
+            no_implicit_this: loaded.compiler_options.no_implicit_this,
+            module_emit: checker_module_emit(loaded.compiler_options.emit_module),
+            use_define_for_class_fields: loaded.compiler_options.use_define_for_class_fields,
+            node_module_resolution,
+            esm_module_files,
             strict_null_checks: loaded.compiler_options.strict_null_checks,
             strict_property_initialization: loaded
                 .compiler_options
@@ -829,4 +845,73 @@ mod tests {
         );
         assert_eq!(codes(&out), vec![2304, 2339]);
     }
+}
+
+fn checker_module_emit(kind: surge_ts_config::ModuleKind) -> surge_ts_checker::ModuleEmitKind {
+    use surge_ts_checker::ModuleEmitKind as Emit;
+    use surge_ts_config::ModuleKind as Module;
+    match kind {
+        Module::CommonJS => Emit::CommonJS,
+        Module::ES2015 => Emit::ES2015,
+        Module::ES2020 => Emit::ES2020,
+        Module::ES2022 => Emit::ES2022,
+        Module::ESNext => Emit::ESNext,
+        Module::Node16 => Emit::Node16,
+        Module::Node18 => Emit::Node18,
+        Module::Node20 => Emit::Node20,
+        Module::NodeNext => Emit::NodeNext,
+        Module::Preserve => Emit::Preserve,
+    }
+}
+
+/// The files whose implied module format under node16/nodenext resolution is
+/// ESM: an `.mts`, or a `.ts`/`.tsx` whose nearest `package.json` says
+/// `"type": "module"` (tsgo's `getImpliedNodeFormatForFile`).
+fn esm_format_files<'a>(
+    files: impl Iterator<Item = (&'a std::path::Path, &'a str)>,
+) -> std::collections::HashSet<String> {
+    let mut package_types: std::collections::HashMap<std::path::PathBuf, bool> =
+        std::collections::HashMap::new();
+    let mut is_module_package = |start: &std::path::Path| -> bool {
+        let mut visited = Vec::new();
+        let mut current = Some(start.to_path_buf());
+        let mut answer = false;
+        while let Some(dir) = current {
+            if let Some(known) = package_types.get(&dir) {
+                answer = *known;
+                break;
+            }
+            visited.push(dir.clone());
+            let manifest = dir.join("package.json");
+            if let Ok(text) = std::fs::read_to_string(&manifest) {
+                answer = serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|json| json.get("type").and_then(|t| t.as_str()).map(|t| t == "module"))
+                    .unwrap_or(false);
+                break;
+            }
+            current = dir.parent().map(|parent| parent.to_path_buf());
+        }
+        for dir in visited {
+            package_types.insert(dir, answer);
+        }
+        answer
+    };
+    let mut esm = std::collections::HashSet::new();
+    for (path, name) in files {
+        let lower = name.to_ascii_lowercase();
+        let is_esm = if lower.ends_with(".mts") {
+            true
+        } else if lower.ends_with(".cts") || lower.ends_with(".d.ts") {
+            false
+        } else if lower.ends_with(".ts") || lower.ends_with(".tsx") {
+            path.parent().is_some_and(&mut is_module_package)
+        } else {
+            false
+        };
+        if is_esm {
+            esm.insert(name.to_string());
+        }
+    }
+    esm
 }

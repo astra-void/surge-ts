@@ -159,6 +159,11 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             types: Vec::new(),
             stub_external_modules: false,
             no_implicit_any: loaded.compiler_options.no_implicit_any,
+            no_implicit_this: loaded.compiler_options.no_implicit_any,
+            module_emit: Default::default(),
+            use_define_for_class_fields: true,
+            node_module_resolution: false,
+            esm_module_files: Default::default(),
             strict_null_checks: true,
             strict_property_initialization: loaded
                 .compiler_options

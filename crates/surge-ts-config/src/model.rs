@@ -23,6 +23,8 @@ pub struct LoadedTsConfig {
 pub struct NormalizedCompilerOptions {
     pub strict: bool,
     pub no_implicit_any: bool,
+    /// `compilerOptions.noImplicitThis`. Defaults to `strict`.
+    pub no_implicit_this: bool,
     /// `compilerOptions.strictNullChecks`. Defaults to `strict`.
     pub strict_null_checks: bool,
     /// `compilerOptions.strictPropertyInitialization`. Defaults to `strict`.
@@ -47,6 +49,13 @@ pub struct NormalizedCompilerOptions {
     pub no_unused_parameters: bool,
     pub target: ScriptTarget,
     pub module: ModuleKind,
+    /// tsgo's `GetEmitModuleKind`: the written `module`, or the kind its
+    /// `target` implies when none is written (`module` itself defaults to
+    /// `preserve` here for resolution purposes, which tsc does not).
+    pub emit_module: ModuleKind,
+    /// tsgo's `GetUseDefineForClassFields`: the written flag, or whether the
+    /// target is ES2022 or later.
+    pub use_define_for_class_fields: bool,
     pub module_resolution: ModuleResolutionKind,
     pub jsx: Option<JsxMode>,
     pub allow_js: bool,
@@ -93,6 +102,7 @@ impl Default for NormalizedCompilerOptions {
         Self {
             strict: true,
             no_implicit_any: true,
+            no_implicit_this: true,
             strict_null_checks: true,
             strict_property_initialization: true,
             use_unknown_in_catch_variables: true,
@@ -106,6 +116,8 @@ impl Default for NormalizedCompilerOptions {
             no_unused_parameters: false,
             target: ScriptTarget::ES2024,
             module: ModuleKind::Preserve,
+            emit_module: ModuleKind::ES2022,
+            use_define_for_class_fields: true,
             module_resolution: ModuleResolutionKind::Bundler,
             jsx: None,
             allow_js: false,
@@ -129,7 +141,7 @@ impl Default for NormalizedCompilerOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ScriptTarget {
     ES2015,
     ES2016,

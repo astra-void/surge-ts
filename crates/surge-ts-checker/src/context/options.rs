@@ -9,6 +9,34 @@ pub enum DiagnosticProfile {
     Native,
 }
 
+/// tsgo's `GetEmitModuleKind`, which grammar checks on `import =`/`export =`
+/// read. `Preserve` is also what a caller that does not say gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ModuleEmitKind {
+    CommonJS,
+    ES2015,
+    ES2020,
+    ES2022,
+    ESNext,
+    Node16,
+    Node18,
+    Node20,
+    NodeNext,
+    #[default]
+    Preserve,
+}
+
+impl ModuleEmitKind {
+    /// `ES2015 <= kind <= ESNext`.
+    pub fn is_ecmascript(self) -> bool {
+        matches!(self, Self::ES2015 | Self::ES2020 | Self::ES2022 | Self::ESNext)
+    }
+
+    pub fn is_node(self) -> bool {
+        matches!(self, Self::Node16 | Self::Node18 | Self::Node20 | Self::NodeNext)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileKind {
     RootSource,
@@ -50,6 +78,18 @@ pub struct CompatibilityStats {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckerOptions {
     pub no_implicit_any: bool,
+    /// `noImplicitThis`: a `this` whose type is implicitly `any` is TS2683.
+    pub no_implicit_this: bool,
+    pub module_emit: ModuleEmitKind,
+    /// tsgo's `GetUseDefineForClassFields`; off, a static `name`/`length`
+    /// member collides with the constructor function's own (TS2699).
+    pub use_define_for_class_fields: bool,
+    /// `moduleResolution` is `node16` or `nodenext`, where an ESM import of a
+    /// relative path must spell its extension (TS2834/TS2835).
+    pub node_module_resolution: bool,
+    /// Under node16/nodenext resolution, the files whose implied format is
+    /// ESM (an `.mts`, or a `.ts` under a `"type": "module"` package.json).
+    pub esm_module_files: std::collections::HashSet<String>,
     /// `strictNullChecks`. Off, `null` and `undefined` belong to every type:
     /// they drop out of unions and are assignable anywhere.
     pub strict_null_checks: bool,
@@ -140,6 +180,11 @@ impl Default for CheckerOptions {
     fn default() -> Self {
         Self {
             no_implicit_any: false,
+            no_implicit_this: false,
+            module_emit: ModuleEmitKind::Preserve,
+            use_define_for_class_fields: true,
+            node_module_resolution: false,
+            esm_module_files: Default::default(),
             strict_null_checks: true,
             strict_property_initialization: false,
             use_unknown_in_catch_variables: false,

@@ -22,6 +22,9 @@ pub(crate) fn normalize_compiler_options(
     };
 
     let mut explicit_no_implicit_any = None;
+    let mut explicit_no_implicit_this = None;
+    let mut explicit_module = None;
+    let mut explicit_use_define_for_class_fields = None;
     let mut explicit_strict_null_checks = None;
     let mut explicit_strict_property_initialization = None;
     let mut explicit_use_unknown_in_catch_variables = None;
@@ -39,6 +42,9 @@ pub(crate) fn normalize_compiler_options(
                 if let Some(no_implicit_any) = explicit_no_implicit_any {
                     normalized.no_implicit_any = no_implicit_any;
                 }
+            }
+            "noImplicitThis" => {
+                explicit_no_implicit_this = parse_bool_option(key, value, config_dir, diagnostics);
             }
             "strictNullChecks" => {
                 explicit_strict_null_checks = parse_bool_option(key, value, config_dir, diagnostics);
@@ -102,6 +108,11 @@ pub(crate) fn normalize_compiler_options(
             }
             "module" => {
                 normalized.module = parse_module_option(value, config_dir, diagnostics);
+                explicit_module = Some(normalized.module);
+            }
+            "useDefineForClassFields" => {
+                explicit_use_define_for_class_fields =
+                    parse_bool_option(key, value, config_dir, diagnostics);
             }
             "moduleResolution" => {
                 normalized.module_resolution =
@@ -206,6 +217,15 @@ pub(crate) fn normalize_compiler_options(
     }
 
     normalized.no_implicit_any = explicit_no_implicit_any.unwrap_or(normalized.strict);
+    normalized.no_implicit_this = explicit_no_implicit_this.unwrap_or(normalized.strict);
+    normalized.emit_module = explicit_module.unwrap_or(match normalized.target {
+        ScriptTarget::ESNext => ModuleKind::ESNext,
+        target if target >= ScriptTarget::ES2022 => ModuleKind::ES2022,
+        target if target >= ScriptTarget::ES2020 => ModuleKind::ES2020,
+        _ => ModuleKind::ES2015,
+    });
+    normalized.use_define_for_class_fields = explicit_use_define_for_class_fields
+        .unwrap_or(normalized.target >= ScriptTarget::ES2022);
     normalized.strict_null_checks = explicit_strict_null_checks.unwrap_or(normalized.strict);
     normalized.strict_property_initialization =
         explicit_strict_property_initialization.unwrap_or(normalized.strict);

@@ -497,6 +497,11 @@ fn run_single_file_mode(
     let diagnostics = Checker::new()
         .options(CheckerOptions {
             no_implicit_any,
+            no_implicit_this: no_implicit_any,
+            module_emit: surge_ts_checker::ModuleEmitKind::ES2022,
+            use_define_for_class_fields: true,
+            node_module_resolution: false,
+            esm_module_files: Default::default(),
             strict_null_checks: true,
             // The single-file path has no tsconfig: `--noImplicitAny` stands in
             // for `strict`, which is what both of these derive from.
