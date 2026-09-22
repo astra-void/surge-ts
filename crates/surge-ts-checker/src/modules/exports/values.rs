@@ -17,6 +17,21 @@ pub(crate) fn thin_prelim_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("SURGE_THIN_PRELIM").as_deref() != Ok("0"))
 }
 
+thread_local! {
+    static SOURCE_EXPORTS_SHARE_ENVIRONMENT_STORE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` with source-file value collection interning its lazy references
+/// into the caller's persistent declaration-environment store (see the store
+/// comment in [`collect_exportable_value_symbols`]).
+pub(crate) fn with_source_exports_sharing_environment_store<R>(f: impl FnOnce() -> R) -> R {
+    let previous = SOURCE_EXPORTS_SHARE_ENVIRONMENT_STORE.with(|flag| flag.replace(true));
+    let result = f();
+    SOURCE_EXPORTS_SHARE_ENVIRONMENT_STORE.with(|flag| flag.set(previous));
+    result
+}
+
 /// The thin variant of [`collect_exportable_value_symbols`]: same symbol name
 /// surface (variables degrade to `Unknown`, namespace value objects keep their
 /// permissive member sets), no shadow context, no annotation resolution, no
@@ -460,6 +475,15 @@ pub(crate) fn collect_exportable_value_symbols(
         // measured +180 MB peak RSS (585 -> 766 MB) for eight diagnostics, so the
         // references those files leave behind are handled where they are read
         // instead — a receiver that peels to the sentinel reports nothing.
+        shadow_ctx.declaration_environment_store = ctx.declaration_environment_store.clone();
+    } else if SOURCE_EXPORTS_SHARE_ENVIRONMENT_STORE.with(std::cell::Cell::get) {
+        // Except for the value-export refinement rounds: the tables they
+        // install are the ones consumers read, and a refined value is exactly
+        // what peels its references. A recursive alias's back-edge there
+        // (tRPC's `DecoratedProcedureUtilsRecord<TRoot, $Value>` behind
+        // `useUtils().todo`) forced through a dead store turns the member
+        // intersection into its `DecorateRouter` half alone, and every
+        // procedure read off it into a TS2339.
         shadow_ctx.declaration_environment_store = ctx.declaration_environment_store.clone();
     }
     shadow_ctx.type_declaration_scope = ctx.type_declaration_scope.clone();
