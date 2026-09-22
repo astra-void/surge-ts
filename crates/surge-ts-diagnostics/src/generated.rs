@@ -15,6 +15,26 @@ pub const TS1029: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2411: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2411",
+    number: Some(2411),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Property '{0}' of type '{1}' is not assignable to '{2}' index type '{3}'.",
+    argument_count: 4,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2413: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2413",
+    number: Some(2413),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' index type '{1}' is not assignable to '{2}' index type '{3}'.",
+    argument_count: 4,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS5112: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS5112",
     number: Some(5112),
@@ -2807,6 +2827,8 @@ pub const TS7017: DiagnosticDescriptor = DiagnosticDescriptor {
 
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
+    TS2411,
+    TS2413,
     TS5112,
     TS5102,
     TS5097,
@@ -3096,6 +3118,46 @@ impl Diagnostic {
             vec![
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2411(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        arg3: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2411,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+                DiagnosticArg::from(arg3.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2413(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        arg3: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2413,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+                DiagnosticArg::from(arg3.to_string()),
             ],
             file_name,
         )

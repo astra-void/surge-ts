@@ -1713,6 +1713,27 @@ fn signatures_of_kind_related(source: Option<&FunctionType>, target: Option<&Fun
 /// explicit property, fall back to these so a `typeof SomeClass` value satisfies
 /// targets like `{name: string}`. Mirrors `function_property_access_type` in
 /// `ty.rs`, but keyed off the object's call signature for `call`/`apply`/`bind`.
+/// tsc's `getPropertyOfType` falls back to the global `Object` type's members
+/// for every object type, so `{}` has `toString` and is assignable to
+/// `Object`. The members' lib signatures, with `valueOf`'s `Object` as the
+/// empty object type (no primitive, and it has these same members) and
+/// `constructor`'s `Function` left as `any`.
+fn object_prototype_member(name: &str) -> Option<Type> {
+    let method = |parameters: Vec<Type>, return_type: Type| {
+        let required = parameters.len();
+        Some(Type::Function(FunctionType::new(parameters, return_type, false, required)))
+    };
+    match name {
+        "toString" | "toLocaleString" => method(vec![], Type::String),
+        "valueOf" => method(vec![], Type::Object(ObjectType::new(Default::default(), None))),
+        "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" => {
+            method(vec![Type::Any], Type::Boolean)
+        }
+        "constructor" => Some(Type::Any),
+        _ => None,
+    }
+}
+
 fn callable_object_function_member(source: &ObjectType, name: &str) -> Option<Type> {
     let signature = source
         .call_signature()
@@ -1813,7 +1834,8 @@ pub fn object_assignability_failure(
 
         let source_property_ty = source_property_ty
             .cloned()
-            .or_else(|| callable_object_function_member(source, property_name.as_ref()));
+            .or_else(|| callable_object_function_member(source, property_name.as_ref()))
+            .or_else(|| object_prototype_member(property_name.as_ref()));
 
         let Some(source_property_ty) = source_property_ty.as_ref() else {
             if target_property.is_optional() {

@@ -25,12 +25,12 @@ use crate::infer::map_parsed_type;
 
 /// A member a heritage walk compares: its name, and where tsc anchors an error
 /// about it.
-struct DeclaredMember {
-    name: String,
-    name_span: Option<TextSpan>,
+pub(crate) struct DeclaredMember {
+    pub(crate) name: String,
+    pub(crate) name_span: Option<TextSpan>,
 }
 
-fn class_instance_members(class: &ParsedClassDeclaration) -> Vec<DeclaredMember> {
+pub(crate) fn class_instance_members(class: &ParsedClassDeclaration) -> Vec<DeclaredMember> {
     class
         .members
         .iter()

@@ -9,6 +9,22 @@ message = "'{0}' modifier must precede '{1}' modifier."
 arity = 2
 
 [[diagnostic]]
+code = "TS2411"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' of type '{1}' is not assignable to '{2}' index type '{3}'."
+arity = 4
+
+[[diagnostic]]
+code = "TS2413"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' index type '{1}' is not assignable to '{2}' index type '{3}'."
+arity = 4
+
+[[diagnostic]]
 code = "TS5112"
 category = "Error"
 source = "typescript"

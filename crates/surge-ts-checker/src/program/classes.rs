@@ -1284,6 +1284,7 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
     super::property_initialization::check_property_initialization(class, ctx);
     super::forward_references::check_class_property_initializers(class, ctx);
     check_override_modifiers(class, ctx);
+    super::index_constraints::check_class_index_constraints(class, ctx);
 
     // Ambient classes have no bodies. Definite assignment needs no member
     // types, so they still get it.

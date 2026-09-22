@@ -8,6 +8,22 @@
     "support": "emitted"
   },
   {
+    "code": "TS2411",
+    "category": "Error",
+    "message": "Property '{0}' of type '{1}' is not assignable to '{2}' index type '{3}'.",
+    "source": "typescript",
+    "arity": 4,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2413",
+    "category": "Error",
+    "message": "'{0}' index type '{1}' is not assignable to '{2}' index type '{3}'.",
+    "source": "typescript",
+    "arity": 4,
+    "support": "emitted"
+  },
+  {
     "code": "TS5112",
     "category": "Error",
     "message": "tsconfig.json is present but will not be loaded if files are specified on commandline. Use '--ignoreConfig' to skip this error.",

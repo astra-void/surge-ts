@@ -24,6 +24,7 @@ mod check_files;
 mod classes;
 mod forward_references;
 mod heritage;
+mod index_constraints;
 mod namespaces;
 mod property_initialization;
 pub(crate) mod diagnostics;

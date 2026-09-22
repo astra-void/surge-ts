@@ -626,6 +626,7 @@ export const fixturePresets: Record<string, string> = {
   'type-variable-relation-basic': path.join(workspaceRoot, 'tests/compat-projects/type-variable-relation-basic/tsconfig.json'),
   'type-variable-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/type-variable-narrowing-basic/tsconfig.json'),
   'member-write-narrowing-join-basic': path.join(workspaceRoot, 'tests/compat-projects/member-write-narrowing-join-basic/tsconfig.json'),
+  'index-signature-property-constraint-basic': path.join(workspaceRoot, 'tests/compat-projects/index-signature-property-constraint-basic/tsconfig.json'),
   'promise-all-tuple-basic': path.join(workspaceRoot, 'tests/compat-projects/promise-all-tuple-basic/tsconfig.json'),
   'type-parameter-default-primitive-context-basic': path.join(workspaceRoot, 'tests/compat-projects/type-parameter-default-primitive-context-basic/tsconfig.json'),
   'try-catch-never-call-basic': path.join(workspaceRoot, 'tests/compat-projects/try-catch-never-call-basic/tsconfig.json'),
