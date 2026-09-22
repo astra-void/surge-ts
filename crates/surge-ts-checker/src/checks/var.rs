@@ -78,7 +78,7 @@ pub(crate) fn report_initializer_mismatch(
 ) {
     if inferred_initializer_type.is_unknown()
         || type_contains_unknown(declared_type)
-        || type_contains_unknown(inferred_initializer_type)
+        || crate::checks::call::as_source(|| type_contains_unknown(inferred_initializer_type))
         || crate::checks::call::is_open_instantiation(inferred_initializer_type)
         || is_assignable_to(inferred_initializer_type, declared_type)
     {
@@ -588,8 +588,9 @@ fn type_contains_unknown(ty: &Type) -> bool {
         Type::Array(element) => type_contains_unknown(element),
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
         Type::Function(function) => {
-            function.parameters().iter().any(type_contains_unknown)
-                || type_contains_unknown(function.return_type())
+            !crate::checks::call::is_generic_signature(function)
+                && (function.parameters().iter().any(type_contains_unknown)
+                    || type_contains_unknown(function.return_type()))
         }
         Type::Object(object) => {
             object

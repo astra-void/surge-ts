@@ -102,11 +102,12 @@ fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
             .iter()
             .any(|element| contains_unknown(element, sentinel_only)),
         Type::Function(function) => {
-            function
-                .parameters()
-                .iter()
-                .any(|parameter| contains_unknown(parameter, sentinel_only))
-                || contains_unknown(function.return_type(), sentinel_only)
+            !crate::checks::call::is_generic_signature(function)
+                && (function
+                    .parameters()
+                    .iter()
+                    .any(|parameter| contains_unknown(parameter, sentinel_only))
+                    || contains_unknown(function.return_type(), sentinel_only))
         }
         Type::Object(object) => {
             object

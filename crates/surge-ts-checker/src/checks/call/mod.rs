@@ -1902,7 +1902,8 @@ pub(crate) fn check_function_type_call(
                     || is_unnarrowable_literal(&argument.expression))
                     && !type_contains_unknown(&parameter_type)
                     && !surge_ts_types::parameter_type_is_degraded(&parameter_type)
-                    && (genuine_unknown_argument || !type_contains_unknown(&argument_type))
+                    && (genuine_unknown_argument
+                        || !as_source(|| type_contains_degradation(&argument_type)))
                     && !is_open_instantiation(&argument_type)
                     && !is_assignable_to(&argument_type, &parameter_type)
                 {
@@ -2497,17 +2498,80 @@ pub(crate) fn is_open_instantiation(ty: &Type) -> bool {
     matches!(ty, Type::Reference(reference) if reference.arguments.iter().any(argument_is_open))
 }
 
+/// Whether `function` declares type parameters of its own. Such a signature is
+/// fully modelled whatever its parameters say: they are written over its own
+/// placeholders (`static deserialize: <T>(s: string) => T`, or superjson's
+/// `registerCustom: <I, O>(t: Omit<Transformer<I, O>, 'name'>) => void`, whose
+/// `Omit` over placeholders resolves to the sentinel), so a "contains unknown"
+/// walk does not read them as a value surge failed to model. Treating them so
+/// silenced every assignment, argument and return of `SuperJSON`.
+///
+/// Only a *source* is read this way. A target carrying such signatures (ts-pattern's
+/// `Matcher` inside `P.Pattern<Input>`) is still where surge models least, and
+/// checking against it surfaced its gaps as false positives.
+pub(crate) fn is_generic_signature(function: &FunctionType) -> bool {
+    GENERIC_SIGNATURES_ARE_MODELLED.with(std::cell::Cell::get)
+        && !own_type_parameter_names(function).is_empty()
+}
+
+thread_local! {
+    static GENERIC_SIGNATURES_ARE_MODELLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs a "contains unknown" query over a value being checked, the side
+/// [`is_generic_signature`] applies to.
+pub(crate) fn as_source<R>(query: impl FnOnce() -> R) -> R {
+    let previous = GENERIC_SIGNATURES_ARE_MODELLED.with(|flag| flag.replace(true));
+    let result = query();
+    GENERIC_SIGNATURES_ARE_MODELLED.with(|flag| flag.set(previous));
+    result
+}
+
+fn own_type_parameter_names(function: &FunctionType) -> Vec<String> {
+    // A signature read from a type annotation (`static parse: <T>(s: string) =>
+    // T`) carries no declaration, only its rendered parameter list.
+    let Some(declaration) = function.declaration() else {
+        return function.type_parameter_names();
+    };
+    let type_parameters = if let Some(member) = declaration.downcast_ref::<DeclaredMemberSignature>() {
+        &member.signature.type_parameters
+    } else if let Some(signature) = declaration.downcast_ref::<crate::symbols::FunctionSignatureInfo>() {
+        &signature.type_parameters
+    } else {
+        return function.type_parameter_names();
+    };
+    type_parameters.iter().map(|parameter| parameter.name.clone()).collect()
+}
+
+/// [`type_contains_unknown`] for a value's own shape: a written `unknown` in it
+/// (a method's `(o: unknown)` parameter) is a real type, and only surge's
+/// sentinel or a free type parameter says the shape is incomplete.
+fn type_contains_degradation(ty: &Type) -> bool {
+    UNKNOWN_KEYWORD_IS_REAL.with(|flag| {
+        let previous = flag.replace(true);
+        let result = type_contains_unknown(ty);
+        flag.set(previous);
+        result
+    })
+}
+
+thread_local! {
+    static UNKNOWN_KEYWORD_IS_REAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => true,
+        Type::GenuineUnknown => !UNKNOWN_KEYWORD_IS_REAL.with(std::cell::Cell::get),
+        Type::Unknown | Type::TypeParameter(_) => true,
         Type::Array(element) => type_contains_unknown(element),
         Type::Reference(reference) if reference.is_readonly_array() => {
             reference.arguments.iter().any(type_contains_unknown)
         }
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
         Type::Function(function) => {
-            function.parameters().iter().any(type_contains_unknown)
-                || type_contains_unknown(function.return_type())
+            !is_generic_signature(function)
+                && (function.parameters().iter().any(type_contains_unknown)
+                    || type_contains_unknown(function.return_type()))
         }
         Type::Object(object) => {
             object

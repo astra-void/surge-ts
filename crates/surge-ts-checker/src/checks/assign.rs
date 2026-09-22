@@ -79,7 +79,7 @@ pub(crate) fn check_assignment_with_symbols(
             record_assignability_check();
             if inferred_value_type != surge_ts_types::Type::Unknown
                 && !type_contains_unknown(&target_type)
-                && !type_contains_unknown(&inferred_value_type)
+                && !crate::checks::call::as_source(|| type_contains_unknown(&inferred_value_type))
                 && !with_dts_expansion_reason(DtsExpansionReason::Assignability, || {
                     is_assignable_to(&inferred_value_type, &target_type)
                 })
@@ -165,8 +165,9 @@ fn contains_unknown(ty: &surge_ts_types::Type) -> bool {
         surge_ts_types::Type::Array(element) => contains_unknown(element),
         surge_ts_types::Type::Tuple(elements) => elements.iter().any(contains_unknown),
         surge_ts_types::Type::Function(function) => {
-            function.parameters().iter().any(contains_unknown)
-                || contains_unknown(function.return_type())
+            !crate::checks::call::is_generic_signature(function)
+                && (function.parameters().iter().any(contains_unknown)
+                    || contains_unknown(function.return_type()))
         }
         surge_ts_types::Type::Object(object) => {
             object

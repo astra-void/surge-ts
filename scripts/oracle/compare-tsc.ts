@@ -603,6 +603,7 @@ export const fixturePresets: Record<string, string> = {
   'recursive-mapped-alias-member-basic': path.join(workspaceRoot, 'tests/compat-projects/recursive-mapped-alias-member-basic/tsconfig.json'),
   'filter-inferred-predicate-basic': path.join(workspaceRoot, 'tests/compat-projects/filter-inferred-predicate-basic/tsconfig.json'),
   'block-arrow-return-basic': path.join(workspaceRoot, 'tests/compat-projects/block-arrow-return-basic/tsconfig.json'),
+  'generic-static-class-value-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-static-class-value-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

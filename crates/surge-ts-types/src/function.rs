@@ -218,6 +218,38 @@ impl FunctionType {
         self.parameter_names.as_deref()
     }
 
+    /// The names this signature declares as its own type parameters, read off
+    /// the rendered list (`T = unknown, const K extends keyof T`).
+    pub fn type_parameter_names(&self) -> Vec<String> {
+        let Some(head) = self.type_parameter_head.as_deref() else {
+            return Vec::new();
+        };
+        let mut names = Vec::new();
+        let mut depth = 0i32;
+        let mut start = 0;
+        let bytes = head.as_bytes();
+        for index in 0..=bytes.len() {
+            let byte = bytes.get(index).copied();
+            match byte {
+                Some(b'<' | b'(' | b'[' | b'{') => depth += 1,
+                Some(b'>' | b')' | b']' | b'}') => depth -= 1,
+                Some(b',') | None if depth <= 0 => {
+                    let item = head[start..index.min(head.len())].trim();
+                    let name = item
+                        .split_whitespace()
+                        .find(|word| !matches!(*word, "const" | "in" | "out"))
+                        .unwrap_or_default();
+                    if !name.is_empty() {
+                        names.push(name.to_string());
+                    }
+                    start = index + 1;
+                }
+                _ => {}
+            }
+        }
+        names
+    }
+
     /// Attaches the rendered type-parameter list, without the angle brackets.
     pub fn with_type_parameter_head(mut self, head: Option<String>) -> Self {
         self.type_parameter_head = head.filter(|head| !head.is_empty()).map(Arc::from);

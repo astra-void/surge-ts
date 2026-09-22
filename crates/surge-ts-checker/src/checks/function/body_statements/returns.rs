@@ -180,8 +180,12 @@ pub(crate) fn check_function_return_statement(
                 // already failed: the deep walk forces lazy references, and
                 // doing that on every clean return measurably perturbs later
                 // resolutions (a false TS2554 on ky's `resolve()`).
-                if crate::checks::function::type_contains_unknown(&source_type)
-                    || crate::checks::function::type_contains_unknown(&return_type)
+                // A written `unknown` (a method's `(o: unknown)`) is a real type,
+                // so only the degradation sentinel counts.
+                if crate::checks::call::as_source(|| {
+                    crate::checks::function::type_contains_degradation(&source_type)
+                })
+                    || crate::checks::function::type_contains_degradation(&return_type)
                 {
                     return;
                 }
