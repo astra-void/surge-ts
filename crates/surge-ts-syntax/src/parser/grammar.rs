@@ -1277,9 +1277,13 @@ impl GrammarCollector {
     /// or an accessor is a *different* diagnostic there (TS2300 for methods, a
     /// legal get/set pair for accessors), so only plain properties count.
     fn check_duplicate_properties(&mut self, object: &ObjectExpression<'_>) {
-        let mut seen: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Methods report in first-written order, so the spans live in a `Vec`
+        // and the map only finds a name's slot.
         let mut methods: Vec<(String, Vec<Span>)> = Vec::new();
-        let mut accessors: Vec<String> = Vec::new();
+        let mut method_slots: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut accessors: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for property in &object.properties {
             let ObjectPropertyKind::ObjectProperty(property) = property else {
@@ -1287,16 +1291,14 @@ impl GrammarCollector {
             };
             if property.kind != PropertyKind::Init {
                 if let Some(name) = property_key_name(&property.key) {
-                    if seen.contains(&name)
-                        || methods.iter().any(|(other, _)| *other == name)
-                    {
+                    if seen.contains(&name) || method_slots.contains_key(&name) {
                         self.push(
                             Kind::ObjectLiteralPropertyAndAccessor,
                             property.key.span(),
                             None,
                         );
                     }
-                    accessors.push(name);
+                    accessors.insert(name);
                 }
                 continue;
             }
@@ -1316,16 +1318,19 @@ impl GrammarCollector {
                 );
             }
             if property.method {
-                match methods.iter_mut().find(|(other, _)| *other == name) {
-                    Some((_, spans)) => spans.push(property.span),
-                    None => methods.push((name, vec![property.span])),
+                match method_slots.get(&name) {
+                    Some(&slot) => methods[slot].1.push(property.span),
+                    None => {
+                        method_slots.insert(name.clone(), methods.len());
+                        methods.push((name, vec![property.span]));
+                    }
                 }
                 continue;
             }
             if seen.contains(&name) {
                 self.push(Kind::DuplicateObjectLiteralProperty, property.span, None);
             } else {
-                seen.push(name);
+                seen.insert(name);
             }
         }
 
