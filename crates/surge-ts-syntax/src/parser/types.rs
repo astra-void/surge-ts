@@ -138,9 +138,16 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         // `infer X` in a conditional `extends` clause. Carrying the name (rather
         // than dropping to `None`) keeps the enclosing conditional alive; the
         // resolver treats the capture as a permissive hole.
-        TSType::TSInferType(infer_type) => Some(ParsedType::Infer(
-            infer_type.type_parameter.name.name.to_string(),
-        )),
+        TSType::TSInferType(infer_type) => Some(ParsedType::Infer(std::sync::Arc::new(
+            crate::ParsedInferType {
+                name: infer_type.type_parameter.name.name.to_string(),
+                constraint: infer_type
+                    .type_parameter
+                    .constraint
+                    .as_ref()
+                    .and_then(parse_type),
+            },
+        ))),
         _ => None,
     }
 }

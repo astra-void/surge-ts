@@ -22,7 +22,8 @@ pub use reference::*;
 pub use store::*;
 pub use template_literal::{
     STRING_MAPPING_REFERENCE_ID, StringMappingKind, TEMPLATE_LITERAL_REFERENCE_ID,
-    is_member_of_string_mapping, is_template_literal_type, peel_to_pattern_literal, is_type_matched_by_template_literal,
+    infer_template_literal_placeholders, is_member_of_string_mapping, is_template_literal_type, peel_to_pattern_literal,
+    is_type_matched_by_template_literal, preferred_template_placeholder_inference,
     string_mapping_parts, string_mapping_type, template_literal_parts, template_literal_type,
 };
 pub use ty::*;

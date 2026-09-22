@@ -332,7 +332,7 @@ pub enum ParsedType {
     /// An `infer X` capture inside a conditional type's `extends` clause. Modelled
     /// so a conditional that uses it (e.g. React's `ComponentProps<T>`) survives
     /// parsing instead of degrading the whole conditional to `Unknown`.
-    Infer(String),
+    Infer(std::sync::Arc<ParsedInferType>),
     /// A type-predicate return annotation (`x is T`, `this is T`, `asserts x`,
     /// `asserts x is T`). Resolves to `boolean` in type position; the guard
     /// narrowing consumes the payload to narrow the tested argument.
@@ -430,7 +430,7 @@ impl Clone for ParsedType {
             Self::Mapped(payload) => Self::Mapped(payload.clone()),
             Self::Conditional(payload) => Self::Conditional(payload.clone()),
             Self::TemplateLiteral(payload) => Self::TemplateLiteral(payload.clone()),
-            Self::Infer(name) => Self::Infer(name.clone()),
+            Self::Infer(payload) => Self::Infer(payload.clone()),
             Self::Predicate(payload) => Self::Predicate(payload.clone()),
             Self::InferredMember(payload) => Self::InferredMember(payload.clone()),
             Self::UniqueSymbol(name) => Self::UniqueSymbol(name.clone()),
@@ -489,6 +489,13 @@ pub struct ParsedTemplateLiteralType {
     pub quasis: Vec<String>,
     pub interpolations: Vec<ParsedType>,
     pub span: Option<TextSpan>,
+}
+
+/// `infer X` or `infer X extends C`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedInferType {
+    pub name: String,
+    pub constraint: Option<ParsedType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1966,7 +1973,7 @@ impl ParsedType {
                         .map(ParsedType::estimated_heap_bytes)
                         .sum::<u64>()
             }
-            ParsedType::Infer(name) => name.capacity() as u64,
+            ParsedType::Infer(infer) => infer.name.capacity() as u64,
             _ => 0,
         }
     }

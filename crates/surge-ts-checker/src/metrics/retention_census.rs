@@ -760,7 +760,7 @@ fn parsed_type_unique_bytes(ty: &ParsedType) -> u64 {
                     .map(parsed_type_unique_bytes)
                     .sum::<u64>()
         }
-        ParsedType::Infer(name) => name.capacity() as u64,
+        ParsedType::Infer(infer) => infer.name.capacity() as u64,
         _ => 0,
     }
 }
@@ -875,7 +875,7 @@ fn parsed_type_bytes(ty: &ParsedType) -> u64 {
                     .map(parsed_type_bytes)
                     .sum::<u64>()
         }
-        ParsedType::Infer(name) => name.capacity() as u64,
+        ParsedType::Infer(infer) => infer.name.capacity() as u64,
         _ => 0,
     }
 }

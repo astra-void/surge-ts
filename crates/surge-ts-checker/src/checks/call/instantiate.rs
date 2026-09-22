@@ -1086,7 +1086,7 @@ fn declares_infer_named(ty: &ParsedType, name: &str) -> bool {
             || declares_infer_named(&signature.return_type, name)
     };
     match ty {
-        ParsedType::Infer(infer) => infer == name,
+        ParsedType::Infer(infer) => infer.name == name,
         ParsedType::Named(named) => named
             .type_arguments
             .iter()

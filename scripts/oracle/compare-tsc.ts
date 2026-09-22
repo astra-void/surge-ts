@@ -674,6 +674,7 @@ export const fixturePresets: Record<string, string> = {
   'falsy-narrowing-filter-predicate-basic': path.join(workspaceRoot, 'tests/compat-projects/falsy-narrowing-filter-predicate-basic/tsconfig.json'),
   'ambient-block-import-signature-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-block-import-signature-basic/tsconfig.json'),
   'script-typeof-global-signature-basic': path.join(workspaceRoot, 'tests/compat-projects/script-typeof-global-signature-basic/tsconfig.json'),
+  'template-literal-infer-basic': path.join(workspaceRoot, 'tests/compat-projects/template-literal-infer-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
