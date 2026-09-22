@@ -10,6 +10,7 @@ pub use name_memo::clear_name_intern_table;
 mod object;
 mod reference;
 mod store;
+mod identity;
 mod template_literal;
 mod ty;
 mod union;
@@ -20,6 +21,7 @@ pub use function::*;
 pub use object::*;
 pub use reference::*;
 pub use store::*;
+pub use identity::is_type_identical_to;
 pub use template_literal::{
     STRING_MAPPING_REFERENCE_ID, StringMappingKind, TEMPLATE_LITERAL_REFERENCE_ID,
     infer_template_literal_placeholders, is_member_of_string_mapping, is_template_literal_type, peel_to_pattern_literal,

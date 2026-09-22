@@ -414,6 +414,17 @@ pub(crate) fn check_variable_declaration_against_symbols(
 
     if redeclaration_candidate {
         report_redeclared_var_type(&variable_name, variable_name_span, &symbol, symbols, ctx);
+        // A `var` has one type, its first declaration's: a later declaration
+        // is checked against it (TS2403) and never replaces it.
+        if matches!(symbol.kind, SymbolKind::Var)
+            && let Some(first) = symbols
+                .get_own_handle(&variable_name)
+                .filter(|existing| {
+                    matches!(existing.kind, SymbolKind::Var) && !existing.ty.is_unknown()
+                })
+        {
+            return Some(first);
+        }
     }
 
     Some(symbol)
@@ -448,7 +459,10 @@ fn report_redeclared_var_type(
     else {
         return;
     };
-    if previous.is_unknown() || symbol.ty.is_unknown() || previous == symbol.ty {
+    if previous.is_unknown()
+        || symbol.ty.is_unknown()
+        || surge_ts_types::is_type_identical_to(&previous, &symbol.ty)
+    {
         return;
     }
 

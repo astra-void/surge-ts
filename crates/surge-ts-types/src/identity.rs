@@ -1,0 +1,130 @@
+//! tsc's identity relation (`isTypeIdenticalTo`): what TS2403 requires of
+//! every redeclaration of a `var`. Stricter than mutual assignability —
+//! `any` is identical only to `any`, and optionality, `readonly` and member
+//! visibility must agree — but blind to how a type was written: an alias, a
+//! mapped type over a closed key set, a reordered union, and a callable
+//! object literal all denote the same type as their expansion.
+
+use crate::{FunctionType, ObjectType, Type};
+
+/// Past this depth a recursive type is taken as identical, as tsc's relation
+/// cache assumes a cycle it is already comparing to hold.
+const MAX_DEPTH: usize = 16;
+
+pub fn is_type_identical_to(left: &Type, right: &Type) -> bool {
+    identical(left, right, MAX_DEPTH)
+}
+
+fn identical(left: &Type, right: &Type, depth: usize) -> bool {
+    if left == right || depth == 0 {
+        return true;
+    }
+    let (left, right) = (left.peeled(), right.peeled());
+    if left == right {
+        return true;
+    }
+    match (&left, &right) {
+        (Type::Union(left), Type::Union(right)) => {
+            members_identical(left.types(), right.types(), depth)
+        }
+        (Type::Boolean, Type::Union(union)) | (Type::Union(union), Type::Boolean) => {
+            members_identical(
+                &[Type::BooleanLiteral(false), Type::BooleanLiteral(true)],
+                union.types(),
+                depth,
+            )
+        }
+        (Type::Object(left), Type::Object(right)) => objects_identical(left, right, depth),
+        (Type::Function(function), Type::Object(object))
+        | (Type::Object(object), Type::Function(function)) => {
+            object_is_bare_call_signature(object).is_some_and(|signature| {
+                signatures_identical(function, signature, depth)
+            })
+        }
+        (Type::Function(left), Type::Function(right)) => signatures_identical(left, right, depth),
+        (Type::Array(left), Type::Array(right)) => identical(left, right, depth - 1),
+        (Type::Tuple(left), Type::Tuple(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right.iter())
+                    .all(|(left, right)| identical(left, right, depth - 1))
+        }
+        _ => false,
+    }
+}
+
+fn members_identical(left: &[Type], right: &[Type], depth: usize) -> bool {
+    let covers = |from: &[Type], to: &[Type]| {
+        from.iter()
+            .all(|member| to.iter().any(|other| identical(member, other, depth - 1)))
+    };
+    covers(left, right) && covers(right, left)
+}
+
+fn objects_identical(left: &ObjectType, right: &ObjectType, depth: usize) -> bool {
+    if left.properties.len() != right.properties.len()
+        || !optional_identical(left.string_index_type.as_deref(), right.string_index_type.as_deref(), depth)
+        || !optional_identical(left.number_index_type.as_deref(), right.number_index_type.as_deref(), depth)
+        || !optional_signatures_identical(left.call_signature.as_deref(), right.call_signature.as_deref(), depth)
+        || !optional_signatures_identical(
+            left.construct_signature.as_deref(),
+            right.construct_signature.as_deref(),
+            depth,
+        )
+    {
+        return false;
+    }
+    left.properties.iter().all(|(name, property)| {
+        right.properties.get(name).is_some_and(|other| {
+            property.optional == other.optional
+                && property.readonly == other.readonly
+                && property.restriction == other.restriction
+                && identical(&property.ty, &other.ty, depth - 1)
+        })
+    })
+}
+
+/// An object type literal whose only member is one call signature is the
+/// function type `{ (n: number): string }` spells.
+fn object_is_bare_call_signature(object: &ObjectType) -> Option<&FunctionType> {
+    (object.properties.is_empty()
+        && object.string_index_type.is_none()
+        && object.number_index_type.is_none()
+        && object.construct_signature.is_none())
+    .then_some(object.call_signature.as_deref())
+    .flatten()
+}
+
+fn optional_identical(left: Option<&Type>, right: Option<&Type>, depth: usize) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => identical(left, right, depth - 1),
+        _ => false,
+    }
+}
+
+fn optional_signatures_identical(
+    left: Option<&FunctionType>,
+    right: Option<&FunctionType>,
+    depth: usize,
+) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => signatures_identical(left, right, depth),
+        _ => false,
+    }
+}
+
+fn signatures_identical(left: &FunctionType, right: &FunctionType, depth: usize) -> bool {
+    left.parameters().len() == right.parameters().len()
+        && left.is_variadic() == right.is_variadic()
+        && left.required_parameter_count() == right.required_parameter_count()
+        && left.type_parameter_names().len() == right.type_parameter_names().len()
+        && left
+            .parameters()
+            .iter()
+            .zip(right.parameters())
+            .all(|(left, right)| identical(left, right, depth - 1))
+        && identical(left.return_type(), right.return_type(), depth - 1)
+}
