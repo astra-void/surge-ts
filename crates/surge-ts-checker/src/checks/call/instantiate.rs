@@ -764,25 +764,32 @@ fn inference_provably_records_nothing(
         // An object type inferred from a function source: properties pair by
         // name, call signatures pair, and a function has no construct signature
         // or index info to pair (inference.go:822-826, 838-850).
-        ParsedType::Function(function) => {
-            source.and_then(function_source).is_some()
-                && signature_provably_records_nothing(function, name, ctx, depth)
-        }
-        ParsedType::Object(object) => {
-            if source.and_then(function_source).is_none() {
-                return false;
+        ParsedType::Function(function) => match source.and_then(source_surface) {
+            Some(SourceSurface::Function) => {
+                signature_provably_records_nothing(function, name, ctx, depth)
             }
+            // No call signature on the source to pair with.
+            Some(SourceSurface::Members(_) | SourceSurface::Nothing) => true,
+            None => false,
+        },
+        ParsedType::Object(object) => {
+            let Some(surface) = source.and_then(source_surface) else {
+                return false;
+            };
             let properties_record_nothing = object.properties.iter().all(|property| {
                 !parsed_type_mentions_name(&property.ty, name)
-                    || !function_source_has_property(&property.name, ctx)
+                    || !source_has_property(&surface, &property.name, ctx)
             });
             properties_record_nothing
-                && object
-                    .call_signature
-                    .as_deref()
-                    .into_iter()
-                    .chain(object.call_signature_overloads.iter())
-                    .all(|signature| signature_provably_records_nothing(signature, name, ctx, depth))
+                && (!matches!(surface, SourceSurface::Function)
+                    || object
+                        .call_signature
+                        .as_deref()
+                        .into_iter()
+                        .chain(object.call_signature_overloads.iter())
+                        .all(|signature| {
+                            signature_provably_records_nothing(signature, name, ctx, depth)
+                        }))
         }
         _ => false,
     }
@@ -818,9 +825,10 @@ fn reference_provably_records_nothing(
             })
         }
         TypeDeclarationInfo::Interface(interface) => {
-            if source.and_then(function_source).is_none()
-                || interface.body.type_parameters.len() < named.type_arguments.len()
-            {
+            let Some(surface) = source.and_then(source_surface) else {
+                return false;
+            };
+            if interface.body.type_parameters.len() < named.type_arguments.len() {
                 return false;
             }
             let body = interface.body.clone();
@@ -831,9 +839,10 @@ fn reference_provably_records_nothing(
                     let member_type =
                         crate::infer::substitute_parsed_type_parameters_deep(&member.ty, &map);
                     !parsed_type_mentions_name(&member_type, name)
-                        || !function_source_has_property(&member.name, ctx)
+                        || !source_has_property(&surface, &member.name, ctx)
                 });
-                let signatures_record_nothing = body.call_signature.iter().all(|signature| {
+                let signatures_record_nothing = !matches!(surface, SourceSurface::Function)
+                    || body.call_signature.iter().all(|signature| {
                     match crate::infer::substitute_parsed_type_parameters_deep(
                         &ParsedType::Function(std::sync::Arc::new(signature.clone())),
                         &map,
@@ -884,6 +893,45 @@ fn signature_provably_records_nothing(
         .iter()
         .all(|parameter| inference_provably_records_nothing(&parameter.ty, None, name, ctx, depth + 1))
         && inference_provably_records_nothing(&signature.return_type, None, name, ctx, depth + 1)
+}
+
+/// What `inferFromObjectTypes` can pair a target's members with, for the
+/// sources whose answer is known: a function's apparent members, a primitive's
+/// wrapper interface (`getApparentType`, inference.go), or nothing at all for a
+/// source that is no object and has no apparent one.
+enum SourceSurface {
+    Function,
+    Members(&'static [&'static str]),
+    Nothing,
+}
+
+fn source_surface(source: &Type) -> Option<SourceSurface> {
+    match source.peeled() {
+        Type::Function(_) => Some(SourceSurface::Function),
+        Type::Boolean | Type::BooleanLiteral(_) => Some(SourceSurface::Members(&["Boolean", "Object"])),
+        Type::String | Type::StringLiteral(_) => Some(SourceSurface::Members(&["String", "Object"])),
+        Type::Number | Type::NumberLiteral(_) => Some(SourceSurface::Members(&["Number", "Object"])),
+        Type::BigInt => Some(SourceSurface::Members(&["BigInt", "Object"])),
+        Type::Symbol => Some(SourceSurface::Members(&["Symbol", "Object"])),
+        Type::Undefined | Type::Null | Type::Void | Type::Never => Some(SourceSurface::Nothing),
+        _ => None,
+    }
+}
+
+/// Whether the source answers `member`. A lib surge cannot find counts as
+/// declaring it, the direction that keeps a default out.
+fn source_has_property(surface: &SourceSurface, member: &str, ctx: &CheckerContext) -> bool {
+    let interfaces: &[&str] = match surface {
+        SourceSurface::Function => return function_source_has_property(member, ctx),
+        SourceSurface::Members(interfaces) => interfaces,
+        SourceSurface::Nothing => return false,
+    };
+    interfaces
+        .iter()
+        .any(|interface| lookup_declaration_for_inference(interface, ctx).is_none())
+        || interfaces
+            .iter()
+            .any(|interface| interface_declares_member(interface, member, ctx, 0))
 }
 
 /// The function a source is, when it is one.

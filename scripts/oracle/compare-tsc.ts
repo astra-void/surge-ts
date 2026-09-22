@@ -618,6 +618,7 @@ export const fixturePresets: Record<string, string> = {
   'lib-constructor-feature-basic': path.join(workspaceRoot, 'tests/compat-projects/lib-constructor-feature-basic/tsconfig.json'),
   'array-reduce-accumulator-basic': path.join(workspaceRoot, 'tests/compat-projects/array-reduce-accumulator-basic/tsconfig.json'),
   'promise-all-tuple-basic': path.join(workspaceRoot, 'tests/compat-projects/promise-all-tuple-basic/tsconfig.json'),
+  'type-parameter-default-primitive-context-basic': path.join(workspaceRoot, 'tests/compat-projects/type-parameter-default-primitive-context-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
