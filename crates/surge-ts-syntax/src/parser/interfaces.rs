@@ -46,6 +46,22 @@ pub(crate) fn parse_interface_declaration(
     };
     let string_index_type = index_signature_of(false);
     let number_index_type = index_signature_of(true);
+    let index_span_of = |numeric: bool| {
+        declaration
+            .body
+            .body
+            .iter()
+            .filter_map(|member| match member {
+                TSSignature::TSIndexSignature(index_signature)
+                    if super::types::index_signature_is_numeric(index_signature) == numeric
+                        && parse_index_signature_value_type(index_signature).is_some() =>
+                {
+                    Some(text_span_from_oxc_span(index_signature.span))
+                }
+                _ => None,
+            })
+            .next_back()
+    };
 
     // A bare call signature (`(value?: any): number`) makes the interface
     // callable. Multiple overloads fold into one permissive signature the same
@@ -96,6 +112,8 @@ pub(crate) fn parse_interface_declaration(
         members,
         string_index_type,
         number_index_type,
+        string_index_span: index_span_of(false),
+        number_index_span: index_span_of(true),
         call_signature,
         call_signature_overloads: if call_signature_overloads.len() > 1 {
             call_signature_overloads

@@ -87,7 +87,15 @@ fn narrow_non_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Opti
             .map(|_| Type::Never)
     };
     if !keep_matching {
+        // A variable the true branch keeps whole (its constraint *is* the
+        // tag's type) has nothing left for the false branch.
+        if let Some(narrowed) = narrow_type_variable_by_typeof(ty, tag) {
+            return (narrowed == *ty).then_some(Type::Never);
+        }
         return ruled_out();
+    }
+    if let Some(narrowed) = narrow_type_variable_by_typeof(ty, tag) {
+        return Some(narrowed);
     }
     if matches!(
         ty,
@@ -152,6 +160,11 @@ pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) 
     let kept: Vec<Type> = union
         .types()
         .iter()
+        .filter_map(|member| match narrow_type_variable_by_typeof(member, tag) {
+            Some(narrowed) if keep_matching => (narrowed != Type::Never).then_some(narrowed),
+            Some(narrowed) if narrowed == *member => None,
+            _ => Some(member.clone()),
+        })
         .filter(|member| match typeof_tag_of(member) {
             Some(member_tag) => (member_tag == tag) == keep_matching,
             None => true,
@@ -162,9 +175,9 @@ pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) 
         // reads `typeof x === 'string'` on an `unknown`. Only the genuine
         // keyword qualifies: `Type::Unknown` is the degradation sentinel, and
         // rewriting it would claim knowledge surge does not have.
-        .map(|member| match (member, keep_matching) {
-            (Type::GenuineUnknown, true) => type_for_typeof_tag(tag).unwrap_or_else(|| member.clone()),
-            _ => member.clone(),
+        .map(|member| match (&member, keep_matching) {
+            (Type::GenuineUnknown, true) => type_for_typeof_tag(tag).unwrap_or(member),
+            _ => member,
         })
         .collect();
 
@@ -299,4 +312,55 @@ pub(crate) fn narrow_typeof_symbol_table(
         symbol.ty.clone(),
     );
     Some(narrowed_symbols)
+}
+
+/// tsc's `narrowTypeByTypeFacts` for a type variable of the body being checked
+/// in the matching branch: it stays itself when its constraint is already the
+/// tag's type, becomes `never` when its constraint can never report the tag,
+/// and otherwise is intersected with it (`T & string`). `None` for anything
+/// that is not such a variable, and for the `"object"`/`"function"` tags, whose
+/// implied types surge does not model as operands.
+fn narrow_type_variable_by_typeof(member: &Type, tag: &str) -> Option<Type> {
+    let Type::TypeParameter(parameter) = member else {
+        return None;
+    };
+    let constraint = surge_ts_types::type_variable::active_constraint(parameter)?;
+    if tag == "object" {
+        return narrow_type_variable_to_object(member, constraint);
+    }
+    let implied = type_for_typeof_tag(tag)?;
+    let constraint = constraint.unwrap_or(Type::GenuineUnknown);
+    if !constraint.is_unknown() && is_assignable_to(&constraint, &implied) {
+        return Some(member.clone());
+    }
+    if narrow_union_by_typeof(&constraint, tag, true) == Some(Type::Never) {
+        return Some(Type::Never);
+    }
+    Some(surge_ts_types::type_variable::intersect_type_variable(member, implied))
+}
+
+/// `narrowTypeByTypeName("object")`: the non-primitive part of the variable
+/// and, under `strictNullChecks`, its `null` part — `(T & object) | (T & null)`,
+/// whose second member a later truthiness test removes. A constraint that is
+/// already an object keeps the variable whole.
+fn narrow_type_variable_to_object(member: &Type, constraint: Option<Type>) -> Option<Type> {
+    let object = Type::Object(
+        surge_ts_types::ObjectType::new(Default::default(), None).with_non_primitive_marker(),
+    );
+    if let Some(constraint) = constraint.as_ref().filter(|constraint| !constraint.is_unknown()) {
+        if is_assignable_to(constraint, &object) {
+            return Some(member.clone());
+        }
+        if narrow_union_by_typeof(constraint, "object", true) == Some(Type::Never) {
+            return Some(Type::Never);
+        }
+    }
+    let object_part = surge_ts_types::type_variable::intersect_type_variable(member, object);
+    if !surge_ts_types::strict_null_checks() {
+        return Some(object_part);
+    }
+    Some(union_type(vec![
+        object_part,
+        surge_ts_types::type_variable::intersect_type_variable(member, Type::Null),
+    ]))
 }

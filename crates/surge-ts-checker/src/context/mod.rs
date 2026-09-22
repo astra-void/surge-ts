@@ -1173,9 +1173,17 @@ impl CheckerContext {
         let mut scope = substitution.unwrap_or_default();
         let mut constraint_scope = HashMap::new();
         for type_parameter in type_parameters {
-            scope
-                .entry(type_parameter.name.clone())
-                .or_insert(Type::Unknown);
+            let variable = type_parameter.name_span.and_then(|span| {
+                surge_ts_types::type_variable::variable_for_declaration(&self.file_name, span.start as u32)
+            });
+            match variable {
+                Some(variable) => {
+                    scope.insert(type_parameter.name.clone(), variable);
+                }
+                None => {
+                    scope.entry(type_parameter.name.clone()).or_insert(Type::Unknown);
+                }
+            }
             if let Some(constraint) = type_parameter.constraint.clone() {
                 constraint_scope.insert(type_parameter.name.clone(), constraint);
             }

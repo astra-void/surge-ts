@@ -251,6 +251,7 @@ pub fn remove_definitely_falsy(ty: &Type) -> Type {
         .iter()
         .filter_map(|member| match member {
             Type::Undefined | Type::Void | Type::BooleanLiteral(false) => None,
+            member if crate::type_variable::is_nullish_type_variable_intersection(member) => None,
             Type::StringLiteral(value) if value.is_empty() => None,
             Type::NumberLiteral(literal) if literal.value == "0" => None,
             Type::Boolean => Some(Type::BooleanLiteral(true)),
@@ -299,12 +300,13 @@ pub fn remove_nullish(ty: &Type) -> Type {
                 .types()
                 .iter()
                 .filter(|t| !matches!(t, Type::Undefined | Type::Null | Type::Void))
-                .cloned()
+                .filter(|t| !crate::type_variable::is_nullish_type_variable_intersection(t))
+                .map(crate::type_variable::non_nullable_type_variable)
                 .collect();
             union_type(filtered)
         }
         Type::Undefined | Type::Null | Type::Void => Type::Unknown,
-        _ => ty.clone(),
+        _ => crate::type_variable::non_nullable_type_variable(ty),
     }
 }
 

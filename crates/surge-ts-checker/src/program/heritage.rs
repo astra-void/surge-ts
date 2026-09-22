@@ -25,12 +25,12 @@ use crate::infer::map_parsed_type;
 
 /// A member a heritage walk compares: its name, and where tsc anchors an error
 /// about it.
-struct DeclaredMember {
-    name: String,
-    name_span: Option<TextSpan>,
+pub(crate) struct DeclaredMember {
+    pub(crate) name: String,
+    pub(crate) name_span: Option<TextSpan>,
 }
 
-fn class_instance_members(class: &ParsedClassDeclaration) -> Vec<DeclaredMember> {
+pub(crate) fn class_instance_members(class: &ParsedClassDeclaration) -> Vec<DeclaredMember> {
     class
         .members
         .iter()
@@ -193,85 +193,5 @@ pub(crate) fn check_interface_heritage(
             Some(span) => diagnostic.with_span(convert_span(span)),
             None => diagnostic,
         });
-    }
-}
-
-/// tsc's `checkIndexConstraintForProperty` for an interface's own members
-/// against its own index signatures: every property must be assignable to the
-/// string index type, and a numerically named one to the number index type —
-/// TS2411 on the property. A generic interface, and a member or index type
-/// surge cannot model, are left alone.
-pub(crate) fn check_interface_index_constraints(
-    interface: &ParsedInterfaceDeclaration,
-    ctx: &mut CheckerContext,
-) {
-    if !interface.type_parameters.is_empty()
-        || (interface.string_index_type.is_none() && interface.number_index_type.is_none())
-    {
-        return;
-    }
-    let string_index = interface
-        .string_index_type
-        .clone()
-        .map(|ty| map_parsed_type(ty, ctx));
-    let number_index = interface
-        .number_index_type
-        .clone()
-        .map(|ty| map_parsed_type(ty, ctx));
-    for member in &interface.members {
-        let Some(span) = member.name_span else {
-            continue;
-        };
-        // An optional member's type carries `undefined` into the comparison:
-        // tsc strips it only under `exactOptionalPropertyTypes`.
-        let mut member_type = map_parsed_type(member.ty.clone(), ctx);
-        if member.optional && ctx.options.strict_null_checks {
-            member_type = surge_ts_types::union_type(vec![member_type, Type::Undefined]);
-        }
-        if has_unmodelled_part(&member_type) {
-            continue;
-        }
-        let applicable = [
-            ("string", string_index.as_ref()),
-            ("number", number_index.as_ref().filter(|_| is_numeric_literal_name(&member.name))),
-        ];
-        for (key, index_type) in applicable {
-            let Some(index_type) = index_type else {
-                continue;
-            };
-            if has_unmodelled_part(index_type) || is_assignable_to(&member_type, index_type) {
-                continue;
-            }
-            let diagnostic = Diagnostic::ts2411(
-                &member.name,
-                member_type.name(),
-                key,
-                index_type.name(),
-                ctx.file_name.clone(),
-            );
-            ctx.push(diagnostic.with_span(convert_span(span)));
-        }
-    }
-}
-
-/// tsc's `isNumericLiteralName`: the name reads back as the number it spells.
-fn is_numeric_literal_name(name: &str) -> bool {
-    let Ok(value) = name.parse::<f64>() else {
-        return false;
-    };
-    let spelled = if value.fract() == 0.0 && value.abs() < 1e21 {
-        format!("{}", value as i64)
-    } else {
-        format!("{value}")
-    };
-    spelled == name
-}
-
-fn has_unmodelled_part(ty: &Type) -> bool {
-    match ty {
-        Type::Unknown | Type::ErrorType | Type::TypeParameter(_) => true,
-        Type::Union(union) => union.types().iter().any(has_unmodelled_part),
-        Type::Reference(reference) => has_unmodelled_part(&reference.resolve()),
-        _ => ty.is_degraded(),
     }
 }

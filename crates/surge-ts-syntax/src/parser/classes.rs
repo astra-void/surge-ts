@@ -51,15 +51,20 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
                         && super::types::index_signature_is_numeric(index_signature) == numeric =>
                 {
                     super::types::parse_index_signature_value_type(index_signature)
+                        .map(|value_type| (value_type, text_span_from_oxc_span(index_signature.span)))
                 }
                 _ => None,
             })
             .next_back()
     };
+    let (string_index_type, string_index_span) = index_signature_of(false).unzip();
+    let (number_index_type, number_index_span) = index_signature_of(true).unzip();
 
     Some(ParsedClassDeclaration {
-        string_index_type: index_signature_of(false),
-        number_index_type: index_signature_of(true),
+        string_index_type,
+        number_index_type,
+        string_index_span,
+        number_index_span,
         is_declare: class.declare,
         is_abstract: class.r#abstract,
         name: id.name.to_string(),

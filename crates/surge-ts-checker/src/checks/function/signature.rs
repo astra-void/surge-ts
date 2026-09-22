@@ -613,7 +613,12 @@ pub(crate) fn map_function_signature(
         ctx.push_type_parameter_scope(type_parameters, None);
     }
 
-    let type_parameter_substitution = build_type_parameter_substitution(type_parameters);
+    let mut type_parameter_substitution = build_type_parameter_substitution(type_parameters);
+    for type_parameter in type_parameters {
+        if let Some(variable) = bound_type_variable(type_parameter, ctx) {
+            type_parameter_substitution.insert_placeholder(type_parameter.name.clone(), variable);
+        }
+    }
     let mut parameter_types = Vec::with_capacity(parameters.len());
     let mut parameter_symbols = None;
     let mut parameter_bindings: Vec<(String, Type)> = Vec::new();
@@ -1119,6 +1124,12 @@ pub(crate) fn check_type_parameter_declarations(
     });
 }
 
+/// The variable `type_parameter` is bound to while its body is checked.
+pub(crate) fn bound_type_variable(type_parameter: &ParsedTypeParameter, ctx: &CheckerContext) -> Option<Type> {
+    let span = type_parameter.name_span?;
+    surge_ts_types::type_variable::variable_for_declaration(&ctx.file_name, span.start as u32)
+}
+
 pub(crate) fn with_type_parameter_scope<R>(
     type_parameters: &[ParsedTypeParameter],
     ctx: &mut CheckerContext,
@@ -1126,7 +1137,8 @@ pub(crate) fn with_type_parameter_scope<R>(
 ) -> R {
     let mut scope = std::collections::HashMap::new();
     for type_parameter in type_parameters {
-        scope.insert(type_parameter.name.clone(), Type::Unknown);
+        let variable = bound_type_variable(type_parameter, ctx);
+        scope.insert(type_parameter.name.clone(), variable.unwrap_or(Type::Unknown));
     }
 
     ctx.push_type_parameter_scope(type_parameters, Some(scope));
@@ -1697,6 +1709,80 @@ pub(crate) fn check_function_body_with_signature(
     );
 }
 
+/// Binds a generic body's own type parameters as type variables for as long as
+/// the returned scope lives, their constraints resolved inside it (a
+/// constraint may name them: `U extends T`).
+pub(crate) fn enter_body_type_variables(
+    type_parameters: &[ParsedTypeParameter],
+    ctx: &mut CheckerContext,
+) -> Option<surge_ts_types::type_variable::TypeVariableScope> {
+    if type_parameters.is_empty() || type_parameters.iter().any(|parameter| parameter.name_span.is_none()) {
+        return None;
+    }
+    let file: Arc<str> = Arc::from(ctx.file_name.as_str());
+    let already_bound = type_parameters.iter().all(|parameter| {
+        parameter.name_span.is_some_and(|span| {
+            surge_ts_types::type_variable::variable_for_declaration(&file, span.start as u32).is_some()
+        })
+    });
+    if already_bound {
+        return None;
+    }
+    let scope = surge_ts_types::type_variable::TypeVariableScope::enter(type_parameters.iter().map(|parameter| {
+        let offset = parameter.name_span.map_or(0, |span| span.start as u32);
+        (Arc::from(parameter.name.as_str()), (file.clone(), offset))
+    }));
+    let diagnostics_before = ctx.diagnostics().len();
+    let mut unmodelled = Vec::new();
+    with_type_parameter_scope(type_parameters, ctx, |ctx| {
+        for parameter in type_parameters {
+            if let Some(constraint) = parameter.constraint.clone() {
+                let constraint = crate::infer::map_parsed_type(constraint, ctx);
+                if constraint.is_unmodelled()
+                    || matches!(constraint, Type::ErrorType)
+                    || crate::checks::assign::type_contains_unknown(&constraint)
+                {
+                    unmodelled.push(parameter.name.as_str());
+                } else {
+                    scope.set_constraint(&parameter.name, constraint);
+                }
+            }
+        }
+    });
+    for name in unmodelled {
+        scope.forget(name);
+    }
+    // The declaration check already reported whatever its constraints raise.
+    ctx.truncate_diagnostics(diagnostics_before);
+    Some(scope)
+}
+
+/// The signature a generic body is checked against: re-mapped while its type
+/// variables are bound, so every annotation — `Readonly<T>` included —
+/// resolves over the variables rather than the placeholders the declaration
+/// was collected with. The written return type is kept when there is none to
+/// re-map; diagnostics were already reported by the first mapping.
+fn signature_over_type_variables(
+    parameters: &[ParsedFunctionParameter],
+    return_annotation: Option<&ParsedType>,
+    collected: &FunctionType,
+    type_parameters: &[ParsedTypeParameter],
+    ctx: &mut CheckerContext,
+) -> FunctionType {
+    let diagnostics_before = ctx.diagnostics().len();
+    let remapped = map_function_signature(parameters, return_annotation, type_parameters, None, ctx);
+    ctx.truncate_diagnostics(diagnostics_before);
+    if remapped.parameters().len() != collected.parameters().len() {
+        return collected.clone();
+    }
+    let return_type = if return_annotation.is_some() {
+        remapped.return_type().clone()
+    } else {
+        collected.return_type().clone()
+    };
+    collected.with_signature_types(remapped.parameters().to_vec(), return_type)
+}
+
 /// Like [`check_function_body_with_signature`], but optionally binds a `this`
 /// symbol (the class instance or static side) into the body scope so class
 /// method and constructor bodies can resolve `this.<member>` references.
@@ -1724,6 +1810,21 @@ pub(crate) fn check_function_body_with_signature_and_this(
     has_this_parameter: bool,
     ctx: &mut CheckerContext,
 ) {
+    let type_variables = enter_body_type_variables(type_parameters, ctx);
+    let body_function_type;
+    let function_type = match (&type_variables, function_signature.as_deref()) {
+        (Some(_), Some(signature)) => {
+            body_function_type = signature_over_type_variables(
+                &parameters,
+                signature.return_type.as_ref(),
+                function_type,
+                type_parameters,
+                ctx,
+            );
+            &body_function_type
+        }
+        _ => function_type,
+    };
     let body_flow = analyze_function_body_flow(&body);
     let flow_facts = collect_function_flow_facts(&body);
     // Whether a `default`-less switch covers its discriminant is only known once

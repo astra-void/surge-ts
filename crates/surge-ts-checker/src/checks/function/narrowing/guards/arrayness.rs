@@ -29,6 +29,16 @@ pub(crate) fn parse_array_isarray_condition(
 /// members (the `=== true` branch); otherwise removes them. `any`/`unknown`
 /// members are kept either way.
 pub(crate) fn narrow_union_by_arrayness(ty: &Type, keep_arrays: bool) -> Option<Type> {
+    // `arg is any[]` over a type variable, bare or already narrowed, is
+    // `getNarrowedType`'s `T & any[]`: it keeps its identity and reads as an array.
+    if keep_arrays && (ty.is_type_variable() || surge_ts_types::type_variable::is_narrowed_type_variable(ty)) {
+        let mut operands = match ty {
+            Type::Object(object) => object.intersection_operands.as_deref().unwrap_or_default().to_vec(),
+            other => vec![other.clone()],
+        };
+        operands.push(Type::Array(Box::new(Type::Any)));
+        return Some(surge_ts_types::type_variable::type_variable_intersection(operands));
+    }
     let Type::Union(union) = ty else {
         return None;
     };

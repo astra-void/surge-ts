@@ -690,6 +690,10 @@ pub struct ParsedInterfaceDeclaration {
     pub string_index_type: Option<ParsedType>,
     /// See [`ParsedObjectType::number_index_type`].
     pub number_index_type: Option<ParsedType>,
+    /// Where the string and number index signatures above are declared, for
+    /// the diagnostics tsc reports on the signature itself.
+    pub string_index_span: Option<TextSpan>,
+    pub number_index_span: Option<TextSpan>,
     /// A bare call signature (`(value?: any): number`) on the interface, making
     /// values of this type callable without `new` (e.g. `NumberConstructor`).
     pub call_signature: Option<ParsedFunctionType>,
@@ -756,6 +760,9 @@ pub struct ParsedClassDeclaration {
     /// (`[key: string]: T`), as on [`ParsedInterfaceDeclaration`].
     pub string_index_type: Option<ParsedType>,
     pub number_index_type: Option<ParsedType>,
+    /// See [`ParsedInterfaceDeclaration::string_index_span`].
+    pub string_index_span: Option<TextSpan>,
+    pub number_index_span: Option<TextSpan>,
     pub span: Option<TextSpan>,
     /// Every member's computed key (`[expr]`), with the bracketed name's span:
     /// each is checked as an expression (tsc's `checkComputedPropertyName`)

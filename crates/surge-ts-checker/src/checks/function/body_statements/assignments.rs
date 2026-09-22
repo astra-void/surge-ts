@@ -603,7 +603,7 @@ fn check_assigned_value(
         return None;
     };
 
-    if value_type.is_unknown() || target_type.is_unknown() {
+    if value_type.is_unmodelled() || target_type.is_unmodelled() {
         return None;
     }
 
@@ -1030,7 +1030,7 @@ fn check_member_assignment_itself(
         return;
     };
 
-    if target_unresolved || value_type.is_unknown() || target_type.is_unknown() {
+    if target_unresolved || value_type.is_unmodelled() || target_type.is_unmodelled() {
         crate::checks::function::narrowing::narrow_assignment_target_in_scope(
             &assignment.target,
             &value_type,
@@ -1071,7 +1071,7 @@ fn check_member_assignment_itself(
 /// shapes do not cascade.
 pub(crate) fn check_this_property_assignment(
     assignment: ParsedThisPropertyAssignment,
-    scopes: &ScopeStack,
+    scopes: &mut ScopeStack,
     ctx: &mut CheckerContext,
 ) {
     let visible_symbols = visible_symbols(scopes);
@@ -1172,11 +1172,23 @@ pub(crate) fn check_this_property_assignment(
         return;
     };
 
-    if target_unresolved || value_type.is_unknown() || property_type.is_unknown() {
+    // The write narrows `this.<property>` for the reads after it, as any
+    // property reference's assignment does (`getAssignmentReducedType`).
+    let target = ParsedExpression::PropertyAccess {
+        object: Box::new(ParsedExpression::This { span: None }),
+        object_span: None,
+        property_name: assignment.property_name.clone(),
+        property_span: assignment.property_span,
+        is_bracketed: false,
+    };
+    if target_unresolved || value_type.is_unmodelled() || property_type.is_unmodelled() {
+        crate::checks::function::narrowing::narrow_assignment_target_in_scope(&target, &value_type, scopes);
         return;
     }
 
-    if !is_assignable_to(&value_type, &property_type) {
+    if is_assignable_to(&value_type, &property_type) {
+        crate::checks::function::narrowing::narrow_assignment_target_in_scope(&target, &value_type, scopes);
+    } else {
         let reported_target =
             crate::checks::expr::reported_relation_target(&value_type, &property_type);
         let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
@@ -1431,7 +1443,7 @@ pub(crate) fn update_assigned_symbol_type(
         return;
     };
 
-    if value_ty.is_unknown() {
+    if value_ty.is_unmodelled() {
         // Outside a loop pre-pass an unmodelled value keeps the narrowing
         // rather than guessing; inside it, the back edge must not claim the
         // binding still holds what it held on entry.
@@ -1480,7 +1492,7 @@ pub(crate) fn update_assigned_symbol_type(
             // assigned, as tsc does: the lazy-singleton idiom
             // (`let client: Redis | null = null; … client = new Redis(); return client;`)
             // otherwise keeps reading as the full union at every later use.
-            if matches!(symbol.ty, Type::Union(_)) && !value_ty.is_unknown() {
+            if matches!(symbol.ty, Type::Union(_)) && !value_ty.is_unmodelled() {
                 narrowed_by_assignment = true;
                 let declared = scopes
                     .visible_symbols()

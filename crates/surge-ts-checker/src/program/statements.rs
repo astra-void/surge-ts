@@ -784,7 +784,7 @@ fn check_program_statement_itself(
                 ctx,
             );
             super::heritage::check_interface_heritage(&interface, ctx);
-            super::heritage::check_interface_index_constraints(&interface, ctx);
+            super::index_constraints::check_interface_index_constraints(&interface, ctx);
         }
         ParsedStatement::ClassDeclaration(class) => {
             with_module_declared_only(ctx, |ctx| super::check_class_declaration(&class, ctx));

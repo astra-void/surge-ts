@@ -95,7 +95,8 @@ fn contains_unknown(ty: &Type, sentinel_only: bool) -> bool {
             const { std::cell::RefCell::new(Vec::new()) };
     }
     match ty {
-        Type::Unknown | Type::TypeParameter(_) => true,
+        Type::Unknown => true,
+        Type::TypeParameter(parameter) => !parameter.is_active_variable(),
         Type::GenuineUnknown => !sentinel_only,
         Type::Array(element) => contains_unknown(element, sentinel_only),
         Type::Tuple(elements) => elements

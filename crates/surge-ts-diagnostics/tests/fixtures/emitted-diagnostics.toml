@@ -1484,6 +1484,22 @@ oracle = [
   "object-spread-operand-type-basic",
 ]
 
+[TS2411]
+status = "emitted"
+oracle = [
+  "index-signature-property-constraint-basic",
+  "interface-index-constraint-basic",
+]
+
+[TS2413]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/index-signature-property-constraint-basic/src/index.ts",
+]
+oracle = [
+  "index-signature-property-constraint-basic",
+]
+
 [TS2416]
 status = "emitted"
 fixtures = [
@@ -2379,12 +2395,6 @@ oracle = [
 status = "emitted"
 oracle = [
   "declaration-form-grammar-basic",
-]
-
-[TS2411]
-status = "emitted"
-oracle = [
-  "interface-index-constraint-basic",
 ]
 
 [TS2804]

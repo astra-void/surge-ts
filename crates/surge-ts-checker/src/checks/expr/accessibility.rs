@@ -53,11 +53,21 @@ pub(crate) fn enclosing_class_lineage(
     let Some(span) = class.name_span else {
         return lineage;
     };
-    lineage.push((ctx.file_name_arc(), span.start));
     let mut current = match ctx.lookup_type_declaration(&class.name) {
         Some(TypeDeclarationInfo::Interface(info)) => info.clone(),
-        _ => return lineage,
+        _ => {
+            lineage.push((ctx.file_name_arc(), span.start));
+            return lineage;
+        }
     };
+    // A class merged with a same-named interface is one declaration, and a
+    // member read resolves its owner to the merged record, which carries the
+    // first fragment's name — the class's own span would never match it.
+    lineage.push(
+        identity(&current)
+            .filter(|(file, _)| **file == *ctx.file_name)
+            .unwrap_or_else(|| (ctx.file_name_arc(), span.start)),
+    );
     for _ in 0..MAX_HERITAGE_DEPTH {
         let Some(base) = base_interface(&current, ctx) else {
             break;
@@ -130,9 +140,12 @@ fn receiver_class(
     }
     // Narrowing one of an instance's members materializes the instance as an
     // object that keeps only the class's name.
+    // An instantiation (a generic class's own `C<T>` inside its body) keeps
+    // its arguments in the name.
     if let Type::Object(object) = receiver_type
         && let Some(name) = object.alias_name.as_deref()
-        && let Some(TypeDeclarationInfo::Interface(info)) = ctx.lookup_type_declaration(name)
+        && let Some(TypeDeclarationInfo::Interface(info)) =
+            ctx.lookup_type_declaration(name.split('<').next().unwrap_or(name))
     {
         return Some((info.clone(), false));
     }

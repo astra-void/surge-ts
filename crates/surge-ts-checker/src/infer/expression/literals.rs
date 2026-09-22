@@ -84,6 +84,7 @@ pub(crate) fn infer_object_literal(
     // not propagated here; only surge's own openness marker is.
     let mut spread_source_is_open = false;
     let mut spread_source_is_any = false;
+    let mut spread_variables: Vec<Type> = Vec::new();
     for property in properties {
         record_property_lookup();
         record_object_literal_property_check();
@@ -107,8 +108,29 @@ pub(crate) fn infer_object_literal(
                 // Surge's own degradation sentinel: the members it stands for
                 // are real but unenumerable, so the result must stay open — as
                 // must a type parameter's, which tsc keeps as `T & { … }`.
-                Type::Unknown | Type::TypeParameter(_) => {
+                Type::Unknown => {
                     spread_source_is_open = true;
+                }
+                // tsc's `getSpreadType` keeps a generic spread as an
+                // intersection (`T & { error: … }`), so the variable stays
+                // beside the merged members.
+                source @ Type::TypeParameter(_) => {
+                    spread_source_is_open = true;
+                    if source.is_type_variable() {
+                        spread_variables.push(source);
+                    }
+                }
+                Type::Object(source) if surge_ts_types::type_variable::is_narrowed_type_variable(&Type::Object(source.clone())) => {
+                    spread_source_is_open = true;
+                    spread_variables.extend(
+                        source
+                            .intersection_operands
+                            .as_deref()
+                            .unwrap_or_default()
+                            .iter()
+                            .filter(|operand| operand.is_type_variable())
+                            .cloned(),
+                    );
                 }
                 Type::Object(source) => {
                     spread_source_is_open |= source.synthetic_open_index;
@@ -166,6 +188,11 @@ pub(crate) fn infer_object_literal(
     } else if spread_source_is_open {
         let mut object = alloc_object_type(merged_properties, Some(Type::Any));
         object = object.with_open_index_marker();
+        if !spread_variables.is_empty() {
+            object = object
+                .with_intersection_marker()
+                .with_intersection_operands(spread_variables);
+        }
         Type::Object(object)
     } else {
         Type::Object(alloc_object_type(merged_properties, None))

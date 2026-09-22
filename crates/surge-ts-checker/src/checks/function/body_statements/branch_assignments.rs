@@ -12,11 +12,13 @@ use super::super::narrow_discriminant_in_scope;
 /// The bindings a branch body assigns at its own statement level. Deeper
 /// assignments are discarded with their own inner frame before the branch ends,
 /// so they cannot reach the join.
-/// The identifier a reference path starts from: `a` for `a.b.c` and `a[0].b`.
+/// The binding a reference path starts from: `a` for `a.b.c` and `a[0].b`.
 /// `None` for a path rooted in anything that is not a plain binding.
 fn reference_root_name(expression: &ParsedExpression) -> Option<&str> {
     match expression {
         ParsedExpression::Identifier { name, .. } => Some(name),
+        // `this` is bound in scope under its own name, like any root.
+        ParsedExpression::This { .. } => Some("this"),
         ParsedExpression::PropertyAccess { object, .. }
         | ParsedExpression::OptionalPropertyAccess { object, .. }
         | ParsedExpression::ElementAccess { object, .. } => reference_root_name(object),
@@ -36,6 +38,7 @@ pub(crate) fn branch_assigned_names(body: &[ParsedFunctionBodyStatement], names:
             ParsedFunctionBodyStatement::Return(statement) => statement.expression.iter().collect(),
             ParsedFunctionBodyStatement::Assignment(assignment) => vec![&assignment.value],
             ParsedFunctionBodyStatement::MemberAssignment(assignment) => vec![&assignment.value],
+            ParsedFunctionBodyStatement::ThisPropertyAssignment(assignment) => vec![&assignment.value],
             ParsedFunctionBodyStatement::If(statement) => vec![&statement.condition],
             ParsedFunctionBodyStatement::While(statement) => vec![&statement.condition],
             _ => Vec::new(),
@@ -63,6 +66,11 @@ pub(crate) fn branch_assigned_names(body: &[ParsedFunctionBodyStatement], names:
                     && !names.iter().any(|name| name == base)
                 {
                     names.push(base.to_string());
+                }
+            }
+            ParsedFunctionBodyStatement::ThisPropertyAssignment(_) => {
+                if !names.iter().any(|name| name == "this") {
+                    names.push("this".to_string());
                 }
             }
             ParsedFunctionBodyStatement::Block(block) => branch_assigned_names(block, names),

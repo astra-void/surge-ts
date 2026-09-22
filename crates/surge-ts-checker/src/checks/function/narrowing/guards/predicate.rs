@@ -206,6 +206,14 @@ pub(crate) fn narrow_by_predicate(
             {
                 return Some(predicate.clone());
             }
+            let variables: Vec<Type> = members
+                .iter()
+                .filter(|member| member.is_type_variable())
+                .map(|member| surge_ts_types::type_variable::intersect_type_variable(member, predicate.clone()))
+                .collect();
+            if !variables.is_empty() {
+                return Some(union_type(variables));
+            }
             return None;
         }
         let remaining: Vec<Type> = members
@@ -228,6 +236,26 @@ pub(crate) fn narrow_by_predicate(
     // assignable in every direction, so narrowing them would invent a type for
     // a subject whose real one was never reconstructed. The genuine `unknown`
     // keyword is not excluded: narrowing it is the case that already works.
+    // A type variable the predicate does not already cover is `T & P`
+    // (`getNarrowedTypeWorker`'s fallback): it keeps its identity, and the
+    // predicate's members come with it.
+    if keep_matching && peeled.is_type_variable() {
+        return (!predicate.is_unmodelled() && !surge_ts_types::is_assignable_to(&peeled, predicate))
+            .then(|| surge_ts_types::type_variable::intersect_type_variable(&peeled, predicate.clone()));
+    }
+    // An already narrowed `T & X` gains the predicate as one more constituent.
+    if keep_matching
+        && surge_ts_types::type_variable::is_narrowed_type_variable(&peeled)
+        && let Type::Object(object) = &peeled
+        && let Some(operands) = object.intersection_operands.as_deref()
+    {
+        if predicate.is_unmodelled() || surge_ts_types::is_assignable_to(&peeled, predicate) {
+            return None;
+        }
+        let mut operands = operands.to_vec();
+        operands.push(predicate.clone());
+        return Some(surge_ts_types::type_variable::type_variable_intersection(operands));
+    }
     if keep_matching
         && !matches!(peeled, Type::Any | Type::Unknown | Type::TypeParameter(_))
         && peeled != *predicate
