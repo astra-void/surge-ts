@@ -810,7 +810,17 @@ fn check_promise_then_call(
         | InferredExpression::Unknown => Type::Unknown,
     };
 
-    Some(next_value)
+    // A `then` answers a promise; only with `Promise<T>` collapsed is that its
+    // value. The receiver can reach here as a promise too, when its interface
+    // did not resolve where `then` was looked up.
+    // `TResult1` is inferred from the callback's return, which widens its
+    // fresh literals (`() => ({ data: 5 })` is `Promise<{ data: number }>`).
+    let next_value = if promise_nominal_enabled() {
+        crate::checks::expr::widen_type(&next_value)
+    } else {
+        next_value
+    };
+    Some(promise_of(&next_value, ctx))
 }
 
 /// Whether `ty` answers `name` from a member of its own, as opposed to from an

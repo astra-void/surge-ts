@@ -581,6 +581,15 @@ pub(crate) fn infer_property_call(
         } else {
             object_type.clone()
         };
+        // The same promise the checking path answers (`check_promise_then_call`):
+        // an inferred callback that returned the bare value handed `vi.fn` a
+        // `T` of `() => string` for `() => sleep(10).then(() => 'data')`.
+        let chained = if property_name == "then" && crate::checks::call::promise_nominal_enabled() {
+            let widened = crate::checks::expr::widen_type(&chained);
+            crate::checks::call::promise_of(&widened, ctx)
+        } else {
+            chained
+        };
         record_program_timing(ctx.timings.as_ref(), |timings| {
             timings.property_access_checking += property_call_start.elapsed()
         });
