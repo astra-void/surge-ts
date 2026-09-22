@@ -6,8 +6,9 @@
 // directory for what the numbers do and do not mean.
 
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -42,6 +43,7 @@ import {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(scriptDir, '../..');
 const tsgoBinPath = path.join(workspaceRoot, 'node_modules', 'typescript', 'bin', 'tsc');
+const baselineCacheDir = path.join(workspaceRoot, '.bench', 'checkers-cache', 'tsgo');
 // bolt-ts emits message text only, so codes are recovered from the TS 6 JS
 // compiler's diagnostic table (TS 7 embeds its table in the Go binary).
 const tsDiagnosticTablePath = path.join(workspaceRoot, 'node_modules', 'typescript-6', 'lib', 'typescript.js');
@@ -124,6 +126,7 @@ type ParsedArgs = {
   out: string;
   boltBin: string;
   surgeBin: string;
+  baselineCache: boolean;
   fromJson?: string;
 };
 
@@ -567,6 +570,57 @@ function filesCount(stdout: string): number | null {
 
 type RunLimits = { timeoutMs: number; maxRssBytes: number };
 
+type BaselineRuns = { tsgo: ProcessOutput; listed: ProcessOutput };
+
+// Only materialized upstream cases are cached: their directory is the whole
+// input, whereas fixtures and corpora read files outside it (shared sources,
+// node_modules) that a directory hash would miss. The directory's own path is
+// keyed too, because tsgo's output names files by path.
+export function baselineCacheKey(projectDir: string, tsgoVersion: string): string {
+  const hash = createHash('sha256').update(`tsgo ${tsgoVersion}\0${path.resolve(projectDir)}\0`);
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else hash.update(`${path.relative(projectDir, full)}\0`).update(readFileSync(full)).update('\0');
+    }
+  };
+  walk(projectDir);
+  return hash.digest('hex');
+}
+
+async function runBaseline(target: Target, args: ParsedArgs, limits: RunLimits): Promise<BaselineRuns> {
+  const cacheFile = args.baselineCache && target.tier === 'upstream'
+    ? path.join(baselineCacheDir, `${baselineCacheKey(path.dirname(target.tsconfig), readPackageVersion('typescript'))}.json`)
+    : null;
+  if (cacheFile && existsSync(cacheFile)) {
+    try {
+      return JSON.parse(readFileSync(cacheFile, 'utf8')) as BaselineRuns;
+    } catch {
+      // A torn or stale entry is recomputed and overwritten below.
+    }
+  }
+  const tsgo = await runProcess(
+    process.execPath,
+    [tsgoBinPath, '--noEmit', '--pretty', 'false', '--project', target.tsconfig],
+    { cwd: workspaceRoot, ...limits },
+  );
+  if (limitStatus(tsgo)) return { tsgo, listed: tsgo };
+  const listed = await runProcess(
+    process.execPath,
+    [tsgoBinPath, '--listFilesOnly', '--project', target.tsconfig],
+    { cwd: workspaceRoot, ...limits },
+  );
+  // Limit hits depend on --timeout/--maxMemory and machine load, not on the case.
+  if (cacheFile && !limitStatus(listed)) {
+    mkdirSync(baselineCacheDir, { recursive: true });
+    const temp = `${cacheFile}.${process.pid}.tmp`;
+    writeFileSync(temp, JSON.stringify({ tsgo, listed }));
+    renameSync(temp, cacheFile);
+  }
+  return { tsgo, listed };
+}
+
 async function evaluateTarget(target: Target, args: ParsedArgs): Promise<TargetResult> {
   const corpus = target.tier === 'corpus';
   const limits: RunLimits = {
@@ -583,8 +637,7 @@ async function evaluateTarget(target: Target, args: ParsedArgs): Promise<TargetR
     scores: {},
   };
 
-  const tsgoArgs = [tsgoBinPath, '--noEmit', '--pretty', 'false', '--project', target.tsconfig];
-  const tsgo = await runProcess(process.execPath, tsgoArgs, { cwd: workspaceRoot, ...limits });
+  const { tsgo, listed } = await runBaseline(target, args, limits);
   const baselineLimited = limitStatus(tsgo);
   if (baselineLimited) {
     result.baselineStatus = baselineLimited;
@@ -597,11 +650,6 @@ async function evaluateTarget(target: Target, args: ParsedArgs): Promise<TargetR
     return result;
   }
 
-  const listed = await runProcess(
-    process.execPath,
-    [tsgoBinPath, '--listFilesOnly', '--project', target.tsconfig],
-    { cwd: workspaceRoot, ...limits },
-  );
   const programFiles =
     listed.status === 0
       ? new Set(
@@ -1122,6 +1170,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     out: path.join(workspaceRoot, '.bench', 'checkers'),
     boltBin: process.env.BOLT_TS_BIN ?? defaultBoltBin,
     surgeBin: process.env.SURGE_TS_BIN ?? defaultSurgeBin,
+    baselineCache: true,
   };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -1147,6 +1196,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (arg === '--boltBin') parsed.boltBin = path.resolve(value());
     else if (arg === '--surgeBin') parsed.surgeBin = path.resolve(value());
     else if (arg === '--fromJson') parsed.fromJson = path.resolve(value());
+    else if (arg === '--noBaselineCache') parsed.baselineCache = false;
     else throw new Error(`unknown argument: ${arg}\n${usage()}`);
   }
   // Concurrent targets can each grow to the cap; keep their sum within half of
@@ -1167,7 +1217,7 @@ function usage(): string {
     'Usage: pnpm run bench:checkers -- [--upstream] [--fixtures] [--corpora] [--all] [--project <tsconfig>]',
     '         [--upstreamLimit <n>] [--filter <substring>] [--jobs <n>] [--timeout <s>] [--corpusTimeout <s>]',
     '         [--maxMemory <MB>] [--corpusMaxMemory <MB>]',
-    '         [--out <dir>] [--boltBin <path>] [--surgeBin <path>] [--fromJson <report.json>]',
+    '         [--out <dir>] [--boltBin <path>] [--surgeBin <path>] [--fromJson <report.json>] [--noBaselineCache]',
     '  Binaries default to ../bolt-ts/target/release/bolt_ts_compiler and target/release/surge',
     '  (override with BOLT_TS_BIN / SURGE_TS_BIN).',
     '  --upstream (the default) is the held-out tier; --upstreamLimit 0 runs every held-out case (default 1000).',

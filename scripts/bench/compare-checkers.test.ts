@@ -1,4 +1,6 @@
 import assert from 'node:assert';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -6,6 +8,7 @@ import test from 'node:test';
 import type { NormalizedDiagnostic } from '../oracle/compare-tsc.js';
 import {
   aggregate,
+  baselineCacheKey,
   codeForMessage,
   compileTemplate,
   loadMessageTemplates,
@@ -150,4 +153,26 @@ test('a process past the resident-memory cap is killed and flagged', async () =>
   assert.strictEqual(output.memoryExceeded, true);
   assert.strictEqual(output.timedOut, false);
   assert.ok(output.ms < 10_000, `took ${output.ms}ms`);
+});
+
+test('the baseline cache key follows case content, location, and tsgo version', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'baseline-key-'));
+  try {
+    const makeCase = (name: string, source: string) => {
+      const dir = path.join(root, name);
+      mkdirSync(path.join(dir, 'sub'), { recursive: true });
+      writeFileSync(path.join(dir, 'tsconfig.json'), '{}');
+      writeFileSync(path.join(dir, 'sub', 'a.ts'), source);
+      return dir;
+    };
+    const one = makeCase('one', 'let x = 1;');
+    const key = baselineCacheKey(one, '7.0.2');
+    assert.strictEqual(baselineCacheKey(one, '7.0.2'), key);
+    assert.notStrictEqual(baselineCacheKey(one, '7.0.3'), key);
+    assert.notStrictEqual(baselineCacheKey(makeCase('two', 'let x = 1;'), '7.0.2'), key);
+    writeFileSync(path.join(one, 'sub', 'a.ts'), 'let x = 2;');
+    assert.notStrictEqual(baselineCacheKey(one, '7.0.2'), key);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

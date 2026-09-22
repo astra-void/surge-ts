@@ -217,6 +217,16 @@ enforces no address-space rlimit, and bolt-ts runs away on some upstream cases
 fast enough to take a 16 GB machine down inside the timeout. `--jobs` is
 lowered so jobs × `--maxMemory` stays within half of physical memory.
 
+The tsgo baseline (the `--noEmit` check and `--listFilesOnly`) dominates an
+upstream run's wall time and does not depend on either checker, so for upstream
+cases it is cached under `.bench/checkers-cache/tsgo/`, keyed on the tsgo
+version, the materialized case directory's path, and every file in it. A rerun
+with the same `--out` skips tsgo entirely; a different `--out` misses, because
+tsgo's output names files by path. Runs that hit `--timeout` or `--maxMemory`
+are not cached. Fixtures and corpora are never cached (they read files outside
+their directory). Pass `--noBaselineCache` to recompute, or delete the
+directory after changing anything else tsgo reads (e.g. workspace `@types`).
+
 Reports land in `.bench/checkers/report.{md,json,svg,html}` (`--out <dir>` to
 change). The SVG and HTML reuse the compiler benchmark's panel renderer and page
 chrome from `report.ts`. Re-render them from a previous run without re-checking:
