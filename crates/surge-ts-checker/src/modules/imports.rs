@@ -278,6 +278,45 @@ pub(crate) fn resolve_module_imports(
         ctx,
     );
 
+    // A UMD global (`export as namespace React`) is a global symbol naming its
+    // module (Go merges each file's `globalExports` into the globals), so a
+    // module that neither declares nor imports the name reads the namespace's
+    // types through it — `React.Context` with no import of React — after its
+    // own declarations and imports.
+    if !ctx.umd_global_names.is_empty() {
+        let declared = crate::program::module_scope_declared_names(&parsed_file.statements);
+        let mut umd_globals: Vec<(Arc<str>, usize)> = ctx
+            .umd_global_names
+            .iter()
+            .map(|(name, index)| (name.clone(), *index))
+            .collect();
+        umd_globals.sort();
+        for (name, module_index) in umd_globals {
+            let declaring_file = program_files.get(module_index);
+            if declaring_file.is_none_or(|file| file.file_name == parsed_file.file_name)
+                || declared.contains(name.as_ref())
+                || local_symbol_exists(&name)
+                || symbols.get_handle(&name).is_some()
+                || type_declarations.get(&name).is_some()
+            {
+                continue;
+            }
+            let Some(export_table) = module_export_tables.get(module_index).and_then(Option::as_ref)
+            else {
+                continue;
+            };
+            let scope = module_resolution_scopes
+                .get(module_index)
+                .and_then(Option::as_ref);
+            namespace_alias_layers.push(namespace_alias_table(
+                export_table,
+                &name,
+                scope,
+                Some(module_index),
+            ));
+        }
+    }
+
     report_import_local_declaration_conflicts(
         parsed_file,
         program_files,
