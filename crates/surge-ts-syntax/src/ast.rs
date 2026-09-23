@@ -856,8 +856,13 @@ pub struct ParsedClassDeclaration {
     pub type_parameters: Vec<ParsedTypeParameter>,
     /// Base classes named in an `extends` clause. A class has at most one, but
     /// this is modelled as a list so the instance side can reuse the interface
-    /// heritage-merge path. A non-identifier base (e.g. a mixin call) is dropped.
+    /// heritage-merge path. A base that is not a (dotted) name, e.g. a mixin
+    /// call, is named [`EXPRESSION_HERITAGE_BASE`].
     pub extends: Vec<ParsedNamedType>,
+    /// The `extends` expression behind an [`EXPRESSION_HERITAGE_BASE`] base,
+    /// whose type is the base constructor type (tsc's
+    /// `getBaseConstructorTypeOfClass`).
+    pub heritage_expression: Option<Box<ParsedExpression>>,
     /// Interfaces named in an `implements` clause. They contribute nothing to
     /// the instance type — the class has to declare the members itself, which
     /// is what makes an unimplemented one reportable.

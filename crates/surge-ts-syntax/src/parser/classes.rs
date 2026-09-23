@@ -75,6 +75,11 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
         name_span: Some(text_span_from_oxc_span(id.span)),
         type_parameters: parse_type_parameters(class.type_parameters.as_deref()),
         extends: parse_class_heritage(class),
+        heritage_expression: class
+            .super_class
+            .as_ref()
+            .filter(|super_class| super::types::flatten_heritage_expression(super_class).is_none())
+            .map(|super_class| Box::new(parse_expression(super_class).0)),
         implements: class
             .implements
             .iter()

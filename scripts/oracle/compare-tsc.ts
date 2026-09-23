@@ -373,6 +373,7 @@ export const fixturePresets: Record<string, string> = {
   'explicit-return-missing-value': path.join(workspaceRoot, 'tests/compat-projects/explicit-return-missing-value/tsconfig.json'),
   'namespace-merged-member-value': path.join(workspaceRoot, 'tests/compat-projects/namespace-merged-member-value/tsconfig.json'),
   'namespace-block-interface-merging-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-block-interface-merging-basic/tsconfig.json'),
+  'mixin-static-members-basic': path.join(workspaceRoot, 'tests/compat-projects/mixin-static-members-basic/tsconfig.json'),
   'export-equals-entity-meanings': path.join(workspaceRoot, 'tests/compat-projects/export-equals-entity-meanings/tsconfig.json'),
   'import-equals-module-namespace-as-type': path.join(workspaceRoot, 'tests/compat-projects/import-equals-module-namespace-as-type/tsconfig.json'),
   'unresolved-import-generic-reference': path.join(workspaceRoot, 'tests/compat-projects/unresolved-import-generic-reference/tsconfig.json'),

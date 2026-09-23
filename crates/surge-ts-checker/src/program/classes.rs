@@ -658,17 +658,54 @@ fn base_type_variable(
 }
 
 /// The base class's static members, as the starting point for a derived class's
-/// static side. Empty when the class has no base, when the base's value is not
-/// in scope yet, or when the base's static side is not an object (a generic
-/// class models its value as `any`).
+/// static side (tsc's `resolveAnonymousTypeMembers` adds the properties of the
+/// base constructor type). Empty when the class has no base, when the base's
+/// value is not in scope yet, or when the base's static side is not an object (a
+/// generic class models its value as `any`).
 fn inherited_static_properties(
     class: &ParsedClassDeclaration,
     scope: Option<&SymbolTable>,
-    ctx: &CheckerContext,
+    ctx: &mut CheckerContext,
 ) -> PropertyMap {
-    base_static_side(class, scope, ctx)
+    let base_static = match class.heritage_expression.as_deref() {
+        Some(expression) => expression_base_constructor_type(expression, scope, ctx),
+        None => base_static_side(class, scope, ctx),
+    };
+    base_static
         .map(|base_static| base_static.properties.as_ref().clone())
         .unwrap_or_default()
+}
+
+/// tsc's `getBaseConstructorTypeOfClass` for an `extends` expression that is
+/// not a name (`extends Mixin(A, B)`): the expression's type where the class is
+/// bound, an intersection's being the merged surface of its constituents. What
+/// inferring it reports is dropped, as binding runs before every value the
+/// expression may name is in scope.
+fn expression_base_constructor_type(
+    expression: &surge_ts_syntax::ParsedExpression,
+    scope: Option<&SymbolTable>,
+    ctx: &mut CheckerContext,
+) -> Option<ObjectType> {
+    let enclosing;
+    let symbols = match scope {
+        Some(scope) => scope,
+        None => {
+            enclosing = ctx
+                .symbols
+                .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+            &enclosing
+        }
+    };
+    let diagnostics_before = ctx.diagnostics().len();
+    let inferred = crate::infer::infer_expression(expression, symbols, ctx);
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    match inferred {
+        crate::infer::InferredExpression::Known(ty) => match ty.peeled() {
+            Type::Object(object) => Some(object),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn base_static_side(
