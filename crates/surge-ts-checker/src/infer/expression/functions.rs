@@ -81,7 +81,7 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
         );
     }
 
-    let return_type = match &arrow_function.body {
+    let infer_return_type = |ctx: &mut CheckerContext| match &arrow_function.body {
         ParsedArrowFunctionBody::Expression(expression) => {
             declared_return_type.unwrap_or_else(|| {
                 let locals = body_locals(arrow_function, &parameters, symbols);
@@ -115,6 +115,17 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
                 })
             })
             .unwrap_or(Type::Unknown),
+    };
+    // The body sees the arrow's own type parameters wherever it names them
+    // (`<U>() => <U[]>null`), as tsc's lexical `resolveName` finds them.
+    let return_type = if arrow_function.type_parameters.is_empty() {
+        infer_return_type(ctx)
+    } else {
+        crate::checks::function::with_type_parameter_scope(
+            &arrow_function.type_parameters,
+            ctx,
+            infer_return_type,
+        )
     };
 
     // An async function returns a promise of what its body completes with.
