@@ -55,13 +55,44 @@ pub(crate) fn report_unresolved_value_name(
     } else {
         site
     };
-    let diagnostic = unresolved_value_name_diagnostic(name, site, symbols, ctx);
+    let diagnostic = invalid_initializer_reference_diagnostic(name, span, site, symbols, ctx)
+        .unwrap_or_else(|| unresolved_value_name_diagnostic(name, site, symbols, ctx));
     ctx.push(diagnostic_with_syntax_span(diagnostic, span));
+}
+
+/// tsc's `checkAndReportErrorForInvalidInitializer`, which the name resolver
+/// runs ahead of `onFailedToResolveSymbol` for a reference inside a property
+/// whose constructor declares the name: a missing `this.`/`C.` prefix, and
+/// otherwise the reference the property cannot make.
+fn invalid_initializer_reference_diagnostic(
+    name: &str,
+    span: Option<SyntaxTextSpan>,
+    site: UnresolvedNameSite,
+    symbols: &SymbolTable,
+    ctx: &CheckerContext,
+) -> Option<Diagnostic> {
+    let span = span?;
+    let property = crate::program::property_with_invalid_initializer(name, span, ctx)?;
+    if site != UnresolvedNameSite::TypeQuery
+        && let Some(diagnostic) = missing_member_prefix_diagnostic(name, symbols, ctx)
+    {
+        return Some(diagnostic);
+    }
+    Some(property.invalid_reference_diagnostic(name, span, ctx.file_name.clone()))
 }
 
 /// The operand of `typeof name` that resolves to nothing. The callers have
 /// already settled the names tsc resolves (UMD globals, type-only classes).
-pub(crate) fn unresolved_type_query_diagnostic(name: &str, ctx: &CheckerContext) -> Diagnostic {
+pub(crate) fn unresolved_type_query_diagnostic(
+    name: &str,
+    span: Option<SyntaxTextSpan>,
+    ctx: &CheckerContext,
+) -> Diagnostic {
+    if let Some(span) = span
+        && let Some(property) = crate::program::property_with_invalid_initializer(name, span, ctx)
+    {
+        return property.invalid_reference_diagnostic(name, span, ctx.file_name.clone());
+    }
     let message = cannot_find_name_message(name, UnresolvedNameSite::TypeQuery, ctx);
     let file_name = ctx.file_name.clone();
     if ctx.namespace_meaning(name) == Some(false) {

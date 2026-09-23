@@ -458,8 +458,11 @@ pub(crate) fn resolve_parsed_type(
                         had_error: true,
                     };
                 }
-                let mut diagnostic =
-                    crate::checks::expr::unresolved_type_query_diagnostic(&type_of.name, ctx);
+                let mut diagnostic = crate::checks::expr::unresolved_type_query_diagnostic(
+                    &type_of.name,
+                    type_of.name_span,
+                    ctx,
+                );
                 if let Some(span) = type_of.name_span {
                     diagnostic = diagnostic.with_span(convert_span(span));
                 }

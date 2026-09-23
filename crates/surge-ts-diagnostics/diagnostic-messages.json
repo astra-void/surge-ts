@@ -2232,6 +2232,22 @@
     "support": "emitted"
   },
   {
+    "code": "TS2301",
+    "category": "Error",
+    "message": "Initializer of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2844",
+    "category": "Error",
+    "message": "Type of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2708",
     "category": "Error",
     "message": "Cannot use namespace '{0}' as a value.",

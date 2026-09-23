@@ -1667,6 +1667,270 @@ fn check_class_property_initializer(
     }
 }
 
+/// A non-static property of a class whose constructor implementation declares
+/// locals. tsc's name resolver records such a property while climbing out of
+/// it (`propertyWithInvalidInitializer` in `nameresolver.go`) when those locals
+/// hold a value of the name being resolved, and unless class fields are
+/// standard fields `checkAndReportErrorForInvalidInitializer` reports the
+/// reference instead of resolving it.
+#[derive(Debug, Clone)]
+pub(crate) struct ConstructorLocalProperty {
+    name: String,
+    /// From the property's name to the end of the member: a decorator is
+    /// resolved at the class, not inside the property.
+    span: surge_ts_syntax::TextSpan,
+    name_end: usize,
+    initializer: Option<surge_ts_syntax::TextSpan>,
+    constructor_locals: Arc<[String]>,
+}
+
+impl ConstructorLocalProperty {
+    /// TS2844 for a reference in the property's type annotation, TS2301
+    /// anywhere else in it.
+    pub(crate) fn invalid_reference_diagnostic(
+        &self,
+        name: &str,
+        reference: surge_ts_syntax::TextSpan,
+        file_name: String,
+    ) -> Diagnostic {
+        let in_initializer = self.initializer.is_some_and(|initializer| {
+            initializer.start <= reference.start && reference.end <= initializer.end
+        });
+        if !in_initializer && reference.start >= self.name_end {
+            Diagnostic::ts2844(&self.name, name, file_name)
+        } else {
+            Diagnostic::ts2301(&self.name, name, file_name)
+        }
+    }
+}
+
+/// Every [`ConstructorLocalProperty`] of the classes `statements` declare, at
+/// any statement depth.
+pub(crate) fn file_constructor_local_properties(
+    statements: &[surge_ts_syntax::ParsedStatement],
+    options: &crate::context::CheckerOptions,
+) -> Arc<[ConstructorLocalProperty]> {
+    // tsgo's `GetEmitStandardClassFields` also asks for an ES2022 target; the
+    // checker options carry `GetUseDefineForClassFields`, which differs from it
+    // only for an explicit `useDefineForClassFields: true` below ES2022.
+    if options.use_define_for_class_fields {
+        return Arc::from([]);
+    }
+    let mut properties = Vec::new();
+    for statement in statements {
+        collect_statement_constructor_locals(statement, &mut properties);
+    }
+    properties.into()
+}
+
+/// [`file_constructor_local_properties`] of every source file that has any.
+pub(crate) fn constructor_local_properties_by_file(
+    parsed_files: &[super::ParsedProgramFile],
+    options: &crate::context::CheckerOptions,
+) -> Arc<surge_ts_types::fx::FxHashMap<Arc<str>, Arc<[ConstructorLocalProperty]>>> {
+    let mut by_file = surge_ts_types::fx::FxHashMap::default();
+    for parsed_file in parsed_files {
+        if parsed_file.file_kind.is_declaration() {
+            continue;
+        }
+        let properties = file_constructor_local_properties(&parsed_file.statements, options);
+        if !properties.is_empty() {
+            by_file.insert(Arc::from(parsed_file.file_name.as_str()), properties);
+        }
+    }
+    Arc::new(by_file)
+}
+
+/// tsc's `propertyWithInvalidInitializer` for a reference to `name`: of the
+/// enclosing properties whose constructor declares the name, the outermost is
+/// the last one the resolver's climb records.
+pub(crate) fn property_with_invalid_initializer<'a>(
+    name: &str,
+    reference: surge_ts_syntax::TextSpan,
+    ctx: &'a CheckerContext,
+) -> Option<&'a ConstructorLocalProperty> {
+    ctx.constructor_local_properties
+        .get(ctx.file_name.as_str())?
+        .iter()
+        .filter(|property| {
+            property.span.start <= reference.start
+                && reference.end <= property.span.end
+                && property.constructor_locals.iter().any(|local| local == name)
+        })
+        .min_by_key(|property| property.span.start)
+}
+
+fn collect_statement_constructor_locals(
+    statement: &surge_ts_syntax::ParsedStatement,
+    properties: &mut Vec<ConstructorLocalProperty>,
+) {
+    use surge_ts_syntax::{ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedStatement};
+    match statement {
+        ParsedStatement::ClassDeclaration(class) => {
+            collect_class_constructor_locals(class, properties)
+        }
+        ParsedStatement::FunctionDeclaration(function) => {
+            collect_body_constructor_locals(&function.body, properties)
+        }
+        // An ambient namespace's classes have no constructor bodies.
+        ParsedStatement::NamespaceDeclaration(namespace) if !namespace.is_declare => {
+            for statement in &namespace.statements {
+                collect_statement_constructor_locals(statement, properties);
+            }
+        }
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => {
+                collect_statement_constructor_locals(declaration, properties)
+            }
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Class(class),
+                ..
+            } => collect_class_constructor_locals(class, properties),
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Function(function),
+                ..
+            } => collect_body_constructor_locals(&function.body, properties),
+            _ => {}
+        },
+        ParsedStatement::If(if_statement) => {
+            collect_body_constructor_locals(&if_statement.then_body, properties);
+            collect_body_constructor_locals(&if_statement.else_body, properties);
+        }
+        ParsedStatement::Block(body) => collect_body_constructor_locals(body, properties),
+        _ => {}
+    }
+}
+
+fn collect_body_constructor_locals(
+    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+    properties: &mut Vec<ConstructorLocalProperty>,
+) {
+    use surge_ts_syntax::ParsedFunctionBodyStatement;
+    for statement in body {
+        match statement {
+            ParsedFunctionBodyStatement::Class(class) => {
+                collect_class_constructor_locals(class, properties)
+            }
+            ParsedFunctionBodyStatement::Function(function) => {
+                collect_body_constructor_locals(&function.body, properties)
+            }
+            ParsedFunctionBodyStatement::Block(block) => {
+                collect_body_constructor_locals(block, properties)
+            }
+            ParsedFunctionBodyStatement::If(if_statement) => {
+                collect_body_constructor_locals(&if_statement.then_body, properties);
+                collect_body_constructor_locals(&if_statement.else_body, properties);
+            }
+            ParsedFunctionBodyStatement::While(while_statement) => {
+                collect_body_constructor_locals(&while_statement.body, properties)
+            }
+            ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
+                collect_body_constructor_locals(&for_of_statement.body, properties)
+            }
+            ParsedFunctionBodyStatement::Switch(switch_statement) => {
+                for case in &switch_statement.cases {
+                    collect_body_constructor_locals(&case.consequent, properties);
+                }
+            }
+            ParsedFunctionBodyStatement::Try(try_statement) => {
+                collect_body_constructor_locals(&try_statement.block, properties);
+                if let Some(handler) = &try_statement.handler {
+                    collect_body_constructor_locals(&handler.body, properties);
+                }
+                collect_body_constructor_locals(&try_statement.finalizer, properties);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_class_constructor_locals(
+    class: &ParsedClassDeclaration,
+    properties: &mut Vec<ConstructorLocalProperty>,
+) {
+    for member in &class.members {
+        match member {
+            ParsedClassMember::Method(method) => {
+                collect_body_constructor_locals(&method.body, properties)
+            }
+            ParsedClassMember::Constructor(constructor) => {
+                collect_body_constructor_locals(&constructor.body, properties)
+            }
+            ParsedClassMember::Accessor(accessor) => {
+                for declaration in &accessor.declarations {
+                    collect_body_constructor_locals(&declaration.body, properties);
+                }
+            }
+            ParsedClassMember::StaticBlock(block) => {
+                collect_body_constructor_locals(&block.body, properties)
+            }
+            ParsedClassMember::Property(_) => {}
+        }
+    }
+    if class.is_declare {
+        return;
+    }
+    // `FindConstructorDeclaration` takes the constructor with a body, which
+    // follows its overloads.
+    let Some(constructor) = class.members.iter().rev().find_map(|member| match member {
+        ParsedClassMember::Constructor(constructor) => Some(constructor),
+        _ => None,
+    }) else {
+        return;
+    };
+    let locals = constructor_local_value_names(constructor);
+    if locals.is_empty() {
+        return;
+    }
+    let locals: Arc<[String]> = locals.into();
+    for member in &class.members {
+        let ParsedClassMember::Property(property) = member else {
+            continue;
+        };
+        let (false, Some(name_span), Some(span)) =
+            (property.is_static, property.name_span, property.span)
+        else {
+            continue;
+        };
+        properties.push(ConstructorLocalProperty {
+            name: property.name.clone(),
+            span: surge_ts_syntax::TextSpan {
+                start: name_span.start,
+                end: span.end,
+            },
+            name_end: name_span.end,
+            initializer: property.initializer_span,
+            constructor_locals: Arc::clone(&locals),
+        });
+    }
+}
+
+/// The names `ctor.Locals()` answers with a value: the parameters, what the
+/// body declares at its top level, and every `var` it hoists.
+fn constructor_local_value_names(
+    constructor: &surge_ts_syntax::ParsedClassConstructor,
+) -> Vec<String> {
+    use surge_ts_syntax::ParsedFunctionBodyStatement;
+    let mut names: Vec<String> = constructor
+        .parameters
+        .iter()
+        .flat_map(|parameter| parameter.binding_name.bound_names())
+        .map(|bound| bound.name)
+        .collect();
+    for statement in &constructor.body {
+        match statement {
+            ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
+                names.push(variable.name.clone())
+            }
+            ParsedFunctionBodyStatement::Function(function) => names.push(function.name.clone()),
+            ParsedFunctionBodyStatement::Class(class) => names.push(class.name.clone()),
+            _ => {}
+        }
+    }
+    crate::flow::collect_var_names(&constructor.body, &mut names);
+    names
+}
+
 /// TS4114 under `noImplicitOverride`: an instance member that overrides a
 /// resolvable base-class member must carry the `override` modifier. Base-member
 /// resolution is conservative — only locally-declared base classes are walked

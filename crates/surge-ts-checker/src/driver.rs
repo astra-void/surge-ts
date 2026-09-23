@@ -74,6 +74,15 @@ fn check_single_source(
     crate::program::emit_grammar_diagnostics(&parsed.grammar_diagnostics, &mut ctx);
     ctx.parenthesized_expressions = parsed.parenthesized_expressions.into();
     ctx.let_assignments = parsed.let_assignments.into();
+    if !classify_file_kind(&file_name).is_declaration() {
+        let properties =
+            crate::program::file_constructor_local_properties(&parsed.statements, &ctx.options);
+        if !properties.is_empty() {
+            let mut by_file = surge_ts_types::fx::FxHashMap::default();
+            by_file.insert(std::sync::Arc::from(file_name.as_str()), properties);
+            ctx.constructor_local_properties = std::sync::Arc::new(by_file);
+        }
+    }
 
     ctx.merge_script_interfaces_with_globals = !parsed.is_module;
     collect_type_declarations(&parsed.statements, &mut ctx);

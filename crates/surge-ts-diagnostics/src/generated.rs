@@ -2795,6 +2795,26 @@ pub const TS2663: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2301: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2301",
+    number: Some(2301),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Initializer of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2844: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2844",
+    number: Some(2844),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2708: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2708",
     number: Some(2708),
@@ -4355,6 +4375,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2661,
     TS2662,
     TS2663,
+    TS2301,
+    TS2844,
     TS2708,
     TS2713,
     TS2867,
@@ -6789,6 +6811,30 @@ impl Diagnostic {
         Self::from_descriptor(
             &TS2663,
             vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2301(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2301,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2844(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2844,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
             file_name,
         )
     }

@@ -646,6 +646,10 @@ pub(crate) struct CheckerContext {
     /// parameters — shadows them), and their names.
     pub(crate) static_member_type_parameters:
         Option<(Option<surge_ts_syntax::TextSpan>, usize, Vec<String>)>,
+    /// Each source file's properties whose class constructor declares locals
+    /// (see [`crate::program::ConstructorLocalProperty`]), keyed by file name.
+    pub(crate) constructor_local_properties:
+        Arc<FxHashMap<Arc<str>, Arc<[crate::program::ConstructorLocalProperty]>>>,
     /// The scope enclosing a nested `function` declaration whose body is
     /// about to be checked. It already chains to the module and the ambient
     /// globals, so it replaces the usual module-over-ambient body root.
@@ -821,6 +825,7 @@ impl CheckerContext {
             enclosing_class_members: Vec::new(),
             never_returning_calls: FxHashSet::default(),
             static_member_type_parameters: None,
+            constructor_local_properties: Arc::default(),
             nested_function_scope: None,
             parenthesized_expressions: Arc::from([]),
             evolving_array_operation_target: None,
@@ -991,6 +996,7 @@ impl CheckerContext {
             enclosing_class_members: Vec::new(),
             never_returning_calls: FxHashSet::default(),
             static_member_type_parameters: None,
+            constructor_local_properties: Arc::default(),
             nested_function_scope: None,
             parenthesized_expressions: Arc::from([]),
             evolving_array_operation_target: None,

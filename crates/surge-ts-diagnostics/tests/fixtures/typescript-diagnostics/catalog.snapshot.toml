@@ -2233,6 +2233,22 @@ message = "Cannot find name '{0}'. Did you mean the instance member 'this.{0}'?"
 arity = 1
 
 [[diagnostic]]
+code = "TS2301"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Initializer of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor."
+arity = 2
+
+[[diagnostic]]
+code = "TS2844"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor."
+arity = 2
+
+[[diagnostic]]
 code = "TS2708"
 category = "Error"
 source = "typescript"

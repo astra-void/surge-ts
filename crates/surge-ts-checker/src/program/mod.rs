@@ -296,6 +296,7 @@ fn check_program_with_stats_and_jobs_inner(
         mut parsed_files,
         mut ctx,
     } = start_program_run(files, prescanned, options, jobs, &store);
+    ctx.constructor_local_properties = constructor_local_properties_by_file(&parsed_files, &ctx.options);
     let syntax_errors = diagnostics::program_has_syntax_errors(&parsed_files);
     let globals = collect_program_globals(&parsed_files, &mut ctx, &timings, program_start);
     let preliminary = run_preliminary_pass(

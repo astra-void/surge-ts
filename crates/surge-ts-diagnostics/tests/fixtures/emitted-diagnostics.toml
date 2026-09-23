@@ -198,6 +198,18 @@ oracle = [
   "cannot-find-name-variants-basic",
 ]
 
+[TS2301]
+status = "emitted"
+oracle = [
+  "property-initializer-constructor-locals",
+]
+
+[TS2844]
+status = "emitted"
+oracle = [
+  "property-initializer-constructor-locals",
+]
+
 [TS2676]
 status = "emitted"
 oracle = [
