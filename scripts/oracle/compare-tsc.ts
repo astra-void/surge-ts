@@ -824,6 +824,7 @@ export const fixturePresets: Record<string, string> = {
   'assignment-contextual-callback': path.join(workspaceRoot, 'tests/compat-projects/assignment-contextual-callback/tsconfig.json'),
   'loose-null-widening': path.join(workspaceRoot, 'tests/compat-projects/loose-null-widening/tsconfig.json'),
   'optional-call-chain-nullability': path.join(workspaceRoot, 'tests/compat-projects/optional-call-chain-nullability/tsconfig.json'),
+  'module-member-assignment-narrowing': path.join(workspaceRoot, 'tests/compat-projects/module-member-assignment-narrowing/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

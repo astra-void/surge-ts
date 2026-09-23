@@ -276,10 +276,11 @@ fn module_alias_condition(
         .cloned()
 }
 
-/// Runs `check` with every narrowed module `let`/`var` read at its declared type.
-/// A function declaration is hoisted and may run before the narrowing
-/// assignment or guard, so its body does not see module narrowing of a binding
-/// that can still change.
+/// Runs `check` with every narrowed module binding read at its declared type.
+/// A function declaration is a flow container of its own (tsc extends the
+/// flow only into function expressions and arrows): hoisted, it may run before
+/// the narrowing assignment, guard or assertion, so its body sees neither a
+/// binding's narrowing nor a narrowed member of it, `const` or not.
 pub(crate) fn with_declared_mutable_module_bindings(
     ctx: &mut CheckerContext,
     check: impl FnOnce(&mut CheckerContext),
@@ -289,12 +290,6 @@ pub(crate) fn with_declared_mutable_module_bindings(
         .narrowed_names()
         .filter_map(|name| {
             let symbol = ctx.symbols.get(name)?;
-            if !matches!(
-                symbol.kind,
-                crate::symbols::SymbolKind::Let | crate::symbols::SymbolKind::Var
-            ) {
-                return None;
-            }
             let declared = ctx.symbols.declared_type(name)?;
             (*declared != symbol.ty)
                 .then(|| (std::sync::Arc::clone(name), symbol.clone(), declared.clone()))
@@ -732,22 +727,33 @@ fn check_program_statement_itself(
             crate::checks::function::check_member_assignment(*assignment, &mut scopes, ctx);
             // The scope stack is this statement's alone. An expando member the
             // write *declared* (`fn.x = v`) belongs to the binding, so it is
-            // carried back for the statements that follow; what a write to an
-            // existing member narrowed is not.
+            // carried back as its type; what a write to an existing member
+            // narrowed is carried as a narrowing, which the statements that
+            // follow read and a function body does not.
             if let Some((name, property_name)) = receiver
                 && let Some(updated) = scopes.resolve(&name)
-                && let surge_ts_types::Type::Object(object) = &updated.ty
-                && object.call_signature().is_some()
-                && ctx.symbols.get(&name).is_some_and(|current| {
-                    current.ty.get_property_access_type(&property_name).is_none()
-                })
+                && let Some(current) = ctx.symbols.get(&name)
+                && updated.ty != current.ty
             {
+                let declares_expando = matches!(
+                    &updated.ty,
+                    surge_ts_types::Type::Object(object) if object.call_signature().is_some()
+                ) && current.ty.get_property_access_type(&property_name).is_none();
+                let declared = ctx
+                    .symbols
+                    .declared_type(&name)
+                    .cloned()
+                    .unwrap_or_else(|| current.ty.clone());
                 let updated = crate::symbols::SymbolInfo {
                     ty: updated.ty.clone(),
                     kind: updated.kind,
                     function_signature: updated.function_signature.clone(),
                 };
-                let _ = ctx.symbols.insert(name, updated);
+                if declares_expando {
+                    let _ = ctx.symbols.insert(name, updated);
+                } else {
+                    let _ = ctx.symbols.insert_narrowed(name, updated, declared);
+                }
             }
         }
         ParsedStatement::FunctionDeclaration(function) => {
