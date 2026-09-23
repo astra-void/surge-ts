@@ -388,6 +388,7 @@ export const fixturePresets: Record<string, string> = {
   'global-augmentation-class-alias-values': path.join(workspaceRoot, 'tests/compat-projects/global-augmentation-class-alias-values/tsconfig.json'),
   'object-literal-accessor-pair-typing': path.join(workspaceRoot, 'tests/compat-projects/object-literal-accessor-pair-typing/tsconfig.json'),
   'inference-any-candidate-supertype': path.join(workspaceRoot, 'tests/compat-projects/inference-any-candidate-supertype/tsconfig.json'),
+  'inference-extends-any-literal-widening': path.join(workspaceRoot, 'tests/compat-projects/inference-extends-any-literal-widening/tsconfig.json'),
   'instantiation-expression-basic': path.join(workspaceRoot, 'tests/compat-projects/instantiation-expression-basic/tsconfig.json'),
   'literal-equality-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/literal-equality-narrowing-basic/tsconfig.json'),
   'optional-chain-guard-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-guard-narrowing-basic/tsconfig.json'),

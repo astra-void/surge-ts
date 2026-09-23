@@ -1511,7 +1511,15 @@ pub(crate) fn infer_type_argument_substitution(
             type_parameter.name.clone(),
             Type::type_parameter(&type_parameter.name),
         );
-        if type_parameter.constraint.is_some() {
+        // `getConstraintFromTypeParameter` reads `extends any` as `unknown`, and
+        // an `unknown` constraint is no literal context: it has no primitive
+        // kind (`hasPrimitiveConstraint`) and, as `{}`, no member whose
+        // contextual type could keep a literal.
+        if type_parameter
+            .constraint
+            .as_ref()
+            .is_some_and(|constraint| !matches!(constraint, ParsedType::Any | ParsedType::UnknownKeyword))
+        {
             substitution.mark_keeps_literal(&type_parameter.name);
         }
     }
