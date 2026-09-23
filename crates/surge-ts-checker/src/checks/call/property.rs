@@ -1577,6 +1577,13 @@ pub(super) fn instantiate_declared_member_signature<'a>(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> std::borrow::Cow<'a, surge_ts_types::FunctionType> {
+    // An overload group is resolved per candidate by the call (tsc's
+    // `chooseOverload`); a signature recovered for the group is its first
+    // member's, and instantiating that answered every call with the first
+    // member's return (`queryOptions()` against an overload requiring options).
+    if function_type.overloads().is_some() {
+        return std::borrow::Cow::Borrowed(function_type);
+    }
     if let Some(member) = function_type
         .declaration()
         .and_then(|declaration| declaration.downcast_ref::<super::DeclaredMemberSignature>())
@@ -1685,22 +1692,43 @@ pub(crate) fn callable_member_call_return_type(
         ctx,
     );
     Some(
-        overloaded_member_call_return_type(&declared, arguments, symbols, ctx)
-            .unwrap_or_else(|| function_type.return_type().clone()),
+        overloaded_member_call_return_type(
+            &declared,
+            type_arguments,
+            property_span,
+            arguments,
+            symbols,
+            ctx,
+        )
+        .unwrap_or_else(|| function_type.return_type().clone()),
     )
 }
 
-/// The return type of the overload an inferred member call lands on. Only a
-/// non-generic pick answers: an inferred call has no contextual type, and a
-/// generic candidate instantiated without one widens what the context would
-/// have kept (`() => Promise.resolve('data')` against `QueryFunction<'data'>`).
+/// The return type of the overload an inferred member call lands on: tsc's
+/// `chooseOverload`, as a checked call runs it — the candidates in declaration
+/// order, each with the right arity, a generic one instantiated for this call.
+/// Reading only non-generic picks left a generic group at its first member's
+/// return, which a call too short for it cannot resolve to
+/// (`queryOptions()` against a first overload that requires its options).
 pub(crate) fn overloaded_member_call_return_type(
     declared: &surge_ts_types::FunctionType,
+    type_arguments: &[ParsedType],
+    property_span: Option<SyntaxTextSpan>,
     arguments: &[ParsedCallArgument],
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    super::select_overload_return_type_for_inferred_call(declared, arguments, symbols, ctx)
+    let argument_types = super::inferred_argument_shapes(declared, arguments, symbols, ctx)?;
+    super::choose_overload_return_type(
+        declared,
+        &argument_types,
+        type_arguments,
+        property_span,
+        arguments,
+        None,
+        symbols,
+        ctx,
+    )
 }
 
 /// Under `noLib` the array member surface comes from the configured replacement

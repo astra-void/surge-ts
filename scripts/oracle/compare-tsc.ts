@@ -725,6 +725,7 @@ export const fixturePresets: Record<string, string> = {
   'generic-body-return-call-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-body-return-call-basic/tsconfig.json'),
   'unannotated-body-return-checked-basic': path.join(workspaceRoot, 'tests/compat-projects/unannotated-body-return-checked-basic/tsconfig.json'),
   'switch-any-discriminant-implicit-return-basic': path.join(workspaceRoot, 'tests/compat-projects/switch-any-discriminant-implicit-return-basic/tsconfig.json'),
+  'callable-interface-overload-member-call-basic': path.join(workspaceRoot, 'tests/compat-projects/callable-interface-overload-member-call-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
