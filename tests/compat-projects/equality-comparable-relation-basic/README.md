@@ -15,3 +15,8 @@ value it has no member for, a template literal against a literal its fixed
 text rules out) and type variables of a generic body: two of them overlap only
 when one is constrained to the other. A `case` test is compared to the
 discriminant under the same relation (TS2678, `switches.ts`).
+
+`intersections.ts` pins intersection operands on either side: an intersection
+source relates when some constituent does or its members do as a whole, an
+intersection target needs every constituent, so `A & B` overlaps `A` but not
+`B & C`, and `I1 & I3` has no overlap with `I2 extends I1` in either direction.
