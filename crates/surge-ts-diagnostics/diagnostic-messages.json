@@ -1893,7 +1893,7 @@
     "message": "A decorator can only decorate a method implementation, not an overload.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1257",

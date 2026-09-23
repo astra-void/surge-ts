@@ -155,6 +155,36 @@ fn first_token_end(text: &str, start: usize) -> usize {
     start + word.max(rest.chars().next().map_or(0, char::len_utf8))
 }
 
+/// Whether tsc's `nodeCanBeDecorated` accepts a node's decorators with
+/// `experimentalDecorators` (`legacy`) and without it (`es`).
+#[derive(Clone, Copy)]
+struct DecoratorLegality {
+    legacy: bool,
+    es: bool,
+}
+
+impl DecoratorLegality {
+    /// `code` under whichever settings reject the decorators.
+    fn unless_legal(self, code: u32) -> Option<Kind> {
+        match (self.legacy, self.es) {
+            (true, true) => None,
+            (false, false) => Some(Kind::Ts(code)),
+            (false, true) => Some(Kind::TsUnderLegacyDecorators(code)),
+            (true, false) => Some(Kind::TsUnderEsDecorators(code)),
+        }
+    }
+
+    /// `code` under whichever settings accept the decorators.
+    fn if_legal(self, code: u32) -> Option<Kind> {
+        match (self.legacy, self.es) {
+            (true, true) => Some(Kind::Ts(code)),
+            (false, false) => None,
+            (true, false) => Some(Kind::TsUnderLegacyDecorators(code)),
+            (false, true) => Some(Kind::TsUnderEsDecorators(code)),
+        }
+    }
+}
+
 /// What tsc's `getThisContainer(node, false, false)` stops at.
 #[derive(Clone, Copy)]
 enum ThisContainer<'a> {
@@ -1255,19 +1285,111 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
-    /// A decorator on a parameter of a plain function — TS1206. (A class
-    /// method's parameter decorators depend on `experimentalDecorators`.)
-    fn check_parameter_decorator(&mut self, decorator: &oxc_ast::ast::Decorator<'_>) {
-        let mut ancestors = self.stack.iter().rev();
-        if !matches!(ancestors.next(), Some(AstKind::FormalParameter(_) | AstKind::FormalParameterRest(_))) {
+    /// tsc's `findFirstIllegalDecorator`: TS1206 (TS1249 for a method
+    /// overload) on the first decorator of a node that `nodeCanBeDecorated`
+    /// rejects.
+    fn check_decorator_target(&mut self, decorator: &oxc_ast::ast::Decorator<'_>) {
+        let Some(target) = self.stack.last().copied() else {
+            return;
+        };
+        let Some((decorators, legality)) = self.decorator_legality(target, self.stack.len() - 1) else {
+            return;
+        };
+        if decorators.first().map(|first| first.span) != Some(decorator.span) {
             return;
         }
-        ancestors.next();
-        let function = ancestors.next();
-        let owner = ancestors.next();
-        let in_class_member = matches!(owner, Some(AstKind::MethodDefinition(_)));
-        if matches!(function, Some(AstKind::Function(_) | AstKind::ArrowFunctionExpression(_))) && !in_class_member {
-            self.push(1206, decorator.span, &[]);
+        // `checkGrammarModifiers` names a method without a body an overload.
+        let code = match target {
+            AstKind::MethodDefinition(method)
+                if method.kind == MethodDefinitionKind::Method && method.value.body.is_none() =>
+            {
+                1249
+            }
+            _ => 1206,
+        };
+        if let Some(kind) = legality.unless_legal(code) {
+            let start = decorator.span.start;
+            self.out.push(ParsedGrammarDiagnostic {
+                kind,
+                span: text_span_from_oxc_span(Span::new(start, start + 1)),
+                name: None,
+            });
+        }
+    }
+
+    /// The decorators of `target`, the node at `index` in the stack, and
+    /// whether tsc's `nodeCanBeDecorated` accepts them.
+    fn decorator_legality(
+        &self,
+        target: AstKind<'a>,
+        index: usize,
+    ) -> Option<(&'a [oxc_ast::ast::Decorator<'a>], DecoratorLegality)> {
+        let class_at = |position: Option<usize>| {
+            position
+                .and_then(|position| self.stack.get(position))
+                .is_some_and(|kind| {
+                    matches!(kind, AstKind::Class(class)
+                        if class.r#type == oxc_ast::ast::ClassType::ClassDeclaration)
+                })
+        };
+        let member_of_declaration = class_at(index.checked_sub(2));
+        let private = |key: &oxc_ast::ast::PropertyKey<'_>| {
+            matches!(key, oxc_ast::ast::PropertyKey::PrivateIdentifier(_))
+        };
+        match target {
+            AstKind::Class(class) => Some((
+                &class.decorators[..],
+                DecoratorLegality {
+                    legacy: class.r#type == oxc_ast::ast::ClassType::ClassDeclaration,
+                    es: true,
+                },
+            )),
+            AstKind::PropertyDefinition(property) => Some((
+                &property.decorators[..],
+                DecoratorLegality {
+                    legacy: member_of_declaration && !private(&property.key),
+                    es: property.r#type != oxc_ast::ast::PropertyDefinitionType::TSAbstractPropertyDefinition
+                        && !property.declare,
+                },
+            )),
+            AstKind::AccessorProperty(property) => Some((
+                &property.decorators[..],
+                DecoratorLegality {
+                    legacy: member_of_declaration && !private(&property.key),
+                    es: property.r#type != oxc_ast::ast::AccessorPropertyType::TSAbstractAccessorProperty,
+                },
+            )),
+            AstKind::MethodDefinition(method) => {
+                let has_body = method.value.body.is_some();
+                Some((
+                    &method.decorators[..],
+                    DecoratorLegality {
+                        legacy: has_body && member_of_declaration && !private(&method.key),
+                        es: has_body,
+                    },
+                ))
+            }
+            // Parameter decorators are legacy-only: a constructor, method or
+            // setter with a body, in a class declaration.
+            AstKind::FormalParameter(_) | AstKind::FormalParameterRest(_) => {
+                let function = index.checked_sub(2).and_then(|position| self.stack.get(position));
+                let owner = index.checked_sub(3).and_then(|position| self.stack.get(position));
+                let legacy = match (function, owner) {
+                    (Some(AstKind::Function(function)), Some(AstKind::MethodDefinition(method))) => {
+                        function.body.is_some()
+                            && method.kind != MethodDefinitionKind::Get
+                            && class_at(index.checked_sub(5))
+                    }
+                    _ => false,
+                };
+                let decorators = match target {
+                    AstKind::FormalParameter(parameter) => &parameter.decorators[..],
+                    AstKind::FormalParameterRest(parameter) => &parameter.decorators[..],
+                    _ => return None,
+                };
+                Some((decorators, DecoratorLegality { legacy, es: false }))
+            }
+            _ => None,
         }
     }
 
@@ -1432,21 +1554,24 @@ impl<'a> ContextCollector<'a, '_> {
     /// TS1166 on a class property, TS1169/TS1170 on an interface or type
     /// literal member, reported on the bracketed name.
     fn check_dynamic_property_name(&mut self, code: u32, key: &oxc_ast::ast::PropertyKey<'_>) {
-        let Some(expression) = key.as_expression() else {
-            return;
-        };
-        let expression = expression.without_parentheses();
+        if let Some(span) = self.dynamic_property_name_span(key) {
+            self.push(code, span, &[]);
+        }
+    }
+
+    /// The bracketed name of a computed key that is neither a literal nor an
+    /// entity name.
+    fn dynamic_property_name_span(&self, key: &oxc_ast::ast::PropertyKey<'_>) -> Option<Span> {
+        let expression = key.as_expression()?.without_parentheses();
         if is_literal_name(expression) || is_entity_name_expression(expression) {
-            return;
+            return None;
         }
         let key_start = key.span().start as usize;
-        let Some(open) = self.source_text[..key_start].rfind('[') else {
-            return;
-        };
+        let open = self.source_text[..key_start].rfind('[')?;
         let close = self.source_text[key.span().end as usize..]
             .find(']')
             .map_or(key.span().end, |offset| key.span().end + offset as u32 + 1);
-        self.push(code, Span::new(open as u32, close), &[]);
+        Some(Span::new(open as u32, close))
     }
 
     /// tsc's `checkGrammarBreakOrContinueStatement`.
@@ -1886,8 +2011,24 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 if property.definite && property.value.is_some() {
                     self.push_at_exclamation(1263, property.key.span());
                 }
-                if property.computed {
-                    self.check_dynamic_property_name(1166, &property.key);
+                // tsc checks the name only once `checkGrammarModifiers` passes,
+                // so not under a decorator TS1206 rejects.
+                if property.computed
+                    && let Some(span) = self.dynamic_property_name_span(&property.key)
+                {
+                    let kind = if property.decorators.is_empty() {
+                        Some(Kind::Ts(1166))
+                    } else {
+                        self.decorator_legality(kind, self.stack.len())
+                            .and_then(|(_, legality)| legality.if_legal(1166))
+                    };
+                    if let Some(kind) = kind {
+                        self.out.push(ParsedGrammarDiagnostic {
+                            kind,
+                            span: text_span_from_oxc_span(span),
+                            name: None,
+                        });
+                    }
                 }
             }
             AstKind::TSPropertySignature(signature) if signature.computed => {
@@ -1943,7 +2084,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 }
             }
             AstKind::TSTypeParameterDeclaration(declaration) => self.check_circular_constraints(declaration),
-            AstKind::Decorator(decorator) => self.check_parameter_decorator(decorator),
+            AstKind::Decorator(decorator) => self.check_decorator_target(decorator),
             AstKind::TSImportEqualsDeclaration(declaration) if !self.at_module_element_level() => {
                 self.push_on_module_element(1232, declaration.span.start);
             }

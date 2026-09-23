@@ -1798,8 +1798,12 @@ oracle = [
 ]
 
 [TS1249]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "decorator-targets-legacy",
+  "decorator-targets-es",
+]
+
 [TS1263]
 status = "emitted"
 oracle = [
@@ -2446,6 +2450,8 @@ oracle = [
 status = "emitted"
 oracle = [
   "self-reference-and-placement-basic",
+  "decorator-targets-legacy",
+  "decorator-targets-es",
 ]
 
 [TS1147]

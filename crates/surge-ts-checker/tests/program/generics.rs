@@ -1078,6 +1078,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             no_unchecked_indexed_access: false,
             allow_importing_ts_extensions: false,
             allow_arbitrary_extensions: false,
+            experimental_decorators: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,

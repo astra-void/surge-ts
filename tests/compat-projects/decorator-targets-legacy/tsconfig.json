@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "experimentalDecorators": true,
+    "strict": true,
+    "types": [],
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -798,6 +798,8 @@ export const fixturePresets: Record<string, string> = {
   'generator-return-type-argument': path.join(workspaceRoot, 'tests/compat-projects/generator-return-type-argument/tsconfig.json'),
   'module-element-wrong-context': path.join(workspaceRoot, 'tests/compat-projects/module-element-wrong-context/tsconfig.json'),
   'with-statement-body-unchecked': path.join(workspaceRoot, 'tests/compat-projects/with-statement-body-unchecked/tsconfig.json'),
+  'decorator-targets-legacy': path.join(workspaceRoot, 'tests/compat-projects/decorator-targets-legacy/tsconfig.json'),
+  'decorator-targets-es': path.join(workspaceRoot, 'tests/compat-projects/decorator-targets-es/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

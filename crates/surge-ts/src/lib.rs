@@ -574,6 +574,7 @@ impl Project {
             allow_importing_ts_extensions: loaded.compiler_options.allow_importing_ts_extensions
                 || loaded.compiler_options.rewrite_relative_import_extensions,
             allow_arbitrary_extensions: loaded.compiler_options.allow_arbitrary_extensions,
+            experimental_decorators: loaded.compiler_options.experimental_decorators,
             no_unused_locals: loaded.compiler_options.no_unused_locals,
             no_unused_parameters: loaded.compiler_options.no_unused_parameters,
             allow_unreachable_code: loaded.compiler_options.allow_unreachable_code,

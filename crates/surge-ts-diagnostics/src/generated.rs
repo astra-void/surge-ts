@@ -2372,7 +2372,7 @@ pub const TS1249: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "A decorator can only decorate a method implementation, not an overload.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS1257: DiagnosticDescriptor = DiagnosticDescriptor {

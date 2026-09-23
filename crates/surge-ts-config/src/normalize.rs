@@ -103,6 +103,11 @@ pub(crate) fn normalize_compiler_options(
                     parse_bool_option(key, value, config_dir, diagnostics)
                         .unwrap_or(normalized.allow_arbitrary_extensions);
             }
+            "experimentalDecorators" => {
+                normalized.experimental_decorators =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.experimental_decorators);
+            }
             "noUnusedLocals" => {
                 normalized.no_unused_locals =
                     parse_bool_option(key, value, config_dir, diagnostics)

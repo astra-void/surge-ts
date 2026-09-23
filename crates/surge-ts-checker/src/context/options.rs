@@ -114,6 +114,9 @@ pub struct CheckerOptions {
     pub no_unchecked_indexed_access: bool,
     pub allow_importing_ts_extensions: bool,
     pub allow_arbitrary_extensions: bool,
+    /// `experimentalDecorators`: which decorator targets tsc accepts
+    /// (`nodeCanBeDecorated`'s `useLegacyDecorators`).
+    pub experimental_decorators: bool,
     pub no_unused_locals: bool,
     pub no_unused_parameters: bool,
     /// `allowUnreachableCode: true`; unset and `false` both leave it off.
@@ -215,6 +218,7 @@ impl Default for CheckerOptions {
             no_unchecked_indexed_access: false,
             allow_importing_ts_extensions: false,
             allow_arbitrary_extensions: false,
+            experimental_decorators: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,

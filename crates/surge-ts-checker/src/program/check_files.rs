@@ -887,6 +887,12 @@ pub(crate) fn unclaimed_parser_errors<'a>(
         if error.code == Some(1039) && !in_declaration_file {
             return false;
         }
+        // Likewise `checkGrammarModifiers`' decorator rules: oxc also raises
+        // TS1249 for a decorated accessor without a body, which tsc reports as
+        // TS1206, so the grammar pass's verdict is the only one.
+        if error.code == Some(1249) && !in_declaration_file {
+            return false;
+        }
         // oxc rejects any parameter-property modifier outside a constructor
         // as TS1090; tsc's modifier grammar rejects only `static`, `export`,
         // `declare` and `async` on a parameter and reports a misplaced
@@ -933,7 +939,12 @@ fn grammar_finding_diagnostic(
         Kind::Ts(1203) if !export_assignment_targets_esm(ctx) => return None,
         Kind::Ts(2699) if ctx.options.use_define_for_class_fields => return None,
         Kind::TsUnderStrictNullChecks(_) if !ctx.options.strict_null_checks => return None,
-        Kind::Ts(number) | Kind::TsUnderStrictNullChecks(number) => {
+        Kind::TsUnderLegacyDecorators(_) if !ctx.options.experimental_decorators => return None,
+        Kind::TsUnderEsDecorators(_) if ctx.options.experimental_decorators => return None,
+        Kind::Ts(number)
+        | Kind::TsUnderStrictNullChecks(number)
+        | Kind::TsUnderLegacyDecorators(number)
+        | Kind::TsUnderEsDecorators(number) => {
             let args: Vec<surge_ts_diagnostics::DiagnosticArg> = finding
                 .name
                 .as_deref()
