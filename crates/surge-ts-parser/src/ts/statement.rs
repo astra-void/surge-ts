@@ -68,6 +68,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     fn parse_ts_enum_member_name(&mut self) -> TSEnumMemberName<'a> {
+        let name_start = self.start_span();
         match self.cur_kind() {
             Kind::Str => {
                 let literal = self.parse_literal_string();
@@ -82,10 +83,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     let error = diagnostics::enum_member_cannot_have_numeric_name(literal.span());
                     self.fatal_error(error)
                 }
-                expr => {
-                    let error =
-                        diagnostics::computed_property_names_not_allowed_in_enums(expr.span());
-                    self.fatal_error(error)
+                // surge: TS1164 — tsc reports every such member at its `[…]` name and keeps
+                // parsing; the member keeps an empty placeholder name.
+                _ => {
+                    let span = self.end_span(name_start);
+                    self.error(diagnostics::computed_property_names_not_allowed_in_enums(span));
+                    TSEnumMemberName::Identifier(self.alloc(self.ast.identifier_name(span, "")))
                 }
             },
             Kind::NoSubstitutionTemplate | Kind::TemplateHead => {
@@ -533,12 +536,14 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let r#async = modifiers.contains(ModifierKind::Async);
         self.expect(Kind::Function);
         let func_kind = FunctionKind::TSDeclaration;
-        let id = self.parse_function_id(func_kind, r#async, false);
+        // surge: TS1221 — tsc parses `declare function*`; surge's grammar pass reports the `*`.
+        let generator = self.eat(Kind::Star);
+        let id = self.parse_function_id(func_kind, r#async, generator);
         self.parse_function(
             start_span,
             id,
             r#async,
-            false,
+            generator,
             func_kind,
             FormalParameterKind::FormalParameter,
             modifiers,

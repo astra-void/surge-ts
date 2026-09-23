@@ -1076,6 +1076,8 @@ pub fn abstract_accessor_cannot_have_implementation(name: &str, span: Span) -> O
     .with_label(span)
 }
 
+// surge: TS1191 — no longer reached; `export import {…}` now reports TS1191.
+#[allow(dead_code)]
 #[cold]
 pub fn unexpected_export(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error("Unexpected export.").with_label(span)
@@ -1346,4 +1348,21 @@ pub fn jsx_type_parameter_in_mts_cts(span: Span) -> OxcDiagnostic {
         "This syntax is reserved in files with the .mts or .cts extension. Add a trailing comma or explicit constraint.",
     )
     .with_label(span)
+}
+
+// surge: TS1011/TS1162/TS1191 — tsc's codes and wording for the recovered `o[]`, `{ a?: … }` and
+// `export import {…}`.
+#[cold]
+pub fn element_access_expression_should_take_an_argument(span: Span) -> OxcDiagnostic {
+    ts_error("1011", "An element access expression should take an argument.").with_label(span)
+}
+
+#[cold]
+pub fn object_member_cannot_be_declared_optional(span: Span) -> OxcDiagnostic {
+    ts_error("1162", "An object member cannot be declared optional.").with_label(span)
+}
+
+#[cold]
+pub fn import_declaration_cannot_have_modifiers(span: Span) -> OxcDiagnostic {
+    ts_error("1191", "An import declaration cannot have modifiers.").with_label(span)
 }

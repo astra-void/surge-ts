@@ -1,7 +1,7 @@
 //! Cover Grammar for Destructuring Assignment
 
 use oxc_ast::ast::*;
-use oxc_span::GetSpan;
+use oxc_span::{GetSpan, Span};
 
 use crate::{ParserConfig as Config, ParserImpl, diagnostics};
 
@@ -36,13 +36,14 @@ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for SimpleAssignmentTarg
                 SimpleAssignmentTarget::from(member_expr)
             }
             Expression::ParenthesizedExpression(expr) => {
-                let span = expr.span;
-                match expr.unbox().expression {
-                    Expression::ObjectExpression(_) | Expression::ArrayExpression(_) => {
-                        p.fatal_error(diagnostics::invalid_assignment(span))
-                    }
-                    expr => SimpleAssignmentTarget::cover(expr, p),
+                if matches!(
+                    expr.expression,
+                    Expression::ObjectExpression(_) | Expression::ArrayExpression(_)
+                ) {
+                    let span = expr.span;
+                    return invalid_target(p, span, Expression::ParenthesizedExpression(expr));
                 }
+                SimpleAssignmentTarget::cover(expr.unbox().expression, p)
             }
             Expression::TSAsExpression(expr) => match expr.expression.get_inner_expression() {
                 Expression::Identifier(_)
@@ -51,7 +52,7 @@ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for SimpleAssignmentTarg
                 | Expression::PrivateFieldExpression(_) => {
                     SimpleAssignmentTarget::TSAsExpression(expr)
                 }
-                _ => p.fatal_error(diagnostics::invalid_assignment(expr.span())),
+                _ => invalid_target(p, expr.span, Expression::TSAsExpression(expr)),
             },
             Expression::TSSatisfiesExpression(expr) => {
                 match expr.expression.get_inner_expression() {
@@ -61,7 +62,7 @@ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for SimpleAssignmentTarg
                     | Expression::PrivateFieldExpression(_) => {
                         SimpleAssignmentTarget::TSSatisfiesExpression(expr)
                     }
-                    _ => p.fatal_error(diagnostics::invalid_assignment(expr.span())),
+                    _ => invalid_target(p, expr.span, Expression::TSSatisfiesExpression(expr)),
                 }
             }
             Expression::TSNonNullExpression(expr) => match expr.expression.get_inner_expression() {
@@ -71,7 +72,7 @@ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for SimpleAssignmentTarg
                 | Expression::PrivateFieldExpression(_) => {
                     SimpleAssignmentTarget::TSNonNullExpression(expr)
                 }
-                _ => p.fatal_error(diagnostics::invalid_assignment(expr.span())),
+                _ => invalid_target(p, expr.span, Expression::TSNonNullExpression(expr)),
             },
             Expression::TSTypeAssertion(expr) => match expr.expression.get_inner_expression() {
                 Expression::Identifier(_)
@@ -80,14 +81,26 @@ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for SimpleAssignmentTarg
                 | Expression::PrivateFieldExpression(_) => {
                     SimpleAssignmentTarget::TSTypeAssertion(expr)
                 }
-                _ => p.fatal_error(diagnostics::invalid_assignment(expr.span())),
+                _ => invalid_target(p, expr.span, Expression::TSTypeAssertion(expr)),
             },
             Expression::TSInstantiationExpression(expr) => {
                 p.fatal_error(diagnostics::invalid_lhs_assignment(expr.span()))
             }
-            expr => p.fatal_error(diagnostics::invalid_assignment(expr.span())),
+            expr => invalid_target(p, expr.span(), expr),
         }
     }
+}
+
+// surge: TS2364/TS2357/TS2779/TS2777 — tsc reports an invalid write target from the checker and
+// keeps the file. The expression survives inside a non-null wrapper of exactly its span, which
+// surge recognizes as this recovery.
+fn invalid_target<'a, C: Config>(
+    p: &mut ParserImpl<'a, C>,
+    span: Span,
+    expr: Expression<'a>,
+) -> SimpleAssignmentTarget<'a> {
+    p.error(diagnostics::invalid_assignment(span));
+    SimpleAssignmentTarget::TSNonNullExpression(p.ast.alloc_ts_non_null_expression(span, expr))
 }
 
 impl<'a, C: Config> CoverGrammar<'a, ArrayExpression<'a>, C> for ArrayAssignmentTarget<'a> {
@@ -104,7 +117,12 @@ impl<'a, C: Config> CoverGrammar<'a, ArrayExpression<'a>, C> for ArrayAssignment
                     elements.push(Some(target));
                 }
                 ArrayExpressionElement::SpreadElement(elem) => {
-                    if i == len - 1 {
+                    // surge: TS2462 — tsc reports a rest element that is not last and keeps the
+                    // pattern; the last spread seen stays the rest target.
+                    if i != len - 1 {
+                        p.error(diagnostics::spread_last_element(elem.span));
+                    }
+                    if i == len - 1 || rest.is_none() {
                         let span = elem.span;
                         let argument = elem.unbox().argument;
                         if !matches!(
@@ -123,9 +141,6 @@ impl<'a, C: Config> CoverGrammar<'a, ArrayExpression<'a>, C> for ArrayAssignment
                         if let Some(span) = p.state.trailing_commas.get(&expr.span.start) {
                             p.error(diagnostics::rest_element_trailing_comma(*span));
                         }
-                    } else {
-                        let error = diagnostics::spread_last_element(elem.span);
-                        return p.fatal_error(error);
                     }
                 }
                 ArrayExpressionElement::Elision(_) => elements.push(None),
@@ -177,7 +192,11 @@ impl<'a, C: Config> CoverGrammar<'a, ObjectExpression<'a>, C> for ObjectAssignme
                     properties.push(target);
                 }
                 ObjectPropertyKind::SpreadProperty(spread) => {
-                    if i == len - 1 {
+                    // surge: TS2462 — as for the array pattern above.
+                    if i != len - 1 {
+                        p.error(diagnostics::spread_last_element(spread.span));
+                    }
+                    if i == len - 1 || rest.is_none() {
                         let span = spread.span;
                         let argument = spread.unbox().argument;
                         if !matches!(
@@ -194,8 +213,6 @@ impl<'a, C: Config> CoverGrammar<'a, ObjectExpression<'a>, C> for ObjectAssignme
                         }
                         let target = AssignmentTarget::cover(argument, p);
                         rest = Some(p.ast.alloc_assignment_target_rest(span, target));
-                    } else {
-                        return p.fatal_error(diagnostics::spread_last_element(spread.span));
                     }
                 }
             }

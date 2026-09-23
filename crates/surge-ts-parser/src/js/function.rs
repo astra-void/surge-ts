@@ -108,14 +108,27 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 }
             }
 
-            if let Some(r) = &rest {
-                self.set_fatal_error(diagnostics::rest_parameter_last(
+            // surge: TS1014 — tsc reports a rest parameter that is not last and treats it as an
+            // ordinary parameter; demote it so the list keeps tsc's arity.
+            if let Some(r) = rest.take() {
+                self.error(diagnostics::rest_parameter_last(
                     r.type_annotation.as_ref().map_or_else(
                         || r.rest.span,
                         |type_annotation| r.rest.span.merge(type_annotation.span()),
                     ),
                 ));
-                break;
+                let r = r.unbox();
+                list.push(self.ast.formal_parameter(
+                    r.span,
+                    r.decorators,
+                    r.rest.argument,
+                    r.type_annotation,
+                    oxc_ast::NONE,
+                    false,
+                    None,
+                    false,
+                    false,
+                ));
             }
 
             let span = self.start_span();

@@ -63,6 +63,13 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let token_is_identifier =
             self.cur_kind().is_identifier_reference(self.ctx.has_yield(), self.ctx.has_await());
         let (key, computed) = self.parse_property_name();
+        // surge: TS1162 — tsc parses a `?` after an object member's name and rejects it at the `?`.
+        if self.is_ts && self.at(Kind::Question) {
+            self.error(diagnostics::object_member_cannot_be_declared_optional(
+                self.cur_token().span(),
+            ));
+            self.bump_any();
+        }
 
         if asterisk_token || matches!(self.cur_kind(), Kind::LParen | Kind::LAngle) {
             self.verify_modifiers(

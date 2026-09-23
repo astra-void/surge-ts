@@ -525,6 +525,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     {
         let mut list = self.ast.vec();
         let mut rest: Option<BindingRestElement<'a>> = None;
+        let mut rest_reported = false;
         let mut first = true;
         loop {
             let kind = self.cur_kind();
@@ -560,15 +561,20 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 }
             }
 
-            if let Some(r) = &rest {
-                self.set_fatal_error(rest_last_diagnostic(r.span()));
-                break;
+            // surge: TS1014/TS2462 — tsc reports a rest that is not last and keeps parsing the
+            // list; the elements after it join the list and the last rest seen stays the rest.
+            if let Some(r) = &rest
+                && !rest_reported
+            {
+                self.error(rest_last_diagnostic(r.span()));
+                rest_reported = true;
             }
 
             // Re-capture kind to get the current token (may have changed after else branch)
             let kind = self.cur_kind();
             if kind == Kind::Dot3 {
                 rest.replace(parse_rest(self));
+                rest_reported = false;
             } else {
                 list.push(parse_element(self));
             }

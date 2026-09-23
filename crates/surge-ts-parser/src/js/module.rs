@@ -429,6 +429,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         span: u32,
         mut decorators: Vec<'a, Decorator<'a>>,
     ) -> Statement<'a> {
+        let export_span = self.cur_token().span();
         self.bump_any(); // bump `export`
         let decl = match self.cur_kind() {
             // `export import A = B`
@@ -453,7 +454,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     }
                     ModuleDeclaration::ExportNamedDeclaration(export_named_decl)
                 } else {
-                    return self.fatal_error(diagnostics::unexpected_export(stmt.span()));
+                    // surge: TS1191 — tsc parses `export import {…}` as an import with a modifier
+                    // and rejects the modifier at its first token; keep the import.
+                    self.error(diagnostics::import_declaration_cannot_have_modifiers(export_span));
+                    return stmt;
                 }
             }
             Kind::At => {

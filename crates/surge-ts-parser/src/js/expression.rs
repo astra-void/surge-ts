@@ -926,7 +926,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         optional: bool,
     ) -> Expression<'a> {
         self.bump_any(); // advance `[`
-        let property = self.context_add(Context::In, Self::parse_expr);
+        // surge: TS1011 — tsc reports `o[]` at the position after `[` and keeps parsing; the
+        // empty-span placeholder property marks the recovered node.
+        let property = if self.at(Kind::RBrack) {
+            let position = Span::empty(self.prev_token_end);
+            self.error(diagnostics::element_access_expression_should_take_an_argument(position));
+            self.ast.expression_null_literal(position)
+        } else {
+            self.context_add(Context::In, Self::parse_expr)
+        };
         self.expect(Kind::RBrack);
         self.ast.member_expression_computed(self.end_span(lhs_span), lhs, property, optional).into()
     }
