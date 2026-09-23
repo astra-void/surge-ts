@@ -505,7 +505,12 @@ pub(crate) fn reported_relation_target(source: &Type, target: &Type) -> Type {
     let Type::Union(union) = target else {
         return target.clone();
     };
-    if !definitely_non_nullable || union.types().len() > 3 {
+    // tsc's union holds `boolean` as `false | true`, so a nullable beside it
+    // never leaves a single member to name.
+    if !definitely_non_nullable
+        || union.types().len() > 3
+        || union.types().iter().any(|member| matches!(member, Type::Boolean))
+    {
         return target.clone();
     }
     let mut non_nullable = union
