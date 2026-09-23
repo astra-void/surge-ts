@@ -968,16 +968,38 @@ fn check_inherited_abstract_members(class: &ParsedClassDeclaration, ctx: &mut Ch
         return;
     }
 
-    // tsc names the base as written, type arguments included (`Base<string>`).
+    // tsc names both classes by `typeToString` of their types: the base as the
+    // heritage clause instantiates it, under the class's own type parameters
+    // (`A<T>`), and a generic class as its declared type (`C<T>`). Resolving
+    // the arguments is only for their names; the heritage check reports them.
     let base_display = if base.type_arguments.is_empty() {
         base.name.clone()
     } else {
-        let arguments: Vec<String> = base
-            .type_arguments
-            .iter()
-            .map(|argument| map_parsed_type(argument.clone(), ctx).name())
-            .collect();
+        let checkpoint = ctx.diagnostics().len();
+        let _type_variables =
+            crate::checks::function::enter_body_type_variables(&class.type_parameters, ctx);
+        let arguments: Vec<String> = crate::checks::function::with_type_parameter_scope(
+            &class.type_parameters,
+            ctx,
+            |ctx| {
+                base.type_arguments
+                    .iter()
+                    .map(|argument| map_parsed_type(argument.clone(), ctx).name())
+                    .collect()
+            },
+        );
+        ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
         format!("{}<{}>", base.name, arguments.join(", "))
+    };
+    let class_display = if class.type_parameters.is_empty() {
+        class.name.clone()
+    } else {
+        let parameters: Vec<&str> = class
+            .type_parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect();
+        format!("{}<{}>", class.name, parameters.join(", "))
     };
     let quoted = |names: &[String]| {
         names
@@ -988,19 +1010,19 @@ fn check_inherited_abstract_members(class: &ParsedClassDeclaration, ctx: &mut Ch
     };
     let diagnostic = match missing.len() {
         1 => Diagnostic::ts2515(
-            &class.name,
+            &class_display,
             &missing[0],
             &base_display,
             ctx.file_name.clone(),
         ),
         count if count <= MAX_LISTED => Diagnostic::ts2654(
-            &class.name,
+            &class_display,
             &base_display,
             quoted(&missing),
             ctx.file_name.clone(),
         ),
         count => Diagnostic::ts2655(
-            &class.name,
+            &class_display,
             &base_display,
             quoted(&missing[..LISTED_WHEN_TRUNCATED]),
             count - LISTED_WHEN_TRUNCATED,
