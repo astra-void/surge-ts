@@ -783,6 +783,7 @@ export const fixturePresets: Record<string, string> = {
   'arbitrary-extension-imports': path.join(workspaceRoot, 'tests/compat-projects/arbitrary-extension-imports/tsconfig.json'),
   'arbitrary-extension-imports-allowed': path.join(workspaceRoot, 'tests/compat-projects/arbitrary-extension-imports-allowed/tsconfig.json'),
   'ts-nocheck-typescript-file': path.join(workspaceRoot, 'tests/compat-projects/ts-nocheck-typescript-file/tsconfig.json'),
+  'contextual-and-comma-operands': path.join(workspaceRoot, 'tests/compat-projects/contextual-and-comma-operands/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

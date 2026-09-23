@@ -951,6 +951,35 @@ fn evaluate_logical(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    evaluate_logical_in_context(
+        left,
+        left_span,
+        operator,
+        right,
+        right_span,
+        fallback_span,
+        None,
+        symbols,
+        ctx,
+    )
+}
+
+/// `a && b` / `a || b` where `contextual` is the whole expression's contextual
+/// type, which tsc's `getContextualTypeForBinaryOperand` hands the right
+/// operand of `&&` (as context only: the result also carries the left's falsy
+/// part).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_logical_in_context(
+    left: &Box<ParsedExpression>,
+    left_span: &Option<SyntaxTextSpan>,
+    operator: &ParsedLogicalOperator,
+    right: &Box<ParsedExpression>,
+    right_span: &Option<SyntaxTextSpan>,
+    fallback_span: Option<SyntaxTextSpan>,
+    contextual: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
     let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
     report_void_truthiness(&left_result, left_span.or(fallback_span), ctx);
     // The right operand runs after the left's assignments, and is narrowed by
@@ -1011,11 +1040,17 @@ fn evaluate_logical(
     .or(narrowed);
     let right_symbols = narrowed.as_ref().unwrap_or(symbols);
     // `a || b` hands `b` the same contextual type `a ?? b` does.
-    let right_contextual = matches!(operator, surge_ts_syntax::ParsedLogicalOperator::Or)
-        .then(|| contextual_default_operand_type(&left_result))
-        .flatten();
+    let (right_contextual, left_typed) = match operator {
+        surge_ts_syntax::ParsedLogicalOperator::Or => {
+            (contextual_default_operand_type(&left_result), true)
+        }
+        surge_ts_syntax::ParsedLogicalOperator::And => (contextual.cloned(), false),
+    };
     let right_result = match right_contextual {
-        Some(contextual) => match empty_object_fallback_type(right, &contextual) {
+        Some(contextual) => match left_typed
+            .then(|| empty_object_fallback_type(right, &contextual))
+            .flatten()
+        {
             Some(fallback) => InferredExpression::Known(fallback),
             None => crate::checks::expected::evaluate_expression_with_expected_type(
                 right,

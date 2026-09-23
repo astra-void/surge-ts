@@ -1609,6 +1609,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
         span: arrow_span,
     } = arrow;
     let is_argument = std::mem::take(&mut ctx.next_arrow_is_argument);
+    let context_only = std::mem::take(&mut ctx.next_arrow_context_only);
     check_type_parameter_declarations(&type_parameters, ctx);
 
     // An arrow does not bind `this`, so it keeps whatever the enclosing function
@@ -1997,6 +1998,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 // that instead.
                 if let Some(returned_types) = ctx.take_contextual_return_mismatch()
                     && let Some(expected_type) = expected_type
+                    && !context_only
                 {
                     emit_contextual_signature_mismatch(
                         &parameter_types,

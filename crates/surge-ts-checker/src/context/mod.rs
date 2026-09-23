@@ -601,6 +601,10 @@ pub(crate) struct CheckerContext {
     /// The arrow about to be checked is a call argument, so a whole-signature
     /// mismatch is an argument error (TS2345). Taken by that arrow's check.
     pub(crate) next_arrow_is_argument: bool,
+    /// The arrow about to be checked is only contextually typed by its
+    /// expectation (the right operand of `&&`, `||`, `??`), so a return that
+    /// does not fit is no error of the arrow's own. Taken by that arrow's check.
+    pub(crate) next_arrow_context_only: bool,
     /// Set by a return-value check whose value is a conditional, consumed by
     /// that conditional: tsc checks each branch of a returned conditional
     /// against the return type on its own (`checkReturnExpression`).
@@ -810,6 +814,7 @@ impl CheckerContext {
             in_contextual_return_check: false,
             in_async_body: false,
             next_arrow_is_argument: false,
+            next_arrow_context_only: false,
             split_returned_conditional: false,
             allow_missing_tuple_element: false,
             non_exhaustive_switches: Vec::new(),
@@ -980,6 +985,7 @@ impl CheckerContext {
             in_contextual_return_check: false,
             in_async_body: false,
             next_arrow_is_argument: false,
+            next_arrow_context_only: false,
             split_returned_conditional: false,
             allow_missing_tuple_element: false,
             non_exhaustive_switches: Vec::new(),
@@ -1457,6 +1463,7 @@ impl CheckerContext {
         self.in_contextual_return_check = false;
         self.in_async_body = false;
         self.next_arrow_is_argument = false;
+        self.next_arrow_context_only = false;
         self.next_body_frame_active = false;
         if !is_module || self.options.allow_umd_global_access || self.umd_global_names.is_empty() {
             return;

@@ -331,6 +331,8 @@ fn evaluate_expression_with_expected_type_inner(
     {
         ctx.next_arrow_is_argument =
             matches!(_expected_diagnostic, ExpectedTypeDiagnostic::ArgumentNotAssignable);
+        ctx.next_arrow_context_only =
+            matches!(_expected_diagnostic, ExpectedTypeDiagnostic::ContextOnly);
         let function_type = crate::checks::function::check_arrow_function_expression_anchored(
             with_type_copy_reason(TypeCopyReason::ExpectedType, || arrow.as_ref().clone()),
             Some(expected_function_type),
@@ -350,6 +352,8 @@ fn evaluate_expression_with_expected_type_inner(
         if let Some(call_signature) = expected_object.call_signature() {
             ctx.next_arrow_is_argument =
                 matches!(_expected_diagnostic, ExpectedTypeDiagnostic::ArgumentNotAssignable);
+            ctx.next_arrow_context_only =
+                matches!(_expected_diagnostic, ExpectedTypeDiagnostic::ContextOnly);
             let function_type = crate::checks::function::check_arrow_function_expression_anchored(
                 with_type_copy_reason(TypeCopyReason::ExpectedType, || arrow.as_ref().clone()),
                 Some(call_signature),
@@ -467,6 +471,51 @@ fn evaluate_expression_with_expected_type_inner(
             *operator,
             left_result,
             right_result,
+        );
+    }
+
+    // tsc's `getContextualTypeForBinaryOperand`: the right operand of `&&`
+    // (and so of `&&=`) is contextually typed by the whole expression's
+    // contextual type, the left not at all. The result is the union with the
+    // left's falsy part, so the operand only takes the type as context.
+    if let ParsedExpression::Logical {
+        left,
+        left_span,
+        operator: operator @ surge_ts_syntax::ParsedLogicalOperator::And,
+        right,
+        right_span,
+        ..
+    } = expression
+    {
+        return crate::checks::expr::evaluate_logical_in_context(
+            left,
+            left_span,
+            operator,
+            right,
+            right_span,
+            fallback_span,
+            Some(expected_type),
+            symbols,
+            ctx,
+        );
+    }
+
+    // A comma expression's value is its last operand, which is the one the
+    // contextual type reaches.
+    if let ParsedExpression::Sequence { expressions } = expression
+        && let Some(((last, last_span), leading)) = expressions.split_last()
+    {
+        for (operand, span) in leading {
+            let _ = evaluate_expression(operand, span.or(fallback_span), symbols, ctx);
+        }
+        return evaluate_expression_with_expected_type_anchored(
+            last,
+            last_span.or(fallback_span),
+            target_span,
+            Some(expected_type),
+            _expected_diagnostic,
+            symbols,
+            ctx,
         );
     }
 
