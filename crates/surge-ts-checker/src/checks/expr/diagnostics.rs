@@ -163,8 +163,9 @@ pub(crate) fn missing_property_diagnostic(
     property_name: &str,
     object_type: &Type,
     symbols: &SymbolTable,
-    file_name: String,
+    ctx: &CheckerContext,
 ) -> Diagnostic {
+    let file_name = ctx.file_name.clone();
     let object_type_name = object_type.name();
     if let Some(class_name) =
         static_member_owner_for_missing_instance_property(property_name, object_type, symbols)
@@ -184,7 +185,57 @@ pub(crate) fn missing_property_diagnostic(
     if let Some(suggestion) = property_spelling_suggestion(property_name, object_type) {
         return Diagnostic::ts2551(property_name, &object_type_name, suggestion, file_name);
     }
+    if container_seems_to_be_empty_dom_element(object_type, ctx) {
+        return Diagnostic::ts2812(property_name, &object_type_name, file_name);
+    }
     Diagnostic::ts2339(property_name, &object_type_name, file_name)
+}
+
+/// tsc's `containerSeemsToBeEmptyDomElement`: without the DOM lib, a member
+/// read off an empty `EventTarget`/`Node`/`Element`/`HTML…Element` suggests
+/// that lib (TS2812).
+pub(crate) fn container_seems_to_be_empty_dom_element(ty: &Type, ctx: &CheckerContext) -> bool {
+    fn declared_name(ty: &Type) -> Option<String> {
+        match ty {
+            Type::Reference(reference) => {
+                Some(reference.display.split('<').next().unwrap_or_default().to_string())
+            }
+            Type::Object(object) => object.alias_name.as_deref().map(str::to_string),
+            _ => None,
+        }
+    }
+    fn has_common_dom_type_name(ty: &Type) -> bool {
+        declared_name(ty).is_some_and(|name| {
+            matches!(name.as_str(), "EventTarget" | "Node" | "Element")
+                || (name.starts_with("HTML") && name.ends_with("Element"))
+        })
+    }
+    fn is_empty_object_type(ty: &Type) -> bool {
+        match ty.peeled() {
+            Type::Object(object) => {
+                object.properties.is_empty()
+                    && object.string_index_type.is_none()
+                    && object.number_index_type.is_none()
+                    && object.call_signature.is_none()
+                    && object.construct_signature.is_none()
+            }
+            Type::Union(union) => union.types().iter().any(is_empty_object_type),
+            _ => false,
+        }
+    }
+    let every_contained_named = match ty {
+        Type::Union(union) => union.types().iter().all(has_common_dom_type_name),
+        other => has_common_dom_type_name(other),
+    };
+    every_contained_named && is_empty_object_type(ty) && !dom_lib_loaded(ctx)
+}
+
+fn dom_lib_loaded(ctx: &CheckerContext) -> bool {
+    matches!(
+        ctx.ambient_global_type_declarations.get("EventTarget"),
+        Some(crate::symbols::TypeDeclarationInfo::Interface(info))
+            if info.file_name.contains("lib.dom")
+    )
 }
 
 /// tsc's `getScriptTargetFeatures`, for the receivers surge answers from its

@@ -831,6 +831,7 @@ pub(crate) fn emit_grammar_diagnostics(
         if matches!(
             finding.kind,
             surge_ts_syntax::ParsedGrammarDiagnosticKind::NamedSignatureParameterWithoutType
+                | surge_ts_syntax::ParsedGrammarDiagnosticKind::ComputedTypeMemberName
         ) {
             ctx.deferred_grammar_findings.push(finding.clone());
             continue;
@@ -859,10 +860,16 @@ pub(crate) fn emit_grammar_diagnostics(
 /// reads as (TS7006, or TS7019 for a rest parameter).
 pub(crate) fn emit_deferred_grammar_diagnostics(ctx: &mut CheckerContext) {
     let findings = std::mem::take(&mut ctx.deferred_grammar_findings);
-    if !ctx.options.no_implicit_any {
-        return;
-    }
     for finding in findings {
+        if finding.kind == surge_ts_syntax::ParsedGrammarDiagnosticKind::ComputedTypeMemberName {
+            if let Some(diagnostic) = computed_type_member_name_diagnostic(&finding, ctx) {
+                ctx.push(diagnostic.with_span(crate::context::convert_span(finding.span)));
+            }
+            continue;
+        }
+        if !ctx.options.no_implicit_any {
+            continue;
+        }
         let Some([name, suggested_name, suffix]) = finding
             .name
             .as_deref()
@@ -882,6 +889,91 @@ pub(crate) fn emit_deferred_grammar_diagnostics(ctx: &mut CheckerContext) {
             };
         ctx.push(diagnostic.with_span(crate::context::convert_span(finding.span)));
     }
+}
+
+/// tsc's `checkAndReportErrorForUsingTypeAsValue` for a computed member name
+/// that resolves only as a type: TS2693, or TS2690 (`K in Keys`) when
+/// `maybeMappedType` holds — the member is a type literal's only property and
+/// the type is a union of string- and number-like types. `None` wherever surge
+/// cannot tell what the name's declared type is.
+fn computed_type_member_name_diagnostic(
+    finding: &surge_ts_syntax::ParsedGrammarDiagnostic,
+    ctx: &CheckerContext,
+) -> Option<Diagnostic> {
+    let (name, mapped) = finding.name.as_deref()?.split_once('\0')?;
+    if ctx.symbols.get_handle(name).is_some()
+        || ctx.ambient_global_symbols.get_handle(name).is_some()
+        || ctx.namespace_meaning(name).is_some()
+        || crate::checks::expr::is_es2015_or_later_constructor_name(name)
+    {
+        return None;
+    }
+    if crate::checks::expr::is_primitive_type_name(name) {
+        return Some(Diagnostic::ts2693(name, ctx.file_name.clone()));
+    }
+    let is_literal_union = match ctx.lookup_type_declaration(name)? {
+        crate::symbols::TypeDeclarationInfo::Interface(info) => {
+            if info.is_class_instance {
+                return None;
+            }
+            false
+        }
+        crate::symbols::TypeDeclarationInfo::Alias(info) => {
+            if info.enum_name.is_some() || !info.body.type_parameters.is_empty() {
+                return None;
+            }
+            declared_literal_union(&info.body.ty)?
+        }
+    };
+    let file_name = ctx.file_name.clone();
+    Some(if mapped == "1" && is_literal_union {
+        Diagnostic::ts2690(name, if name == "K" { "P" } else { "K" }, file_name)
+    } else {
+        Diagnostic::ts2693(name, file_name)
+    })
+}
+
+/// Whether an alias written as `body` declares a union every member of which
+/// is string- or number-like. `None` for a body whose declared type needs
+/// resolving, or a union tsc would reduce.
+fn declared_literal_union(body: &surge_ts_syntax::ParsedType) -> Option<bool> {
+    use surge_ts_syntax::ParsedType as P;
+    let is_settled = |ty: &P| {
+        matches!(
+            ty,
+            P::String
+                | P::Number
+                | P::Boolean
+                | P::BigInt
+                | P::Symbol
+                | P::StringLiteral(_)
+                | P::NumberLiteral(_)
+                | P::BooleanLiteral(_)
+                | P::Object(_)
+                | P::Function(_)
+                | P::Array(_)
+                | P::Tuple(_)
+        )
+    };
+    let P::Union(members) = body else {
+        return is_settled(body).then_some(false);
+    };
+    if !members.iter().all(is_settled) {
+        return None;
+    }
+    let has = |pred: fn(&P) -> bool| members.iter().any(pred);
+    let reduces = (has(|ty| matches!(ty, P::String)) && has(|ty| matches!(ty, P::StringLiteral(_))))
+        || (has(|ty| matches!(ty, P::Number)) && has(|ty| matches!(ty, P::NumberLiteral(_))))
+        || members
+            .iter()
+            .enumerate()
+            .any(|(index, ty)| members[..index].contains(ty));
+    if reduces {
+        return None;
+    }
+    Some(members.iter().all(|ty| {
+        matches!(ty, P::String | P::Number | P::StringLiteral(_) | P::NumberLiteral(_))
+    }))
 }
 
 /// tsc's `isTypeNodeKind` over the keyword an identifier's text scans as.
@@ -970,9 +1062,20 @@ fn grammar_finding_diagnostic(
         Kind::LaterParameterReference => return None,
         Kind::Ts(2683 | 7041) if !ctx.options.no_implicit_this => return None,
         Kind::Ts(7028) if ctx.options.allow_unused_labels != Some(false) => return None,
+        Kind::Ts(7032) => {
+            let payload = finding.name.as_deref()?;
+            let (name, private) = match payload.split_once('\0') {
+                Some((name, _)) => (name, true),
+                None => (payload, false),
+            };
+            if !ctx.options.no_implicit_any || (private && super::file_classify::is_declaration_file_name(&ctx.file_name)) {
+                return None;
+            }
+            Diagnostic::ts7032(name, ctx.file_name.clone())
+        }
         // Answered by `emit_deferred_grammar_diagnostics`, once the file's type
         // declarations are in place.
-        Kind::NamedSignatureParameterWithoutType => return None,
+        Kind::NamedSignatureParameterWithoutType | Kind::ComputedTypeMemberName => return None,
         Kind::Ts(1202) if !ctx.options.module_emit.is_ecmascript() => return None,
         Kind::Ts(1203) if !export_assignment_targets_esm(ctx) => return None,
         Kind::Ts(2699) if ctx.options.use_define_for_class_fields => return None,

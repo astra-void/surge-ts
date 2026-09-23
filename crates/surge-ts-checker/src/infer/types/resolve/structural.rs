@@ -79,13 +79,28 @@ pub(crate) fn resolve_variadic_tuple_type(
     let mut resolved = Vec::with_capacity(elements.len());
     let mut had_error = false;
 
+    let mut rest_reported = false;
     for element in elements {
-        let (is_rest, written) = match element {
-            ParsedTupleElement::Fixed(written) => (false, written),
-            ParsedTupleElement::Rest(written) => (true, written),
+        let (is_rest, written, span) = match element {
+            ParsedTupleElement::Fixed(written) => (false, written, None),
+            ParsedTupleElement::Rest(written, span) => (true, written, span),
         };
         let resolved_element = resolve_parsed_type(written, ctx, resolving, substitution);
         had_error |= resolved_element.had_error;
+        // tsc's `checkTupleType`: a rest element's type must be array-like,
+        // reported for the first offender only (TS2574).
+        if is_rest
+            && !rest_reported
+            && let Some(span) = span
+            && !ctx.suppress_unknown_type_name()
+            && is_array_like_type(&resolved_element.ty) == Some(false)
+        {
+            rest_reported = true;
+            ctx.push_utility_diagnostic_once(
+                surge_ts_diagnostics::Diagnostic::ts2574(ctx.file_name.clone())
+                    .with_span(crate::context::convert_span(span)),
+            );
+        }
         resolved.push((is_rest, resolved_element.ty));
     }
 
@@ -98,6 +113,34 @@ pub(crate) fn resolve_variadic_tuple_type(
     ResolvedType {
         ty: open_tuple_from_operands(&resolved).unwrap_or(Type::Unknown),
         had_error,
+    }
+}
+
+/// tsc's `isArrayLikeType`: an array, or a non-nullable type assignable to
+/// `readonly any[]`. `None` for a type surge could not resolve.
+fn is_array_like_type(ty: &Type) -> Option<bool> {
+    if let Type::Reference(reference) = ty
+        && reference.is_readonly_array()
+    {
+        return Some(true);
+    }
+    match ty.peeled() {
+        Type::Unknown | Type::ErrorType => None,
+        Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) | Type::Any | Type::Never => Some(true),
+        Type::GenuineUnknown | Type::Null | Type::Undefined => Some(false),
+        Type::TypeParameter(parameter) => match surge_ts_types::type_variable::active_constraint(&parameter) {
+            Some(Some(constraint)) => is_array_like_type(&constraint),
+            Some(None) => Some(false),
+            None => None,
+        },
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .try_fold(true, |all, member| Some(all && is_array_like_type(member)?)),
+        other => Some(surge_ts_types::is_assignable_to(
+            &other,
+            &Type::Array(Box::new(Type::Any)),
+        )),
     }
 }
 

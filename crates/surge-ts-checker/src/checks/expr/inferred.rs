@@ -38,7 +38,7 @@ pub(crate) fn report_inferred_expression(
                     &property_name,
                     &object_type,
                     symbols,
-                    ctx.file_name.clone(),
+                    ctx,
                 ),
             };
             ctx.push(diagnostic_with_syntax_span(

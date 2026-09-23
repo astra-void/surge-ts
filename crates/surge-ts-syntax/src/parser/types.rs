@@ -131,6 +131,10 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                         .type_annotation
                         .as_ref()
                         .and_then(|annotation| parse_type(&annotation.type_annotation)),
+                    type_span: predicate
+                        .type_annotation
+                        .as_ref()
+                        .map(|annotation| text_span_from_oxc_span(annotation.type_annotation.span())),
                     asserts: predicate.asserts,
                 },
             )))
@@ -596,7 +600,10 @@ fn variadic_tuple_elements(tuple_type: &TSTupleType<'_>) -> Option<Vec<ParsedTup
     for element in &tuple_type.element_types {
         match element {
             TSTupleElement::TSRestType(rest) => {
-                elements.push(ParsedTupleElement::Rest(parse_type(&rest.type_annotation)?));
+                elements.push(ParsedTupleElement::Rest(
+                    parse_type(&rest.type_annotation)?,
+                    Some(text_span_from_oxc_span(rest.span)),
+                ));
             }
             TSTupleElement::TSOptionalType(optional) => {
                 let parsed = parse_type(&optional.type_annotation)?;
@@ -606,7 +613,10 @@ fn variadic_tuple_elements(tuple_type: &TSTupleType<'_>) -> Option<Vec<ParsedTup
             }
             TSTupleElement::TSNamedTupleMember(member) => match &member.element_type {
                 TSTupleElement::TSRestType(rest) => {
-                    elements.push(ParsedTupleElement::Rest(parse_type(&rest.type_annotation)?));
+                    elements.push(ParsedTupleElement::Rest(
+                    parse_type(&rest.type_annotation)?,
+                    Some(text_span_from_oxc_span(rest.span)),
+                ));
                 }
                 other => {
                     let parsed = parse_type(other.as_ts_type()?)?;

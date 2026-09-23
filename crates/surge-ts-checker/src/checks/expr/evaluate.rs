@@ -517,14 +517,24 @@ fn evaluate_expression_unsettled(
 
             super::update_result_type(&operand_result)
         }
-        ParsedExpression::ObjectRest { source, omitted } => {
-            match evaluate_expression(source, fallback_span, symbols, ctx) {
-                InferredExpression::Known(ty) => InferredExpression::Known(
-                    crate::checks::function::object_rest_type(&ty, omitted),
-                ),
-                other => other,
-            }
-        }
+        ParsedExpression::ObjectRest {
+            source,
+            omitted,
+            name_span,
+        } => match evaluate_expression(source, fallback_span, symbols, ctx) {
+            InferredExpression::Known(ty) => InferredExpression::Known(
+                if crate::checks::function::rest_source_validity(&ty) == Some(false) {
+                    ctx.push(crate::spans::diagnostic_with_syntax_span(
+                        Diagnostic::ts2700(ctx.file_name.clone()),
+                        name_span.or(fallback_span),
+                    ));
+                    Type::ErrorType
+                } else {
+                    crate::checks::function::object_rest_type(&ty, omitted)
+                },
+            ),
+            other => other,
+        },
         ParsedExpression::Sequence { expressions } => {
             let mut result = InferredExpression::Unknown;
             for (expression, span) in expressions {
@@ -1145,7 +1155,7 @@ fn evaluate_optional_property_access(
                 property_name,
                 object_type,
                 symbols,
-                ctx.file_name.clone(),
+                ctx,
             )),
         };
         if let Some(diagnostic) = diagnostic {

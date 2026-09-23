@@ -283,14 +283,14 @@ pub(crate) fn export_assignment_target_is_exempt(
         || ctx.lookup_type_declaration(name).is_some()
 }
 
-fn is_primitive_type_name(name: &str) -> bool {
+pub(crate) fn is_primitive_type_name(name: &str) -> bool {
     matches!(
         name,
         "any" | "string" | "number" | "boolean" | "never" | "unknown"
     )
 }
 
-fn is_es2015_or_later_constructor_name(name: &str) -> bool {
+pub(crate) fn is_es2015_or_later_constructor_name(name: &str) -> bool {
     matches!(
         name,
         "Promise" | "Symbol" | "Map" | "WeakMap" | "Set" | "WeakSet"
