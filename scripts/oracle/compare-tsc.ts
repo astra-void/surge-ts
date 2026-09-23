@@ -429,6 +429,7 @@ export const fixturePresets: Record<string, string> = {
   'type-only-import-enum': path.join(workspaceRoot, 'tests/compat-projects/type-only-import-enum/tsconfig.json'),
   'ambient-module-block-import-type-query': path.join(workspaceRoot, 'tests/compat-projects/ambient-module-block-import-type-query/tsconfig.json'),
   'ambient-module-import-equals-namespace': path.join(workspaceRoot, 'tests/compat-projects/ambient-module-import-equals-namespace/tsconfig.json'),
+  'merged-interface-type-parameter-defaults': path.join(workspaceRoot, 'tests/compat-projects/merged-interface-type-parameter-defaults/tsconfig.json'),
   'indexed-access-index-kinds-basic': path.join(workspaceRoot, 'tests/compat-projects/indexed-access-index-kinds-basic/tsconfig.json'),
   'missing-member-prefix-lookup': path.join(workspaceRoot, 'tests/compat-projects/missing-member-prefix-lookup/tsconfig.json'),
   'property-initializer-constructor-locals': path.join(workspaceRoot, 'tests/compat-projects/property-initializer-constructor-locals/tsconfig.json'),

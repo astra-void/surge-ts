@@ -381,17 +381,8 @@ pub(crate) fn merge_interface_infos(
     }
     let mut extends = existing.body.extends.clone();
     extends.extend(incoming.body.extends.iter().cloned());
-    // tsc's binder declares each declaration's type parameters in the merged
-    // symbol's members, so a name an earlier declaration declared is the same
-    // parameter and any other name is one more: the merged type's parameters
-    // are every name in order of first appearance
-    // (`appendLocalTypeParametersOfClassOrInterfaceOrTypeAlias`).
     let mut type_parameters = existing.body.type_parameters.clone();
-    for parameter in &incoming.body.type_parameters {
-        if !type_parameters.iter().any(|known| known.name == parameter.name) {
-            type_parameters.push(parameter.clone());
-        }
-    }
+    merge_type_parameters(&mut type_parameters, &incoming.body.type_parameters);
     let mut merged_info = InterfaceInfo::new(
         existing.name.clone(),
         existing.file_name.clone(),
@@ -459,6 +450,35 @@ pub(crate) fn merge_interface_infos(
             .collect();
     }
     merged_info
+}
+
+/// tsc's binder declares each declaration's type parameters in the merged
+/// symbol's members, so a name an earlier declaration declared is the same
+/// parameter and any other name is one more: the merged type's parameters are
+/// every name in order of first appearance
+/// (`appendLocalTypeParametersOfClassOrInterfaceOrTypeAlias`). A parameter is
+/// then read off all of its declarations: its constraint and its default are
+/// the first ones written (`getConstraintDeclaration`,
+/// `getResolvedTypeParameterDefault`), so `interface I<T>` merged with
+/// `interface I<T = number>` takes `I` with no argument, and a modifier on any
+/// declaration applies (`getTypeParameterModifiers`).
+fn merge_type_parameters(
+    merged: &mut Vec<ParsedTypeParameter>,
+    incoming: &[ParsedTypeParameter],
+) {
+    for parameter in incoming {
+        let Some(known) = merged.iter_mut().find(|known| known.name == parameter.name) else {
+            merged.push(parameter.clone());
+            continue;
+        };
+        if known.constraint.is_none() {
+            known.constraint = parameter.constraint.clone();
+        }
+        if known.default_type.is_none() {
+            known.default_type = parameter.default_type.clone();
+        }
+        known.is_const |= parameter.is_const;
+    }
 }
 
 /// Declaration-merge an interface contributed by a `declare module` block in
@@ -677,9 +697,7 @@ fn fold_interface_declaration(
         body.member_fragments.push(fragment.clone());
     }
     body.extends.extend(incoming.body.extends.iter().cloned());
-    if body.type_parameters.is_empty() {
-        body.type_parameters = incoming.body.type_parameters.clone();
-    }
+    merge_type_parameters(&mut body.type_parameters, &incoming.body.type_parameters);
     if body.number_index_type.is_none() {
         body.number_index_type = incoming.body.number_index_type.clone();
     }
