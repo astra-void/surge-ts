@@ -751,6 +751,7 @@ export const fixturePresets: Record<string, string> = {
   'binding-element-default-implicit-any': path.join(workspaceRoot, 'tests/compat-projects/binding-element-default-implicit-any/tsconfig.json'),
   'union-tuple-rest-contextual-parameters': path.join(workspaceRoot, 'tests/compat-projects/union-tuple-rest-contextual-parameters/tsconfig.json'),
   'dependent-destructuring-own-guards': path.join(workspaceRoot, 'tests/compat-projects/dependent-destructuring-own-guards/tsconfig.json'),
+  'super-type-arguments-parse-error': path.join(workspaceRoot, 'tests/compat-projects/super-type-arguments-parse-error/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -235,7 +235,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             crate::ParserError { code, message: error.to_string(), span, span_text }
         })
         .collect();
-    parser_errors.extend(super::scanner_checks::collect_numeric_literal_errors(
+    parser_errors.extend(super::scanner_checks::collect_missing_parser_errors(
         &parsed.program,
         source_text,
     ));

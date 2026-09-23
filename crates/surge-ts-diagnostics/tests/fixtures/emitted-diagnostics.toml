@@ -2668,3 +2668,9 @@ status = "emitted"
 oracle = [
   "unused-import-declaration-grouping",
 ]
+
+[TS2754]
+status = "emitted"
+oracle = [
+  "super-type-arguments-parse-error",
+]

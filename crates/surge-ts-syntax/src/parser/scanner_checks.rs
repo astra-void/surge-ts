@@ -1,15 +1,18 @@
-//! Scanner errors tsc raises that oxc does not: a legacy octal literal
-//! (TS1121) and a decimal with a leading zero (TS1489) are rejected by tsc's
-//! `scanNumber` in every file, strict or not, and like any scanner error they
-//! make the program report its syntactic diagnostics alone.
+//! Scanner and parser errors tsc raises that oxc does not: a legacy octal
+//! literal (TS1121) and a decimal with a leading zero (TS1489) are rejected by
+//! tsc's `scanNumber` in every file, strict or not, and type arguments on
+//! `super` (TS2754) by `parseSuperExpression`. Like any parse error they make
+//! the program report its syntactic diagnostics alone.
 
-use oxc_ast::ast::{BinaryExpression, Expression, NumericLiteral, Program, UnaryExpression};
+use oxc_ast::ast::{
+    BinaryExpression, CallExpression, Expression, NumericLiteral, Program, UnaryExpression,
+};
 use oxc_ast_visit::{Visit, walk};
 use oxc_syntax::operator::{BinaryOperator, UnaryOperator};
 
 use crate::{ParserError, TextSpan};
 
-pub(crate) fn collect_numeric_literal_errors(program: &Program<'_>, source_text: &str) -> Vec<ParserError> {
+pub(crate) fn collect_missing_parser_errors(program: &Program<'_>, source_text: &str) -> Vec<ParserError> {
     let mut collector = Collector {
         source_text,
         after_minus: Vec::new(),
@@ -44,6 +47,20 @@ impl<'a> Visit<'a> for Collector<'_> {
             self.after_minus.push(literal.span.start);
         }
         walk::walk_binary_expression(self, expression);
+    }
+
+    fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        if matches!(call.callee, Expression::Super(_))
+            && let Some(type_arguments) = &call.type_arguments
+        {
+            self.push(
+                2754,
+                "'super' may not use type arguments.".to_string(),
+                type_arguments.span.start as usize,
+                type_arguments.span.end as usize,
+            );
+        }
+        walk::walk_call_expression(self, call);
     }
 
     fn visit_numeric_literal(&mut self, literal: &NumericLiteral<'a>) {

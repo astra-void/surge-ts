@@ -696,6 +696,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2754",
+    "category": "Error",
+    "message": "'super' may not use type arguments.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2749",
     "category": "Error",
     "message": "'{0}' refers to a value, but is being used as a type here. Did you mean 'typeof {0}'?",
