@@ -763,6 +763,7 @@ export const fixturePresets: Record<string, string> = {
   'element-access-missing-key-selection': path.join(workspaceRoot, 'tests/compat-projects/element-access-missing-key-selection/tsconfig.json'),
   'import-require-in-namespace-grammar': path.join(workspaceRoot, 'tests/compat-projects/import-require-in-namespace-grammar/tsconfig.json'),
   'annotated-destructuring-declaration': path.join(workspaceRoot, 'tests/compat-projects/annotated-destructuring-declaration/tsconfig.json'),
+  'catch-annotation-resolved-type': path.join(workspaceRoot, 'tests/compat-projects/catch-annotation-resolved-type/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

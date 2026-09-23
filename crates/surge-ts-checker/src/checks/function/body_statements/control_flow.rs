@@ -1321,30 +1321,13 @@ pub(crate) fn check_function_try_statement(
             widen_assigned_bindings(&[&try_block_for_widening], scopes);
             scopes.push_child();
             if let Some(binding_name) = handler_clause.binding_name.as_ref() {
-                if let Some(declared_type) = handler_clause.declared_type.as_ref() {
-                    if !matches!(
-                        declared_type,
-                        ParsedType::Any | ParsedType::Unknown | ParsedType::UnknownKeyword
-                    ) {
-                        let mut diagnostic = Diagnostic::new(
-                            DiagnosticCode::TypeScript(1196),
-                            "Catch clause variable type annotation must be 'any' or 'unknown' if specified.",
-                            ctx.file_name.clone(),
-                        );
-                        if let Some(span) = handler_clause.declared_type_span {
-                            diagnostic = diagnostic.with_span(convert_span(span));
-                        }
-                        ctx.push(diagnostic);
-                    }
-                }
-
                 // tsc types an unannotated catch variable `unknown` under
                 // `strict` (`useUnknownInCatchVariables`), and rejects it as a
                 // source for any parameter that is not `unknown`/`any`.
                 let catch_type = handler_clause
                     .declared_type
-                    .clone()
-                    .map(|ty| map_parsed_type(ty, ctx))
+                    .as_ref()
+                    .map(|declared| catch_annotation_type(declared, handler_clause.declared_type_span, ctx))
                     .unwrap_or(if ctx.options.use_unknown_in_catch_variables {
                         Type::GenuineUnknown
                     } else {
@@ -1436,30 +1419,13 @@ pub(crate) fn check_function_try_statement(
             widen_assigned_bindings(&[&try_block_for_widening], scopes);
             scopes.push_child();
             if let Some(binding_name) = handler_clause.binding_name.as_ref() {
-                if let Some(declared_type) = handler_clause.declared_type.as_ref() {
-                    if !matches!(
-                        declared_type,
-                        ParsedType::Any | ParsedType::Unknown | ParsedType::UnknownKeyword
-                    ) {
-                        let mut diagnostic = Diagnostic::new(
-                            DiagnosticCode::TypeScript(1196),
-                            "Catch clause variable type annotation must be 'any' or 'unknown' if specified.",
-                            ctx.file_name.clone(),
-                        );
-                        if let Some(span) = handler_clause.declared_type_span {
-                            diagnostic = diagnostic.with_span(convert_span(span));
-                        }
-                        ctx.push(diagnostic);
-                    }
-                }
-
                 // tsc types an unannotated catch variable `unknown` under
                 // `strict` (`useUnknownInCatchVariables`), and rejects it as a
                 // source for any parameter that is not `unknown`/`any`.
                 let catch_type = handler_clause
                     .declared_type
-                    .clone()
-                    .map(|ty| map_parsed_type(ty, ctx))
+                    .as_ref()
+                    .map(|declared| catch_annotation_type(declared, handler_clause.declared_type_span, ctx))
                     .unwrap_or(if ctx.options.use_unknown_in_catch_variables {
                         Type::GenuineUnknown
                     } else {
@@ -1533,4 +1499,29 @@ pub(crate) fn check_function_throw_statement(
         &visible_symbols,
         ctx,
     );
+}
+
+/// tsc's `checkTryStatement` and its catch variable's type: the annotation
+/// must resolve to `any` or `unknown` (an alias of either is fine), TS1196 on
+/// it otherwise, and a rejected annotation types the variable as the error
+/// type rather than as what it names.
+fn catch_annotation_type(
+    declared: &ParsedType,
+    span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) -> Type {
+    let ty = map_parsed_type(declared.clone(), ctx);
+    if matches!(ty.peeled(), Type::Any | Type::GenuineUnknown) || ty.peeled().is_unmodelled() {
+        return ty;
+    }
+    let mut diagnostic = Diagnostic::new(
+        DiagnosticCode::TypeScript(1196),
+        "Catch clause variable type annotation must be 'any' or 'unknown' if specified.",
+        ctx.file_name.clone(),
+    );
+    if let Some(span) = span {
+        diagnostic = diagnostic.with_span(convert_span(span));
+    }
+    ctx.push(diagnostic);
+    Type::ErrorType
 }
