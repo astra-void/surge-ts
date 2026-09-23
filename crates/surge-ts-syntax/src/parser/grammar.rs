@@ -29,6 +29,7 @@ pub(crate) fn collect_grammar_diagnostics(
     let mut collector = GrammarCollector::default();
     collector.visit_program(program);
     super::grammar_context::collect_context_grammar_diagnostics(program, &mut collector.diagnostics);
+    super::grammar_recovered::collect_recovered_grammar_diagnostics(program, &mut collector.diagnostics);
     let mut parenthesized = collector.parenthesized_expressions;
     parenthesized.sort_unstable_by_key(|span| (span.inner.start, span.inner.end));
     (collector.diagnostics, parenthesized)
@@ -2240,6 +2241,8 @@ impl<'a> Visit<'a> for GrammarCollector {
 
 fn property_key_name_of_enum_member(name: &TSEnumMemberName<'_>) -> Option<String> {
     match name {
+        // The parser's nameless placeholder for a computed name (TS1164).
+        TSEnumMemberName::Identifier(identifier) if identifier.name.is_empty() => None,
         TSEnumMemberName::Identifier(identifier) => Some(identifier.name.to_string()),
         TSEnumMemberName::String(literal) => Some(literal.value.to_string()),
         _ => None,

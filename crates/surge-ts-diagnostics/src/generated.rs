@@ -5115,6 +5115,26 @@ pub const TS2405: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1011: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1011",
+    number: Some(1011),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An element access expression should take an argument.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1221: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1221",
+    number: Some(1221),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Generators are not allowed in an ambient context.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
     TS2411,
@@ -5627,6 +5647,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS7028,
     TS2677,
     TS2405,
+    TS1011,
+    TS1221,
 ];
 
 impl Diagnostic {
@@ -9530,5 +9552,15 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2405(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2405, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1011(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1011, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1221(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1221, Vec::<DiagnosticArg>::new(), file_name)
     }
 }

@@ -53,8 +53,7 @@ pub fn parse_source(source_text: &str, file_name: &str) -> ParsedSource {
 /// reports the same construct as a grammar error: an invalid write target —
 /// TS2364 for an assignment, TS2357 for `++`/`--`, TS2779/TS2777 when it is an
 /// optional chain — and a misplaced rest parameter (TS1014) or rest element
-/// (TS2462). oxc stops parsing the file at these, so they are all that is
-/// left to report for it.
+/// (TS2462).
 fn classify_uncoded_parser_error(
     message: &str,
     span: crate::TextSpan,
@@ -98,6 +97,8 @@ fn classify_uncoded_parser_error(
             let start = span.end - name.len();
             Some((2462, crate::TextSpan { start, end: span.end }))
         }
+        // The same failure in an assignment pattern, reported over the whole `...x`.
+        "Spread must be last element" => Some((2462, span)),
         _ => None,
     }
 }

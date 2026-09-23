@@ -170,6 +170,8 @@ fn lower_enum_declaration(
 
 fn enum_member_name(name: &TSEnumMemberName<'_>) -> Option<String> {
     match name {
+        // The parser's nameless placeholder for a computed name (TS1164).
+        TSEnumMemberName::Identifier(identifier) if identifier.name.is_empty() => None,
         TSEnumMemberName::Identifier(identifier) => Some(identifier.name.to_string()),
         TSEnumMemberName::String(literal) | TSEnumMemberName::ComputedString(literal) => {
             Some(literal.value.to_string())

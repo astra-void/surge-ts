@@ -1526,6 +1526,14 @@ pub(crate) fn parse_update_expression(
             parse_computed_member_expression(member)?,
             member.span,
         ),
+        // The parser keeps an operand tsc rejects (TS2357/TS2777) in a non-null
+        // wrapper spanning exactly that operand; tsc still checks it as an
+        // arithmetic operand.
+        SimpleAssignmentTarget::TSNonNullExpression(recovered)
+            if recovered.span == recovered.expression.span() =>
+        {
+            (parse_expression(&recovered.expression).0, recovered.span)
+        }
         _ => return None,
     };
 
@@ -1615,6 +1623,11 @@ fn parse_chain_expression(chain_expression: &ChainExpression<'_>) -> Option<Pars
 pub(super) fn parse_computed_member_expression(
     member_expression: &ComputedMemberExpression<'_>,
 ) -> Option<ParsedExpression> {
+    // `o[]` (TS1011): the parser's placeholder argument is empty, and the access
+    // has no key to check.
+    if member_expression.expression.span().is_empty() {
+        return None;
+    }
     // String-literal bracket access (`obj["key"]`, `obj?.["key"]`) lowers to the
     // same (optional) property-access nodes as dot access so it reuses identical
     // property-lookup, optional-widening, and missing-property behavior.

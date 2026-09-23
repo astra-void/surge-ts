@@ -4088,3 +4088,19 @@ support = "emitted"
 message = "The left-hand side of a 'for...in' statement must be of type 'string' or 'any'."
 arity = 0
 
+[[diagnostic]]
+code = "TS1011"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An element access expression should take an argument."
+arity = 0
+
+[[diagnostic]]
+code = "TS1221"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Generators are not allowed in an ambient context."
+arity = 0
+

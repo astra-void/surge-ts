@@ -4086,5 +4086,21 @@
     "source": "typescript",
     "arity": 0,
     "support": "emitted"
+  },
+  {
+    "code": "TS1011",
+    "category": "Error",
+    "message": "An element access expression should take an argument.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1221",
+    "category": "Error",
+    "message": "Generators are not allowed in an ambient context.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
   }
 ]
