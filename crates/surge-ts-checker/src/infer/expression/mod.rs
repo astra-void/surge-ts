@@ -531,7 +531,11 @@ fn infer_expression_unsettled(
             index_span,
         } => infer_optional_index_access(object, object_span, index, index_span, symbols, ctx),
         ParsedExpression::JsxElement { .. } | ParsedExpression::JsxFragment { .. } => {
-            InferredExpression::Known(jsx_element_type())
+            let fragment = matches!(parsed_expression, ParsedExpression::JsxFragment { .. });
+            InferredExpression::Known(
+                crate::checks::jsx::jsx_expression_type(fragment, ctx)
+                    .unwrap_or_else(jsx_element_type),
+            )
         }
         ParsedExpression::TemplateLiteral {
             expressions,

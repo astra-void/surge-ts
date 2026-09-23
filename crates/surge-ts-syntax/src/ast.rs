@@ -1538,6 +1538,10 @@ pub struct ParsedJsxTag {
     pub expression: Option<ParsedExpression>,
     pub type_arguments: Vec<ParsedType>,
     pub type_arguments_span: Option<TextSpan>,
+    /// Each child's own node, parallel to the element's children: a `{…}`
+    /// child is its container, where tsc reports a child that does not fit
+    /// the children prop.
+    pub child_spans: Vec<Option<TextSpan>>,
     /// tsc resolves the closing tag again (`checkJsxElementDeferred`), so an
     /// unknown tag is reported at both.
     pub closing: Option<ParsedJsxClosingElement>,

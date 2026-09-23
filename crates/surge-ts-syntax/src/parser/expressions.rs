@@ -283,7 +283,7 @@ fn parse_jsx_element(element: &JSXElement<'_>) -> ParsedExpression {
         .iter()
         .filter_map(parse_jsx_attribute_item)
         .collect();
-    let children = element.children.iter().map(parse_jsx_child).collect();
+    let (children, child_spans) = parse_jsx_children(&element.children);
     let (type_arguments, type_arguments_span) = match opening.type_arguments.as_deref() {
         Some(type_arguments) => (
             parse_type_arguments(type_arguments).unwrap_or_default(),
@@ -311,6 +311,7 @@ fn parse_jsx_element(element: &JSXElement<'_>) -> ParsedExpression {
             expression: jsx_tag_expression(&opening.name),
             type_arguments,
             type_arguments_span,
+            child_spans,
             closing,
         }),
     }
@@ -363,7 +364,7 @@ fn jsx_member_tag_expression(member: &JSXMemberExpression<'_>) -> ParsedExpressi
 }
 
 fn parse_jsx_fragment(fragment: &JSXFragment<'_>) -> ParsedExpression {
-    let children = fragment.children.iter().map(parse_jsx_child).collect();
+    let (children, _) = parse_jsx_children(&fragment.children);
 
     ParsedExpression::JsxFragment {
         children,
@@ -536,6 +537,44 @@ fn parse_jsx_container_expression(
         // Empty container `{}`: nothing to check.
         None => (None, Some(text_span_from_oxc_span(container.span))),
     }
+}
+
+fn parse_jsx_children(children: &[JSXChild<'_>]) -> (Vec<ParsedJsxChild>, Vec<Option<TextSpan>>) {
+    children
+        .iter()
+        .filter(|child| !is_trivia_jsx_text(child))
+        .map(|child| (parse_jsx_child(child), Some(text_span_from_oxc_span(child.span()))))
+        .unzip()
+}
+
+/// tsc's `JsxText.ContainsOnlyTriviaWhiteSpaces`: whitespace that spans a line
+/// break is layout, not a child, so the checker never sees it.
+fn is_trivia_jsx_text(child: &JSXChild<'_>) -> bool {
+    let JSXChild::Text(text) = child else {
+        return false;
+    };
+    let raw = text.raw.as_ref().map_or(text.value.as_str(), |raw| raw.as_str());
+    let is_line_break = |c: char| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}');
+    let is_single_line_white_space = |c: char| {
+        matches!(
+            c,
+            ' ' | '\t'
+                | '\u{b}'
+                | '\u{c}'
+                | '\u{a0}'
+                | '\u{85}'
+                | '\u{1680}'
+                | '\u{2000}'..='\u{200b}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
+        )
+    };
+    raw.chars().any(is_line_break)
+        && raw
+            .chars()
+            .all(|c| is_line_break(c) || is_single_line_white_space(c))
 }
 
 fn parse_jsx_child(child: &JSXChild<'_>) -> ParsedJsxChild {
