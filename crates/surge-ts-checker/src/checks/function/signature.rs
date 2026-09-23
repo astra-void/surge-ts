@@ -620,6 +620,353 @@ pub(crate) fn insert_object_binding_element_binding(
     }
 }
 
+/// The value names an expression reads: `eager` ones are evaluated while the
+/// expression itself is, `deferred` ones sit inside a nested function body and
+/// are read only when it runs.
+#[derive(Default)]
+pub(crate) struct ValueReads {
+    pub(crate) eager: Vec<String>,
+    pub(crate) deferred: Vec<String>,
+}
+
+pub(crate) fn collect_value_reads(
+    expression: &surge_ts_syntax::ParsedExpression,
+    deferred: bool,
+    reads: &mut ValueReads,
+) {
+    use surge_ts_syntax::ParsedExpression;
+    let name = match expression {
+        ParsedExpression::Identifier { name, .. } => Some(name),
+        ParsedExpression::Call { callee_name, .. } => Some(callee_name),
+        ParsedExpression::IndexAccess { object_name, .. } => Some(object_name),
+        ParsedExpression::Assignment { target_name, .. } => Some(target_name),
+        ParsedExpression::JsxElement { component_name, .. } => component_name.as_ref(),
+        ParsedExpression::ArrowFunction(function) => {
+            collect_function_reads(function, reads);
+            return;
+        }
+        ParsedExpression::ObjectLiteral { properties, .. } => {
+            for property in properties {
+                if let Some(key) = &property.computed_key {
+                    collect_value_reads(key, deferred, reads);
+                }
+                collect_value_reads(&property.value, deferred, reads);
+                if let Some(setter) = &property.paired_setter {
+                    collect_function_reads(setter, reads);
+                }
+                if let Some(value) = &property.unnamed_key_value {
+                    collect_value_reads(value, deferred, reads);
+                }
+            }
+            return;
+        }
+        _ => None,
+    };
+    if let Some(name) = name {
+        if deferred {
+            reads.deferred.push(name.clone());
+        } else {
+            reads.eager.push(name.clone());
+        }
+    }
+    expression.for_each_child(&mut |child| collect_value_reads(child, deferred, reads));
+}
+
+fn collect_function_reads(function: &surge_ts_syntax::ParsedArrowFunction, reads: &mut ValueReads) {
+    reads.deferred.extend(function.body_reads.iter().cloned());
+    for parameter in &function.parameters {
+        if let Some(initializer) = &parameter.initializer {
+            collect_value_reads(initializer, true, reads);
+        }
+    }
+}
+
+/// The value names the `typeof` queries written in `ty` read. A query is eager
+/// through unions, intersections, arrays, tuples, type operators, indexed
+/// accesses and type arguments; inside an object type's members, a signature
+/// or any other type it is resolved on demand, so deferred (the positions the
+/// grammar pass's `eager_type_queries` follows for TS2502).
+pub(crate) fn collect_type_query_reads(ty: &ParsedType, deferred: bool, reads: &mut ValueReads) {
+    fn signature(function: &surge_ts_syntax::ParsedFunctionType, reads: &mut ValueReads) {
+        for parameter in &function.parameters {
+            collect_type_query_reads(&parameter.ty, true, reads);
+        }
+        collect_type_query_reads(&function.return_type, true, reads);
+        for type_parameter in &function.type_parameters {
+            for written in [&type_parameter.constraint, &type_parameter.default_type]
+                .into_iter()
+                .flatten()
+            {
+                collect_type_query_reads(written, true, reads);
+            }
+        }
+    }
+    match ty {
+        ParsedType::TypeOf(query) => {
+            if query.import_specifier.is_none() {
+                if deferred {
+                    reads.deferred.push(query.name.clone());
+                } else {
+                    reads.eager.push(query.name.clone());
+                }
+            }
+            for argument in &query.type_arguments {
+                collect_type_query_reads(argument, deferred, reads);
+            }
+        }
+        ParsedType::Named(named) => {
+            for argument in &named.type_arguments {
+                collect_type_query_reads(argument, deferred, reads);
+            }
+        }
+        ParsedType::Array(element) | ParsedType::Readonly(element) | ParsedType::KeyOf(element) => {
+            collect_type_query_reads(element, deferred, reads);
+        }
+        ParsedType::Tuple(elements) | ParsedType::Union(elements) | ParsedType::Intersection(elements) => {
+            for element in elements.iter() {
+                collect_type_query_reads(element, deferred, reads);
+            }
+        }
+        ParsedType::VariadicTuple(elements) => {
+            for element in elements.iter() {
+                match element {
+                    surge_ts_syntax::ParsedTupleElement::Fixed(ty)
+                    | surge_ts_syntax::ParsedTupleElement::Rest(ty) => {
+                        collect_type_query_reads(ty, deferred, reads)
+                    }
+                }
+            }
+        }
+        ParsedType::IndexedAccess(indexed_access) => {
+            collect_type_query_reads(&indexed_access.object_type, deferred, reads);
+            collect_type_query_reads(&indexed_access.index_type, deferred, reads);
+        }
+        ParsedType::Object(object) => {
+            for property in &object.properties {
+                collect_type_query_reads(&property.ty, true, reads);
+            }
+            for index in [&object.string_index_type, &object.number_index_type]
+                .into_iter()
+                .flatten()
+            {
+                collect_type_query_reads(index, true, reads);
+            }
+            for function in object
+                .call_signature
+                .iter()
+                .chain(object.construct_signature.iter())
+            {
+                signature(function, reads);
+            }
+        }
+        ParsedType::Function(function) => signature(function, reads),
+        ParsedType::Mapped(mapped) => {
+            collect_type_query_reads(&mapped.constraint, true, reads);
+            collect_type_query_reads(&mapped.value_type, true, reads);
+            if let Some(name_type) = mapped.name_type.as_deref() {
+                collect_type_query_reads(name_type, true, reads);
+            }
+        }
+        ParsedType::Conditional(conditional) => {
+            collect_type_query_reads(&conditional.check_type, true, reads);
+            collect_type_query_reads(&conditional.extends_type, true, reads);
+            collect_type_query_reads(&conditional.true_type, true, reads);
+            collect_type_query_reads(&conditional.false_type, true, reads);
+        }
+        ParsedType::TemplateLiteral(template) => {
+            for interpolation in &template.interpolations {
+                collect_type_query_reads(interpolation, true, reads);
+            }
+        }
+        ParsedType::Predicate(predicate) => {
+            if let Some(ty) = predicate.ty.as_ref() {
+                collect_type_query_reads(ty, true, reads);
+            }
+        }
+        ParsedType::Infer(infer) => {
+            if let Some(constraint) = infer.constraint.as_ref() {
+                collect_type_query_reads(constraint, true, reads);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The names a parameter binds, each with the type it reads from the
+/// parameter's type.
+fn parameter_bindings(parameter: &ParsedFunctionParameter, parameter_type: &Type) -> Vec<(String, Type)> {
+    match &parameter.binding_name {
+        ParsedBindingName::Identifier { name, .. } => vec![(
+            name.clone(),
+            with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || parameter_type.clone()),
+        )],
+        binding => {
+            let pattern_type = parameter_scope_type(parameter, parameter_type);
+            binding
+                .bound_names()
+                .into_iter()
+                .map(|bound| {
+                    let ty = bound_name_type(&pattern_type, &bound);
+                    (bound.name, ty)
+                })
+                .collect()
+        }
+    }
+}
+
+/// A parameter list as tsc's `resolveName` scopes it: the function's locals
+/// hold every parameter, and `lastLocation` being a parameter makes each one
+/// visible to every initializer and annotation of the list, itself and the
+/// ones after it included. A parameter's type is resolved when another one
+/// reads it (`getTypeOfSymbol`); a read that closes a cycle made of eager reads
+/// is a circularity, and every parameter on it is `any`
+/// (`reportCircularityError`). A read from inside a nested function needs the
+/// type but, being deferred, never closes a cycle.
+struct ParameterListResolver<'p> {
+    parameters: &'p [ParsedFunctionParameter],
+    bound_names: Vec<Vec<String>>,
+    types: Vec<Option<Type>>,
+    in_progress: Vec<bool>,
+    circular: Vec<bool>,
+    /// The parameters being resolved, each with whether an eager read reached it.
+    stack: Vec<(usize, bool)>,
+    initializer_symbols: Option<SymbolTable>,
+}
+
+impl<'p> ParameterListResolver<'p> {
+    fn new(parameters: &'p [ParsedFunctionParameter]) -> Self {
+        let bound_names = parameters
+            .iter()
+            .map(|parameter| match &parameter.binding_name {
+                ParsedBindingName::Identifier { name, .. } => vec![name.clone()],
+                binding => binding.bound_names().into_iter().map(|bound| bound.name).collect(),
+            })
+            .collect();
+        Self {
+            parameters,
+            bound_names,
+            types: vec![None; parameters.len()],
+            in_progress: vec![false; parameters.len()],
+            circular: vec![false; parameters.len()],
+            stack: Vec::new(),
+            initializer_symbols: None,
+        }
+    }
+
+    fn resolve(
+        &mut self,
+        index: usize,
+        eager: bool,
+        substitution: &TypeParameterSubstitution,
+        ctx: &mut CheckerContext,
+    ) {
+        if self.types[index].is_some() {
+            return;
+        }
+        if self.in_progress[index] {
+            if eager
+                && let Some(position) = self.stack.iter().position(|(entry, _)| *entry == index)
+                && self.stack[position + 1..].iter().all(|(_, eager)| *eager)
+            {
+                for (entry, _) in &self.stack[position..] {
+                    self.circular[*entry] = true;
+                }
+            }
+            return;
+        }
+        self.in_progress[index] = true;
+        self.stack.push((index, eager));
+        let parameters = self.parameters;
+        let parameter = &parameters[index];
+        let ty = if let Some(declared_type) = parameter.declared_type.clone() {
+            let mut reads = ValueReads::default();
+            collect_type_query_reads(&declared_type, false, &mut reads);
+            self.resolve_reads(&reads.eager, true, substitution, ctx);
+            self.resolve_reads(&reads.deferred, false, substitution, ctx);
+            ctx.signature_parameter_bindings = self.bindings();
+            let mapped = map_parsed_type_with_substitution(declared_type, ctx, substitution);
+            ctx.signature_parameter_bindings.clear();
+            mapped
+        } else if let Some(initializer) = parameter.initializer.as_ref() {
+            let mut reads = ValueReads::default();
+            collect_value_reads(initializer, false, &mut reads);
+            self.resolve_reads(&reads.eager, true, substitution, ctx);
+            self.resolve_reads(&reads.deferred, false, substitution, ctx);
+            let symbols = self.initializer_scope(ctx);
+            let inferred = evaluate_expression(initializer, parameter.initializer_span, &symbols, ctx);
+            self.initializer_symbols = Some(symbols);
+            match inferred {
+                InferredExpression::Known(ty) => {
+                    widen_implicit_variable_initializer_type(SymbolKind::Let, initializer, &ty, false)
+                }
+                InferredExpression::UnresolvedIdentifier { .. }
+                | InferredExpression::MissingProperty { .. }
+                | InferredExpression::Unknown => Type::Unknown,
+            }
+        } else {
+            Type::Any
+        };
+        self.stack.pop();
+        self.in_progress[index] = false;
+        self.types[index] = Some(if self.circular[index] { Type::Any } else { ty });
+    }
+
+    fn resolve_reads(
+        &mut self,
+        names: &[String],
+        eager: bool,
+        substitution: &TypeParameterSubstitution,
+        ctx: &mut CheckerContext,
+    ) {
+        for index in 0..self.parameters.len() {
+            if self.bound_names[index].iter().any(|bound| names.contains(bound)) {
+                self.resolve(index, eager, substitution, ctx);
+            }
+        }
+    }
+
+    /// The scope an initializer is evaluated in: the enclosing one with every
+    /// parameter bound, a parameter still being resolved as `any`.
+    fn initializer_scope(&mut self, ctx: &CheckerContext) -> SymbolTable {
+        let mut symbols = self.initializer_symbols.take().unwrap_or_else(|| {
+            ctx.symbols
+                .clone_with_reason(TypeCopyReason::FunctionBodySetup)
+        });
+        for (index, parameter) in self.parameters.iter().enumerate() {
+            let ty = self.types[index].clone().unwrap_or(Type::Any);
+            for (name, ty) in parameter_bindings(parameter, &ty) {
+                let _ = symbols.insert(
+                    name,
+                    SymbolInfo {
+                        ty,
+                        kind: SymbolKind::Parameter,
+                        function_signature: None,
+                    },
+                );
+            }
+        }
+        symbols
+    }
+
+    /// The parameter bindings a `typeof` in the signature resolves against.
+    fn bindings(&self) -> Vec<(String, Type)> {
+        let mut bindings = Vec::new();
+        for (index, parameter) in self.parameters.iter().enumerate() {
+            let ty = match &self.types[index] {
+                Some(ty) => ty.clone(),
+                None if self.in_progress[index] => Type::Any,
+                None => continue,
+            };
+            bindings.extend(parameter_bindings(parameter, &ty));
+        }
+        bindings
+    }
+
+    fn resolved_type(&self, index: usize) -> Type {
+        self.types[index].clone().unwrap_or(Type::Any)
+    }
+}
+
 pub(crate) fn map_function_signature(
     parameters: &[ParsedFunctionParameter],
     return_type: Option<&ParsedType>,
@@ -646,96 +993,15 @@ pub(crate) fn map_function_signature(
             type_parameter_substitution.insert_placeholder(type_parameter.name.clone(), variable);
         }
     }
-    let mut parameter_types = Vec::with_capacity(parameters.len());
-    let mut parameter_symbols = None;
-    let mut parameter_bindings: Vec<(String, Type)> = Vec::new();
-
     let outer_parameter_bindings = std::mem::take(&mut ctx.signature_parameter_bindings);
+    let mut resolver = ParameterListResolver::new(parameters);
+    for index in 0..parameters.len() {
+        resolver.resolve(index, true, &type_parameter_substitution, ctx);
+    }
+
+    let mut parameter_types = Vec::with_capacity(parameters.len());
     for (index, parameter) in parameters.iter().enumerate() {
-        let inferred_parameter_type = if let Some(declared_type) = parameter.declared_type.clone() {
-            ctx.signature_parameter_bindings = parameter_bindings.clone();
-            let mapped =
-                map_parsed_type_with_substitution(declared_type, ctx, &type_parameter_substitution);
-            ctx.signature_parameter_bindings.clear();
-            mapped
-        } else if let Some(initializer) = parameter.initializer.as_ref() {
-            let parameter_symbols = parameter_symbols.get_or_insert_with(|| {
-                let mut symbols = ctx
-                    .symbols
-                    .clone_with_reason(TypeCopyReason::FunctionBodySetup);
-                for (name, ty) in &parameter_bindings {
-                    let _ = symbols.insert(
-                        name.clone(),
-                        SymbolInfo {
-                            ty: with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || {
-                                ty.clone()
-                            }),
-                            kind: SymbolKind::Parameter,
-                            function_signature: None,
-                        },
-                    );
-                }
-                symbols
-            });
-            let inferred_initializer = evaluate_expression(
-                initializer,
-                parameter.initializer_span,
-                parameter_symbols,
-                ctx,
-            );
-
-            match inferred_initializer {
-                InferredExpression::Known(ty) => widen_implicit_variable_initializer_type(
-                    SymbolKind::Let,
-                    initializer,
-                    &ty,
-                    false,
-                ),
-                InferredExpression::UnresolvedIdentifier { .. }
-                | InferredExpression::MissingProperty { .. }
-                | InferredExpression::Unknown => Type::Unknown,
-            }
-        } else {
-            Type::Any
-        };
-
-        if let Some(name) = parameter_identifier_name(parameter) {
-            let parameter_binding_type =
-                with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || {
-                    inferred_parameter_type.clone()
-                });
-            if let Some(parameter_symbols) = parameter_symbols.as_mut() {
-                let _ = parameter_symbols.insert(
-                    name.to_string(),
-                    SymbolInfo {
-                        ty: with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || {
-                            parameter_binding_type.clone()
-                        }),
-                        kind: SymbolKind::Parameter,
-                        function_signature: None,
-                    },
-                );
-            }
-            parameter_bindings.push((name.to_string(), parameter_binding_type));
-        } else {
-            // A destructured parameter's names are in scope for the later
-            // parameters and the return type too (`({ a: alias }: T) => typeof alias`).
-            let pattern_type = parameter_scope_type(parameter, &inferred_parameter_type);
-            for bound in parameter.binding_name.bound_names() {
-                let ty = bound_name_type(&pattern_type, &bound);
-                if let Some(parameter_symbols) = parameter_symbols.as_mut() {
-                    let _ = parameter_symbols.insert(
-                        bound.name.clone(),
-                        SymbolInfo {
-                            ty: ty.clone(),
-                            kind: SymbolKind::Parameter,
-                            function_signature: None,
-                        },
-                    );
-                }
-                parameter_bindings.push((bound.name, ty));
-            }
-        }
+        let inferred_parameter_type = resolver.resolved_type(index);
 
         // tsc's `addOptionality`: a parameter with an initializer accepts
         // `undefined` from its callers wherever it stands. A trailing one is
@@ -757,10 +1023,25 @@ pub(crate) fn map_function_signature(
         if ctx.options.no_implicit_any {
             let contextual_type = contextual_parameter_types.and_then(|types| types.get(index));
             emit_parameter_diagnostics(parameter, contextual_type, ctx);
+            // `reportCircularityError`. A contextually typed parameter takes its
+            // type from the context, not its initializer, so it is never circular.
+            if resolver.circular[index]
+                && parameter.declared_type.is_none()
+                && parameter.initializer.is_some()
+                && contextual_type.is_none()
+                && let ParsedBindingName::Identifier {
+                    name,
+                    span: Some(span),
+                } = &parameter.binding_name
+            {
+                ctx.push(
+                    Diagnostic::ts7022(name, ctx.file_name.clone()).with_span(convert_span(*span)),
+                );
+            }
         }
     }
 
-    ctx.signature_parameter_bindings = parameter_bindings.clone();
+    ctx.signature_parameter_bindings = resolver.bindings();
     let function_return_type = return_type
         .map(|return_type| {
             with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || {

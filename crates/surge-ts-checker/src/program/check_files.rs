@@ -830,8 +830,6 @@ pub(crate) fn emit_grammar_diagnostics(
     for finding in findings {
         let answered: &'static [u32] = match finding.kind {
             surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2842) => &[7031],
-            surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2372 | 2373)
-            | surge_ts_syntax::ParsedGrammarDiagnosticKind::LaterParameterReference => &[2304, 2552],
             _ => &[],
         };
         if !answered.is_empty() {
@@ -919,7 +917,6 @@ fn grammar_finding_diagnostic(
     use surge_ts_syntax::ParsedGrammarDiagnosticKind as Kind;
 
     let diagnostic = match finding.kind {
-        Kind::LaterParameterReference => return None,
         Kind::Ts(2683) if !ctx.options.no_implicit_this => return None,
         Kind::Ts(1202) if !ctx.options.module_emit.is_ecmascript() => return None,
         Kind::Ts(1203) if !export_assignment_targets_esm(ctx) => return None,

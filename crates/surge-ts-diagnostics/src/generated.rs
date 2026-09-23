@@ -1105,6 +1105,16 @@ pub const TS7019: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS7022: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS7022",
+    number: Some(7022),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS4111: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS4111",
     number: Some(4111),
@@ -4216,6 +4226,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS7006,
     TS7016,
     TS7019,
+    TS7022,
     TS4111,
     TS1121,
     TS1489,
@@ -5587,6 +5598,15 @@ impl Diagnostic {
     pub fn ts7019(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS7019,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts7022(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS7022,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )

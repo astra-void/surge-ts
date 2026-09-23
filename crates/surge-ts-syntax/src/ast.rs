@@ -235,10 +235,6 @@ pub enum ParsedGrammarDiagnosticKind {
     Ts(u32),
     /// A [`Self::Ts`] error that holds only under `strictNullChecks`.
     TsUnderStrictNullChecks(u32),
-    /// Not an error: a name in a parameter initializer's deferred function
-    /// that resolves to a later parameter, which the checker's scope does not
-    /// hold while the initializer is checked.
-    LaterParameterReference,
 }
 
 /// A leading `/// <reference types="..." />` directive. Only the `types` form is

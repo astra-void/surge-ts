@@ -881,6 +881,14 @@ message = "Rest parameter '{0}' implicitly has an 'any[]' type."
 arity = 1
 
 [[diagnostic]]
+code = "TS7022"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer."
+arity = 1
+
+[[diagnostic]]
 code = "TS4111"
 category = "Error"
 source = "typescript"

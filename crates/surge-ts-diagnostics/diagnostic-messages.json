@@ -880,6 +880,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS7022",
+    "category": "Error",
+    "message": "'{0}' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS4111",
     "category": "Error",
     "message": "Property '{0}' comes from an index signature, so it must be accessed with ['{0}'].",

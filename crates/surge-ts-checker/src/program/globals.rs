@@ -52,14 +52,16 @@ pub(crate) fn collect_global_function_signatures(
     let seeded_names = seed_script_values_for_signatures(parsed_files, global_symbols, ctx);
     // A class's member annotations resolve their `typeof` through the
     // context, not the signature scope, so the seed reaches them this way.
+    // Behind it sit the lib's globals, which a parameter initializer reads like
+    // any other value (`function f(m = Math)`).
     let saved_fallback = ctx.module_value_fallback.take();
-    if !seeded_names.is_empty() {
-        let mut seeded_values = SymbolTable::new();
-        for (name, symbol) in &seeded_names {
-            let _ = seeded_values.insert_shared(name.clone(), symbol.clone());
-        }
-        ctx.module_value_fallback = Some(Arc::new(seeded_values));
+    let mut seeded_values = SymbolTable::new();
+    for (name, symbol) in &seeded_names {
+        let _ = seeded_values.insert_shared(name.clone(), symbol.clone());
     }
+    ctx.module_value_fallback = Some(Arc::new(
+        seeded_values.with_parent_fallback(Arc::new(ctx.ambient_global_symbols.clone())),
+    ));
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
         if !is_script_source(parsed_file) {
             continue;
@@ -210,20 +212,17 @@ fn is_script_source(parsed_file: &ParsedProgramFile) -> bool {
 }
 
 /// A script's top-level `var`s are globals the binder declares before any
-/// signature is resolved, so `function f(x: typeof a)` reads `a` wherever it
-/// is written. Signature collection runs before the check phase declares
-/// them; seed their values for it, as module analysis does for a module's
-/// locals. The seed is removed afterwards so the check phase declares each
-/// variable itself.
+/// signature is resolved, so `function f(x: typeof a)` and `function f(x = a)`
+/// read `a` wherever it is written. Signature collection runs before the check
+/// phase declares them; seed their values for it, as module analysis does for
+/// a module's locals. The seed is removed afterwards so the check phase
+/// declares each variable itself.
 fn seed_script_values_for_signatures(
     parsed_files: &[ParsedProgramFile],
     global_symbols: &mut SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Vec<(Arc<str>, crate::symbols::SymbolInfoHandle)> {
     let script_sources = || parsed_files.iter().filter(|parsed_file| is_script_source(parsed_file));
-    if !script_sources().any(|parsed_file| parsed_file.contains_typeof) {
-        return Vec::new();
-    }
     let mut seeded = Vec::new();
     for parsed_file in script_sources() {
         ctx.set_file_name(parsed_file.file_name.clone());

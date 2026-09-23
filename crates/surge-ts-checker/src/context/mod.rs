@@ -284,9 +284,7 @@ pub(crate) struct CheckerContext {
     pub(crate) suppressed_argument_mismatch_span: Option<DiagnosticTextSpan>,
     /// Spans the grammar pass has already answered for, with the codes tsc
     /// does not also report there: a renamed binding in a bodyless signature
-    /// (TS2842) is not an implicit `any` (TS7031), and a parameter initializer
-    /// naming its own or a later parameter (TS2372/TS2373) resolves the name —
-    /// surge's scope lacks the later parameter, which is not a TS2304.
+    /// (TS2842) is not an implicit `any` (TS7031).
     pub(crate) grammar_answered_spans: Vec<(DiagnosticTextSpan, &'static [u32])>,
     /// Parameters already bound while a signature's annotations are being
     /// mapped, so a later annotation's `typeof <earlier parameter>` resolves the

@@ -1029,15 +1029,6 @@ impl<'a> ContextCollector<'a, '_> {
                     self.push(2373, span, &[own.name.as_str(), &name]);
                 }
             }
-            for (name, span) in references.deferred {
-                if is_later(&name) {
-                    self.out.push(ParsedGrammarDiagnostic {
-                        kind: Kind::LaterParameterReference,
-                        span: text_span_from_oxc_span(span),
-                        name: None,
-                    });
-                }
-            }
         }
     }
 
@@ -2117,22 +2108,16 @@ fn statement_declares_value(statement: &Statement<'_>, name: &str) -> bool {
 /// The value names an expression reads as it runs. A nested function, arrow,
 /// or class body runs later (tsc's `withinDeferredContext`), and a type
 /// annotation reads no values.
-/// The deferred reads are kept apart: they resolve (a later parameter is in
-/// scope by the time a nested function runs) but are not errors.
 #[derive(Default)]
 struct EagerReferences {
     found: Vec<(String, Span)>,
-    deferred: Vec<(String, Span)>,
     deferred_depth: usize,
 }
 
 impl<'a> Visit<'a> for EagerReferences {
     fn visit_identifier_reference(&mut self, identifier: &oxc_ast::ast::IdentifierReference<'a>) {
-        let entry = (identifier.name.to_string(), identifier.span);
-        if self.deferred_depth > 0 {
-            self.deferred.push(entry);
-        } else {
-            self.found.push(entry);
+        if self.deferred_depth == 0 {
+            self.found.push((identifier.name.to_string(), identifier.span));
         }
     }
     fn visit_function(&mut self, function: &oxc_ast::ast::Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
