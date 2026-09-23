@@ -370,6 +370,7 @@ export const fixturePresets: Record<string, string> = {
   'missing-member-prefix-lookup': path.join(workspaceRoot, 'tests/compat-projects/missing-member-prefix-lookup/tsconfig.json'),
   'property-initializer-constructor-locals': path.join(workspaceRoot, 'tests/compat-projects/property-initializer-constructor-locals/tsconfig.json'),
   'inherited-abstract-generic-heritage': path.join(workspaceRoot, 'tests/compat-projects/inherited-abstract-generic-heritage/tsconfig.json'),
+  'global-augmentation-class-alias-values': path.join(workspaceRoot, 'tests/compat-projects/global-augmentation-class-alias-values/tsconfig.json'),
   'object-literal-accessor-pair-typing': path.join(workspaceRoot, 'tests/compat-projects/object-literal-accessor-pair-typing/tsconfig.json'),
   'inference-any-candidate-supertype': path.join(workspaceRoot, 'tests/compat-projects/inference-any-candidate-supertype/tsconfig.json'),
   'instantiation-expression-basic': path.join(workspaceRoot, 'tests/compat-projects/instantiation-expression-basic/tsconfig.json'),

@@ -275,8 +275,8 @@ pub(crate) fn lower_global_augmentation_values_from_statements(
     statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
 ) {
-    for_each_global_augmentation_block(statements, ctx, |block_statements, _enclosing, ctx| {
-        lower_global_augmentation_values(block_statements, ctx)
+    for_each_global_augmentation_block(statements, ctx, |block_statements, enclosing, ctx| {
+        lower_global_augmentation_values(block_statements, enclosing.unwrap_or(statements), ctx)
     });
 }
 
@@ -302,8 +302,8 @@ pub(crate) fn collect_global_augmentations_from_statements(
         std::sync::Arc::make_mut(&mut ctx.ambient_global_type_declarations),
         &block_tables,
     );
-    for_each_global_augmentation_block(statements, ctx, |block_statements, _enclosing, ctx| {
-        lower_global_augmentation_values(block_statements, ctx)
+    for_each_global_augmentation_block(statements, ctx, |block_statements, enclosing, ctx| {
+        lower_global_augmentation_values(block_statements, enclosing.unwrap_or(statements), ctx)
     });
 }
 
@@ -426,8 +426,11 @@ pub(crate) fn merged_global_function_type(
     }
 }
 
+/// `enclosing_statements` are the declarations of the file, or of the ambient
+/// module, the block is written in.
 fn lower_global_augmentation_values(
     block_statements: &[ParsedStatement],
+    enclosing_statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
 ) {
     // Value types resolve against the caller's current type environment (during
@@ -565,7 +568,88 @@ fn lower_global_augmentation_values(
         }
     }
 
+    // A class in the block is a global value as well as a global type, the
+    // way a script's `declare class` is.
+    for stmt in block_statements {
+        if let ParsedStatement::ClassDeclaration(class) =
+            crate::modules::peel_exported_statement(stmt)
+            && ctx.ambient_global_symbols.get(&class.name).is_none()
+        {
+            crate::program::record_augmentation_value_insertion();
+            let symbol = crate::program::build_class_value_symbol(class, ctx);
+            ctx.ambient_global_symbols.insert(class.name.clone(), symbol);
+        }
+    }
+
+    for stmt in block_statements {
+        if let ParsedStatement::ImportDeclaration(import) =
+            crate::modules::peel_exported_statement(stmt)
+            && let surge_ts_syntax::ParsedImportKind::EntityAlias {
+                local_name, target, ..
+            } = &import.kind
+            && ctx.ambient_global_symbols.get(local_name).is_none()
+            && let Some(ty) =
+                global_augmentation_alias_value(target, block_statements, enclosing_statements, ctx)
+        {
+            crate::program::record_augmentation_value_insertion();
+            ctx.ambient_global_symbols.insert(
+                local_name.clone(),
+                crate::symbols::SymbolInfo {
+                    ty,
+                    kind: crate::symbols::SymbolKind::Const,
+                    function_signature: None,
+                },
+            );
+        }
+    }
+
     ctx.symbols = saved_symbols;
+}
+
+/// The value an `import X = N.M` in a `declare global` block aliases. The
+/// entity's root resolves the way tsc's `resolveEntityName` climbs from the
+/// block: its own namespaces, then those of the file or ambient module it is
+/// written in, then the globals.
+fn global_augmentation_alias_value(
+    target: &str,
+    block_statements: &[ParsedStatement],
+    enclosing_statements: &[ParsedStatement],
+    ctx: &mut CheckerContext,
+) -> Option<surge_ts_types::Type> {
+    let mut segments = target.split('.');
+    let root = segments.next()?;
+    let mut ty = match namespace_value_named(block_statements, root, ctx) {
+        Some(ty) => ty,
+        None => match namespace_value_named(enclosing_statements, root, ctx) {
+            Some(ty) => ty,
+            None => ctx.ambient_global_symbols.get(root)?.ty.clone(),
+        },
+    };
+    for member in segments {
+        let surge_ts_types::Type::Object(object) = ty.peeled() else {
+            return None;
+        };
+        ty = object.properties.get(member)?.ty.clone();
+    }
+    Some(ty)
+}
+
+fn namespace_value_named(
+    statements: &[ParsedStatement],
+    name: &str,
+    ctx: &mut CheckerContext,
+) -> Option<surge_ts_types::Type> {
+    let namespace = statements.iter().find_map(|statement| {
+        match crate::modules::peel_exported_statement(statement) {
+            ParsedStatement::NamespaceDeclaration(namespace)
+                if namespace.name == name && crate::program::is_instantiated_namespace(namespace) =>
+            {
+                Some(namespace)
+            }
+            _ => None,
+        }
+    })?;
+    Some(crate::modules::namespace_value_object_type_resolved(namespace, ctx))
 }
 
 pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
