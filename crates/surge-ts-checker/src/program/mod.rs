@@ -287,6 +287,7 @@ fn check_program_with_stats_and_jobs_inner(
         mut parsed_files,
         mut ctx,
     } = start_program_run(files, prescanned, options, jobs, &store);
+    namespaces::report_cross_file_namespace_merges(&mut parsed_files);
     let globals = collect_program_globals(&parsed_files, &mut ctx, &timings, program_start);
     let preliminary = run_preliminary_pass(
         &mut parsed_files,

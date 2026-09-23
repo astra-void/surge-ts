@@ -397,3 +397,67 @@ fn declares_name(statement: &ParsedStatement, name: &str) -> bool {
         _ => false,
     }
 }
+
+/// tsc's `checkModuleDeclaration` merge placement across global scripts: a
+/// non-ambient instantiated namespace whose global symbol's first non-ambient
+/// class or implemented function lives in another file is TS2433 at its name.
+/// Declarations merge in program file order. The same-file case (TS2434) is
+/// the parser's, and gives way here when the first such declaration is in an
+/// earlier file.
+pub(crate) fn report_cross_file_namespace_merges(parsed_files: &mut [ParsedProgramFile]) {
+    let is_global_script =
+        |file: &ParsedProgramFile| !file.is_module && !file.file_kind.is_declaration();
+    let mut first_class_or_function: FxHashMap<&str, usize> = FxHashMap::default();
+    for (index, file) in parsed_files.iter().enumerate() {
+        if !is_global_script(file) {
+            continue;
+        }
+        for statement in &file.statements {
+            let name = match statement {
+                ParsedStatement::ClassDeclaration(class) if !class.is_declare => class.name.as_str(),
+                ParsedStatement::FunctionDeclaration(function)
+                    if function.has_body && !function.is_declare =>
+                {
+                    function.name.as_str()
+                }
+                _ => continue,
+            };
+            first_class_or_function.entry(name).or_insert(index);
+        }
+    }
+    let mut reports: Vec<(usize, surge_ts_syntax::TextSpan)> = Vec::new();
+    for (index, file) in parsed_files.iter().enumerate() {
+        if !is_global_script(file) {
+            continue;
+        }
+        for statement in &file.statements {
+            let ParsedStatement::NamespaceDeclaration(namespace) = statement else {
+                continue;
+            };
+            if namespace.is_declare || namespace.name.contains('.') {
+                continue;
+            }
+            let Some(span) = namespace.name_span else {
+                continue;
+            };
+            if first_class_or_function
+                .get(namespace.name.as_str())
+                .is_some_and(|first| *first != index)
+                && is_instantiated_namespace(namespace)
+            {
+                reports.push((index, span));
+            }
+        }
+    }
+    for (index, span) in reports {
+        let findings = &mut parsed_files[index].grammar_diagnostics;
+        findings.retain(|finding| {
+            !(finding.kind == surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2434) && finding.span == span)
+        });
+        findings.push(surge_ts_syntax::ParsedGrammarDiagnostic {
+            kind: surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2433),
+            span,
+            name: None,
+        });
+    }
+}

@@ -721,19 +721,42 @@ impl<'a> ContextCollector<'a, '_> {
     }
 
     /// tsc's `checkExportsOnMergedDeclarations` for the declarations that
-    /// merge (interfaces, namespaces, classes, enums): exported and local
-    /// declarations of one name sharing a declaration space — TS2395 on each.
+    /// merge (interfaces, namespaces, classes, enums, and a named default
+    /// export of one): a default-exported declaration sharing a space with
+    /// any other is TS2652; exported and local declarations sharing one are
+    /// TS2395. Each declaration reports at most one, TS2652 first.
     fn check_merged_export_visibility(&mut self, statements: &[Statement<'_>]) {
         const TYPE: u8 = 1;
         const VALUE: u8 = 2;
         const NAMESPACE: u8 = 4;
-        let mut declarations: Vec<(&str, Span, bool, u8)> = Vec::new();
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Visibility {
+            Local,
+            Exported,
+            Default,
+        }
+        let mut declarations: Vec<(&str, Span, Visibility, u8)> = Vec::new();
         for statement in statements {
-            let (declaration, exported) = match statement {
-                Statement::ExportNamedDeclaration(export) => (export.declaration.as_ref(), true),
-                other => (other.as_declaration(), false),
-            };
             use oxc_ast::ast::Declaration as D;
+            let (declaration, visibility) = match statement {
+                Statement::ExportNamedDeclaration(export) => (export.declaration.as_ref(), Visibility::Exported),
+                Statement::ExportDefaultDeclaration(export) => {
+                    let entry = match &export.declaration {
+                        oxc_ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(d) => {
+                            d.id.as_ref().map(|id| (id.name.as_str(), id.span, TYPE | VALUE))
+                        }
+                        oxc_ast::ast::ExportDefaultDeclarationKind::TSInterfaceDeclaration(d) => {
+                            Some((d.id.name.as_str(), d.id.span, TYPE))
+                        }
+                        _ => None,
+                    };
+                    if let Some((name, span, spaces)) = entry {
+                        declarations.push((name, span, Visibility::Default, spaces));
+                    }
+                    continue;
+                }
+                other => (other.as_declaration(), Visibility::Local),
+            };
             let entry = match declaration {
                 Some(D::TSInterfaceDeclaration(d)) => Some((d.id.name.as_str(), d.id.span, TYPE)),
                 Some(D::ClassDeclaration(d)) => d.id.as_ref().map(|id| (id.name.as_str(), id.span, TYPE | VALUE)),
@@ -748,21 +771,23 @@ impl<'a> ContextCollector<'a, '_> {
                 _ => None,
             };
             if let Some((name, span, spaces)) = entry {
-                declarations.push((name, span, exported, spaces));
+                declarations.push((name, span, visibility, spaces));
             }
         }
         for (name, span, _, spaces) in &declarations {
-            let (mut exported_spaces, mut local_spaces) = (0u8, 0u8);
-            for (other, _, exported, other_spaces) in &declarations {
+            let (mut exported_spaces, mut local_spaces, mut default_spaces) = (0u8, 0u8, 0u8);
+            for (other, _, visibility, other_spaces) in &declarations {
                 if other == name {
-                    if *exported {
-                        exported_spaces |= other_spaces;
-                    } else {
-                        local_spaces |= other_spaces;
+                    match visibility {
+                        Visibility::Local => local_spaces |= other_spaces,
+                        Visibility::Exported => exported_spaces |= other_spaces,
+                        Visibility::Default => default_spaces |= other_spaces,
                     }
                 }
             }
-            if spaces & exported_spaces & local_spaces != 0 {
+            if spaces & default_spaces & (exported_spaces | local_spaces) != 0 {
+                self.push(2652, *span, &[name]);
+            } else if spaces & exported_spaces & local_spaces != 0 {
                 self.push(2395, *span, &[name]);
             }
         }
@@ -816,6 +841,15 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
+    fn check_merged_declarations(&mut self, statements: &[Statement<'_>]) {
+        super::grammar_merges::check_merged_declarations(
+            statements,
+            self.ambient_depth > 0,
+            self.source_text,
+            self.out,
+        );
+    }
+
     /// tsc's `checkModuleDeclaration`: an ambient module at the top of a
     /// script file may not use a relative name — TS2436. In a module file the
     /// same declaration is an augmentation, which the checker resolves.
@@ -828,6 +862,54 @@ impl<'a> ContextCollector<'a, '_> {
         }
         if is_external_module_name_relative(name.value.as_str()) {
             self.push(2436, name.span, &[]);
+        }
+    }
+
+    /// tsc's `checkVarDeclaredNamesNotShadowed`: a `var` hoists past the
+    /// block-scoped declaration of the same name in any enclosing scope short
+    /// of its own function, namespace, or file, which at run time is a
+    /// syntax error — TS2481 at the declarator. A block-scoped declaration in
+    /// the hoisting scope itself is the binder's redeclaration error instead.
+    fn check_var_declared_name_not_shadowed(&mut self, declarator: &oxc_ast::ast::VariableDeclarator<'_>) {
+        if declarator.kind != VariableDeclarationKind::Var {
+            return;
+        }
+        let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+            return;
+        };
+        let name = id.name.as_str();
+        for kind in self.stack.iter().rev() {
+            let shadowed = match kind {
+                AstKind::BlockStatement(block) => statements_declare_block_scoped(&block.body, name),
+                AstKind::SwitchStatement(statement) => statement
+                    .cases
+                    .iter()
+                    .any(|case| statements_declare_block_scoped(&case.consequent, name)),
+                AstKind::ForStatement(statement) => matches!(
+                    &statement.init,
+                    Some(oxc_ast::ast::ForStatementInit::VariableDeclaration(declaration))
+                        if variable_declaration_declares_block_scoped(declaration, name)
+                ),
+                AstKind::ForInStatement(statement) => matches!(
+                    &statement.left,
+                    oxc_ast::ast::ForStatementLeft::VariableDeclaration(declaration)
+                        if variable_declaration_declares_block_scoped(declaration, name)
+                ),
+                AstKind::ForOfStatement(statement) => matches!(
+                    &statement.left,
+                    oxc_ast::ast::ForStatementLeft::VariableDeclaration(declaration)
+                        if variable_declaration_declares_block_scoped(declaration, name)
+                ),
+                AstKind::FunctionBody(_)
+                | AstKind::StaticBlock(_)
+                | AstKind::TSModuleBlock(_)
+                | AstKind::Program(_) => return,
+                _ => false,
+            };
+            if shadowed {
+                self.push(2481, declarator.span, &[name, name]);
+                return;
+            }
         }
     }
 
@@ -1939,6 +2021,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             AstKind::VariableDeclarator(declarator) => {
                 self.check_let_name(declarator);
                 self.check_definite_assertion(declarator);
+                self.check_var_declared_name_not_shadowed(declarator);
             }
             AstKind::TSModuleDeclaration(module) => self.check_relative_ambient_module_name(module),
             AstKind::PropertyDefinition(property) => {
@@ -2066,11 +2149,13 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_self_referencing_annotations(&block.body);
                 self.check_type_parameter_lists_identical(&block.body);
                 self.check_merged_export_visibility(&block.body);
+                self.check_merged_declarations(&block.body);
             }
             AstKind::BlockStatement(block) => {
                 self.check_statements_in_ambient_context(&block.body);
                 self.check_enum_merges(&block.body);
                 self.check_self_referencing_annotations(&block.body);
+                self.check_merged_declarations(&block.body);
             }
             AstKind::Program(program) => {
                 self.check_enum_merges(&program.body);
@@ -2080,10 +2165,12 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     self.check_merged_export_visibility(&program.body);
                     self.check_export_assignment_conflicts(program);
                 }
+                self.check_merged_declarations(&program.body);
             }
             AstKind::FunctionBody(body) => {
                 self.check_enum_merges(&body.statements);
                 self.check_self_referencing_annotations(&body.statements);
+                self.check_merged_declarations(&body.statements);
             }
             _ => {}
         }
@@ -2361,6 +2448,34 @@ fn is_entity_name_expression(expression: &oxc_ast::ast::Expression<'_>) -> bool 
         E::StaticMemberExpression(member) => is_entity_name_expression(&member.object),
         _ => false,
     }
+}
+
+fn statements_declare_block_scoped(statements: &[Statement<'_>], name: &str) -> bool {
+    statements.iter().any(|statement| {
+        let declaration = match statement {
+            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            other => other.as_declaration(),
+        };
+        matches!(
+            declaration,
+            Some(oxc_ast::ast::Declaration::VariableDeclaration(declaration))
+                if variable_declaration_declares_block_scoped(declaration, name)
+        )
+    })
+}
+
+fn variable_declaration_declares_block_scoped(
+    declaration: &oxc_ast::ast::VariableDeclaration<'_>,
+    name: &str,
+) -> bool {
+    declaration.kind != VariableDeclarationKind::Var
+        && declaration.declarations.iter().any(|declarator| {
+            declarator
+                .id
+                .get_binding_identifiers()
+                .iter()
+                .any(|identifier| identifier.name == name)
+        })
 }
 
 /// tsc's `IsExternalModuleNameRelative`: `./`, `../`, or a rooted path.
