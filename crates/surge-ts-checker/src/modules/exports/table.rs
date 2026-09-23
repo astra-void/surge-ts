@@ -202,6 +202,7 @@ pub(crate) fn build_module_export_table(
         namespace_export_object_type: None,
         has_unresolved_star_export: false,
         has_incomplete_declaration_surface: module_has_incomplete_declaration_surface(parsed_file),
+        shorthand: false,
     }
 }
 
@@ -239,6 +240,7 @@ fn build_json_module_export_table(
         has_unresolved_star_export: false,
         namespace_export_object_type: Some(value_type),
         has_incomplete_declaration_surface: false,
+        shorthand: false,
     }
 }
 
@@ -778,6 +780,27 @@ pub(crate) fn resolve_module_export_table(
                 };
 
                 ctx.set_file_name(parsed_file.file_name.clone());
+
+                // A shorthand ambient module's every member is the module
+                // itself: `any`, with no type of its own.
+                if target_export_table.shorthand {
+                    for specifier in specifiers {
+                        insert_error_type_import(
+                            Arc::make_mut(&mut resolved_export_table.type_declarations),
+                            &specifier.exported_name,
+                            ctx.file_name_arc(),
+                            specifier.name_span,
+                        );
+                        if !(*is_type_only || specifier.is_type_only) {
+                            insert_value_import(
+                                &specifier.exported_name,
+                                Type::Any,
+                                &mut resolved_export_table.symbols,
+                            );
+                        }
+                    }
+                    continue;
+                }
 
                 for specifier in specifiers {
                     let specifier_is_type_only = *is_type_only || specifier.is_type_only;

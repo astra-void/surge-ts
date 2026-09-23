@@ -515,6 +515,19 @@ pub(crate) fn resolve_import_declaration(
     ctx: &mut CheckerContext,
 ) {
     report_ts_extension_import(import, program_files, ctx);
+    if !matches!(
+        import.kind,
+        ParsedImportKind::EntityAlias { .. } | ParsedImportKind::SideEffect
+    ) && resolves_to_shorthand_ambient_module(
+        &import.module_specifier,
+        ctx,
+        program_files,
+        module_export_tables,
+        module_resolution_scopes,
+    ) {
+        bind_shorthand_module_import(import, local_symbol_exists, type_declarations, symbols, ctx);
+        return;
+    }
     match &import.kind {
         ParsedImportKind::EntityAlias { .. } => return,
         ParsedImportKind::Unsupported | ParsedImportKind::TypeOnlyDefault { .. } => {
@@ -599,6 +612,93 @@ pub(crate) fn resolve_import_declaration(
             ctx,
         ),
     };
+}
+
+/// Whether `module_specifier` lands on a shorthand ambient module
+/// (`declare module "x";`) by the precedence [`try_resolve_module`] applies.
+fn resolves_to_shorthand_ambient_module(
+    module_specifier: &str,
+    ctx: &CheckerContext,
+    program_files: &[ParsedProgramFile],
+    module_export_tables: &[Option<ModuleExportTable>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
+) -> bool {
+    ambient_module_export_table(ctx, module_specifier).is_some_and(|table| table.shorthand)
+        && try_resolve_module(
+            module_specifier,
+            ctx,
+            program_files,
+            module_export_tables,
+            module_resolution_scopes,
+        )
+        .is_some_and(|(table, _, _)| table.shorthand)
+}
+
+/// Every binding a shorthand ambient module gives — default, named, namespace
+/// or `import =` — is the module symbol itself (`getExternalModuleMember`
+/// returns the module for a named import): `any` as a value, and a namespace
+/// with no members as a type, which surge leaves unresolved rather than
+/// misreport as a value.
+fn bind_shorthand_module_import(
+    import: &ParsedImportDeclaration,
+    local_symbol_exists: &dyn Fn(&str) -> bool,
+    type_declarations: &mut TypeDeclarationTable,
+    symbols: &mut SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let (value_locals, type_locals): (Vec<&str>, Vec<&str>) = match &import.kind {
+        ParsedImportKind::Default { local_name, .. } | ParsedImportKind::Equals { local_name, .. } => {
+            (vec![local_name], vec![])
+        }
+        ParsedImportKind::TypeOnlyDefault { local_name, .. } => (vec![], vec![local_name]),
+        ParsedImportKind::Namespace {
+            local_name,
+            is_type_only,
+            ..
+        } => {
+            if *is_type_only {
+                (vec![], vec![local_name])
+            } else {
+                (vec![local_name], vec![])
+            }
+        }
+        ParsedImportKind::Named {
+            is_type_only,
+            specifiers,
+        } => {
+            let locals = specifiers.iter().map(|specifier| specifier.local_name.as_str()).collect();
+            if *is_type_only { (vec![], locals) } else { (locals, vec![]) }
+        }
+        ParsedImportKind::DefaultAndNamed {
+            local_name,
+            is_type_only,
+            specifiers,
+            ..
+        } => {
+            let locals = std::iter::once(local_name.as_str())
+                .chain(specifiers.iter().map(|specifier| specifier.local_name.as_str()))
+                .collect();
+            if *is_type_only { (vec![], locals) } else { (locals, vec![]) }
+        }
+        ParsedImportKind::EntityAlias { .. }
+        | ParsedImportKind::SideEffect
+        | ParsedImportKind::Unsupported => (vec![], vec![]),
+    };
+    for local in value_locals.iter().chain(&type_locals) {
+        if type_declarations.get(local).is_none() {
+            crate::modules::exports::insert_error_type_import(
+                type_declarations,
+                local,
+                ctx.file_name_arc(),
+                None,
+            );
+        }
+    }
+    for local in value_locals {
+        if !local_symbol_exists(local) {
+            crate::modules::exports::insert_value_import(local, Type::Any, symbols);
+        }
+    }
 }
 
 fn resolve_default_and_named_import(

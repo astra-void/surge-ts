@@ -275,6 +275,9 @@ pub struct ParsedDeclareModuleDeclaration {
     pub module_specifier_span: Option<TextSpan>,
     pub statements: Vec<ParsedStatement>,
     pub span: Option<TextSpan>,
+    /// `declare module "x";`, with no body: every import of the module is
+    /// `any` (tsc's shorthand ambient module).
+    pub is_shorthand: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

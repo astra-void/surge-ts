@@ -919,7 +919,7 @@ fn register_ambient_blocks(
             } else {
                 SymbolTable::new()
             };
-            let raw_export_table = build_module_export_table(
+            let mut raw_export_table = build_module_export_table(
                 &temp_file,
                 &current_type_declarations,
                 &current_symbols,
@@ -927,6 +927,7 @@ fn register_ambient_blocks(
                 Some(current_type_declarations_scope.clone()),
                 ctx,
             );
+            raw_export_table.shorthand = module.is_shorthand;
             let lowered_type_declarations = current_type_declarations.len() as u64;
             ctx.type_declarations = current_type_declarations;
             ctx.symbols = current_symbols;

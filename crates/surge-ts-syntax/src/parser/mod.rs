@@ -834,6 +834,7 @@ pub(crate) fn parse_ts_module_declaration(
             enums::merge_lowered_enum_declarations(&mut statements);
             statements
         }
+        None => Vec::new(),
         _ => {
             return vec![ParsedStatement::UnsupportedDeclaration {
                 span: Some(text_span_from_oxc_span(module.span)),
@@ -847,6 +848,7 @@ pub(crate) fn parse_ts_module_declaration(
             module_specifier_span: Some(text_span_from_oxc_span(module.id.span())),
             statements,
             span: Some(text_span_from_oxc_span(module.span)),
+            is_shorthand: module.body.is_none(),
         },
     ))]
 }
@@ -915,6 +917,7 @@ fn parse_ts_global_declaration(global: &TSGlobalDeclaration<'_>) -> Vec<ParsedSt
             module_specifier_span: Some(text_span_from_oxc_span(global.global_span)),
             statements,
             span: Some(text_span_from_oxc_span(global.span)),
+            is_shorthand: false,
         },
     ))]
 }

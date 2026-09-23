@@ -45,6 +45,10 @@ pub(crate) struct ModuleExportTable {
     pub(crate) namespace_export_object_type: Option<Type>,
     pub(crate) has_unresolved_star_export: bool,
     pub(crate) has_incomplete_declaration_surface: bool,
+    /// A shorthand ambient module (`declare module "x";`) as its first
+    /// declaration made it: every binding imported from it is the module
+    /// itself (tsc's `isShorthandAmbientModuleSymbol`).
+    pub(crate) shorthand: bool,
 }
 
 impl Clone for ModuleExportTable {
@@ -65,6 +69,7 @@ impl Clone for ModuleExportTable {
             namespace_export_object_type: self.namespace_export_object_type.clone(),
             has_unresolved_star_export: self.has_unresolved_star_export,
             has_incomplete_declaration_surface: self.has_incomplete_declaration_surface,
+            shorthand: self.shorthand,
         }
     }
 }
