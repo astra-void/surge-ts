@@ -386,6 +386,7 @@ export const fixturePresets: Record<string, string> = {
   'script-expando-const-seed': path.join(workspaceRoot, 'tests/compat-projects/script-expando-const-seed/tsconfig.json'),
   'class-heritage-type-argument-count': path.join(workspaceRoot, 'tests/compat-projects/class-heritage-type-argument-count/tsconfig.json'),
   'generic-reference-type-argument-range': path.join(workspaceRoot, 'tests/compat-projects/generic-reference-type-argument-range/tsconfig.json'),
+  'type-only-import-enum': path.join(workspaceRoot, 'tests/compat-projects/type-only-import-enum/tsconfig.json'),
   'indexed-access-index-kinds-basic': path.join(workspaceRoot, 'tests/compat-projects/indexed-access-index-kinds-basic/tsconfig.json'),
   'missing-member-prefix-lookup': path.join(workspaceRoot, 'tests/compat-projects/missing-member-prefix-lookup/tsconfig.json'),
   'property-initializer-constructor-locals': path.join(workspaceRoot, 'tests/compat-projects/property-initializer-constructor-locals/tsconfig.json'),
