@@ -49,6 +49,8 @@ pub struct NormalizedCompilerOptions {
     pub no_unused_parameters: bool,
     /// `compilerOptions.allowUnreachableCode`, set only when written `true`.
     pub allow_unreachable_code: bool,
+    /// `compilerOptions.allowUnusedLabels` as written; `None` when unset.
+    pub allow_unused_labels: Option<bool>,
     pub target: ScriptTarget,
     pub module: ModuleKind,
     /// tsgo's `GetEmitModuleKind`: the written `module`, or the kind its
@@ -117,6 +119,7 @@ impl Default for NormalizedCompilerOptions {
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,
+            allow_unused_labels: None,
             target: ScriptTarget::ES2024,
             module: ModuleKind::Preserve,
             emit_module: ModuleKind::ES2022,

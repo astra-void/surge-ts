@@ -140,6 +140,13 @@ pub enum ParsedGrammarDiagnosticKind {
     /// A type-level signature's parameter with neither annotation nor
     /// initializer — TS7006, under `noImplicitAny`.
     ImplicitAnySignatureParameter,
+    /// A call signature, method signature or function type's parameter with
+    /// neither annotation nor initializer, where tsc asks whether the name is
+    /// a type keyword or a type in scope (`(string) => void`) — TS7051 under
+    /// `noImplicitAny`, otherwise the plain implicit `any`. `name` holds the
+    /// written name, the `argN` tsc suggests, and `[]` for a rest parameter,
+    /// NUL-separated.
+    NamedSignatureParameterWithoutType,
     /// Two members of one class, interface, or object literal declaring the
     /// same name where neither is an overload of the other — TS2300.
     DuplicateMember,

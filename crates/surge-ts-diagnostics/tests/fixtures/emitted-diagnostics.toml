@@ -1113,8 +1113,10 @@ oracle = [
 ]
 
 [TS7051]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "signature-parameter-named-type-basic",
+]
 
 [TS7052]
 status = "catalog-only"
@@ -1870,8 +1872,10 @@ oracle = [
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
 [TS2566]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "rest-element-property-name-basic",
+]
 [TS2784]
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
@@ -2636,4 +2640,22 @@ oracle = [
 status = "emitted"
 oracle = [
   "node-esm-relative-extension-basic",
+]
+
+[TS2744]
+status = "emitted"
+oracle = [
+  "type-parameter-default-reference-basic",
+]
+
+[TS7041]
+status = "emitted"
+oracle = [
+  "arrow-captures-global-this-basic",
+]
+
+[TS7028]
+status = "emitted"
+oracle = [
+  "unused-label-basic",
 ]

@@ -40,7 +40,9 @@ mod unused_locals;
 pub(crate) use ambient::*;
 pub(crate) use binding::*;
 use check_files::*;
-pub(crate) use check_files::{emit_grammar_diagnostics, unclaimed_parser_errors};
+pub(crate) use check_files::{
+    emit_deferred_grammar_diagnostics, emit_grammar_diagnostics, unclaimed_parser_errors,
+};
 pub(crate) use classes::*;
 pub(crate) use diagnostics::*;
 pub(crate) use file_classify::*;

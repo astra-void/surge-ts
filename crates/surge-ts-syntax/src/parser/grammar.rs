@@ -1549,18 +1549,45 @@ impl GrammarCollector {
 
     /// A type-level signature has no body to infer a parameter from, so an
     /// unannotated one is `any` unless an (erroneous) initializer types it.
-    fn check_implicit_any_signature_parameters(&mut self, parameters: &FormalParameters<'_>) {
-        for parameter in &parameters.items {
+    /// `may_name_type` is tsc's `reportImplicitAny` test for a call signature,
+    /// method signature or function type, whose bare parameter name may be a
+    /// forgotten type (`(string) => void`); the checker resolves the name.
+    fn check_implicit_any_signature_parameters(
+        &mut self,
+        parameters: &FormalParameters<'_>,
+        may_name_type: bool,
+    ) {
+        for (index, parameter) in parameters.items.iter().enumerate() {
             if parameter.type_annotation.is_some() || parameter.initializer.is_some() {
                 continue;
             }
-            if let oxc_ast::ast::BindingPattern::BindingIdentifier(binding) = &parameter.pattern {
+            let oxc_ast::ast::BindingPattern::BindingIdentifier(binding) = &parameter.pattern else {
+                continue;
+            };
+            if may_name_type {
+                self.push(
+                    Kind::NamedSignatureParameterWithoutType,
+                    binding.span,
+                    Some(&format!("{}\0arg{index}\0", binding.name)),
+                );
+            } else {
                 self.push(
                     Kind::ImplicitAnySignatureParameter,
                     binding.span,
                     Some(binding.name.as_str()),
                 );
             }
+        }
+        if may_name_type
+            && let Some(rest) = parameters.rest.as_deref()
+            && rest.type_annotation.is_none()
+            && let oxc_ast::ast::BindingPattern::BindingIdentifier(binding) = &rest.rest.argument
+        {
+            self.push(
+                Kind::NamedSignatureParameterWithoutType,
+                rest.span,
+                Some(&format!("{}\0arg{}\0[]", binding.name, parameters.items.len())),
+            );
         }
     }
 
@@ -2152,7 +2179,7 @@ impl<'a> Visit<'a> for GrammarCollector {
             self.push(Kind::ImplicitAnyCallReturn, signature.span, None);
         }
         self.check_signature_parameters(&signature.params, false);
-        self.check_implicit_any_signature_parameters(&signature.params);
+        self.check_implicit_any_signature_parameters(&signature.params, true);
         oxc_ast_visit::walk::walk_ts_call_signature_declaration(self, signature);
     }
 
@@ -2164,23 +2191,23 @@ impl<'a> Visit<'a> for GrammarCollector {
             self.push(Kind::ImplicitAnyConstructReturn, signature.span, None);
         }
         self.check_signature_parameters(&signature.params, false);
-        self.check_implicit_any_signature_parameters(&signature.params);
+        self.check_implicit_any_signature_parameters(&signature.params, false);
         oxc_ast_visit::walk::walk_ts_construct_signature_declaration(self, signature);
     }
 
     fn visit_ts_function_type(&mut self, function: &oxc_ast::ast::TSFunctionType<'a>) {
-        self.check_implicit_any_signature_parameters(&function.params);
+        self.check_implicit_any_signature_parameters(&function.params, true);
         oxc_ast_visit::walk::walk_ts_function_type(self, function);
     }
 
     fn visit_ts_constructor_type(&mut self, constructor: &oxc_ast::ast::TSConstructorType<'a>) {
-        self.check_implicit_any_signature_parameters(&constructor.params);
+        self.check_implicit_any_signature_parameters(&constructor.params, false);
         oxc_ast_visit::walk::walk_ts_constructor_type(self, constructor);
     }
 
     fn visit_ts_method_signature(&mut self, method: &TSMethodSignature<'a>) {
         self.check_signature_parameters(&method.params, false);
-        self.check_implicit_any_signature_parameters(&method.params);
+        self.check_implicit_any_signature_parameters(&method.params, true);
         if method.kind == TSMethodSignatureKind::Method
             && method.return_type.is_none()
             && !method.computed

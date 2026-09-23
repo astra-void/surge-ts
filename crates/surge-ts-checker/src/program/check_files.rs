@@ -828,6 +828,13 @@ pub(crate) fn emit_grammar_diagnostics(
     ctx: &mut CheckerContext,
 ) {
     for finding in findings {
+        if matches!(
+            finding.kind,
+            surge_ts_syntax::ParsedGrammarDiagnosticKind::NamedSignatureParameterWithoutType
+        ) {
+            ctx.deferred_grammar_findings.push(finding.clone());
+            continue;
+        }
         let answered: &'static [u32] = match finding.kind {
             surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2842) => &[7031],
             surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2372 | 2373)
@@ -842,6 +849,58 @@ pub(crate) fn emit_grammar_diagnostics(
             ctx.push(diagnostic);
         }
     }
+}
+
+/// The grammar findings whose answer needs the file's type declarations, which
+/// `emit_grammar_diagnostics` runs before. tsc's `reportImplicitAny` for a
+/// call signature, method signature or function type parameter: a bare name
+/// that is a type keyword or names a type in scope is TS7051 with the
+/// suggested `argN: Name`; otherwise the parameter is the implicit `any` it
+/// reads as (TS7006, or TS7019 for a rest parameter).
+pub(crate) fn emit_deferred_grammar_diagnostics(ctx: &mut CheckerContext) {
+    let findings = std::mem::take(&mut ctx.deferred_grammar_findings);
+    if !ctx.options.no_implicit_any {
+        return;
+    }
+    for finding in findings {
+        let Some([name, suggested_name, suffix]) = finding
+            .name
+            .as_deref()
+            .map(|payload| payload.split('\0').collect::<Vec<_>>())
+            .and_then(|parts| <[&str; 3]>::try_from(parts).ok())
+        else {
+            continue;
+        };
+        let file_name = ctx.file_name.clone();
+        let diagnostic =
+            if is_type_keyword_name(name) || ctx.lookup_type_declaration(name).is_some() {
+                Diagnostic::ts7051(suggested_name, format!("{name}{suffix}"), file_name)
+            } else if suffix.is_empty() {
+                Diagnostic::ts7006(name, file_name)
+            } else {
+                Diagnostic::ts7019(name, file_name)
+            };
+        ctx.push(diagnostic.with_span(crate::context::convert_span(finding.span)));
+    }
+}
+
+/// tsc's `isTypeNodeKind` over the keyword an identifier's text scans as.
+fn is_type_keyword_name(name: &str) -> bool {
+    matches!(
+        name,
+        "any"
+            | "unknown"
+            | "number"
+            | "bigint"
+            | "object"
+            | "boolean"
+            | "string"
+            | "symbol"
+            | "void"
+            | "undefined"
+            | "never"
+            | "intrinsic"
+    )
 }
 
 /// The parse failures oxc classified that the grammar pass does not already
@@ -909,7 +968,11 @@ fn grammar_finding_diagnostic(
 
     let diagnostic = match finding.kind {
         Kind::LaterParameterReference => return None,
-        Kind::Ts(2683) if !ctx.options.no_implicit_this => return None,
+        Kind::Ts(2683 | 7041) if !ctx.options.no_implicit_this => return None,
+        Kind::Ts(7028) if ctx.options.allow_unused_labels != Some(false) => return None,
+        // Answered by `emit_deferred_grammar_diagnostics`, once the file's type
+        // declarations are in place.
+        Kind::NamedSignatureParameterWithoutType => return None,
         Kind::Ts(1202) if !ctx.options.module_emit.is_ecmascript() => return None,
         Kind::Ts(1203) if !export_assignment_targets_esm(ctx) => return None,
         Kind::Ts(2699) if ctx.options.use_define_for_class_fields => return None,
@@ -1368,6 +1431,7 @@ pub(super) fn check_program_file(
         });
     }
 
+    emit_deferred_grammar_diagnostics(ctx);
     let mut diagnostics = std::mem::take(&mut ctx.diagnostics);
     drop_suppressed_diagnostics(&mut diagnostics, &parsed_file.suppressed_ranges);
     let stats = std::mem::take(&mut ctx.stats);
