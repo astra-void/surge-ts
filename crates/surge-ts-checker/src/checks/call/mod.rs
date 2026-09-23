@@ -1395,14 +1395,24 @@ fn infer_generic_class_type_arguments(
     ))
 }
 
-/// Checks a call whose callee is an arbitrary expression (an IIFE, a call on a
-/// call). The callee and the arguments are always evaluated so everything
-/// written inside them is checked; the result is the callee's return type.
-/// An arrow invoked on the spot (`((table) => …)(f.field.table)`), checked with
-/// the call's own arguments standing in for the contextual type the arrow has no
-/// other way to get. Without this its parameters are un-annotated and
-/// `noImplicitAny` reports every one of them, which tsc never does — it types
-/// them from the argument at the same position.
+/// One of tsc's effective call arguments (`getEffectiveCallArguments`): a
+/// spread of a tuple type stands for one argument per element, and its rest
+/// element for a variadic one.
+enum EffectiveArgument {
+    /// A written argument or a fixed tuple element.
+    Plain(Type),
+    /// An open tuple's rest element, spread: the array of its element type.
+    Variadic(Type),
+    /// A spread of a type that is not a tuple.
+    Spread(Type),
+}
+
+/// An arrow invoked on the spot (`((table) => …)(f.field.table)`) is typed from
+/// the call's own arguments, which is the contextual type it has no other way to
+/// get (tsc's `getContextuallyTypedParameterType` for an IIFE): each parameter
+/// takes the argument at its position, a rest parameter the ones from there on,
+/// and a parameter no argument reaches `undefined`. Such a parameter is also
+/// optional to the call (`isOptionalParameter`).
 ///
 /// The arguments are typed with diagnostics dropped: they are checked for real
 /// by the call below, and reporting here would double every one of them.
@@ -1425,51 +1435,187 @@ fn immediately_invoked_arrow_type(
     }
 
     let diagnostics_before = ctx.diagnostics().len();
-    // The effective arguments: a tuple spread is one argument per element, an
-    // array spread one argument of its element type.
-    let mut argument_types: Vec<Type> = Vec::with_capacity(arguments.len());
+    let mut effective = Vec::with_capacity(arguments.len());
     for argument in arguments {
-        // tsc reads the widened literal type of the argument
-        // (`getContextuallyTypedParameterType`): `({ p = 14 }) => p` called with
-        // `{ p: 15 }` binds `p: number`.
         let ty = match evaluate_expression(&argument.expression, argument.span, symbols, ctx) {
-            InferredExpression::Known(ty) => {
+            InferredExpression::Known(ty) => ty,
+            _ => Type::Unknown,
+        };
+        if !argument.spread {
+            // tsc reads the widened literal type of a written argument:
+            // `({ p = 14 }) => p` called with `{ p: 15 }` binds `p: number`.
+            effective.push(EffectiveArgument::Plain(
                 crate::checks::var::widen_implicit_variable_initializer_type(
                     crate::symbols::SymbolKind::Let,
                     &argument.expression,
                     &ty,
                     false,
-                )
-            }
-            _ => Type::Unknown,
-        };
-        if !argument.spread {
-            argument_types.push(ty);
+                ),
+            ));
             continue;
         }
         match ty.peeled() {
-            Type::Tuple(elements) => argument_types.extend(elements),
-            other => argument_types.push(crate::checks::function::for_of_element_type(&other)),
+            Type::Tuple(elements) => {
+                effective.extend(elements.into_iter().map(EffectiveArgument::Plain));
+            }
+            Type::OpenTuple(open) => {
+                effective.extend(open.leading.into_iter().map(EffectiveArgument::Plain));
+                effective.push(EffectiveArgument::Variadic(Type::Array(open.rest)));
+                effective.extend(open.trailing.into_iter().map(EffectiveArgument::Plain));
+            }
+            other => effective.push(EffectiveArgument::Spread(other)),
         }
     }
     ctx.truncate_diagnostics(diagnostics_before);
-    if argument_types.iter().any(|ty| ty.is_unknown()) {
+    if effective.iter().any(|argument| match argument {
+        EffectiveArgument::Plain(ty) | EffectiveArgument::Variadic(ty) | EffectiveArgument::Spread(ty) => {
+            ty.is_unknown()
+        }
+    }) {
         return None;
     }
 
-    let required = argument_types.len();
-    let expected =
-        crate::metrics::alloc_function_type(argument_types, Type::Unknown, false, required);
+    // `checkExpression` of an effective argument: a spread reads as its element.
+    let argument_type = |argument: &EffectiveArgument| match argument {
+        EffectiveArgument::Plain(ty) => ty.clone(),
+        EffectiveArgument::Variadic(array) | EffectiveArgument::Spread(array) => {
+            crate::checks::function::for_of_element_type(array)
+        }
+    };
+    let parameter_count = arrow.parameters.len();
+    let rest_index = arrow
+        .parameters
+        .last()
+        .filter(|parameter| parameter.rest)
+        .map(|_| parameter_count - 1);
+    let mut expected_parameters = Vec::with_capacity(parameter_count);
+    for (index, parameter) in arrow.parameters.iter().enumerate() {
+        if Some(index) == rest_index {
+            expected_parameters.push(spread_argument_type(&effective[index.min(effective.len())..]));
+            continue;
+        }
+        let ty = match effective.get(index) {
+            Some(argument) => argument_type(argument),
+            // No argument leaves the parameter to its initializer, whose
+            // widened type it takes as a declaration would.
+            None => match parameter.initializer.as_ref() {
+                Some(initializer) => {
+                    let inferred =
+                        evaluate_expression(initializer, parameter.initializer_span, symbols, ctx);
+                    ctx.truncate_diagnostics(diagnostics_before);
+                    match inferred {
+                        InferredExpression::Known(ty) => {
+                            crate::checks::var::widen_implicit_variable_initializer_type(
+                                crate::symbols::SymbolKind::Let,
+                                initializer,
+                                &ty,
+                                false,
+                            )
+                        }
+                        _ => Type::Unknown,
+                    }
+                }
+                // `undefinedWideningType`, which widens to `any` without
+                // `strictNullChecks`.
+                None if ctx.options.strict_null_checks => Type::Undefined,
+                None => Type::Any,
+            },
+        };
+        expected_parameters.push(ty);
+    }
+
+    let expected_parameters_for_rest = rest_index.map(|index| expected_parameters[index].clone());
+    let expected = crate::metrics::alloc_function_type(
+        expected_parameters,
+        Type::Unknown,
+        rest_index.is_some(),
+        effective.len().min(parameter_count),
+    );
+    let checked = crate::checks::function::check_arrow_function_expression_with_expected_type(
+        (**arrow).clone(),
+        Some(&expected),
+        symbols,
+        ctx,
+    );
+    // An unannotated parameter past the last argument is optional to the call.
+    let required = arrow
+        .parameters
+        .iter()
+        .enumerate()
+        .filter(|(index, parameter)| {
+            !parameter.optional
+                && parameter.initializer.is_none()
+                && !parameter.rest
+                && (parameter.declared_type.is_some() || *index < effective.len())
+        })
+        .map(|(index, _)| index + 1)
+        .max()
+        .unwrap_or(0);
+    // The rest parameter's slot holds what it collects, which the call below
+    // matches its arguments against position by position.
+    let mut parameters = checked.parameters().to_vec();
+    let rest_collection = rest_index.and_then(|index| {
+        let collection = expected_parameters_for_rest.clone()?;
+        (index < parameters.len()).then(|| (index, collection))
+    });
+    if required >= checked.required_parameter_count() && rest_collection.is_none() {
+        return Some(checked);
+    }
+    if let Some((index, collection)) = rest_collection {
+        parameters[index] = collection;
+    }
     Some(
-        crate::checks::function::check_arrow_function_expression_with_expected_type(
-            (**arrow).clone(),
-            Some(&expected),
-            symbols,
-            ctx,
-        ),
+        surge_ts_types::FunctionType::new(
+            parameters,
+            checked.return_type().clone(),
+            checked.is_variadic(),
+            required.min(checked.required_parameter_count()),
+        )
+        .with_parameter_names(crate::checks::function::written_binding_names(&arrow.parameters)),
     )
 }
 
+/// tsc's `getSpreadArgumentType` for the arguments from a rest parameter's
+/// position on: a spread in the last position is the collection itself, and
+/// otherwise the arguments make up a tuple.
+fn spread_argument_type(arguments: &[EffectiveArgument]) -> Type {
+    if let [EffectiveArgument::Variadic(array) | EffectiveArgument::Spread(array)] = arguments {
+        return array.clone();
+    }
+    let mut leading = Vec::new();
+    let mut rest = None;
+    let mut trailing = Vec::new();
+    for argument in arguments {
+        let (element, variadic) = match argument {
+            EffectiveArgument::Plain(ty) => (ty.clone(), false),
+            EffectiveArgument::Variadic(array) | EffectiveArgument::Spread(array) => {
+                (crate::checks::function::for_of_element_type(array), true)
+            }
+        };
+        match (&rest, variadic) {
+            (None, false) => leading.push(element),
+            (None, true) => rest = Some(element),
+            (Some(_), false) => trailing.push(element),
+            // A second variadic run joins the first: tsc normalizes a tuple to
+            // one rest element and every later element into it.
+            (Some(existing), true) => {
+                rest = Some(surge_ts_types::union_type(vec![existing.clone(), element]));
+            }
+        }
+    }
+    match rest {
+        None => Type::Tuple(leading),
+        Some(rest) => Type::OpenTuple(surge_ts_types::OpenTupleType {
+            leading,
+            rest: Box::new(rest),
+            trailing,
+        }),
+    }
+}
+
+/// Checks a call whose callee is an arbitrary expression (an IIFE, a call on a
+/// call). The callee and the arguments are always evaluated so everything
+/// written inside them is checked; the result is the callee's return type.
 pub(crate) fn check_expression_call(
     callee: &surge_ts_syntax::ParsedExpression,
     callee_span: Option<SyntaxTextSpan>,

@@ -1513,8 +1513,22 @@ pub(crate) fn check_arrow_function_expression_anchored(
         surge_ts_syntax::ParsedThisBinding::ImplicitAny => ctx.this_is_implicitly_any = true,
     }
 
-    let expanded_contextual_parameter_types = expected_type
+    let mut expanded_contextual_parameter_types = expected_type
         .map(|expected_type| contextual_parameter_types(expected_type, parameters.len()));
+    // tsc's `getContextuallyTypedParameterType`: a rest parameter takes the
+    // rest of the contextual signature (`getRestTypeAtPosition`), which is the
+    // empty tuple when nothing is left — still a contextual type, so the
+    // parameter is no implicit `any[]`.
+    if let (Some(expected_type), Some(types)) =
+        (expected_type, expanded_contextual_parameter_types.as_mut())
+        && let Some(last) = parameters.len().checked_sub(1)
+        && parameters[last].rest
+        && parameters[last].declared_type.is_none()
+        && types.len() == last
+        && let Some(rest) = contextual_rest_parameter_type(expected_type, last)
+    {
+        types.push(rest);
+    }
     let contextual_parameter_types = expanded_contextual_parameter_types.as_deref();
     let result = with_type_parameter_scope(&type_parameters, ctx, |ctx| {
         // Resolve the arrow's annotations against the value symbols visible at

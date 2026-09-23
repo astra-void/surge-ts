@@ -742,6 +742,7 @@ export const fixturePresets: Record<string, string> = {
   'numeric-literal-property-names': path.join(workspaceRoot, 'tests/compat-projects/numeric-literal-property-names/tsconfig.json'),
   'class-static-index-signature': path.join(workspaceRoot, 'tests/compat-projects/class-static-index-signature/tsconfig.json'),
   'numeric-enum-reverse-mapping': path.join(workspaceRoot, 'tests/compat-projects/numeric-enum-reverse-mapping/tsconfig.json'),
+  'iife-contextual-parameters': path.join(workspaceRoot, 'tests/compat-projects/iife-contextual-parameters/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
