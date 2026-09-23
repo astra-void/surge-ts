@@ -723,6 +723,8 @@ export const fixturePresets: Record<string, string> = {
   'reference-types-diagnostic-does-not-gate-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-diagnostic-does-not-gate-basic/tsconfig.json'),
   'property-initialization-literal-names-basic': path.join(workspaceRoot, 'tests/compat-projects/property-initialization-literal-names-basic/tsconfig.json'),
   'parameter-property-placement-basic': path.join(workspaceRoot, 'tests/compat-projects/parameter-property-placement-basic/tsconfig.json'),
+  'dotted-namespace-value-member-basic': path.join(workspaceRoot, 'tests/compat-projects/dotted-namespace-value-member-basic/tsconfig.json'),
+  'import-equals-entity-alias-basic': path.join(workspaceRoot, 'tests/compat-projects/import-equals-entity-alias-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
