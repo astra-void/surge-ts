@@ -9,6 +9,7 @@ mod evaluate;
 mod guarded_unknown;
 mod index_access;
 mod inferred;
+mod lib_features;
 mod operand_types;
 mod operand_writes;
 mod unresolved;
@@ -21,6 +22,7 @@ use guarded_unknown::downgrade_predicate_guarded_genuine_unknown;
 use index_access::*;
 pub(crate) use index_access::object_element_read;
 pub(crate) use inferred::*;
+pub(crate) use lib_features::{lib_feature_of_missing_member, suggested_lib_for_nonexistent_name};
 pub(crate) use operand_types::{
     check_instanceof_left_operand, check_instanceof_right_operand, check_iterable_operand,
     check_object_spread_type,
@@ -30,7 +32,7 @@ pub(crate) use operand_writes::{check_delete_operand, check_update_operand, upda
 pub(crate) use unresolved::{
     EnclosingClassMembers, UnresolvedNameSite, cannot_find_name_message,
     export_assignment_target_is_exempt, report_unresolved_value_name,
-    suggested_lib_for_nonexistent_name, unresolved_type_query_diagnostic,
+    unresolved_type_query_diagnostic,
 };
 
 use std::time::Instant;

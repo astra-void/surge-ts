@@ -7,6 +7,7 @@ use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::TextSpan as SyntaxTextSpan;
 use surge_ts_types::Type;
 
+use super::suggested_lib_for_nonexistent_name;
 use crate::context::CheckerContext;
 use crate::spans::diagnostic_with_syntax_span;
 use crate::symbols::SymbolTable;
@@ -297,34 +298,3 @@ fn is_es2015_or_later_constructor_name(name: &str) -> bool {
     )
 }
 
-/// tsc's `getSuggestedLibForNonExistentName`: the first lib of the name's
-/// feature-map entry (checker/utilities.go `getFeatureMap`).
-pub(crate) fn suggested_lib_for_nonexistent_name(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "Array" | "Iterator" | "AsyncIterator" | "RegExp" | "Reflect" | "ArrayConstructor"
-        | "ObjectConstructor" | "NumberConstructor" | "Math" | "Map" | "Set"
-        | "PromiseConstructor" | "Symbol" | "WeakMap" | "WeakSet" | "String"
-        | "StringConstructor" | "Promise" => "es2015",
-        "Atomics" | "SharedArrayBuffer" | "DateTimeFormat" => "es2017",
-        "AsyncIterable"
-        | "AsyncIterableIterator"
-        | "AsyncGenerator"
-        | "AsyncGeneratorFunction"
-        | "RegExpMatchArray"
-        | "RegExpExecArray"
-        | "Intl"
-        | "NumberFormat" => "es2018",
-        "SymbolConstructor" | "DataView" | "BigInt" | "RelativeTimeFormat" | "BigInt64Array"
-        | "BigUint64Array" => "es2020",
-        "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
-        | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array" | "Error" => "es2022",
-        "ArrayBuffer" | "MapConstructor" => "es2024",
-        "RegExpConstructor" | "Float16Array" => "es2025",
-        "ErrorConstructor"
-        | "Uint8ArrayConstructor"
-        | "DisposableStack"
-        | "AsyncDisposableStack"
-        | "Date" => "esnext",
-        _ => return None,
-    })
-}
