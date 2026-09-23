@@ -170,6 +170,5 @@ pub(crate) fn canonical_file_identity(file_name: &str) -> String {
 }
 
 pub(crate) fn is_declaration_file_name(file_name: &str) -> bool {
-    let lower = file_name.to_ascii_lowercase();
-    lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
+    surge_ts_syntax::is_declaration_file_name(file_name)
 }

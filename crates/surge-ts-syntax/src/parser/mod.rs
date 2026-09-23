@@ -52,7 +52,7 @@ pub use self::reference_directives::{
 };
 use self::spans::text_span_from_oxc_span;
 use self::types::{parse_type_alias_declaration, parse_type_annotation};
-pub use entry::{ParserWorker, parse_source};
+pub use entry::{ParserWorker, is_declaration_file_name, parse_source};
 pub use json::{is_json_file_name, parse_json_module_type};
 pub use jsx_uses::entity_root as jsx_entity_root;
 pub use number_text::js_number_to_string;

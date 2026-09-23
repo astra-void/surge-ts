@@ -208,7 +208,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     // (it would otherwise run over every dependency `.d.ts`). The conversion
     // still asks each body for its reads; without an index those calls fall back
     // to walking the body, which for a `.d.ts` is nothing.
-    let (module_reads, statements) = if file_name.ends_with(".d.ts") {
+    let (module_reads, statements) = if is_declaration_file_name(file_name) {
         (Vec::new(), collect_statements())
     } else {
         super::spans::with_lowering_source(source_text, || {
@@ -304,11 +304,20 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     }
 }
 
+/// tsc's `IsDeclarationFileName`: a `.d.ts`/`.d.mts`/`.d.cts` file, or a `.ts`
+/// file whose base name carries `.d.` — the `{name}.d.{extension}.ts` form
+/// `allowArbitraryExtensions` resolves `{name}.{extension}` imports to.
+pub fn is_declaration_file_name(file_name: &str) -> bool {
+    let base = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
+    let ends_with = |suffix: &str| {
+        let bytes = base.as_bytes();
+        bytes.len() >= suffix.len() && bytes[bytes.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+    };
+    ends_with(".d.ts") || ends_with(".d.mts") || ends_with(".d.cts") || (base.ends_with(".ts") && base.contains(".d."))
+}
+
 fn collects_grammar_diagnostics(file_name: &str) -> bool {
-    if file_name.ends_with(".d.ts")
-        || file_name.ends_with(".d.mts")
-        || file_name.ends_with(".d.cts")
-    {
+    if is_declaration_file_name(file_name) {
         return false;
     }
     [".ts", ".tsx", ".mts", ".cts"]

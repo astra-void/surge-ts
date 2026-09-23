@@ -1558,8 +1558,7 @@ fn validate_direct_utility_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
 }
 
 fn classify_file_kind(file_name: &str) -> FileKind {
-    let lower = file_name.to_ascii_lowercase();
-    if lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts") {
+    if surge_ts_syntax::is_declaration_file_name(file_name) {
         return FileKind::RootDeclaration;
     }
 
