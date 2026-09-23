@@ -288,6 +288,13 @@ fn check_program_with_stats_and_jobs_inner(
         };
     }
 
+    // tsc's `SkipTypeChecking`: a `// @ts-nocheck` file keeps only its
+    // syntactic diagnostics.
+    let unchecked_files: HashSet<String> = files
+        .iter()
+        .filter(|file| surge_ts_syntax::extract_check_directive(&file.source_text) == Some(false))
+        .map(|file| file.file_name.clone())
+        .collect();
     let ProgramRun {
         timings,
         timings_enabled,
@@ -389,6 +396,12 @@ fn check_program_with_stats_and_jobs_inner(
     if syntax_errors {
         result.diagnostics.retain(diagnostics::is_syntactic_diagnostic);
         result.syntax_errors = true;
+    }
+    if !unchecked_files.is_empty() {
+        result.diagnostics.retain(|diagnostic| {
+            !unchecked_files.contains(&diagnostic.file_name)
+                || diagnostics::is_syntactic_diagnostic(diagnostic)
+        });
     }
     result
 }
