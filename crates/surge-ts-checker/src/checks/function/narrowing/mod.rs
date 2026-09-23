@@ -26,12 +26,16 @@ pub(crate) use type_guards::*;
 /// type or `None` when the condition does not constrain `var_name` (or leaves it
 /// unchanged). Composes `||` (true branch: union of disjuncts — every disjunct
 /// must constrain `var_name`), `&&` (true branch: sequential), and `!`.
+///
+/// `operand_types` answers the root types of the operands the condition
+/// compares, as they were before any binding it tests narrowed.
 fn narrow_type_for_identifier(
     condition: &ParsedExpression,
     var_name: &str,
     ty: &Type,
     branch_is_true: bool,
     scopes: &ScopeStack,
+    operand_types: &dyn Fn(&str) -> Option<Type>,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
     match condition {
@@ -39,11 +43,27 @@ fn narrow_type_for_identifier(
             operator: ParsedUnaryOperator::Not,
             operand,
             ..
-        } => narrow_type_for_identifier(operand, var_name, ty, !branch_is_true, scopes, ctx),
+        } => narrow_type_for_identifier(
+            operand,
+            var_name,
+            ty,
+            !branch_is_true,
+            scopes,
+            operand_types,
+            ctx,
+        ),
         _ if strip_boolean_literal_comparison(condition).is_some() => {
             let (inner, flip) = strip_boolean_literal_comparison(condition)
                 .expect("boolean-literal comparison checked above");
-            narrow_type_for_identifier(inner, var_name, ty, branch_is_true != flip, scopes, ctx)
+            narrow_type_for_identifier(
+                inner,
+                var_name,
+                ty,
+                branch_is_true != flip,
+                scopes,
+                operand_types,
+                ctx,
+            )
         }
         ParsedExpression::Logical {
             left,
@@ -55,9 +75,10 @@ fn narrow_type_for_identifier(
             // union of each disjunct's narrowing. A disjunct that does not
             // constrain `var_name` leaves it unconstrained, so the whole guard
             // cannot narrow — bail.
-            let left_narrowed = narrow_type_for_identifier(left, var_name, ty, true, scopes, ctx)?;
+            let left_narrowed =
+                narrow_type_for_identifier(left, var_name, ty, true, scopes, operand_types, ctx)?;
             let right_narrowed =
-                narrow_type_for_identifier(right, var_name, ty, true, scopes, ctx)?;
+                narrow_type_for_identifier(right, var_name, ty, true, scopes, operand_types, ctx)?;
             Some(union_type(vec![left_narrowed, right_narrowed]))
         }
         ParsedExpression::Logical {
@@ -67,11 +88,20 @@ fn narrow_type_for_identifier(
             ..
         } if branch_is_true => {
             // `A && B` true branch: apply each guard in sequence.
-            let after_left = narrow_type_for_identifier(left, var_name, ty, true, scopes, ctx)
-                .unwrap_or_else(|| ty.clone());
+            let after_left =
+                narrow_type_for_identifier(left, var_name, ty, true, scopes, operand_types, ctx)
+                    .unwrap_or_else(|| ty.clone());
             Some(
-                narrow_type_for_identifier(right, var_name, &after_left, true, scopes, ctx)
-                    .unwrap_or(after_left),
+                narrow_type_for_identifier(
+                    right,
+                    var_name,
+                    &after_left,
+                    true,
+                    scopes,
+                    operand_types,
+                    ctx,
+                )
+                .unwrap_or(after_left),
             )
         }
         // Fall-through of `A || B` is `!A && !B`: apply each disjunct's negation
@@ -84,11 +114,20 @@ fn narrow_type_for_identifier(
             right,
             ..
         } => {
-            let after_left = narrow_type_for_identifier(left, var_name, ty, false, scopes, ctx)
-                .unwrap_or_else(|| ty.clone());
+            let after_left =
+                narrow_type_for_identifier(left, var_name, ty, false, scopes, operand_types, ctx)
+                    .unwrap_or_else(|| ty.clone());
             Some(
-                narrow_type_for_identifier(right, var_name, &after_left, false, scopes, ctx)
-                    .unwrap_or(after_left),
+                narrow_type_for_identifier(
+                    right,
+                    var_name,
+                    &after_left,
+                    false,
+                    scopes,
+                    operand_types,
+                    ctx,
+                )
+                .unwrap_or(after_left),
             )
         }
         // Fall-through of `A && B` is `!A || !B` — a union, and only sound when
@@ -99,14 +138,21 @@ fn narrow_type_for_identifier(
             right,
             ..
         } => {
-            let left_narrowed = narrow_type_for_identifier(left, var_name, ty, false, scopes, ctx)?;
+            let left_narrowed =
+                narrow_type_for_identifier(left, var_name, ty, false, scopes, operand_types, ctx)?;
             let right_narrowed =
-                narrow_type_for_identifier(right, var_name, ty, false, scopes, ctx)?;
+                narrow_type_for_identifier(right, var_name, ty, false, scopes, operand_types, ctx)?;
             Some(union_type(vec![left_narrowed, right_narrowed]))
         }
-        _ => {
-            narrow_single_guard_for_identifier(condition, var_name, ty, branch_is_true, scopes, ctx)
-        }
+        _ => narrow_single_guard_for_identifier(
+            condition,
+            var_name,
+            ty,
+            branch_is_true,
+            scopes,
+            operand_types,
+            ctx,
+        ),
     }
 }
 
@@ -116,6 +162,7 @@ fn narrow_single_guard_for_identifier(
     ty: &Type,
     branch_is_true: bool,
     scopes: &ScopeStack,
+    operand_types: &dyn Fn(&str) -> Option<Type>,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
     if let Some((ParsedExpression::Identifier { name, .. }, ctor_name)) =
@@ -207,14 +254,22 @@ fn narrow_single_guard_for_identifier(
         // Excluding the one literal the value is already narrowed to leaves
         // `never`, as `narrow_literal_equality_in_scope` does for a lone `if`:
         // it is what the `default` of an exhausted `switch (k)` sees.
-        return narrow_by_literal_equality(ty, &literal, keep_matching)
-            .or_else(|| (!keep_matching && *ty == literal).then_some(Type::Never));
+        if let Some(narrowed) = narrow_by_literal_equality(ty, &literal, keep_matching)
+            .or_else(|| (!keep_matching && *ty == literal).then_some(Type::Never))
+        {
+            return Some(narrowed);
+        }
     }
     if let Some((ParsedExpression::Identifier { name, .. }, property)) =
         parse_in_condition(condition)
         && name == var_name
     {
         return narrow_union_by_property_presence(ty, property, branch_is_true);
+    }
+    if let Some(narrowed) =
+        narrow_binding_by_reference_equality(condition, var_name, ty, branch_is_true, operand_types)
+    {
+        return Some(narrowed);
     }
     narrow_by_property_guard(condition, var_name, ty, branch_is_true, &|expression| {
         const_member_literal_value(expression, scopes.visible_symbols())
@@ -387,6 +442,17 @@ fn narrow_logical_guard_in_scope(
     collect_equality_guard_subjects(condition, scopes, &mut operand_names);
     collect_property_guard_bases(condition, &mut operand_names);
 
+    // A compared operand is typed where it is read, before the bindings this
+    // loop narrows: `y !== z || z !== y` narrows `z` by what `y` was.
+    let mut operand_roots: Vec<(String, Type)> = Vec::new();
+    collect_compared_operand_roots(condition, scopes, &mut operand_roots);
+    let operand_types = |name: &str| {
+        operand_roots
+            .iter()
+            .find(|(root, _)| root == name)
+            .map(|(_, ty)| ty.clone())
+    };
+
     for name in operand_names {
         let Some(symbol) = scopes.resolve(&name) else {
             continue;
@@ -394,9 +460,15 @@ fn narrow_logical_guard_in_scope(
         let symbol_ty = symbol.ty.clone();
         let kind = symbol.kind;
         let function_signature = symbol.function_signature.clone();
-        let Some(narrowed) =
-            narrow_type_for_identifier(condition, &name, &symbol_ty, branch_is_true, scopes, ctx)
-        else {
+        let Some(narrowed) = narrow_type_for_identifier(
+            condition,
+            &name,
+            &symbol_ty,
+            branch_is_true,
+            scopes,
+            &operand_types,
+            ctx,
+        ) else {
             continue;
         };
         if narrowed == symbol_ty {
@@ -424,6 +496,45 @@ fn narrow_logical_guard_in_scope(
         narrow_reference_in_scope(&base, &path, guard, scopes);
     }
     true
+}
+
+/// The roots of the operands every equality test in a `||`/`&&`/`!`-composed
+/// condition compares, with their current types.
+fn collect_compared_operand_roots(
+    condition: &ParsedExpression,
+    scopes: &ScopeStack,
+    roots: &mut Vec<(String, Type)>,
+) {
+    match condition {
+        ParsedExpression::Logical { left, right, .. } => {
+            collect_compared_operand_roots(left, scopes, roots);
+            collect_compared_operand_roots(right, scopes, roots);
+        }
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => collect_compared_operand_roots(operand, scopes, roots),
+        _ if strip_boolean_literal_comparison(condition).is_some() => {
+            let (inner, _) = strip_boolean_literal_comparison(condition)
+                .expect("boolean-literal comparison checked above");
+            collect_compared_operand_roots(inner, scopes, roots);
+        }
+        _ => {
+            let Some(test) = parse_equality_test(condition) else {
+                return;
+            };
+            for (operand, _) in test.operand_pairs() {
+                if let Some((root, _)) = reference_path(operand)
+                    && !roots.iter().any(|(existing, _)| *existing == root)
+                    && let Some(symbol) = scopes.resolve(&root)
+                {
+                    let ty = symbol.ty.clone();
+                    roots.push((root, ty));
+                }
+            }
+        }
+    }
 }
 
 /// The bindings whose properties a `||`/`&&`/`!`-composed condition tests for
@@ -974,6 +1085,7 @@ fn narrow_condition_symbol_table_by_guard(
             )
             .or(filtered)
         })
+        .or_else(|| narrow_reference_equality_symbol_table(condition, symbols, branch_is_true))
 }
 
 /// Merges the two disjunct narrowings of an `A || B` true branch: each name
@@ -1135,6 +1247,7 @@ fn narrow_value_guards_by_guard(
         })
     };
     let Some((discriminant_object, property, literal, eq)) = parsed else {
+        narrow_reference_equality_in_scope(condition, scopes, branch_is_true);
         return;
     };
     let keep_matching = branch_is_true == eq;

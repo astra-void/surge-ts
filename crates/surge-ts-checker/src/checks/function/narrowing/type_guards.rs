@@ -6,7 +6,8 @@ use crate::symbols::{ScopeStack, SymbolInfo, SymbolTable};
 use super::guards::*;
 use super::{
     ReferenceGuard, narrow_predicate_reference_guards_in_scope, narrow_reference_in_scope,
-    narrow_value_guards_in_scope, narrowed_reference_type, reference_path,
+    narrow_value_guards_in_scope, narrowed_reference_type, reference_equality_narrowings,
+    reference_path,
 };
 
 /// Applies `typeof x === "tag"` / `typeof o.p === "tag"` narrowing in place to a
@@ -267,6 +268,50 @@ pub(super) fn narrow_literal_equality_in_scope(
     true
 }
 
+/// Applies `x === y` narrowing against a compared value no literal spells
+/// ([`reference_equality_narrowings`]) in place to a `ScopeStack`. Both
+/// operands' types are read before either narrows. Returns whether anything
+/// narrowed.
+pub(super) fn narrow_reference_equality_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    let narrowings = reference_equality_narrowings(
+        condition,
+        branch_is_true,
+        &|name| scopes.resolve(name).cloned(),
+        &|name| scopes.resolve(name).map(|symbol| symbol.ty.clone()),
+    );
+    let narrowed = !narrowings.is_empty();
+    for (name, symbol, declared) in narrowings {
+        let _ = scopes.insert_current_narrowed(name, symbol, declared);
+    }
+    narrowed
+}
+
+/// [`narrow_reference_equality_in_scope`] over a plain symbol table.
+pub(super) fn narrow_reference_equality_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+) -> Option<SymbolTable> {
+    let narrowings = reference_equality_narrowings(
+        condition,
+        branch_is_true,
+        &|name| symbols.get(name).cloned(),
+        &|name| symbols.get(name).map(|symbol| symbol.ty.clone()),
+    );
+    if narrowings.is_empty() {
+        return None;
+    }
+    let mut narrowed = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    for (name, symbol, declared) in narrowings {
+        narrowed.insert_narrowed(name, symbol, declared);
+    }
+    Some(narrowed)
+}
+
 /// Applies `ArrayBuffer.isView(x)` / `ArrayBuffer.isView(o.p)` narrowing in place
 /// to a `ScopeStack`. Returns whether the condition was such a guard over a
 /// reference.
@@ -450,10 +495,23 @@ pub(super) fn collect_equality_guard_subjects(
                         .map(|(name, _, _)| name),
                 },
             };
-            if let Some(name) = subject
-                && !names.iter().any(|existing| existing == name)
-            {
-                names.push(name.to_string());
+            if let Some(name) = subject {
+                if !names.iter().any(|existing| existing == name) {
+                    names.push(name.to_string());
+                }
+                return;
+            }
+            // `y === z`: both operands narrow, each by the other's type.
+            let Some(test) = parse_equality_test(condition) else {
+                return;
+            };
+            for (subject, value) in test.operand_pairs() {
+                if let ParsedExpression::Identifier { name, .. } = subject
+                    && reference_path(value).is_some()
+                    && !names.iter().any(|existing| existing == name)
+                {
+                    names.push(name.clone());
+                }
             }
         }
     }
