@@ -1127,7 +1127,8 @@ fn collect_namespace_type_declarations_prefixed(
                 }
             }
             ParsedStatement::NamespaceDeclaration(inner_namespace) => {
-                let inner_prefix = format!("{}.{}", prefix, inner_namespace.name);
+                let inner_prefix =
+                    format!("{}.{}", prefix, inner_namespace.member_name());
                 collect_namespace_type_declarations_prefixed(inner_namespace, &inner_prefix, ctx);
             }
             _ => {}

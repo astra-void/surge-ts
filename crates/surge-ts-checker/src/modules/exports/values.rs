@@ -167,7 +167,8 @@ fn collect_exportable_value_symbols_thin(
                     )
                 }
                 ParsedStatement::NamespaceDeclaration(inner_namespace) => {
-                    let inner_prefix = format!("{prefix}.{}", inner_namespace.name);
+                    let inner_prefix =
+                        format!("{prefix}.{}", inner_namespace.member_name());
                     thin_namespace_member_names(
                         inner_namespace,
                         &inner_prefix,
@@ -1388,7 +1389,8 @@ pub(crate) fn collect_namespace_member_value_symbols(
                 );
             }
             ParsedStatement::NamespaceDeclaration(inner_namespace) => {
-                let inner_prefix = format!("{prefix}.{}", inner_namespace.name);
+                let inner_prefix =
+                    format!("{prefix}.{}", inner_namespace.member_name());
                 collect_namespace_member_value_symbols(
                     inner_namespace,
                     &inner_prefix,
@@ -1504,12 +1506,13 @@ fn resolve_namespace_value_annotations(
                 );
             }
             ParsedStatement::NamespaceDeclaration(inner) => {
-                let inner_prefix = format!("{prefix}.{}", inner.name);
+                let member_name = inner.member_name();
+                let inner_prefix = format!("{prefix}.{member_name}");
                 // Seeded with whatever a sibling block of the same namespace
                 // already contributed, so the merge `fill_namespace_value_properties`
                 // performed is not thrown away when the annotations resolve.
                 let mut inner_properties = match properties
-                    .get(inner.name.as_str())
+                    .get(member_name)
                     .map(|property| &property.ty)
                 {
                     Some(Type::Object(previous)) => previous.properties.as_ref().clone(),
@@ -1523,7 +1526,7 @@ fn resolve_namespace_value_annotations(
                     ctx,
                 );
                 properties.insert(
-                    inner.name.as_str().into(),
+                    member_name.into(),
                     surge_ts_types::ObjectProperty::required(Type::Object(
                         crate::metrics::alloc_object_type(inner_properties, None),
                     )),
@@ -1611,7 +1614,7 @@ pub(crate) fn fill_namespace_value_properties(
                 );
             }
             ParsedStatement::NamespaceDeclaration(inner_namespace) => {
-                let name: std::sync::Arc<str> = inner_namespace.name.as_str().into();
+                let name: std::sync::Arc<str> = inner_namespace.member_name().into();
                 let inner = namespace_value_object_type(inner_namespace);
                 // A nested namespace written twice merges the same way a
                 // top-level one does; without this the second block replaces

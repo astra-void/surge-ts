@@ -289,6 +289,15 @@ pub struct ParsedNamespaceDeclaration {
     pub span: Option<TextSpan>,
 }
 
+impl ParsedNamespaceDeclaration {
+    /// The name this namespace has as a member of the namespace it is nested
+    /// in: `namespace A.B {}` parses as `A` holding a namespace already named
+    /// `A.B`, whose member name in `A` is `B`.
+    pub fn member_name(&self) -> &str {
+        self.name.rsplit_once('.').map_or(&self.name, |(_, last)| last)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParsedVariableKind {
     Var,

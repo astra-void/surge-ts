@@ -897,7 +897,7 @@ fn check_namespace_body(
         namespace
     };
     let prefix = match ctx.namespace_member_prefix_stack.last() {
-        Some(outer) => format!("{outer}.{}", namespace.name),
+        Some(outer) => format!("{outer}.{}", namespace.member_name()),
         None => namespace.name.clone(),
     };
     ctx.namespace_member_prefix_stack.push(prefix);
