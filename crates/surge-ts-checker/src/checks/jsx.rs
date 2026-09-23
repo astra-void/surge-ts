@@ -1623,7 +1623,17 @@ fn relate_attributes(
     };
     let missing = missing_from(object);
     let target_name = props.target.name();
-    let Some(first) = missing.first() else {
+    // A primitive operand (the props of a class component constructed from a
+    // `string`) fails every attributes object, whatever it carries.
+    let primitive_operand = object.is_intersection
+        && object
+            .intersection_operands
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|operand| is_primitive_type(&operand.peeled()));
+    let first = missing.first();
+    if first.is_none() && !primitive_operand {
         // A hyphenated attribute is never elaborated, but a prop the target
         // declares under its name still has to fit; the whole object is
         // reported then.
@@ -1643,8 +1653,8 @@ fn relate_attributes(
             )];
         }
         return Vec::new();
-    };
-    if !object.is_intersection {
+    }
+    if let (false, Some(first)) = (object.is_intersection, first) {
         return vec![(
             crate::checks::expr::missing_properties_diagnostic(
                 first,
@@ -1658,10 +1668,18 @@ fn relate_attributes(
     }
     if props.reports_constituent {
         // The intersection is related one constituent at a time, and the
-        // first that fails is what tsc names.
+        // first that fails is what tsc names: an object missing props, or a
+        // primitive no attributes object is assignable to.
         for constituent in &props.constituents {
-            let Type::Object(constituent_object) = constituent.peeled() else {
-                continue;
+            let constituent_object = match constituent.peeled() {
+                Type::Object(constituent_object) => constituent_object,
+                other if is_primitive_type(&other) => {
+                    return vec![(
+                        Diagnostic::ts2322(source_name(), constituent.name(), ctx.file_name.clone()),
+                        tag_name_span,
+                    )];
+                }
+                _ => continue,
             };
             let missing = missing_from(&constituent_object);
             if let Some(first) = missing.first() {
@@ -1682,6 +1700,25 @@ fn relate_attributes(
         Diagnostic::ts2322(source_name(), target_name, ctx.file_name.clone()),
         tag_name_span,
     )]
+}
+
+/// A type no object is assignable to.
+fn is_primitive_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::String
+            | Type::Number
+            | Type::Boolean
+            | Type::BigInt
+            | Type::Symbol
+            | Type::StringLiteral(_)
+            | Type::NumberLiteral(_)
+            | Type::BooleanLiteral(_)
+            | Type::Undefined
+            | Type::Null
+            | Type::Void
+            | Type::Never
+    )
 }
 
 /// A value's relation failure against `expected`, named the way tsc's
@@ -1792,10 +1829,19 @@ fn has_non_array_like_member(ty: &Type, iterable_declared: bool) -> bool {
     }
 }
 
-/// tsc's `isExcessPropertyCheckTarget`.
+/// tsc's `isExcessPropertyCheckTarget`: an object type, a union with one
+/// among its members, or an intersection of nothing else — a primitive or
+/// type-variable operand exempts the whole intersection.
 fn is_excess_property_check_target(target: &Type) -> bool {
     match target {
+        Type::Object(object) if object.is_intersection => object
+            .intersection_operands
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .all(|operand| is_excess_property_check_target(&operand.peeled())),
         Type::Object(object) => object.alias_name.as_deref() != Some("Object"),
+        Type::Function(_) | Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) => true,
         Type::Union(union) => union
             .types()
             .iter()

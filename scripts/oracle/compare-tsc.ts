@@ -290,6 +290,7 @@ export const fixturePresets: Record<string, string> = {
   'jsx-intrinsic-attributes-constituent-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-intrinsic-attributes-constituent-basic/tsconfig.json'),
   'jsx-children-attribute-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-children-attribute-basic/tsconfig.json'),
   'jsx-attribute-contextual-types-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-attribute-contextual-types-basic/tsconfig.json'),
+  'jsx-intrinsic-attributes-primitive-props-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-intrinsic-attributes-primitive-props-basic/tsconfig.json'),
   'auto-types-node-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-node-basic/tsconfig.json'),
   'auto-types-disabled-empty-types-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-disabled-empty-types-basic/tsconfig.json'),
   'auto-types-narrowed-types-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-narrowed-types-basic/tsconfig.json'),
