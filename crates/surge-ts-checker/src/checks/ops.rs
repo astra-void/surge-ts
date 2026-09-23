@@ -465,22 +465,17 @@ fn evaluate_comparison_binary(
         return InferredExpression::Known(Type::Boolean);
     }
 
-    // `never` is comparable to every type, so tsc reports no overlap error on a
-    // comparison in an already-dead branch.
-    if matches!(left_type, Type::Never) || matches!(right_type, Type::Never) {
-        return InferredExpression::Known(Type::Boolean);
-    }
-
-    // tsc's `checkBinaryLikeExpression` for `<`/`>`/`<=`/`>=`: both operands
-    // numeric (`number | bigint`), or neither numeric and comparable to each
-    // other, with literals compared by their base type.
-    let left_numeric = is_numeric_comparison_operand(left_type);
-    let right_numeric = is_numeric_comparison_operand(right_type);
+    // tsc's `checkBinaryLikeExpression` for `<`/`>`/`<=`/`>=`: literals are
+    // compared by their base type, and then both operands must be numeric
+    // (`number | bigint`), or neither numeric and comparable to each other in
+    // either direction (`areTypesComparable`).
+    let left_base = widen_literal_for_comparison(left_type);
+    let right_base = widen_literal_for_comparison(right_type);
+    let left_numeric = is_numeric_comparison_operand(&left_base);
+    let right_numeric = is_numeric_comparison_operand(&right_base);
     let comparable = || {
-        let left_base = widen_literal_for_comparison(left_type);
-        let right_base = widen_literal_for_comparison(right_type);
-        surge_ts_types::is_assignable_to(&left_base, &right_base)
-            || surge_ts_types::is_assignable_to(&right_base, &left_base)
+        surge_ts_types::is_comparable_to(&left_base, &right_base)
+            || surge_ts_types::is_comparable_to(&right_base, &left_base)
     };
     if (left_numeric && right_numeric) || (!left_numeric && !right_numeric && comparable()) {
         return InferredExpression::Known(Type::Boolean);
@@ -490,8 +485,8 @@ fn evaluate_comparison_binary(
         ctx,
         Diagnostic::ts2365(
             operator_text,
-            &operand_display_name(&left_type),
-            &operand_display_name(&right_type),
+            &operand_display_name(&left_base),
+            &operand_display_name(&right_base),
             file_name,
         ),
         fallback_span,
@@ -579,13 +574,13 @@ fn is_number_like_for_arithmetic(ty: &Type) -> bool {
     matches!(ty.base_primitive(), Some(Type::Number))
 }
 
+/// `isTypeAssignableTo(t, numberOrBigIntType)`, which `never` satisfies.
 fn is_numeric_comparison_operand(ty: &Type) -> bool {
-    match ty {
-        Type::Union(union) => union.types().iter().all(is_numeric_comparison_operand),
-        other => matches!(other.base_primitive(), Some(Type::Number) | Some(Type::BigInt)),
-    }
+    surge_ts_types::is_assignable_to(ty, &union_type(vec![Type::Number, Type::BigInt]))
 }
 
+/// `getBaseTypeOfLiteralTypeForComparison`: enum members and enums read as
+/// the primitive their values are, not as the enum.
 fn widen_literal_for_comparison(ty: &Type) -> Type {
     match ty {
         Type::StringLiteral(_) => Type::String,
@@ -593,6 +588,15 @@ fn widen_literal_for_comparison(ty: &Type) -> Type {
         Type::BooleanLiteral(_) => Type::Boolean,
         Type::Union(union) => {
             surge_ts_types::union_type(union.types().iter().map(widen_literal_for_comparison).collect())
+        }
+        Type::Reference(_)
+            if surge_ts_types::is_template_literal_type(ty)
+                || surge_ts_types::string_mapping_parts(ty).is_some() =>
+        {
+            Type::String
+        }
+        Type::Reference(reference) if reference.enum_owner.is_some() => {
+            widen_literal_for_comparison(&ty.peeled())
         }
         other => other.clone(),
     }
