@@ -3160,6 +3160,30 @@
     "support": "emitted"
   },
   {
+    "code": "TS17019",
+    "category": "Error",
+    "message": "'{0}' at the end of a type is not valid TypeScript syntax. Did you mean to write '{1}'?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17020",
+    "category": "Error",
+    "message": "'{0}' at the start of a type is not valid TypeScript syntax. Did you mean to write '{1}'?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1110",
+    "category": "Error",
+    "message": "Type expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2699",
     "category": "Error",
     "message": "Static property '{0}' conflicts with built-in property 'Function.{0}' of constructor function '{1}'.",

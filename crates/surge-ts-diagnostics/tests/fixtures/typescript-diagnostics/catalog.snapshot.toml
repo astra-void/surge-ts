@@ -3161,6 +3161,30 @@ message = "A default export must be at the top level of a file or module declara
 arity = 0
 
 [[diagnostic]]
+code = "TS17019"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' at the end of a type is not valid TypeScript syntax. Did you mean to write '{1}'?"
+arity = 2
+
+[[diagnostic]]
+code = "TS17020"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' at the start of a type is not valid TypeScript syntax. Did you mean to write '{1}'?"
+arity = 2
+
+[[diagnostic]]
+code = "TS1110"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type expected."
+arity = 0
+
+[[diagnostic]]
 code = "TS2699"
 category = "Error"
 source = "typescript"

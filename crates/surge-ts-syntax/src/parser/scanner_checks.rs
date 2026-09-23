@@ -2,12 +2,14 @@
 //! literal (TS1121) and a decimal with a leading zero (TS1489) are rejected by
 //! tsc's `scanNumber` in every file, strict or not, and type arguments on
 //! `super` (TS2754) and a `super` followed by anything but an argument list or
-//! member access (TS1034) by `parseSuperExpression`. Like any parse error they
-//! make the program report its syntactic diagnostics alone.
+//! member access (TS1034) by `parseSuperExpression`, and a type that is only a
+//! `?` (TS1110) by `parseJSDocNullableType`. Like any parse error they make the
+//! program report its syntactic diagnostics alone.
 
 use oxc_ast::ast::{
-    BinaryExpression, CallExpression, ComputedMemberExpression, Expression, NewExpression,
-    NumericLiteral, Program, PrivateFieldExpression, StaticMemberExpression, Super, UnaryExpression,
+    BinaryExpression, CallExpression, ComputedMemberExpression, Expression, JSDocUnknownType,
+    NewExpression, NumericLiteral, Program, PrivateFieldExpression, StaticMemberExpression, Super,
+    UnaryExpression,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_syntax::operator::{BinaryOperator, UnaryOperator};
@@ -95,6 +97,21 @@ impl<'a> Visit<'a> for Collector<'_> {
                 .map_or(self.source_text.len() - after, |(offset, _)| offset);
         let end = (start + 1).min(self.source_text.len()).max(start);
         self.push(1034, "'super' must be followed by an argument list or member access.".to_string(), start, end);
+    }
+
+    /// tsc parses a `?` in type position as a nullable type and then requires
+    /// the type (`parseJSDocNullableType`); oxc reads a lone `?` before `,`,
+    /// `)`, `>`, `=`, `|` or `}` as JSDoc's unknown type. tsc reports the
+    /// missing type at that next token.
+    fn visit_js_doc_unknown_type(&mut self, it: &JSDocUnknownType) {
+        let after = it.span.end as usize;
+        let start = after
+            + self.source_text[after..]
+                .char_indices()
+                .find(|(_, c)| !c.is_whitespace())
+                .map_or(self.source_text.len() - after, |(offset, _)| offset);
+        let end = (start + 1).min(self.source_text.len()).max(start);
+        self.push(1110, "Type expected.".to_string(), start, end);
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {

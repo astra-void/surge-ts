@@ -2754,3 +2754,21 @@ status = "emitted"
 oracle = [
   "module-element-wrong-context",
 ]
+
+[TS17019]
+status = "emitted"
+oracle = [
+  "jsdoc-nullability-in-typescript",
+]
+
+[TS17020]
+status = "emitted"
+oracle = [
+  "jsdoc-nullability-in-typescript",
+]
+
+[TS1110]
+status = "emitted"
+oracle = [
+  "jsdoc-unknown-type-in-typescript",
+]

@@ -1285,6 +1285,28 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
+    /// tsc's `checkJSDocTypeIsInJsFile`: a JSDoc `T!`, `!T`, `T?` or `?T` in
+    /// TypeScript is TS17019 (postfix) or TS17020 (prefix), suggesting the
+    /// written `T` — for `?`, with `undefined` added when postfix and both
+    /// `null` and `undefined` when prefix.
+    fn check_jsdoc_nullability(
+        &mut self,
+        token: &str,
+        postfix: bool,
+        span: Span,
+        inner: &oxc_ast::ast::TSType<'_>,
+    ) {
+        let inner_span = inner.span();
+        let text = self.source_text[inner_span.start as usize..inner_span.end as usize].trim();
+        let meant = match (token, postfix) {
+            ("?", _) if matches!(text, "never" | "void") => text.to_string(),
+            ("?", true) => format!("{text} | undefined"),
+            ("?", false) => format!("{text} | null | undefined"),
+            _ => text.to_string(),
+        };
+        self.push(if postfix { 17019 } else { 17020 }, span, &[token, &meant]);
+    }
+
     /// tsc's `findFirstIllegalDecorator`: TS1206 (TS1249 for a method
     /// overload) on the first decorator of a node that `nodeCanBeDecorated`
     /// rejects.
@@ -2085,6 +2107,12 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             }
             AstKind::TSTypeParameterDeclaration(declaration) => self.check_circular_constraints(declaration),
             AstKind::Decorator(decorator) => self.check_decorator_target(decorator),
+            AstKind::JSDocNonNullableType(node) => {
+                self.check_jsdoc_nullability("!", node.postfix, node.span, &node.type_annotation);
+            }
+            AstKind::JSDocNullableType(node) => {
+                self.check_jsdoc_nullability("?", node.postfix, node.span, &node.type_annotation);
+            }
             AstKind::TSImportEqualsDeclaration(declaration) if !self.at_module_element_level() => {
                 self.push_on_module_element(1232, declaration.span.start);
             }

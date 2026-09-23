@@ -800,6 +800,8 @@ export const fixturePresets: Record<string, string> = {
   'with-statement-body-unchecked': path.join(workspaceRoot, 'tests/compat-projects/with-statement-body-unchecked/tsconfig.json'),
   'decorator-targets-legacy': path.join(workspaceRoot, 'tests/compat-projects/decorator-targets-legacy/tsconfig.json'),
   'decorator-targets-es': path.join(workspaceRoot, 'tests/compat-projects/decorator-targets-es/tsconfig.json'),
+  'jsdoc-nullability-in-typescript': path.join(workspaceRoot, 'tests/compat-projects/jsdoc-nullability-in-typescript/tsconfig.json'),
+  'jsdoc-unknown-type-in-typescript': path.join(workspaceRoot, 'tests/compat-projects/jsdoc-unknown-type-in-typescript/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
