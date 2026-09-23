@@ -1014,6 +1014,7 @@ export const fixturePresets: Record<string, string> = {
   'iife-spread-type-variable': path.join(workspaceRoot, 'tests/compat-projects/iife-spread-type-variable/tsconfig.json'),
   'reference-path-unresolved': path.join(workspaceRoot, 'tests/compat-projects/reference-path-unresolved/tsconfig.json'),
   'reference-path-skip-lib-check': path.join(workspaceRoot, 'tests/compat-projects/reference-path-skip-lib-check/tsconfig.json'),
+  'class-property-arrow-signature': path.join(workspaceRoot, 'tests/compat-projects/class-property-arrow-signature/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

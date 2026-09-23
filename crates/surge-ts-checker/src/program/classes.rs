@@ -280,31 +280,28 @@ fn accessor_property_type(accessor: &ParsedClassAccessor) -> ParsedType {
         .unwrap_or(ParsedType::Any)
 }
 
+/// A declaration's parameters as its callers see them. tsc's `addOptionality`,
+/// as `build_function_type` applies it: a defaulted parameter a required one
+/// follows is written `T | undefined`.
+fn declared_signature_parameters(parameters: &[ParsedFunctionParameter]) -> Vec<ParsedFunctionTypeParameter> {
+    let required = crate::checks::function::required_parameter_count(parameters);
+    parameters
+        .iter()
+        .enumerate()
+        .map(|(index, parameter)| {
+            let mut lowered = parameter_to_type_parameter(parameter);
+            if parameter.initializer.is_some() && index < required && !matches!(lowered.ty, ParsedType::Any) {
+                lowered.ty = ParsedType::Union(std::sync::Arc::new(vec![lowered.ty, ParsedType::Undefined]));
+                lowered.optional = false;
+            }
+            lowered
+        })
+        .collect()
+}
+
 fn method_function_type(class: &ParsedClassDeclaration, method: &ParsedClassMethod) -> ParsedType {
-    // tsc's `addOptionality`, as `build_function_type` applies it to a
-    // declaration: a defaulted parameter a required one follows is written
-    // `T | undefined` for its callers.
-    let required = crate::checks::function::required_parameter_count(&method.parameters);
     ParsedType::Function(std::sync::Arc::new(ParsedFunctionType {
-        parameters: method
-            .parameters
-            .iter()
-            .enumerate()
-            .map(|(index, parameter)| {
-                let mut lowered = parameter_to_type_parameter(parameter);
-                if parameter.initializer.is_some()
-                    && index < required
-                    && !matches!(lowered.ty, ParsedType::Any)
-                {
-                    lowered.ty = ParsedType::Union(std::sync::Arc::new(vec![
-                        lowered.ty,
-                        ParsedType::Undefined,
-                    ]));
-                    lowered.optional = false;
-                }
-                lowered
-            })
-            .collect(),
+        parameters: declared_signature_parameters(&method.parameters),
         return_type: Box::new(
             method
                 .return_type
@@ -868,6 +865,31 @@ fn syntactic_initializer_type(initializer: &surge_ts_syntax::ParsedExpression, k
                 return None;
             }
             ParsedType::Array(Arc::new(first))
+        }
+        // A function whose return type is written has the signature it spells.
+        // A class declaration's property initializer has no contextual type
+        // (`getContextualTypeForVariableLikeDeclaration` gives one to a class
+        // expression's static side alone), so an unannotated parameter is
+        // `any` and a defaulted one takes its initializer's widened type. oxc
+        // keeps a `this` parameter out of the list, so a function expression
+        // that writes one is not lowered.
+        ParsedExpression::ArrowFunction(function)
+            if function.this_binding != surge_ts_syntax::ParsedThisBinding::Own =>
+        {
+            let return_type = function.return_type.clone()?;
+            let mut parameters = function.parameters.clone();
+            for parameter in &mut parameters {
+                if parameter.declared_type.is_none()
+                    && let Some(initializer) = &parameter.initializer
+                {
+                    parameter.declared_type = Some(syntactic_initializer_type(initializer, false)?);
+                }
+            }
+            ParsedType::Function(Arc::new(ParsedFunctionType {
+                parameters: declared_signature_parameters(&parameters),
+                return_type: Box::new(return_type),
+                type_parameters: function.type_parameters.clone(),
+            }))
         }
         ParsedExpression::ObjectLiteral { properties, .. } => {
             let mut members = Vec::with_capacity(properties.len());
