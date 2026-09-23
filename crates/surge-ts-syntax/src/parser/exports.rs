@@ -226,15 +226,13 @@ pub(crate) fn parse_export_assignment(
 ) -> Option<Vec<ParsedStatement>> {
     let span = Some(text_span_from_oxc_span(declaration.span));
 
-    // Declaration-lite `export = identifier`. Any non-identifier target
-    // (`export = require(...)`, object literals, member access, etc.) stays
-    // unsupported as an export shape.
     let Expression::Identifier(identifier) = &declaration.expression else {
         let (expression, expression_span) = parse_expression(&declaration.expression);
         return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
             ParsedExportDeclaration::EqualsExpression {
                 expression: Box::new(expression),
                 expression_span: Some(text_span_from_oxc_span(expression_span)),
+                entity_name: entity_name_expression_text(&declaration.expression),
                 span,
             },
         ))]);
@@ -247,6 +245,22 @@ pub(crate) fn parse_export_assignment(
             span,
         },
     ))])
+}
+
+/// tsc's `isEntityNameExpression`: an identifier, or a property access naming
+/// an identifier on one. Parentheses end it — `export = (A.B)` exports a value,
+/// not an alias — which is why this reads the oxc node rather than the parsed
+/// expression, where they are already gone.
+fn entity_name_expression_text(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::Identifier(identifier) => Some(identifier.name.to_string()),
+        Expression::StaticMemberExpression(member) if !member.optional => Some(format!(
+            "{}.{}",
+            entity_name_expression_text(&member.object)?,
+            member.property.name
+        )),
+        _ => None,
+    }
 }
 
 pub(crate) fn parse_export_all_declaration(

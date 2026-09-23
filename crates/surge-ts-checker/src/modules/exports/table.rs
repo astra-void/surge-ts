@@ -183,6 +183,7 @@ pub(crate) fn build_module_export_table(
             imported_symbols,
             &imported_names,
             &parsed_file.statements,
+            &parsed_file.parenthesized_expressions,
             local_type_declarations,
             local_symbols,
             resolution_scope.as_ref(),
@@ -1124,7 +1125,9 @@ pub(crate) fn resolve_module_export_table(
         // which first-wins expansion later consumers observe (zod message
         // drift). Re-export entries keep their per-table copies.
         for (name, declaration) in target_export_table.type_declarations.iter() {
-            if resolved_type_declarations.get(name.as_ref()).is_none() {
+            if !is_export_assignment_key(name)
+                && resolved_type_declarations.get(name.as_ref()).is_none()
+            {
                 let _ = resolved_type_declarations.insert(name.clone(), declaration.clone());
             }
         }

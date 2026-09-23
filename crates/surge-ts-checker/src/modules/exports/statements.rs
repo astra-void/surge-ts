@@ -14,6 +14,7 @@ pub(crate) fn collect_exports_from_statement(
     imported_symbols: &SymbolTable,
     imported_names: &std::collections::HashSet<&str>,
     statement_list: &[ParsedStatement],
+    parenthesized_expressions: &[surge_ts_syntax::ParenthesizedExpressionSpan],
     local_type_declarations: &TypeDeclarationTable,
     local_symbols: &SymbolTable,
     resolution_scope: Option<&Arc<TypeDeclarationScope>>,
@@ -56,6 +57,7 @@ pub(crate) fn collect_exports_from_statement(
                     imported_symbols,
                     imported_names,
                     statement_list,
+                    parenthesized_expressions,
                     local_type_declarations,
                     local_symbols,
                     resolution_scope,
@@ -124,6 +126,52 @@ pub(crate) fn collect_exports_from_statement(
                         );
                     }
                 }
+                publish_export_assignment_types(
+                    exported_name,
+                    local_type_declarations,
+                    resolution_scope,
+                    type_declarations,
+                    ctx,
+                );
+            }
+            ParsedExportDeclaration::EqualsExpression {
+                entity_name: Some(entity_name),
+                ..
+            } => {
+                // `getTargetOfAliasLikeExpression`: a dotted entity name is an
+                // alias of the entity, resolved with every meaning.
+                if let Some(symbol) =
+                    entity_alias_value(entity_name, exportable_values, imported_symbols, ctx)
+                {
+                    *export_assignment_symbol = Some(symbol);
+                }
+                publish_export_assignment_types(
+                    entity_name,
+                    local_type_declarations,
+                    resolution_scope,
+                    type_declarations,
+                    ctx,
+                );
+            }
+            ParsedExportDeclaration::EqualsExpression {
+                expression,
+                entity_name: None,
+                ..
+            } => {
+                // Any other expression is bound as a property, not an alias
+                // (`bindExportAssignment`): the module's export is the value of
+                // the expression and nothing else.
+                let ty = match crate::infer::infer_expression(expression, exportable_values, ctx) {
+                    crate::infer::InferredExpression::Known(ty) => ty,
+                    crate::infer::InferredExpression::Unknown
+                    | crate::infer::InferredExpression::UnresolvedIdentifier { .. }
+                    | crate::infer::InferredExpression::MissingProperty { .. } => Type::Unknown,
+                };
+                *export_assignment_symbol = Some(Arc::new(SymbolInfo {
+                    ty,
+                    kind: SymbolKind::Const,
+                    function_signature: None,
+                }));
             }
             ParsedExportDeclaration::Named {
                 is_type_only,
@@ -319,6 +367,7 @@ pub(crate) fn collect_exports_from_statement(
                         local_type_declarations,
                         resolution_scope,
                         type_declarations,
+                        ctx,
                     );
                     if let Some(symbol) = local_symbols.get_shared(&class.name) {
                         if default_symbol.is_none() {
@@ -332,13 +381,18 @@ pub(crate) fn collect_exports_from_statement(
                     }
 
                     // `export default Dispatcher` re-exports the named
-                    // declaration's type side too, not just its value.
-                    if let ParsedExpression::Identifier { name, .. } = expression {
+                    // declaration's type side too, not just its value
+                    // (`getTargetOfExportAssignment`: an entity name is an
+                    // alias of every meaning it has).
+                    if let Some(entity_name) =
+                        entity_name_expression(expression, parenthesized_expressions)
+                    {
                         publish_default_type_export(
-                            name,
+                            &entity_name,
                             local_type_declarations,
                             resolution_scope,
                             type_declarations,
+                            ctx,
                         );
                     }
 
@@ -498,19 +552,58 @@ fn publish_default_type_export(
     local_type_declarations: &TypeDeclarationTable,
     resolution_scope: Option<&Arc<TypeDeclarationScope>>,
     type_declarations: &mut TypeDeclarationTable,
+    ctx: &CheckerContext,
 ) {
-    let Some(handle) = local_type_declarations
-        .get_handle(local_name)
-        .or_else(|| resolution_scope.and_then(|scope| scope.get_handle(local_name)))
-    else {
-        return;
-    };
-
     if type_declarations.get("default").is_some() {
         return;
     }
 
-    export_local_type_declaration(handle.get(), "default", resolution_scope, type_declarations);
+    if let Some(handle) = local_type_declarations
+        .get_handle(local_name)
+        .or_else(|| resolution_scope.and_then(|scope| scope.get_handle(local_name)))
+    {
+        export_local_type_declaration(handle.get(), "default", resolution_scope, type_declarations);
+    } else if let Some(declaration) = ctx.ambient_global_type_declarations.get(local_name) {
+        export_local_type_declaration(declaration, "default", None, type_declarations);
+    }
+}
+
+/// tsc's `isEntityNameExpression`: an identifier, or a property access naming
+/// an identifier on one, with no parentheses anywhere in it — `export default
+/// (A.B)` exports a value, not an alias. The parsed tree drops parentheses, so
+/// they are read back from the file's parenthesized-expression spans.
+fn entity_name_expression(
+    expression: &ParsedExpression,
+    parenthesized_expressions: &[surge_ts_syntax::ParenthesizedExpressionSpan],
+) -> Option<String> {
+    let (name, span) = match expression {
+        ParsedExpression::Identifier { name, span } => (name.clone(), *span),
+        ParsedExpression::PropertyAccess {
+            object,
+            object_span,
+            property_name,
+            property_span,
+            is_bracketed: false,
+        } => {
+            let object_name = entity_name_expression(object, parenthesized_expressions)?;
+            let span = object_span
+                .zip(*property_span)
+                .map(|(object_span, property_span)| TextSpan {
+                    start: object_span.start,
+                    end: property_span.end,
+                });
+            (format!("{object_name}.{property_name}"), span)
+        }
+        _ => return None,
+    };
+    let parenthesized = span.is_some_and(|span| {
+        parenthesized_expressions
+            .binary_search_by_key(&(span.start, span.end), |parenthesized| {
+                (parenthesized.inner.start, parenthesized.inner.end)
+            })
+            .is_ok()
+    });
+    (!parenthesized).then_some(name)
 }
 
 /// The qualified type members of the local namespace `local` (`local.T`),
@@ -613,6 +706,65 @@ fn export_entity_alias_types(
     for (key, declaration) in table.iter() {
         if let Some(member) = key.strip_prefix(prefix.as_str()) {
             let _ = type_declarations.insert(format!("{exported}.{member}"), declaration.clone());
+        }
+    }
+}
+
+/// The type and namespace meanings of an `export =` entity, resolved the way
+/// tsc's `resolveEntityName` resolves it from the export assignment: the
+/// module's own declarations, then its imports, then the globals. The entity's
+/// type is published as [`EXPORT_ASSIGNMENT_NAME`] and each namespace member
+/// both under `export=.<member>` and bare — `getExportsOfModule` resolves the
+/// `export =` first, so the members are what a named import reaches.
+fn publish_export_assignment_types(
+    entity: &str,
+    local_type_declarations: &TypeDeclarationTable,
+    resolution_scope: Option<&Arc<TypeDeclarationScope>>,
+    type_declarations: &mut TypeDeclarationTable,
+    ctx: &CheckerContext,
+) {
+    let (entity, globals_only) = match entity.strip_prefix("globalThis.") {
+        Some(global) => (global, true),
+        None => (entity, false),
+    };
+    let prefix = format!("{entity}.");
+    let declares = |table: &TypeDeclarationTable| {
+        table.get(entity).is_some() || table.iter().any(|(key, _)| key.starts_with(&prefix))
+    };
+    let module_tables = std::iter::once(local_type_declarations).chain(
+        resolution_scope
+            .into_iter()
+            .flat_map(|scope| scope.layers().iter().map(Arc::as_ref)),
+    );
+    let (table, scope) = match module_tables
+        .filter(|_| !globals_only)
+        .find(|table| declares(table))
+    {
+        Some(table) => (table, resolution_scope),
+        None if declares(ctx.ambient_global_type_declarations.as_ref()) => {
+            (ctx.ambient_global_type_declarations.as_ref(), None)
+        }
+        None => return,
+    };
+
+    if let Some(declaration) = table.get(entity)
+        && type_declarations.get(EXPORT_ASSIGNMENT_NAME).is_none()
+    {
+        let _ = type_declarations.insert(
+            EXPORT_ASSIGNMENT_NAME,
+            attach_type_resolution_scope_if_missing(declaration.clone(), scope),
+        );
+    }
+    for (key, declaration) in table.iter() {
+        let Some(member) = key.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        let _ = type_declarations.insert(
+            format!("{EXPORT_ASSIGNMENT_NAME}.{member}"),
+            attach_type_resolution_scope_if_missing(declaration.clone(), scope),
+        );
+        if type_declarations.get(member).is_none() {
+            export_local_type_declaration(declaration, member, scope, type_declarations);
         }
     }
 }

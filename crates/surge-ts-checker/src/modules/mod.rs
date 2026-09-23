@@ -25,6 +25,20 @@ pub(crate) use imports::*;
 pub(crate) use node_builtins::*;
 pub(crate) use resolution::*;
 
+/// tsc's `InternalSymbolNameExportEquals`. An `export =` module's type table
+/// keys the assigned entity's type meaning under this name and each of its
+/// namespace members under `export=.<member>`, which is what an
+/// `import x = require(...)` binds. No written name can reach these keys.
+pub(crate) const EXPORT_ASSIGNMENT_NAME: &str = "export=";
+
+/// Whether `key` is one of the [`EXPORT_ASSIGNMENT_NAME`] keys, which belong to
+/// the module that declares them: `export *` and namespace re-exports do not
+/// carry a module's `export =`.
+pub(crate) fn is_export_assignment_key(key: &str) -> bool {
+    key.strip_prefix(EXPORT_ASSIGNMENT_NAME)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ModuleResolution {
     pub(crate) resolved_file_index: usize,

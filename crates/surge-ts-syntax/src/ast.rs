@@ -1141,19 +1141,22 @@ pub enum ParsedExportDeclaration {
         span: Option<TextSpan>,
     },
     /// `export = identifier` — declaration-lite CommonJS export assignment.
-    /// Only a bare identifier target is represented here; any other expression
-    /// target remains `Unsupported`.
+    /// Only a bare identifier target is represented here; any other target is
+    /// an `EqualsExpression`.
     Equals {
         exported_name: String,
         exported_name_span: Option<TextSpan>,
         span: Option<TextSpan>,
     },
-    /// `export = <expression>` with any target but a bare identifier. The
-    /// module's export shape stays unsupported; the expression is kept only to
-    /// be checked.
+    /// `export = <expression>` with any target but a bare identifier.
     EqualsExpression {
         expression: Box<ParsedExpression>,
         expression_span: Option<TextSpan>,
+        /// The dotted name when the target is an entity name (`export = A.B`,
+        /// tsc's `isEntityNameExpression`): the export is then an alias of every
+        /// meaning the entity has. `None` for any other expression, whose value
+        /// is all the module exports.
+        entity_name: Option<String>,
         span: Option<TextSpan>,
     },
     Unsupported {

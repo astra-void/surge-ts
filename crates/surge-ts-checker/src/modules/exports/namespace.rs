@@ -39,6 +39,9 @@ pub(super) fn copy_namespace_member_type_exports(
 ) {
     let type_declarations = Arc::make_mut(&mut resolved_export_table.type_declarations);
     for (key, declaration) in target_export_table.type_declarations.iter() {
+        if is_export_assignment_key(key) {
+            continue;
+        }
         let qualified = format!("{exported_name}.{key}");
         if type_declarations.get(&qualified).is_none() {
             let _ = type_declarations.insert(qualified.as_str(), declaration.clone());

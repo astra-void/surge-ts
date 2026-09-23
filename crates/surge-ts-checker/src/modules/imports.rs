@@ -575,6 +575,7 @@ pub(crate) fn resolve_import_declaration(
             module_export_tables,
             module_resolution_scopes,
             local_symbol_exists,
+            type_declarations,
             symbols,
             namespace_alias_layers,
             ctx,
@@ -1154,6 +1155,7 @@ fn resolve_import_equals(
     module_export_tables: &[Option<ModuleExportTable>],
     module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
     local_symbol_exists: &dyn Fn(&str) -> bool,
+    type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
     namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
     ctx: &mut CheckerContext,
@@ -1183,11 +1185,28 @@ fn resolve_import_equals(
         return;
     };
 
-    // A resolved module that exposes a supported `export = identifier` binds the
-    // local name to that value.
-    if let Some(symbol) = export_table.export_assignment_symbol.clone() {
-        if !local_symbol_exists(local_name) {
+    // `getTargetOfImportEqualsDeclaration` → `resolveExternalModuleSymbol`: the
+    // alias *is* the entity the module's `export =` names, with its value, its
+    // type and its namespace members alike.
+    let assignment_type = lookup_type_export(&export_table, EXPORT_ASSIGNMENT_NAME).cloned();
+    let assignment_members =
+        export_assignment_member_table(&export_table, local_name, scope.as_ref());
+    if export_table.export_assignment_symbol.is_some()
+        || assignment_type.is_some()
+        || assignment_members.is_some()
+    {
+        if let Some(symbol) = export_table.export_assignment_symbol.clone()
+            && !local_symbol_exists(local_name)
+        {
             symbols.insert_shared(local_name.clone(), symbol);
+        }
+        if let Some(declaration) = assignment_type
+            && type_declarations.get(local_name).is_none()
+        {
+            insert_type_export(type_declarations, local_name, scope.as_ref(), declaration);
+        }
+        if let Some(members) = assignment_members {
+            namespace_alias_layers.push(members);
         }
         return;
     }
@@ -1203,7 +1222,11 @@ fn resolve_import_equals(
                 matches!(
                     statement,
                     ParsedStatement::ExportDeclaration(export)
-                        if matches!(export.as_ref(), ParsedExportDeclaration::Equals { .. })
+                        if matches!(
+                            export.as_ref(),
+                            ParsedExportDeclaration::Equals { .. }
+                                | ParsedExportDeclaration::EqualsExpression { .. }
+                        )
                 )
             })
         });
@@ -1295,6 +1318,9 @@ fn build_namespace_alias_table(
 ) -> Arc<TypeDeclarationTable> {
     let mut table = TypeDeclarationTable::new();
     for (key, declaration) in export_table.type_declarations.iter() {
+        if is_export_assignment_key(key) {
+            continue;
+        }
         // A member of an exported namespace is keyed `ns.Member`, and under a
         // namespace import its tsc-visible name keeps that qualifier
         // (`local.ns.Member`). Registering only the last segment leaves the real
@@ -1310,6 +1336,30 @@ fn build_namespace_alias_table(
         }
     }
     Arc::new(table)
+}
+
+/// The `local.<member>` type layer an `import local = require(...)` binds for
+/// the namespace members of the module's `export =` entity; `None` when the
+/// entity has none.
+fn export_assignment_member_table(
+    export_table: &ModuleExportTable,
+    local_name: &str,
+    scope: Option<&Arc<TypeDeclarationScope>>,
+) -> Option<Arc<TypeDeclarationTable>> {
+    let prefix = format!("{EXPORT_ASSIGNMENT_NAME}.");
+    let mut table = TypeDeclarationTable::new();
+    for (key, declaration) in export_table.type_declarations.iter() {
+        let Some(member) = key.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        crate::modules::exports::insert_type_export(
+            &mut table,
+            &format!("{local_name}.{member}"),
+            scope,
+            declaration.clone(),
+        );
+    }
+    (table.len() > 0).then(|| Arc::new(table))
 }
 
 fn namespace_alias_table(
