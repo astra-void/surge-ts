@@ -1778,6 +1778,13 @@ impl CheckerContext {
     }
 
     fn lookup_type_declaration_exact(&self, name: &str) -> Option<&TypeDeclarationInfo> {
+        if let Some(declaration) = self
+            .type_declaration_scope
+            .as_ref()
+            .and_then(|scope| scope.lexical_get(name))
+        {
+            return Some(declaration);
+        }
         if !self.lookup_ignores_local_table()
             && let Some(declaration) = self.type_declarations.get(name)
         {
@@ -1892,6 +1899,13 @@ impl CheckerContext {
         &self,
         name: &str,
     ) -> Option<crate::symbols::TypeDeclarationHandle> {
+        if let Some(handle) = self
+            .type_declaration_scope
+            .as_ref()
+            .and_then(|scope| scope.lexical_get_handle(name))
+        {
+            return Some(handle);
+        }
         if !self.lookup_ignores_local_table()
             && let Some(handle) = self.type_declarations.get_handle(name)
         {
