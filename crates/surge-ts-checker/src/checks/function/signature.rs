@@ -2030,6 +2030,15 @@ pub(crate) fn check_function_body_with_signature_and_this(
         }
     });
 
+    // The flow summary cannot see a callee's return type; the declared ones in
+    // scope decide which call statements end the flow, as a `throw` does.
+    let never_calls = super::body_statements::never_call_statements(&body, &scopes);
+    let body_flow = if never_calls.is_empty() {
+        body_flow
+    } else {
+        crate::flow::with_never_calls(&never_calls, || analyze_function_body_flow(&body))
+    };
+
     let returned_void_like = with_type_parameter_scope(type_parameters, ctx, |ctx| {
         // A declaration's own frame, never active — it has a real signature, so
         // its returns are checked. Opening one stops a nested declaration from

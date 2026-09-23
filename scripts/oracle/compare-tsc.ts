@@ -792,6 +792,7 @@ export const fixturePresets: Record<string, string> = {
   'namespace-require-alias': path.join(workspaceRoot, 'tests/compat-projects/namespace-require-alias/tsconfig.json'),
   'readonly-array-assignment-code': path.join(workspaceRoot, 'tests/compat-projects/readonly-array-assignment-code/tsconfig.json'),
   'union-accessor-element-write': path.join(workspaceRoot, 'tests/compat-projects/union-accessor-element-write/tsconfig.json'),
+  'never-call-statement-exits': path.join(workspaceRoot, 'tests/compat-projects/never-call-statement-exits/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
