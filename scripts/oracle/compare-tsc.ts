@@ -366,6 +366,7 @@ export const fixturePresets: Record<string, string> = {
   'intersection-two-union-operands-basic': path.join(workspaceRoot, 'tests/compat-projects/intersection-two-union-operands-basic/tsconfig.json'),
   'void-parameter-arity-basic': path.join(workspaceRoot, 'tests/compat-projects/void-parameter-arity-basic/tsconfig.json'),
   'indexed-access-index-kinds-basic': path.join(workspaceRoot, 'tests/compat-projects/indexed-access-index-kinds-basic/tsconfig.json'),
+  'missing-member-prefix-lookup': path.join(workspaceRoot, 'tests/compat-projects/missing-member-prefix-lookup/tsconfig.json'),
   'object-literal-accessor-pair-typing': path.join(workspaceRoot, 'tests/compat-projects/object-literal-accessor-pair-typing/tsconfig.json'),
   'inference-any-candidate-supertype': path.join(workspaceRoot, 'tests/compat-projects/inference-any-candidate-supertype/tsconfig.json'),
   'instantiation-expression-basic': path.join(workspaceRoot, 'tests/compat-projects/instantiation-expression-basic/tsconfig.json'),

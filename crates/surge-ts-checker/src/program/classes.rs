@@ -555,6 +555,24 @@ fn generic_class_value_symbol(
     }
 }
 
+/// The constructor type tsc's `checkAndReportErrorForMissingPrefix` looks a
+/// static member up on. A generic class's value is modelled as `any` for its
+/// uses ([`generic_class_value_symbol`]), which would answer every name.
+fn generic_class_static_side(
+    class: &ParsedClassDeclaration,
+    instance_type: &Type,
+    ctx: &mut CheckerContext,
+) -> Type {
+    let mut properties = inherited_static_properties(class, None, ctx);
+    properties.insert(
+        "prototype".into(),
+        ObjectProperty::required(instance_type.clone()),
+    );
+    collect_static_members(class, &mut properties, ctx);
+    let construct_signature = FunctionType::new(vec![Type::Any], instance_type.clone(), true, 0);
+    Type::Object(ObjectType::new(properties, None).with_construct_signature(construct_signature))
+}
+
 /// Builds the constructor/static-side value symbol: a `Type::Object` whose
 /// properties are the static members and whose construct signature yields the
 /// instance type.
@@ -1329,6 +1347,11 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
     let checkpoint = ctx.diagnostics().len();
     let instance_type = class_instance_type(class, ctx);
     let static_value = build_class_value_symbol(class, ctx);
+    let member_prefix_static_type = if class.type_parameters.is_empty() {
+        static_value.ty.clone()
+    } else {
+        generic_class_static_side(class, &instance_type, ctx)
+    };
     ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
     // Signature collection built this class's value before its file's `const`s
     // were bound, so a base that is one of them left the instance open and the
@@ -1361,7 +1384,7 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
         .push(crate::checks::expr::EnclosingClassMembers {
             class_name: class.name.clone(),
             instance_type: instance_type.clone(),
-            static_type: static_type.clone(),
+            static_type: member_prefix_static_type,
         });
 
     let class_type_parameter_depth = ctx
