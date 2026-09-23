@@ -78,14 +78,58 @@ pub(crate) fn collect_global_function_signatures(
         );
     }
     ctx.module_value_fallback = saved_fallback;
+    // Signature collection declares a script's functions and classes; any other
+    // seeded name is still only the seed, even once `apply_expando_members` has
+    // replaced it with the members written on it, and the check phase declares
+    // it itself — left behind, a `const` read as its own redeclaration (TS2451).
+    let declared = signature_declared_names(parsed_files);
     for (name, seeded) in seeded_names {
-        if global_symbols
+        let is_seed = global_symbols
             .get_own(&name)
-            .is_some_and(|symbol| std::ptr::eq(symbol, seeded.as_ref()))
-        {
+            .is_some_and(|symbol| std::ptr::eq(symbol, seeded.as_ref()));
+        if is_seed || !declared.contains(name.as_ref()) {
             global_symbols.remove(&name);
         }
     }
+}
+
+/// The names [`collect_function_signature_from_statement`] declares across the
+/// program's scripts.
+fn signature_declared_names(parsed_files: &[ParsedProgramFile]) -> std::collections::HashSet<&str> {
+    fn collect<'a>(statement: &'a ParsedStatement, names: &mut std::collections::HashSet<&'a str>) {
+        match statement {
+            ParsedStatement::FunctionDeclaration(function) => {
+                names.insert(function.name.as_str());
+            }
+            ParsedStatement::ClassDeclaration(class) => {
+                names.insert(class.name.as_str());
+            }
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => collect(declaration, names),
+                ParsedExportDeclaration::Default {
+                    declaration: ParsedDefaultExportDeclaration::Class(class),
+                    ..
+                } => {
+                    names.insert(class.name.as_str());
+                }
+                ParsedExportDeclaration::Default {
+                    declaration: ParsedDefaultExportDeclaration::Function(function),
+                    ..
+                } => {
+                    names.insert(function.name.as_str());
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    let mut names = std::collections::HashSet::new();
+    for parsed_file in parsed_files.iter().filter(|parsed_file| is_script_source(parsed_file)) {
+        for statement in &parsed_file.statements {
+            collect(statement, &mut names);
+        }
+    }
+    names
 }
 
 /// Each script file's own top-level values, for the other scripts to see:

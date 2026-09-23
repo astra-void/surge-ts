@@ -379,6 +379,7 @@ export const fixturePresets: Record<string, string> = {
   'export-assignment-type-only-alias': path.join(workspaceRoot, 'tests/compat-projects/export-assignment-type-only-alias/tsconfig.json'),
   'import-equals-namespace-alias-as-value': path.join(workspaceRoot, 'tests/compat-projects/import-equals-namespace-alias-as-value/tsconfig.json'),
   'generic-reference-missing-type-arguments': path.join(workspaceRoot, 'tests/compat-projects/generic-reference-missing-type-arguments/tsconfig.json'),
+  'script-expando-const-seed': path.join(workspaceRoot, 'tests/compat-projects/script-expando-const-seed/tsconfig.json'),
   'indexed-access-index-kinds-basic': path.join(workspaceRoot, 'tests/compat-projects/indexed-access-index-kinds-basic/tsconfig.json'),
   'missing-member-prefix-lookup': path.join(workspaceRoot, 'tests/compat-projects/missing-member-prefix-lookup/tsconfig.json'),
   'property-initializer-constructor-locals': path.join(workspaceRoot, 'tests/compat-projects/property-initializer-constructor-locals/tsconfig.json'),
