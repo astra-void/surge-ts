@@ -304,6 +304,7 @@ impl Project {
             &loaded.root_dir,
             &loaded.compiler_options.type_roots,
             loaded.compiler_options.allow_js,
+            loaded.compiler_options.no_resolve,
         );
 
         let mut specifier_scanner =

@@ -87,6 +87,9 @@ pub struct NormalizedCompilerOptions {
     /// `compilerOptions.noCheck`: no file is type-checked, so only syntactic
     /// diagnostics are reported.
     pub no_check: bool,
+    /// `compilerOptions.noResolve`: a file's `/// <reference>` directives
+    /// neither add files nor report what they fail to name.
+    pub no_resolve: bool,
     pub skip_lib_check: bool,
     pub es_module_interop: bool,
     pub allow_synthetic_default_imports: bool,
@@ -163,6 +166,7 @@ impl Default for NormalizedCompilerOptions {
             check_js: false,
             no_emit: false,
             no_check: false,
+            no_resolve: false,
             skip_lib_check: false,
             es_module_interop: false,
             allow_synthetic_default_imports: false,

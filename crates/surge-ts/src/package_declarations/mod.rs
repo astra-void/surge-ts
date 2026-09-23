@@ -609,11 +609,14 @@ pub(crate) struct ReferenceTypeDirectiveResolver {
     seen_effective: HashSet<String>,
     missing: Vec<MissingReferenceTypeDirective>,
     allow_js: bool,
+    /// `noResolve`: tsgo's file loader skips every file's reference
+    /// directives (`filesparser.go`), `path` and `types` alike.
+    no_resolve: bool,
     unresolved_paths: Vec<UnresolvedReferencePath>,
 }
 
 impl ReferenceTypeDirectiveResolver {
-    pub fn new(root_dir: &Path, type_roots: &[PathBuf], allow_js: bool) -> Self {
+    pub fn new(root_dir: &Path, type_roots: &[PathBuf], allow_js: bool, no_resolve: bool) -> Self {
         Self {
             roots: effective_type_roots(root_dir, type_roots),
             root_dir: root_dir.to_path_buf(),
@@ -623,6 +626,7 @@ impl ReferenceTypeDirectiveResolver {
             seen_effective: HashSet::new(),
             missing: Vec::new(),
             allow_js,
+            no_resolve,
             unresolved_paths: Vec::new(),
         }
     }
@@ -660,6 +664,9 @@ impl ReferenceTypeDirectiveResolver {
 
             for (file_name, source_text) in pending {
                 self.scanned_files.insert(file_name.clone());
+                if self.no_resolve {
+                    continue;
+                }
 
                 // `/// <reference path="..." />` pulls in a sibling declaration
                 // file relative to the referencing file. This is how a type
