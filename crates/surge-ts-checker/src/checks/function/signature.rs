@@ -852,30 +852,97 @@ pub(crate) fn signatures_read_ahead(
     }
     let local_type_reads = local_type_value_reads(local_types);
     functions.iter().enumerate().any(|(position, function)| {
-        let mut reads = signature_value_reads(
-            &function.type_parameters,
-            &function.parameters,
-            function.return_type.as_ref(),
-        );
-        let written = function
-            .parameters
-            .iter()
-            .filter_map(|parameter| parameter.declared_type.as_ref())
-            .chain(function.return_type.as_ref())
-            .chain(function.type_parameters.iter().flat_map(|parameter| {
-                [&parameter.constraint, &parameter.default_type].into_iter().flatten()
-            }));
-        for ty in written {
-            ty.for_each_named_type(&mut |named| {
-                if let Some(alias_reads) = local_type_reads.get(named.name.as_str()) {
-                    reads.extend(alias_reads.iter().cloned());
-                }
-            });
-        }
-        reads
+        signature_reads(function, &local_type_reads)
             .iter()
             .any(|name| first_declared.get(name.as_str()).is_some_and(|first| *first >= position))
     })
+}
+
+/// The value names `function`'s signature reads, directly or through the
+/// scope's local types (`local_type_reads`, from [`local_type_value_reads`]).
+fn signature_reads(
+    function: &surge_ts_syntax::ParsedFunctionDeclaration,
+    local_type_reads: &std::collections::HashMap<&str, Vec<String>>,
+) -> Vec<String> {
+    let mut reads = signature_value_reads(
+        &function.type_parameters,
+        &function.parameters,
+        function.return_type.as_ref(),
+    );
+    let written = function
+        .parameters
+        .iter()
+        .filter_map(|parameter| parameter.declared_type.as_ref())
+        .chain(function.return_type.as_ref())
+        .chain(function.type_parameters.iter().flat_map(|parameter| {
+            [&parameter.constraint, &parameter.default_type].into_iter().flatten()
+        }));
+    for ty in written {
+        ty.for_each_named_type(&mut |named| {
+            if let Some(alias_reads) = local_type_reads.get(named.name.as_str()) {
+                reads.extend(alias_reads.iter().cloned());
+            }
+        });
+    }
+    reads
+}
+
+/// The order a scope's hoisting pass collects `functions` in: each name's
+/// declarations after the functions their signatures read, so a signature (or
+/// a local type it names) resolves against a collected signature instead of
+/// the sentinel of one not collected yet — a type resolved against the sentinel
+/// is memoized that way for every later reader. A name's own declarations keep
+/// their source order, which is their overload order, and a cycle keeps source
+/// order.
+pub(crate) fn signature_collection_order(
+    functions: &[&surge_ts_syntax::ParsedFunctionDeclaration],
+    local_types: &[(&str, Vec<&ParsedType>)],
+) -> Vec<usize> {
+    let local_type_reads = local_type_value_reads(local_types);
+    let mut names: Vec<&str> = Vec::new();
+    for function in functions {
+        if !names.contains(&function.name.as_str()) {
+            names.push(function.name.as_str());
+        }
+    }
+    let group_reads: Vec<Vec<usize>> = names
+        .iter()
+        .map(|name| {
+            let mut reads: Vec<usize> = functions
+                .iter()
+                .filter(|function| function.name == *name)
+                .flat_map(|function| signature_reads(function, &local_type_reads))
+                .filter_map(|read| names.iter().position(|other| *other == read))
+                .collect();
+            reads.dedup();
+            reads
+        })
+        .collect();
+    fn visit(group: usize, group_reads: &[Vec<usize>], state: &mut [u8], order: &mut Vec<usize>) {
+        if state[group] != 0 {
+            return;
+        }
+        state[group] = 1;
+        for &read in &group_reads[group] {
+            visit(read, group_reads, state, order);
+        }
+        state[group] = 2;
+        order.push(group);
+    }
+    let mut state = vec![0u8; names.len()];
+    let mut group_order = Vec::with_capacity(names.len());
+    for group in 0..names.len() {
+        visit(group, &group_reads, &mut state, &mut group_order);
+    }
+    let mut order = Vec::with_capacity(functions.len());
+    for group in group_order {
+        for (index, function) in functions.iter().enumerate() {
+            if function.name == names[group] {
+                order.push(index);
+            }
+        }
+    }
+    order
 }
 
 /// The types an interface declaration writes in its members, index signatures

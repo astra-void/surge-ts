@@ -362,8 +362,13 @@ pub(crate) fn check_function_body(
                 },
             );
         }
+        let collection_order: Vec<&surge_ts_syntax::ParsedFunctionDeclaration> =
+            crate::checks::function::signature_collection_order(&nested_functions, &local_types)
+                .into_iter()
+                .map(|position| nested_functions[position])
+                .collect();
         let diagnostics_before = ctx.diagnostics().len();
-        hoist_nested_functions(&nested_functions, scopes, ctx);
+        hoist_nested_functions(&collection_order, scopes, ctx);
         ctx.truncate_diagnostics(diagnostics_before);
     }
     hoist_nested_functions(&nested_functions, scopes, ctx);

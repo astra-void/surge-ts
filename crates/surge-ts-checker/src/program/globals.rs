@@ -484,18 +484,23 @@ fn hoist_function_declarations(
     let mut first_pass = symbols.clone();
     let mut discarded = HashMap::new();
     let diagnostics_before = ctx.diagnostics().len();
-    for (statement_index, statement) in statements.iter().enumerate() {
-        if declared_function(statement).is_some() {
-            collect_function_signature_from_statement(
-                statement,
-                file_index,
-                statement_index,
-                &mut first_pass,
-                &mut discarded,
-                ctx,
-                declaration_counts,
-            );
-        }
+    let function_statements: Vec<usize> = statements
+        .iter()
+        .enumerate()
+        .filter(|(_, statement)| declared_function(statement).is_some())
+        .map(|(statement_index, _)| statement_index)
+        .collect();
+    for position in check_function::signature_collection_order(&functions, &local_types) {
+        let statement_index = function_statements[position];
+        collect_function_signature_from_statement(
+            &statements[statement_index],
+            file_index,
+            statement_index,
+            &mut first_pass,
+            &mut discarded,
+            ctx,
+            declaration_counts,
+        );
     }
     ctx.truncate_diagnostics(diagnostics_before);
     let mut hoisted = SymbolTable::new();
