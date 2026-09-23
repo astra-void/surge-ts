@@ -158,6 +158,9 @@ pub(crate) fn emit_object_binding_element_diagnostic(
     ctx: &mut CheckerContext,
 ) {
     match &element.binding_name {
+        // tsc's `getTypeFromBindingElement` types an element with an
+        // initializer from it; only one without is an implicit `any`.
+        ParsedBindingName::Identifier { .. } if element.has_default => {}
         ParsedBindingName::Identifier { name, span } => {
             let diagnostic = Diagnostic::ts7031(name, "any", ctx.file_name.clone());
             let span = (*span).or(element.name_span);
