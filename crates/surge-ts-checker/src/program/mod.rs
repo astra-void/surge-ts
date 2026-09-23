@@ -1209,6 +1209,10 @@ fn run_check_phase(
 ) {
     let worker_count = resolve_worker_count(jobs, &parsed_files);
     crate::metrics::release_free_memory();
+    publish_program_ambient_globals(Arc::new(
+        ctx.ambient_global_symbols
+            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+    ));
     set_check_phase(true);
     let file_results = if worker_count <= 1 {
         check_program_files_serial(parsed_files, shared_state, &ctx, timings.clone())

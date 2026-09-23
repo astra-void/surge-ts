@@ -547,9 +547,9 @@ pub(crate) fn instantiate_function_type_with_substitution<'a>(
             None => function_signature
                 .body_return
                 .as_ref()
-                .and_then(|function| {
+                .and_then(|source| {
                     crate::checks::function::instantiated_body_return(
-                        function,
+                        source,
                         substitution,
                         &instantiated_parameters,
                         ctx,

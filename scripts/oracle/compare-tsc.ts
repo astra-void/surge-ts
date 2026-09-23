@@ -723,6 +723,7 @@ export const fixturePresets: Record<string, string> = {
   'index-signature-key-slots-basic': path.join(workspaceRoot, 'tests/compat-projects/index-signature-key-slots-basic/tsconfig.json'),
   'inference-nested-union-alias-basic': path.join(workspaceRoot, 'tests/compat-projects/inference-nested-union-alias-basic/tsconfig.json'),
   'generic-body-return-call-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-body-return-call-basic/tsconfig.json'),
+  'unannotated-body-return-checked-basic': path.join(workspaceRoot, 'tests/compat-projects/unannotated-body-return-checked-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

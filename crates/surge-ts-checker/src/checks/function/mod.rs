@@ -90,22 +90,6 @@ fn body_inference_shadow_context(ctx: &CheckerContext) -> CheckerContext {
     shadow
 }
 
-/// tsc's `getReturnTypeFromBody`, restricted to a body whose `return`s all sit
-/// at the top level.
-///
-/// A function declaration's signature is collected before any body is checked,
-/// so an unannotated return type stayed the degradation sentinel — and every
-/// type parameter a caller would infer *through* that return died with it.
-/// Inferring by checking the body here would walk it twice, so this reads only
-/// the body's own top-level statements: the bindings a `return` reads, and the
-/// `return`s themselves. Any statement that could hide a `return` gives up and
-/// keeps the sentinel, so a conditional body is never guessed at.
-///
-/// A returned `any` is refused along with the sentinel. tsc never produces
-/// `any` from a body that returns a typed value, so one here is surge's own gap
-/// — and publishing it is strictly worse than the sentinel: `any` is absorbing,
-/// so it silences every downstream check (`noUncheckedIndexedAccess` included)
-/// instead of merely staying unknown.
 thread_local! {
     /// Body returns being forced on this thread, outermost first. Go's
     /// `getReturnTypeOfSignature` guards the same re-entry with
@@ -148,6 +132,7 @@ impl surge_ts_types::ResolveReference for LazyBodyReturn {
             false
         });
         if re_entered {
+            crate::program::note_expansion_degradation();
             return Type::Unknown;
         }
         struct PopInProgress;
@@ -173,12 +158,11 @@ impl surge_ts_types::ResolveReference for LazyBodyReturn {
             .environment
             .current_module_local_values(&self.file_name)
         {
-            Some(values) => values.as_ref().clone(),
-            None => ctx
-                .symbols
-                .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+            Some(values) => module_body_scope(&values, &ctx),
+            None => module_body_scope(&SymbolTable::new(), &ctx),
         };
-        let resolved = infer_body_return(&self.function, &self.parameter_types, scope, &mut ctx)
+        let resolved =
+            checked_body_return(&self.function, &self.parameter_types, scope, body_check_context(&ctx))
             .unwrap_or(Type::Unknown);
         // A force during module analysis runs with its scopes still incomplete,
         // so only the check phase's answer is the one every later read may keep.
@@ -429,11 +413,12 @@ pub(crate) fn return_type_comes_from_body(function: &ParsedFunctionDeclaration) 
 /// bindings, which is the same type. `None` keeps the sentinel: a type argument
 /// the call left unresolved, a recursive call, or a body not typed cleanly.
 pub(crate) fn instantiated_body_return(
-    function: &ParsedFunctionDeclaration,
+    source: &crate::symbols::BodyReturnSource,
     substitution: &crate::infer::TypeParameterSubstitution,
     parameter_types: &[Type],
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    let function = &source.function;
     let start = function.name_span.map_or(0, |span| span.start);
     let id: std::sync::Arc<str> = std::sync::Arc::from(format!(
         "{}{BODY_RETURN_ID_TAG}{}\u{0}{start}",
@@ -448,6 +433,7 @@ pub(crate) fn instantiated_body_return(
         false
     });
     if re_entered {
+        crate::program::note_expansion_degradation();
         return None;
     }
     struct PopInProgress;
@@ -470,9 +456,7 @@ pub(crate) fn instantiated_body_return(
     // The body names what its own module has in scope, not the caller's.
     let file_name = ctx.file_name.clone();
     let scope = match ctx.module_local_values_for_file(&file_name) {
-        Some(values) => values
-            .as_ref()
-            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+        Some(values) => module_body_scope(&values, ctx),
         None => ctx
             .symbols
             .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
@@ -485,11 +469,150 @@ pub(crate) fn instantiated_body_return(
     ctx.type_parameter_scopes.push(bindings);
     ctx.type_parameter_constraint_scopes
         .push(std::collections::HashMap::new());
-    let inferred = infer_body_return(function, parameter_types, scope, ctx);
+    // The type-parameter scopes are the whole environment the body is read in
+    // beyond its own module; a constraint scope in play is not captured by
+    // them, and only the check phase's answer is final.
+    let cache_key = (crate::program::in_check_phase()
+        && ctx
+            .type_parameter_constraint_scopes
+            .iter()
+            .all(|scope| scope.is_empty()))
+    .then(|| {
+        ctx.type_parameter_scopes
+            .iter()
+            .map(|scope| {
+                let mut entries: Vec<(String, Type)> = scope
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), ty.clone()))
+                    .collect();
+                entries.sort_by(|left, right| left.0.cmp(&right.0));
+                entries
+            })
+            .collect::<Vec<_>>()
+    });
+    let cached = cache_key.as_ref().and_then(|key| {
+        source
+            .instantiations
+            .lock()
+            .ok()?
+            .iter()
+            .find(|(bound, _)| bound == key)
+            .map(|(_, ty)| ty.clone())
+    });
+    let inferred = match cached {
+        Some(cached) => Some(cached),
+        None => {
+            let epoch = crate::program::expansion_degradation_epoch();
+            let inferred =
+                checked_body_return(function, parameter_types, scope, body_check_context(ctx));
+            if let (Some(key), Some(ty)) = (cache_key, inferred.as_ref())
+                && crate::program::expansion_degradation_epoch() == epoch
+                && let Ok(mut instantiations) = source.instantiations.lock()
+            {
+                instantiations.push((key, ty.clone()));
+            }
+            inferred
+        }
+    };
     ctx.pop_type_parameter_scope();
     ctx.type_declaration_scope = saved_scope;
     ctx.type_declarations = saved_declarations;
     inferred
+}
+
+/// The scope a module declaration's body is checked in from outside its own
+/// check: the module's values over the ambient globals, rooted the way the
+/// check phase roots the module file (`check_program_file`).
+fn module_body_scope(module_values: &SymbolTable, ctx: &CheckerContext) -> SymbolTable {
+    let globals = crate::program::program_ambient_globals()
+        .filter(|_| crate::program::in_check_phase())
+        .unwrap_or_else(|| {
+            std::sync::Arc::new(
+                ctx.ambient_global_symbols
+                    .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+            )
+        });
+    let mut scope = SymbolTable::file_check_root(globals);
+    for (name, symbol) in module_values.iter_shared() {
+        let _ = scope.insert_shared(name.clone(), symbol.clone());
+    }
+    scope
+}
+
+/// A context the body checker can run a declaration's body in from outside
+/// that declaration's own check: [`body_inference_shadow_context`] — its own
+/// caches, stores and resolution memo, so nothing resolved under this read's
+/// bindings reaches another — plus the program's declaration tables a body
+/// check reads and a type-only inference did not (ambient modules,
+/// augmentations, the JSX and namespace registries).
+fn body_check_context(ctx: &CheckerContext) -> CheckerContext {
+    let mut shadow = body_inference_shadow_context(ctx);
+    shadow.current_file_kind = ctx.current_file_kind;
+    shadow.ambient_modules = ctx.ambient_modules.clone();
+    shadow.ambient_file_type_scopes = ctx.ambient_file_type_scopes.clone();
+    shadow.module_augmentations = ctx.module_augmentations.clone();
+    shadow.module_file_index_by_identity = ctx.module_file_index_by_identity.clone();
+    shadow.module_value_fallback = ctx.module_value_fallback.clone();
+    shadow.jsx_intrinsic_elements_declarer = ctx.jsx_intrinsic_elements_declarer.clone();
+    shadow.namespace_registry = ctx.namespace_registry.clone();
+    shadow.block_scoped_globals = ctx.block_scoped_globals.clone();
+    shadow.umd_global_names = ctx.umd_global_names.clone();
+    shadow
+}
+
+/// tsc's `getReturnTypeFromBody` over the real body check: the union of what
+/// the body's `return`s produced, literals widened, `undefined` when its end is
+/// reachable, and `void` when it returns nothing — the rule an unannotated
+/// block-bodied arrow already follows. The check runs in `shadow`, a context of
+/// its own, so none of its diagnostics or state reach the caller. A return that
+/// is the degradation sentinel keeps the whole answer at it.
+fn checked_body_return(
+    function: &ParsedFunctionDeclaration,
+    parameter_types: &[Type],
+    scope: SymbolTable,
+    mut shadow: CheckerContext,
+) -> Option<Type> {
+    shadow.set_symbols(scope);
+    let function_type = FunctionType::new(
+        parameter_types.to_vec(),
+        Type::Unknown,
+        function.parameters.last().is_some_and(|parameter| parameter.rest),
+        signature::required_parameter_count(&function.parameters),
+    );
+    let ((), captured) = signature::capture_declaration_body_returns(|| {
+        signature::check_function_body_with_signature_and_this(
+            None,
+            function.parameters.clone(),
+            function.body.clone(),
+            &function_type,
+            &[],
+            None,
+            false,
+            None,
+            None,
+            false,
+            None,
+            function.is_generator,
+            function.is_async,
+            function.has_this_parameter,
+            &mut shadow,
+        )
+    });
+    let (returned, falls_through) = captured?;
+    if returned.iter().any(Type::is_degraded) {
+        return None;
+    }
+    if returned.is_empty() {
+        return Some(Type::Void);
+    }
+    let mut members: Vec<Type> = returned
+        .into_iter()
+        .map(|member| widen_unit_return_type(member, None))
+        .collect();
+    if falls_through {
+        members.push(Type::Undefined);
+    }
+    Some(surge_ts_types::union_type(members))
 }
 
 fn inferred_declaration_return_type(
