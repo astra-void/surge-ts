@@ -159,7 +159,8 @@ pub(crate) fn check_expression_flow(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FunctionBodyFlow {
-    pub(crate) contains_value_return: bool,
+    /// tsc's `hasExplicitReturn`: see [`ReturnFlowSummary::contains_return`].
+    pub(crate) contains_return: bool,
     pub(crate) contains_return_with_value: bool,
     pub(crate) guarantees_value_return: bool,
     pub(crate) guarantees_exit: bool,
@@ -333,7 +334,7 @@ enum FlowReadOutcome {
 pub(crate) fn analyze_function_body_flow(body: &[ParsedFunctionBodyStatement]) -> FunctionBodyFlow {
     let summary = summarize_function_body_flow(body);
     FunctionBodyFlow {
-        contains_value_return: summary.contains_value_return,
+        contains_return: summary.contains_return,
         contains_return_with_value: summary.contains_return_with_value,
         guarantees_value_return: summary.guarantees_value_return,
         guarantees_exit: summary.guarantees_exit,
@@ -798,11 +799,14 @@ impl FunctionFlowState {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ReturnFlowSummary {
-    contains_value_return: bool,
-    /// A `return <expr>` appears on some path — unlike `contains_value_return`,
-    /// a `throw` does *not* set this. Distinguishes a function that genuinely
-    /// returns a value (subject to `noImplicitReturns`/TS7030) from one that only
-    /// throws (whose inferred return type is `void`).
+    /// A `return` statement some flow reaches, with or without a value; a
+    /// `throw` is not one (tsc's `hasExplicitReturn`, which only
+    /// `bindReturnStatement` sets).
+    contains_return: bool,
+    /// A `return <expr>` appears on some path, and a `throw` does *not* set
+    /// this. Distinguishes a function that genuinely returns a value (subject
+    /// to `noImplicitReturns`/TS7030) from one that only throws (whose inferred
+    /// return type is `void`).
     contains_return_with_value: bool,
     contains_throw: bool,
     guarantees_value_return: bool,
