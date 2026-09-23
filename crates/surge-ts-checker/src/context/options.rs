@@ -75,6 +75,16 @@ pub struct CompatibilityStats {
     pub external_modules_unresolved_total: usize,
 }
 
+/// `jsxFactory`, `jsxFragmentFactory`, `reactNamespace` and
+/// `jsxImportSource` as written: the names a JSX tag refers to implicitly.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JsxFactoryNames {
+    pub factory: Option<String>,
+    pub fragment_factory: Option<String>,
+    pub react_namespace: Option<String>,
+    pub import_source: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckerOptions {
     pub no_implicit_any: bool,
@@ -148,6 +158,7 @@ pub struct CheckerOptions {
     /// `compilerOptions.jsx` is set. Unset, a module that resolves to a `.jsx`
     /// file is TS6142 (`GetResolutionDiagnostic`).
     pub jsx_configured: bool,
+    pub jsx_factory_names: JsxFactoryNames,
     pub diagnostic_profile: DiagnosticProfile,
 }
 
@@ -217,6 +228,7 @@ impl Default for CheckerOptions {
             resolve_json_module: true,
             allow_js: false,
             jsx_configured: false,
+            jsx_factory_names: Default::default(),
             diagnostic_profile: DiagnosticProfile::default(),
         }
     }

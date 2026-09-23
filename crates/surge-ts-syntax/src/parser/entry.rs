@@ -164,6 +164,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             json_module_type: Some(
                 super::parse_json_module_type(source_text).unwrap_or(ParsedType::Unknown),
             ),
+            jsx_factory_uses: Default::default(),
         };
     }
 
@@ -262,6 +263,11 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
 
     let let_assignments =
         super::let_assignments::collect_let_assignments(&parsed.program, source_text);
+    let jsx_factory_uses = if source_type.is_jsx() {
+        super::jsx_uses::collect_jsx_factory_uses(&parsed.program, source_text)
+    } else {
+        Default::default()
+    };
     ParsedSource {
         file_name: file_name.to_string(),
         statements,
@@ -276,6 +282,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         grammar_diagnostics,
         parenthesized_expressions,
         json_module_type: None,
+        jsx_factory_uses,
     }
 }
 

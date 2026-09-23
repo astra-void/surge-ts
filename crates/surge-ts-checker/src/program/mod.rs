@@ -107,6 +107,8 @@ pub(crate) struct ParsedProgramFile {
     /// `.json` file; its export table is built from this instead of from
     /// `statements`, which are always empty for such a file.
     pub(crate) json_module_type: Option<surge_ts_syntax::ParsedType>,
+    /// See [`surge_ts_syntax::ParsedSource::jsx_factory_uses`].
+    pub(crate) jsx_factory_uses: surge_ts_syntax::JsxFactoryUses,
 }
 
 #[derive(Debug, Clone)]

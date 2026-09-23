@@ -1265,9 +1265,12 @@ pub(super) fn check_program_file(
         ctx.module_value_fallback = None;
 
         if ctx.options.no_unused_locals && ctx.current_file_kind == FileKind::RootSource {
+            let jsx_reads =
+                unused_locals::jsx_factory_reads(&parsed_file.jsx_factory_uses, &ctx.options);
             unused_locals::emit_unused_module_bindings(
                 &parsed_file.statements,
                 &parsed_file.module_reads,
+                &jsx_reads,
                 ctx,
             );
         }

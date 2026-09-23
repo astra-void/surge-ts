@@ -25,6 +25,7 @@ mod imports;
 mod interfaces;
 mod json;
 mod reads;
+mod jsx_uses;
 mod number_text;
 mod reference_directives;
 mod scanner_checks;
@@ -53,6 +54,7 @@ use self::spans::text_span_from_oxc_span;
 use self::types::{parse_type_alias_declaration, parse_type_annotation};
 pub use entry::{ParserWorker, parse_source};
 pub use json::{is_json_file_name, parse_json_module_type};
+pub use jsx_uses::entity_root as jsx_entity_root;
 pub use number_text::js_number_to_string;
 
 fn parse_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {

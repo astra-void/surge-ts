@@ -126,6 +126,23 @@ pub(crate) fn normalize_compiler_options(
             "jsx" => {
                 normalized.jsx = parse_jsx_option(value, config_dir, diagnostics);
             }
+            "jsxFactory" | "jsxFragmentFactory" | "reactNamespace" | "jsxImportSource" => {
+                let Some(text) = value.as_str() else {
+                    diagnostics.push(ConfigDiagnostic {
+                        code: ConfigDiagnosticCode::InvalidCompilerOptionValue,
+                        message: format!("`{key}` must be a string"),
+                        file_name: config_dir.to_path_buf(),
+                    });
+                    continue;
+                };
+                let slot = match key.as_str() {
+                    "jsxFactory" => &mut normalized.jsx_factory,
+                    "jsxFragmentFactory" => &mut normalized.jsx_fragment_factory,
+                    "reactNamespace" => &mut normalized.react_namespace,
+                    _ => &mut normalized.jsx_import_source,
+                };
+                *slot = Some(text.to_string());
+            }
             "allowJs" => {
                 normalized.allow_js = parse_bool_option(key, value, config_dir, diagnostics)
                     .unwrap_or(normalized.allow_js);

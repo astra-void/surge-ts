@@ -211,6 +211,7 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
                 parenthesized_expressions: Default::default(),
                 let_assignments: Default::default(),
                 json_module_type: None,
+                jsx_factory_uses: parsed.jsx_factory_uses,
             }
         })
         .collect();

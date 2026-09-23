@@ -60,6 +60,23 @@ pub struct ParsedSource {
     /// meaning. `None` for every other file. A `.json` file whose contents do
     /// not parse is still a module, with the degradation sentinel for a value.
     pub json_module_type: Option<ParsedType>,
+    /// See [`JsxFactoryUses`].
+    pub jsx_factory_uses: JsxFactoryUses,
+}
+
+/// What a file's JSX refers to implicitly (tsc's `markJsxAliasReferenced`):
+/// whether it has elements and fragments, and what its leading `@jsx`,
+/// `@jsxFrag`, `@jsxImportSource` and `@jsxRuntime` pragmas say.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JsxFactoryUses {
+    pub has_elements: bool,
+    pub has_fragments: bool,
+    /// The first identifier of the `@jsx` factory.
+    pub factory_pragma: Option<String>,
+    /// The first identifier of the `@jsxFrag` factory.
+    pub fragment_pragma: Option<String>,
+    pub import_source_pragma: bool,
+    pub runtime_pragma: Option<String>,
 }
 
 /// How a flow-typed `let` (un-annotated, initialized with nothing, `undefined`,

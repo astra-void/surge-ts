@@ -528,6 +528,7 @@ fn run_single_file_mode(
             resolve_json_module: true,
             allow_js: false,
             jsx_configured: false,
+            jsx_factory_names: Default::default(),
             diagnostic_profile,
         })
         .check_source(&source_text, &file_name);

@@ -60,6 +60,12 @@ pub struct NormalizedCompilerOptions {
     pub use_define_for_class_fields: bool,
     pub module_resolution: ModuleResolutionKind,
     pub jsx: Option<JsxMode>,
+    /// `jsxFactory`, `jsxFragmentFactory`, `reactNamespace` and
+    /// `jsxImportSource`: the names a JSX tag refers to implicitly.
+    pub jsx_factory: Option<String>,
+    pub jsx_fragment_factory: Option<String>,
+    pub react_namespace: Option<String>,
+    pub jsx_import_source: Option<String>,
     pub allow_js: bool,
     pub check_js: bool,
     pub no_emit: bool,
@@ -123,6 +129,10 @@ impl Default for NormalizedCompilerOptions {
             use_define_for_class_fields: true,
             module_resolution: ModuleResolutionKind::Bundler,
             jsx: None,
+            jsx_factory: None,
+            jsx_fragment_factory: None,
+            react_namespace: None,
+            jsx_import_source: None,
             allow_js: false,
             check_js: false,
             no_emit: false,

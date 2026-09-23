@@ -746,6 +746,7 @@ export const fixturePresets: Record<string, string> = {
   'unused-import-declaration-grouping': path.join(workspaceRoot, 'tests/compat-projects/unused-import-declaration-grouping/tsconfig.json'),
   'default-and-namespace-import': path.join(workspaceRoot, 'tests/compat-projects/default-and-namespace-import/tsconfig.json'),
   'type-only-export-specifier-value': path.join(workspaceRoot, 'tests/compat-projects/type-only-export-specifier-value/tsconfig.json'),
+  'jsx-factory-implicit-use': path.join(workspaceRoot, 'tests/compat-projects/jsx-factory-implicit-use/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

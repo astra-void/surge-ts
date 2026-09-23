@@ -590,6 +590,12 @@ impl Project {
             // tsc's `GetAllowJS`: `checkJs` implies `allowJs`.
             allow_js: loaded.compiler_options.allow_js || loaded.compiler_options.check_js,
             jsx_configured: loaded.compiler_options.jsx.is_some(),
+            jsx_factory_names: surge_ts_checker::JsxFactoryNames {
+                factory: loaded.compiler_options.jsx_factory.clone(),
+                fragment_factory: loaded.compiler_options.jsx_fragment_factory.clone(),
+                react_namespace: loaded.compiler_options.react_namespace.clone(),
+                import_source: loaded.compiler_options.jsx_import_source.clone(),
+            },
             diagnostic_profile: options.diagnostic_profile,
         };
 

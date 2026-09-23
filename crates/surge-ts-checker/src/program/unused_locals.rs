@@ -11,12 +11,71 @@ use surge_ts_syntax::{ParsedExportDeclaration, ParsedImportKind, ParsedStatement
 
 use crate::context::{CheckerContext, convert_span};
 
+/// The names a file's JSX reads without writing them (tsc's
+/// `markJsxAliasReferenced`): an element reads the factory's root — the `@jsx`
+/// pragma's, else `jsxFactory`'s, else `reactNamespace`, else `React` — and a
+/// fragment the fragment factory's (`@jsxFrag`, else `jsxFragmentFactory`,
+/// else that default namespace, never the file's pragma) together with the
+/// file's factory. The automatic runtime imports its factory instead; surge's
+/// loader does not add that import, so it is taken to resolve.
+pub(crate) fn jsx_factory_reads(
+    uses: &surge_ts_syntax::JsxFactoryUses,
+    options: &crate::CheckerOptions,
+) -> Vec<String> {
+    if !uses.has_elements && !uses.has_fragments {
+        return Vec::new();
+    }
+    let names = &options.jsx_factory_names;
+    let runtime = uses.runtime_pragma.as_deref();
+    let automatic = runtime != Some("classic")
+        && (options.jsx_automatic_runtime
+            || names.import_source.is_some()
+            || uses.import_source_pragma
+            || runtime == Some("automatic"));
+    if automatic {
+        return Vec::new();
+    }
+    let default_namespace = names
+        .factory
+        .as_deref()
+        .and_then(surge_ts_syntax::jsx_entity_root)
+        .or_else(|| names.react_namespace.clone())
+        .unwrap_or_else(|| "React".to_string());
+    let factory = uses
+        .factory_pragma
+        .clone()
+        .unwrap_or_else(|| default_namespace.clone());
+    let mut reads = vec![factory];
+    if uses.has_fragments {
+        let fragment = uses
+            .fragment_pragma
+            .clone()
+            .or_else(|| {
+                names
+                    .fragment_factory
+                    .as_deref()
+                    .and_then(surge_ts_syntax::jsx_entity_root)
+            })
+            .unwrap_or(default_namespace);
+        // `jsxFragmentFactory: "null"` names no binding.
+        if fragment != "null" {
+            reads.push(fragment);
+        }
+    }
+    reads
+}
+
 pub(crate) fn emit_unused_module_bindings(
     statements: &[ParsedStatement],
     module_reads: &[String],
+    jsx_reads: &[String],
     ctx: &mut CheckerContext,
 ) {
-    let reads: HashSet<&str> = module_reads.iter().map(String::as_str).collect();
+    let reads: HashSet<&str> = module_reads
+        .iter()
+        .chain(jsx_reads)
+        .map(String::as_str)
+        .collect();
 
     // A binding re-exported via `export { x }` (no `from`) is used. Statement and
     // default exports wrap their declaration, so those names are never visited as
