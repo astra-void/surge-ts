@@ -39,6 +39,9 @@ pub(super) fn copy_namespace_member_type_exports(
 ) {
     let type_declarations = Arc::make_mut(&mut resolved_export_table.type_declarations);
     for (key, declaration) in target_export_table.type_declarations.iter() {
+        if is_export_assignment_key(key) {
+            continue;
+        }
         let qualified = format!("{exported_name}.{key}");
         if type_declarations.get(&qualified).is_none() {
             let _ = type_declarations.insert(qualified.as_str(), declaration.clone());
@@ -101,6 +104,10 @@ pub(crate) fn compute_namespace_export_object_type(export_table: &ModuleExportTa
     let mut property_count = 0u64;
 
     for (name, symbol) in export_table.symbols.iter() {
+        // `export type` keeps a name off the module object.
+        if export_table.type_only_exports.contains_key(name.as_ref()) {
+            continue;
+        }
         property_count += 1;
         properties.insert(
             name.clone(),

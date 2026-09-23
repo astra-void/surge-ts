@@ -101,7 +101,9 @@ pub(super) fn predicate_callee_signature<'a>(
 }
 
 /// Binds a generic predicate's type parameters for the guard site. A
-/// non-generic predicate needs none.
+/// non-generic predicate needs none. `subject_ty` is the type of the tested
+/// argument itself — for `isDefined(this.x)` the type of `this.x` — which is
+/// what tsc infers the predicate's type parameters from.
 pub(super) fn predicate_type_argument_substitution(
     guard: &PredicateGuardInfo,
     subject_ty: Option<&Type>,
@@ -115,13 +117,6 @@ pub(super) fn predicate_type_argument_substitution(
     if !guard.explicit_type_arguments.is_empty() {
         return Some(explicit_predicate_type_argument_substitution(guard, ctx));
     }
-    // A property path means the tested value is not the whole argument, so the
-    // parameter annotation cannot be matched against the subject's type — only
-    // that inference is skipped. The loop below does not read the subject at
-    // all, so a predicate whose parameters come from its *other* arguments still
-    // binds: `is(options.role, PgRole)` takes `T` from the class, and dropping
-    // the whole guard here left every `is(x.y, C)` in drizzle unnarrowed.
-    let subject_ty = guard.path.is_empty().then_some(subject_ty).flatten();
     for type_parameter in &guard.signature.type_parameters {
         substitution.insert_placeholder(
             type_parameter.name.clone(),
@@ -602,15 +597,60 @@ pub(super) fn parse_this_predicate_call(
     Some((subject, path, property_name.as_str()))
 }
 
-/// The resolved target of a `this is T` method predicate declared on the
-/// receiver's own interface (`interface Type { isUnion(): this is UnionType }`).
+/// The resolved target of a `this is T` method predicate the receiver's
+/// member declares: the one its own interface declares
+/// (`interface Type { isUnion(): this is UnionType }`), or the one the member
+/// signature it resolves to carries — inherited from a base class or
+/// interface, or merged into an intersection — as tsc reads the predicate off
+/// the call's resolved signature (`getEffectsSignature`).
 ///
 /// Predicates are dropped when a signature resolves to a type — `x is T` and
 /// `this is T` both resolve to `boolean` — so the declaration has to be read
-/// back. Only the receiver's own declaration is consulted: an inherited
-/// predicate would need the heritage chain, which is not what the shapes this
-/// models (`ts.Type`'s `isUnion`/`isIntersection`) declare.
+/// back.
 pub(super) fn this_predicate_target(
+    receiver_ty: &Type,
+    method: &str,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    own_this_predicate_target(receiver_ty, method, ctx)
+        .or_else(|| member_this_predicate_target(receiver_ty, method, ctx))
+}
+
+/// A `this is T` predicate on the written signature a member's resolved type
+/// carries (`DeclaredMemberSignature`), with the enclosing bindings it was
+/// resolved under.
+fn member_this_predicate_target(
+    receiver_ty: &Type,
+    method: &str,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Type::Function(function) = receiver_ty.get_property_access_type(method)?.peeled() else {
+        return None;
+    };
+    let declared = function
+        .declaration()?
+        .downcast_ref::<crate::checks::call::DeclaredMemberSignature>()?;
+    let Some(surge_ts_syntax::ParsedType::Predicate(predicate)) = &declared.signature.return_type
+    else {
+        return None;
+    };
+    if predicate.asserts || predicate.parameter_name != "this" {
+        return None;
+    }
+    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    for (name, ty) in &declared.outer_type_arguments {
+        substitution.insert(name.clone(), ty.clone());
+    }
+    resolve_predicate_type_under(
+        predicate.ty.clone()?,
+        declared.signature.declaring_file.as_deref(),
+        declared.signature.namespace_prefix.as_deref(),
+        &substitution,
+        ctx,
+    )
+}
+
+fn own_this_predicate_target(
     receiver_ty: &Type,
     method: &str,
     ctx: &mut CheckerContext,
@@ -665,10 +705,11 @@ pub(super) fn this_predicate_target(
     )
 }
 
-/// The object a `this is T` method is called on: the subject itself, or the
-/// member its path reaches (`this.activeConnection.isOpen()`). tsc narrows
-/// whichever reference the call's receiver is (`getTypePredicateArgument`).
-fn this_predicate_receiver(subject_ty: &Type, path: &[String]) -> Option<Type> {
+/// The reference a predicate tests — the argument of `isDefined(this.x)`, or
+/// the object a `this is T` method is called on
+/// (`this.activeConnection.isOpen()`): the subject itself, or the member its
+/// path reaches (tsc's `getTypePredicateArgument`).
+fn predicate_argument_type(subject_ty: &Type, path: &[String]) -> Option<Type> {
     if path.is_empty() {
         return Some(subject_ty.clone());
     }
@@ -688,7 +729,7 @@ pub(super) fn narrow_this_predicate_symbol_table(
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let target = this_predicate_target(&this_predicate_receiver(&subject_ty, &path)?, method, ctx)?;
+    let target = this_predicate_target(&predicate_argument_type(&subject_ty, &path)?, method, ctx)?;
     let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
         narrowed_predicate_subject(&subject_ty, &path, &target, branch_is_true)
     })?;
@@ -721,7 +762,7 @@ pub(super) fn narrow_this_predicate_call_in_scope(
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let Some(target) = this_predicate_receiver(&subject_ty, &path)
+    let Some(target) = predicate_argument_type(&subject_ty, &path)
         .and_then(|receiver| this_predicate_target(&receiver, method, ctx))
     else {
         return false;
@@ -741,6 +782,30 @@ pub(super) fn narrow_this_predicate_call_in_scope(
         subject_ty,
     );
     true
+}
+
+/// Whether `expression` calls a `param is T` predicate with a reference in the
+/// tested position — the one call shape that narrows as a condition.
+pub(crate) fn is_type_predicate_call(
+    expression: &ParsedExpression,
+    scopes: &ScopeStack,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let arguments = match expression {
+        ParsedExpression::Call { arguments, .. }
+        | ParsedExpression::PropertyCall { arguments, .. } => arguments,
+        _ => return false,
+    };
+    if !arguments
+        .iter()
+        .any(|argument| reference_path(&argument.expression).is_some())
+    {
+        return false;
+    }
+    parse_type_predicate_condition(expression, &mut |callee| {
+        predicate_callee_signature(callee, |name| scopes.resolve(name), scopes.visible_symbols(), ctx)
+    })
+    .is_some()
 }
 
 /// Applies user-defined type-predicate narrowing (`isFoo(x)`) in place to a
@@ -763,9 +828,10 @@ pub(super) fn narrow_predicate_call_in_scope(
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
+    let argument_ty = predicate_argument_type(&subject_ty, &guard.path);
     let narrowed = match resolve_predicate_guard_target(
         &guard,
-        Some(&subject_ty),
+        argument_ty.as_ref(),
         scopes.visible_symbols(),
         ctx,
     ) {
@@ -1089,7 +1155,8 @@ pub(crate) fn narrow_predicate_guards_symbol_table(
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let narrowed = match resolve_predicate_guard_target(&guard, Some(&subject_ty), symbols, ctx)? {
+    let argument_ty = predicate_argument_type(&subject_ty, &guard.path);
+    let narrowed = match resolve_predicate_guard_target(&guard, argument_ty.as_ref(), symbols, ctx)? {
         PredicateTarget::Resolved(predicate_ty) => {
             with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
                 narrowed_predicate_subject(&subject_ty, &guard.path, &predicate_ty, branch_is_true)
@@ -1162,8 +1229,11 @@ pub(super) fn narrow_predicate_reference_guards_in_scope(
     if guard.path.is_empty() {
         return;
     }
+    let argument_ty = scopes
+        .resolve(&guard.subject)
+        .and_then(|symbol| predicate_argument_type(&symbol.ty, &guard.path));
     let Some(predicate_ty) =
-        resolve_predicate_guard_type(&guard, None, scopes.visible_symbols(), ctx)
+        resolve_predicate_guard_type(&guard, argument_ty.as_ref(), scopes.visible_symbols(), ctx)
     else {
         return;
     };
@@ -1178,25 +1248,145 @@ pub(super) fn narrow_predicate_reference_guards_in_scope(
     );
 }
 
-/// tsc's `getTypePredicateFromBody`: the predicate a body that is one returned
-/// condition implies over one of its parameters. The condition has to split
-/// the parameter's type exactly — `x => !!x` keeps `number` when true but
-/// proves nothing when false (`0` is falsy), so it is no predicate.
+/// tsc's `getTypePredicateFromBody` for an arrow whose body is an expression.
 pub(crate) fn infer_predicate_from_body(
     parameters: &[surge_ts_syntax::ParsedFunctionParameter],
     parameter_types: &[Type],
     returned: &ParsedExpression,
     symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
 ) -> Option<crate::symbols::InferredPredicate> {
-    let named = |parameter: &surge_ts_syntax::ParsedFunctionParameter| match &parameter.binding_name {
+    let scope = parameter_scope(parameters, parameter_types, symbols);
+    refined_parameter_predicate(
+        parameters,
+        parameter_types,
+        returned,
+        &scope,
+        &Default::default(),
+        ctx,
+    )
+}
+
+/// tsc's `getTypePredicateFromBody` for a block body: exactly one `return`,
+/// with a value, at the end of the body (so it has no implicit return). The
+/// parameters are typed as the flow leaves them at that `return`: a preceding
+/// `if` whose body cannot complete (`if (x instanceof Date) throw …`) rules its
+/// condition out.
+pub(crate) fn infer_predicate_from_function_body(
+    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
+    parameter_types: &[Type],
+    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<crate::symbols::InferredPredicate> {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+    let (Statement::Return(statement), before) = body.split_last()? else {
+        return None;
+    };
+    let returned = statement.expression.as_ref()?;
+    if contains_return(before) {
+        return None;
+    }
+    let mut scope = parameter_scope(parameters, parameter_types, symbols);
+    for statement in before {
+        let Statement::If(if_statement) = statement else {
+            continue;
+        };
+        if !if_statement.else_body.is_empty()
+            || !crate::flow::analyze_function_body_flow(&if_statement.then_body).guarantees_exit
+        {
+            continue;
+        }
+        if let Some(narrowed) = narrowed_by_condition(&if_statement.condition, &scope, false, ctx) {
+            scope = narrowed;
+        }
+    }
+    let assigned = crate::flow::assigned_bindings(body);
+    refined_parameter_predicate(parameters, parameter_types, returned, &scope, &assigned, ctx)
+}
+
+/// tsc's `checkIfExpressionRefinesAnyParameter`: the first parameter the
+/// returned boolean expression refines. A parameter is refined when the
+/// expression holding narrows it to some `T` and the expression failing leaves
+/// nothing of `T` (`checkIfExpressionRefinesParameter`) — "`x is T`" holds if
+/// and only if the call returns true. A `boolean` parameter, a destructured or
+/// rest one, and one the body assigns are never refined.
+fn refined_parameter_predicate(
+    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
+    parameter_types: &[Type],
+    returned: &ParsedExpression,
+    scope: &SymbolTable,
+    assigned: &std::collections::HashSet<Arc<str>>,
+    ctx: &mut CheckerContext,
+) -> Option<crate::symbols::InferredPredicate> {
+    if !is_boolean_expression(returned) {
+        return None;
+    }
+    for (parameter_index, (parameter, declared)) in
+        parameters.iter().zip(parameter_types).enumerate()
+    {
+        let Some(name) = identifier_parameter_name(parameter) else {
+            continue;
+        };
+        if matches!(declared, Type::Boolean)
+            || declared.is_unmodelled() && !matches!(declared, Type::GenuineUnknown)
+            || assigned.contains(name.as_str())
+        {
+            continue;
+        }
+        let initial = scope.get(&name).map_or_else(|| declared.clone(), |symbol| symbol.ty.clone());
+        let narrowed_parameter = |table: Option<SymbolTable>| {
+            table.and_then(|table| table.get(&name).map(|symbol| symbol.ty.clone()))
+        };
+        let Some(true_type) = narrowed_parameter(narrowed_by_condition(returned, scope, true, ctx))
+        else {
+            continue;
+        };
+        if true_type == initial || true_type.is_unmodelled() {
+            continue;
+        }
+        let mut assumed = scope.clone_with_reason(TypeCopyReason::ScopeOrContext);
+        assumed.insert(
+            name.clone(),
+            SymbolInfo {
+                ty: true_type.clone(),
+                kind: crate::symbols::SymbolKind::Parameter,
+                function_signature: None,
+            },
+        );
+        let false_subtype =
+            narrowed_parameter(narrowed_by_condition(returned, &assumed, false, ctx))
+                .unwrap_or_else(|| true_type.clone());
+        if matches!(false_subtype, Type::Never) {
+            return Some(crate::symbols::InferredPredicate {
+                parameter_index,
+                target: true_type,
+            });
+        }
+    }
+    None
+}
+
+fn identifier_parameter_name(
+    parameter: &surge_ts_syntax::ParsedFunctionParameter,
+) -> Option<String> {
+    match &parameter.binding_name {
         surge_ts_syntax::ParsedBindingName::Identifier { name, .. } if !parameter.rest => {
             Some(name.clone())
         }
         _ => None,
-    };
-    let mut scope = symbols.clone();
+    }
+}
+
+/// `symbols` with each named parameter bound to its declared type.
+fn parameter_scope(
+    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
+    parameter_types: &[Type],
+    symbols: &SymbolTable,
+) -> SymbolTable {
+    let mut scope = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
     for (parameter, ty) in parameters.iter().zip(parameter_types) {
-        if let Some(name) = named(parameter) {
+        if let Some(name) = identifier_parameter_name(parameter) {
             scope.insert(
                 name,
                 SymbolInfo {
@@ -1207,63 +1397,91 @@ pub(crate) fn infer_predicate_from_body(
             );
         }
     }
-    parameters
-        .iter()
-        .zip(parameter_types)
-        .enumerate()
-        .find_map(|(parameter_index, (parameter, declared))| {
-            let name = named(parameter)?;
-            if declared.is_unknown() || matches!(declared, Type::Any) {
-                return None;
-            }
-            let narrowed = |branch_is_true: bool| {
-                super::narrow_condition_symbol_table(returned, &scope, branch_is_true)
-                    .and_then(|narrowed| narrowed.get(&name).map(|symbol| symbol.ty.clone()))
-            };
-            let target = narrowed(true)?;
-            if target.is_unknown() || target == *declared {
-                return None;
-            }
-            // tsc's test is "if and only if": the two branches have to split
-            // the declared type exactly, so `x => !!x` (`0` is falsy) is none.
-            let holds = narrowed(false)
-                .is_some_and(|rejected| predicate_partitions(declared, &target, &rejected));
-            holds.then_some(crate::symbols::InferredPredicate {
-                parameter_index,
-                target,
-            })
-        })
+    scope
 }
 
-/// Whether `a` and `b` are exactly the two halves `declared` splits into.
-pub(crate) fn predicate_partitions(declared: &Type, a: &Type, b: &Type) -> bool {
-    let members = |ty: &Type| match ty {
-        Type::Union(union) => union.types().to_vec(),
-        Type::Never => Vec::new(),
-        other => vec![other.clone()],
-    };
-    let declared = members(declared);
-    let mut halves = members(a);
-    halves.extend(members(b));
-    declared.len() == halves.len()
-        && declared.iter().all(|member| halves.contains(member))
-        && halves.iter().all(|member| declared.contains(member))
+/// `symbols` narrowed by `condition` in one branch, by the syntactic guards
+/// and the ones that need the checker (predicate calls, `instanceof` against
+/// a constructor's instance type).
+fn narrowed_by_condition(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+    ctx: &mut CheckerContext,
+) -> Option<SymbolTable> {
+    let narrowed = super::narrow_condition_symbol_table(condition, symbols, branch_is_true);
+    narrow_predicate_guards_symbol_table(
+        condition,
+        narrowed.as_ref().unwrap_or(symbols),
+        branch_is_true,
+        ctx,
+    )
+    .or(narrowed)
 }
 
-/// The expression a predicate body returns: tsc wants exactly one `return`.
-/// Plain expression statements may come before it (`console.log(x)`); anything
-/// that could branch, rebind or reassign first is left alone, since the
-/// condition is then no longer a statement about the parameter as declared.
-pub(crate) fn single_returned_statement_expression(
-    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
-) -> Option<&ParsedExpression> {
+/// Whether an expression is boolean-typed by its shape — tsc requires the
+/// returned expression's type to be `boolean` (a comparison, `!`, `in`,
+/// `instanceof`, a call, or `&&`/`||` of those). `x => x` narrows `x` when
+/// true but returns `x`, so it is no predicate.
+fn is_boolean_expression(expression: &ParsedExpression) -> bool {
+    use surge_ts_syntax::ParsedBinaryOperator as Op;
+    match expression {
+        ParsedExpression::BooleanLiteral(_)
+        | ParsedExpression::Call { .. }
+        | ParsedExpression::PropertyCall { .. }
+        | ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            ..
+        } => true,
+        ParsedExpression::Binary { operator, .. } => matches!(
+            operator,
+            Op::StrictEquals
+                | Op::StrictNotEquals
+                | Op::Equals
+                | Op::NotEquals
+                | Op::LessThan
+                | Op::LessThanEquals
+                | Op::GreaterThan
+                | Op::GreaterThanEquals
+                | Op::In
+                | Op::Instanceof
+        ),
+        ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::And | ParsedLogicalOperator::Or,
+            right,
+            ..
+        } => is_boolean_expression(left) && is_boolean_expression(right),
+        ParsedExpression::SatisfiesExpression { expression, .. } => {
+            is_boolean_expression(expression)
+        }
+        _ => false,
+    }
+}
+
+/// Whether any statement contains a `return` (tsc's `forEachReturnStatement`
+/// stops at nested functions and classes).
+fn contains_return(body: &[surge_ts_syntax::ParsedFunctionBodyStatement]) -> bool {
     use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
-    let (Statement::Return(statement), before) = body.split_last()? else {
-        return None;
-    };
-    before
-        .iter()
-        .all(|statement| matches!(statement, Statement::Expression(_)))
-        .then(|| statement.expression.as_ref())
-        .flatten()
+    body.iter().any(|statement| match statement {
+        Statement::Return(_) => true,
+        Statement::Block(block) => contains_return(block),
+        Statement::If(if_statement) => {
+            contains_return(&if_statement.then_body) || contains_return(&if_statement.else_body)
+        }
+        Statement::While(while_statement) => contains_return(&while_statement.body),
+        Statement::ForOf(for_of) => contains_return(&for_of.body),
+        Statement::Switch(switch) => {
+            switch.cases.iter().any(|case| contains_return(&case.consequent))
+        }
+        Statement::Try(try_statement) => {
+            contains_return(&try_statement.block)
+                || try_statement
+                    .handler
+                    .as_ref()
+                    .is_some_and(|handler| contains_return(&handler.body))
+                || contains_return(&try_statement.finalizer)
+        }
+        _ => false,
+    })
 }

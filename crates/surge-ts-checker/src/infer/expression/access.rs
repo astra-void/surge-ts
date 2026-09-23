@@ -281,7 +281,7 @@ pub(crate) fn indexes_const_enum_object(
 /// bare value it holds, so it keeps the enum's nominal identity: `F.X` is not
 /// an `E` even when both are `0`. Only a member whose `E.A` alias resolves to
 /// an enum reference is answered here; anything else falls back to the object.
-fn enum_member_value_type(
+pub(crate) fn enum_member_value_type(
     object: &ParsedExpression,
     property_name: &str,
     symbols: &SymbolTable,
@@ -837,6 +837,13 @@ pub(crate) fn lib_builtin_member_type(
         Type::Boolean | Type::BooleanLiteral(_) => ("Boolean", None),
         Type::BigInt => ("BigInt", None),
         Type::Function(_) => ("Function", None),
+        // tsc's `getPropertyOfType`: an object type with call or construct
+        // signatures reads the members it lacks from the global `Function`.
+        _ if matches!(receiver.peeled(), Type::Object(object)
+            if object.call_signature().is_some() || object.construct_signature().is_some()) =>
+        {
+            ("Function", None)
+        }
         _ => return None,
     };
     let (member_type, optional, scope) = match ctx.lookup_type_declaration(interface_name)? {

@@ -81,10 +81,10 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
         );
     }
 
-    let return_type = match &arrow_function.body {
+    let infer_return_type = |ctx: &mut CheckerContext| match &arrow_function.body {
         ParsedArrowFunctionBody::Expression(expression) => {
             declared_return_type.unwrap_or_else(|| {
-                let locals = body_locals(&arrow_function.parameters, &parameters, symbols);
+                let locals = body_locals(arrow_function, &parameters, symbols);
                 match infer_expression(expression, &locals, ctx).flowing_type() {
                     Some(ty) => widen_fresh_literal_return(expression, ty),
                     None => Type::Unknown,
@@ -93,7 +93,7 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
         }
         ParsedArrowFunctionBody::Block(body) => declared_return_type
             .or_else(|| {
-                let locals = body_locals(&arrow_function.parameters, &parameters, symbols);
+                let locals = body_locals(arrow_function, &parameters, symbols);
                 infer_block_body_return_type(body, locals, ctx)
             })
             // A body with no `return` anywhere returns `void`, as tsc types it.
@@ -115,6 +115,17 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
                 })
             })
             .unwrap_or(Type::Unknown),
+    };
+    // The body sees the arrow's own type parameters wherever it names them
+    // (`<U>() => <U[]>null`), as tsc's lexical `resolveName` finds them.
+    let return_type = if arrow_function.type_parameters.is_empty() {
+        infer_return_type(ctx)
+    } else {
+        crate::checks::function::with_type_parameter_scope(
+            &arrow_function.type_parameters,
+            ctx,
+            infer_return_type,
+        )
     };
 
     // An async function returns a promise of what its body completes with.
@@ -187,7 +198,7 @@ fn primitive_declared_return_type(ty: &surge_ts_syntax::ParsedType) -> Option<Ty
 }
 
 fn body_locals(
-    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
+    arrow_function: &ParsedArrowFunction,
     parameter_types: &[Type],
     symbols: &SymbolTable,
 ) -> SymbolTable {
@@ -197,7 +208,19 @@ fn body_locals(
     let mut scopes = crate::symbols::ScopeStack::from_root(
         symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
     );
-    for (parameter, ty) in parameters.iter().zip(parameter_types) {
+    // A named `function` expression's own name shadows the enclosing scope's;
+    // the sketch being inferred is its type, so it stands at the sentinel.
+    if let Some(name) = &arrow_function.name {
+        scopes.insert_current(
+            name.as_str(),
+            crate::symbols::SymbolInfo {
+                ty: Type::Unknown,
+                kind: crate::symbols::SymbolKind::Function,
+                function_signature: None,
+            },
+        );
+    }
+    for (parameter, ty) in arrow_function.parameters.iter().zip(parameter_types) {
         crate::checks::function::insert_binding_name(
             &parameter.binding_name,
             ty.clone(),

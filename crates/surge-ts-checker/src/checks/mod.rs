@@ -16,7 +16,8 @@ use crate::context::{CheckerContext, convert_span};
 /// Reports the diagnostic tsc gives for a name used in a genuine *value*
 /// position that is not usable as one: TS1361 when a type-only import binds it
 /// (the import shadows any same-named UMD global, so tsc reports the import),
-/// otherwise TS2686 for a UMD global. Returns whether it fired.
+/// TS1362 when the export it imports is type-only, otherwise TS2686 for a UMD
+/// global. Returns whether it fired.
 ///
 /// A `typeof X` type query is NOT such a position — a type-only import is
 /// exactly what makes `typeof ns.Member` legal — so it calls
@@ -26,11 +27,14 @@ pub(crate) fn emit_value_position_reference_diagnostic(
     span: Option<TextSpan>,
     ctx: &mut CheckerContext,
 ) -> bool {
-    if ctx.is_type_only_import_value_reference(name) {
-        let mut diagnostic = if ctx.is_type_only_export_import_value_reference(name) {
-            Diagnostic::ts1362(name, ctx.file_name.clone())
-        } else {
-            Diagnostic::ts1361(name, ctx.file_name.clone())
+    if let Some(kind) = ctx.type_only_value_reference(name) {
+        let mut diagnostic = match kind {
+            crate::modules::TypeOnlyAliasKind::Import => {
+                Diagnostic::ts1361(name, ctx.file_name.clone())
+            }
+            crate::modules::TypeOnlyAliasKind::Export => {
+                Diagnostic::ts1362(name, ctx.file_name.clone())
+            }
         };
         if let Some(span) = span {
             diagnostic = diagnostic.with_span(convert_span(span));
@@ -105,7 +109,10 @@ pub(crate) fn check_umd_global_value_reference(
     symbols: &crate::symbols::SymbolTable,
     ctx: &mut CheckerContext,
 ) {
-    if ctx.file_umd_global_names.is_empty() && ctx.file_type_only_import_names.is_empty() {
+    if ctx.file_umd_global_names.is_empty()
+        && ctx.file_type_only_import_names.is_empty()
+        && ctx.file_type_only_alias_names.is_empty()
+    {
         return;
     }
 
@@ -113,7 +120,7 @@ pub(crate) fn check_umd_global_value_reference(
         return;
     };
 
-    if !ctx.is_type_only_import_value_reference(name) {
+    if ctx.type_only_value_reference(name).is_none() {
         // A value binding in scope shadows the UMD global entirely — `const qs =
         // searchParams.toString()` is the local, not `@types/qs`. A type-only
         // import is itself a symbol-table entry, so the shadow test belongs to

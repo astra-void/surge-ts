@@ -1303,15 +1303,6 @@ impl<'a> ContextCollector<'a, '_> {
                     self.push(2373, span, &[own.name.as_str(), &name]);
                 }
             }
-            for (name, span) in references.deferred {
-                if is_later(&name) {
-                    self.out.push(ParsedGrammarDiagnostic {
-                        kind: Kind::LaterParameterReference,
-                        span: text_span_from_oxc_span(span),
-                        name: None,
-                    });
-                }
-            }
         }
     }
 
@@ -1448,6 +1439,32 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
+    /// tsc's `checkTypeParameter` on a mapped type's key: its constraint is in
+    /// the key's own scope, and resolving the key's base constraint cycles when
+    /// the constraint is the key, or a union or intersection with the key among
+    /// its members (`computeBaseConstraint`) — TS2313 on the constraint.
+    fn check_circular_mapped_key(&mut self, mapped: &oxc_ast::ast::TSMappedType<'_>) {
+        fn names_key(ty: &oxc_ast::ast::TSType<'_>, key: &str) -> bool {
+            use oxc_ast::ast::TSType as T;
+            match ty {
+                T::TSTypeReference(reference) if reference.type_arguments.is_none() => matches!(
+                    &reference.type_name,
+                    oxc_ast::ast::TSTypeName::IdentifierReference(name) if name.name == key
+                ),
+                T::TSUnionType(union) => union.types.iter().any(|member| names_key(member, key)),
+                T::TSIntersectionType(intersection) => {
+                    intersection.types.iter().any(|member| names_key(member, key))
+                }
+                T::TSParenthesizedType(parenthesized) => names_key(&parenthesized.type_annotation, key),
+                _ => false,
+            }
+        }
+        let key = mapped.key.name.as_str();
+        if names_key(&mapped.constraint, key) {
+            self.push(2313, mapped.constraint.span(), &[key]);
+        }
+    }
+
     /// tsc's `checkGrammarTypeOperatorNode` for `unique symbol`: only a
     /// `const` variable in a variable statement (TS1332/TS1333/TS1334), a
     /// `static readonly` class property (TS1331), or a `readonly` property
@@ -1492,6 +1509,27 @@ impl<'a> ContextCollector<'a, '_> {
                 }
             }
             _ => self.push(1335, operator.span, &[]),
+        }
+    }
+
+    /// tsc's `checkParameter`: an accessibility, `readonly` or `override`
+    /// modifier declares a parameter property, which only a constructor with
+    /// a body can have — TS2369 on any other parameter list.
+    fn check_parameter_property(&mut self, parameter: &oxc_ast::ast::FormalParameter<'_>) {
+        if parameter.accessibility.is_none() && !parameter.readonly && !parameter.r#override {
+            return;
+        }
+        let mut ancestors = self.stack.iter().rev();
+        ancestors.next();
+        let in_constructor_implementation = match (ancestors.next(), ancestors.next()) {
+            (Some(AstKind::Function(function)), Some(AstKind::MethodDefinition(method))) => {
+                method.kind == oxc_ast::ast::MethodDefinitionKind::Constructor
+                    && function.body.is_some()
+            }
+            _ => false,
+        };
+        if !in_constructor_implementation {
+            self.push(2369, parameter.span, &[]);
         }
     }
 
@@ -2268,6 +2306,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_jump(statement.span, statement.label.as_ref().map(|l| l.name.as_str()), true);
             }
             AstKind::LabeledStatement(statement) => self.check_labeled_statement(statement),
+            AstKind::FormalParameter(parameter) => self.check_parameter_property(parameter),
             AstKind::WithStatement(statement) => self.check_with_statement(statement),
             AstKind::BindingRestElement(rest) => self.check_rest_binding_property_name(rest),
             AstKind::BindingIdentifier(identifier) => {
@@ -2335,7 +2374,6 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 if property.computed && !self.check_mapped_type_member(&property.key) {
                     self.check_dynamic_property_name(1166, &property.key);
                 }
-                self.check_property_initializer_constructor_locals(property);
             }
             AstKind::AccessorProperty(property) if property.computed => {
                 self.check_mapped_type_member(&property.key);
@@ -2403,6 +2441,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_circular_constraints(declaration);
                 self.check_type_parameter_defaults(declaration);
             }
+            AstKind::TSMappedType(mapped) => self.check_circular_mapped_key(mapped),
             AstKind::Decorator(decorator) => self.check_parameter_decorator(decorator),
             AstKind::TSImportEqualsDeclaration(declaration) => {
                 // tsc's `checkGrammarModuleElementContext` bails first.
@@ -2931,8 +2970,8 @@ impl<'a> ContextCollector<'a, '_> {
 
     /// tsc's `checkExportAssignment` for `export default <expression>`, and
     /// `checkGrammarModifiers` for a default-exported declaration: not
-    /// inside a function or block (TS1258 / TS1184), and not inside a
-    /// namespace (TS1319).
+    /// inside a function or block (TS1258 / TS1184). The checker reports an
+    /// export assignment inside a namespace (TS1319) itself, as tsc does.
     fn check_export_default(&mut self, declaration: &oxc_ast::ast::ExportDefaultDeclaration<'_>) {
         let is_declaration = matches!(
             declaration.declaration,
@@ -2947,16 +2986,6 @@ impl<'a> ContextCollector<'a, '_> {
             let span = self.first_token(declaration.span.start);
             self.push(code, span, &[]);
             return;
-        }
-        let in_namespace = matches!(parent, Some(AstKind::TSModuleBlock(_)))
-            && matches!(
-                ancestors.next(),
-                Some(AstKind::TSModuleDeclaration(module))
-                    if matches!(module.id, oxc_ast::ast::TSModuleDeclarationName::Identifier(_))
-            );
-        if in_namespace && !is_declaration {
-            let span = self.first_token(declaration.span.start);
-            self.push(1319, span, &[]);
         }
     }
 
@@ -3127,22 +3156,16 @@ fn statement_declares_value(statement: &Statement<'_>, name: &str) -> bool {
 /// The value names an expression reads as it runs. A nested function, arrow,
 /// or class body runs later (tsc's `withinDeferredContext`), and a type
 /// annotation reads no values.
-/// The deferred reads are kept apart: they resolve (a later parameter is in
-/// scope by the time a nested function runs) but are not errors.
 #[derive(Default)]
 struct EagerReferences {
     found: Vec<(String, Span)>,
-    deferred: Vec<(String, Span)>,
     deferred_depth: usize,
 }
 
 impl<'a> Visit<'a> for EagerReferences {
     fn visit_identifier_reference(&mut self, identifier: &oxc_ast::ast::IdentifierReference<'a>) {
-        let entry = (identifier.name.to_string(), identifier.span);
-        if self.deferred_depth > 0 {
-            self.deferred.push(entry);
-        } else {
-            self.found.push(entry);
+        if self.deferred_depth == 0 {
+            self.found.push((identifier.name.to_string(), identifier.span));
         }
     }
     fn visit_function(&mut self, function: &oxc_ast::ast::Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {

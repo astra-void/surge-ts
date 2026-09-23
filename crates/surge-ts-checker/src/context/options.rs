@@ -91,6 +91,16 @@ pub struct CompatibilityStats {
     pub external_modules_unresolved_total: usize,
 }
 
+/// `jsxFactory`, `jsxFragmentFactory`, `reactNamespace` and
+/// `jsxImportSource` as written: the names a JSX tag refers to implicitly.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JsxFactoryNames {
+    pub factory: Option<String>,
+    pub fragment_factory: Option<String>,
+    pub react_namespace: Option<String>,
+    pub import_source: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckerOptions {
     pub no_implicit_any: bool,
@@ -175,12 +185,21 @@ pub struct CheckerOptions {
     /// `compilerOptions.resolveJsonModule`. Off, a `.json` specifier is not a
     /// module and the import reports `TS2732` instead of `TS2307`.
     pub resolve_json_module: bool,
+    /// `compilerOptions.allowJs`. On, tsc makes a JavaScript file a relative
+    /// import resolves to a program file instead of an untyped module.
+    pub allow_js: bool,
+    /// `compilerOptions.jsx` is set. Unset, a module that resolves to a `.jsx`
+    /// file is TS6142 (`GetResolutionDiagnostic`).
+    pub jsx_configured: bool,
+    pub jsx_factory_names: JsxFactoryNames,
     pub diagnostic_profile: DiagnosticProfile,
 }
 
 impl CheckerOptions {
     pub const ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL: &'static str =
         "\0allowSyntheticDefaultImports";
+    /// Present when `compilerOptions.lib` lists `dom`.
+    pub const LIB_DOM_SENTINEL: &'static str = "\0lib.dom.d.ts";
 
     /// Whether `compilerOptions.types` contained the `"*"` wildcard. Selects the
     /// node install-hint variant (TS2580 with a wildcard, TS2591 without),
@@ -201,9 +220,18 @@ impl CheckerOptions {
             .contains_key(Self::ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL)
     }
 
+    /// tsc's `slices.Contains(compilerOptions.Lib, "lib.dom.d.ts")`: the DOM
+    /// lib is written in `lib`. A DOM lib loaded as part of the target's
+    /// default set, or by `/// <reference lib>`, does not count.
+    pub(crate) fn lib_lists_dom(&self) -> bool {
+        self.resolved_modules.contains_key(Self::LIB_DOM_SENTINEL)
+    }
+
     /// Resolve `specifier` from `importer_file`, preferring the importer-scoped
     /// map. Falls back to the project-wide map so paths/baseUrl mappings and
-    /// flat-map callers keep working.
+    /// flat-map callers keep working. An empty importer-scoped entry is a
+    /// resolution the loader ran and lost, which no other importer's answer
+    /// may stand in for.
     pub(crate) fn resolved_module_for(
         &self,
         importer_file: &str,
@@ -211,7 +239,7 @@ impl CheckerOptions {
     ) -> Option<&String> {
         if let Some(per_importer) = self.resolved_modules_by_importer.get(importer_file) {
             if let Some(resolved) = per_importer.get(specifier) {
-                return Some(resolved);
+                return (!resolved.is_empty()).then_some(resolved);
             }
         }
         self.resolved_modules.get(specifier)
@@ -254,6 +282,9 @@ impl Default for CheckerOptions {
             jsx_emit_none: false,
             allow_umd_global_access: false,
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
+            jsx_factory_names: Default::default(),
             diagnostic_profile: DiagnosticProfile::default(),
         }
     }

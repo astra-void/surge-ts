@@ -262,10 +262,41 @@ pub(crate) fn had_error_trace_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("SURGE_TRACE_HAD_ERROR").is_some())
 }
 
+/// Whether a class's `extends` names a non-class generic declaration with a
+/// type-argument count that declaration does not take as a type reference.
+fn class_base_arguments_select_constructors(base: &ParsedNamedType, ctx: &CheckerContext) -> bool {
+    let Some(crate::symbols::TypeDeclarationInfo::Interface(interface)) =
+        ctx.lookup_type_declaration(&base.name)
+    else {
+        return false;
+    };
+    let type_parameters = &interface.body.type_parameters;
+    let min_type_argument_count = super::resolve::min_type_argument_count(type_parameters);
+    !interface.is_class_instance
+        && !type_parameters.is_empty()
+        && (base.type_arguments.len() < min_type_argument_count
+            || base.type_arguments.len() > type_parameters.len())
+}
+
+fn generic_interface_display_name(interface: &InterfaceInfo) -> String {
+    let name = interface.declared_name.as_deref().unwrap_or(&interface.name);
+    let parameters = &interface.body.type_parameters;
+    if parameters.is_empty() {
+        return name.to_string();
+    }
+    let parameters = parameters
+        .iter()
+        .map(|parameter| parameter.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{name}<{parameters}>")
+}
+
 pub(crate) fn resolve_interface(
     interface: &InterfaceInfo,
     handle: TypeDeclarationHandle,
     type_arguments: Vec<ParsedType>,
+    reference_span: Option<surge_ts_syntax::TextSpan>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
@@ -327,11 +358,15 @@ pub(crate) fn resolve_interface(
         ctx.namespace_member_resolution_depth += 1;
         ctx.namespace_member_prefix_stack.push(prefix);
     }
+    // `getTypeFromClassOrInterfaceReference` reports a wrong argument count on
+    // the reference, naming the generic type with its parameters (`C<T>`); a
+    // lookup surge synthesized has no reference to report it on.
+    let generic_display_name = generic_interface_display_name(interface);
     let bound = bind_type_arguments(
         &interface.body.type_parameters,
         type_arguments,
-        &interface.name,
-        interface.name_span,
+        &generic_display_name,
+        reference_span,
         ctx,
         resolving,
         substitution,
@@ -887,17 +922,31 @@ pub(crate) fn resolve_interface_declaration(
     let in_declaration_file = is_declaration_file_name(&ctx.file_name);
     let mut base_is_open = false;
     for base in extends {
-        let resolved_base = crate::program::with_dts_expansion_reason(
-            crate::program::DtsExpansionReason::InterfaceHeritageResolution,
-            || {
-                resolve_named_type(
-                    std::sync::Arc::new(base.clone()),
-                    ctx,
-                    resolving,
-                    substitution,
-                )
-            },
-        );
+        // `resolveBaseTypesOfClass`: a class whose base is not a class derives
+        // from a constructor function, and its type arguments select among the
+        // construct signatures rather than instantiate a type reference, so a
+        // count no reference would take is no error. surge does not select a
+        // signature, so such a base stays open.
+        let resolved_base = if ctx.resolving_class_heritage
+            && class_base_arguments_select_constructors(base, ctx)
+        {
+            ResolvedType {
+                ty: Type::Unknown,
+                had_error: true,
+            }
+        } else {
+            crate::program::with_dts_expansion_reason(
+                crate::program::DtsExpansionReason::InterfaceHeritageResolution,
+                || {
+                    resolve_named_type(
+                        std::sync::Arc::new(base.clone()),
+                        ctx,
+                        resolving,
+                        substitution,
+                    )
+                },
+            )
+        };
         had_error |= resolved_base.had_error;
         if resolved_base.had_error && had_error_trace_enabled() {
             eprintln!(

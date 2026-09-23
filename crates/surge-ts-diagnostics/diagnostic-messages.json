@@ -72,6 +72,30 @@
     "support": "emitted"
   },
   {
+    "code": "TS1362",
+    "category": "Error",
+    "message": "'{0}' cannot be used as a value because it was exported using 'export type'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1063",
+    "category": "Error",
+    "message": "An export assignment cannot be used in a namespace.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1319",
+    "category": "Error",
+    "message": "A default export can only be used in an ECMAScript-style module.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2302",
     "category": "Error",
     "message": "Static members cannot reference class type parameters.",
@@ -229,6 +253,14 @@
     "message": "Generic type '{0}' requires {1} type argument(s).",
     "source": "typescript",
     "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2707",
+    "category": "Error",
+    "message": "Generic type '{0}' requires between {1} and {2} type arguments.",
+    "source": "typescript",
+    "arity": 3,
     "support": "emitted"
   },
   {
@@ -568,6 +600,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2537",
+    "category": "Error",
+    "message": "Type '{0}' has no matching index signature for type '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2538",
     "category": "Error",
     "message": "Type '{0}' cannot be used as an index type.",
@@ -589,6 +629,14 @@
     "message": "Property '{0}' does not exist on type '{1}'. Did you mean '{2}'?",
     "source": "typescript",
     "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2812",
+    "category": "Error",
+    "message": "Property '{0}' does not exist on type '{1}'. Try changing the 'lib' compiler option to include 'dom'.",
+    "source": "typescript",
+    "arity": 2,
     "support": "emitted"
   },
   {
@@ -693,6 +741,30 @@
     "message": "This JSX tag's '{0}' prop expects type '{1}' which requires multiple children, but only a single child was provided.",
     "source": "typescript",
     "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2746",
+    "category": "Error",
+    "message": "This JSX tag's '{0}' prop expects a single child of type '{1}', but multiple children were provided.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2747",
+    "category": "Error",
+    "message": "'{0}' components don't accept text as child elements. Text in JSX has the type 'string', but the expected type of '{1}' is '{2}'.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2754",
+    "category": "Error",
+    "message": "'super' may not use type arguments.",
+    "source": "typescript",
+    "arity": 0,
     "support": "emitted"
   },
   {
@@ -856,11 +928,35 @@
     "support": "emitted"
   },
   {
+    "code": "TS7022",
+    "category": "Error",
+    "message": "'{0}' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS4111",
     "category": "Error",
     "message": "Property '{0}' comes from an index signature, so it must be accessed with ['{0}'].",
     "source": "typescript",
     "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1121",
+    "category": "Error",
+    "message": "Octal literals are not allowed. Use the syntax '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1489",
+    "category": "Error",
+    "message": "Decimals with leading zeros are not allowed.",
+    "source": "typescript",
+    "arity": 0,
     "support": "emitted"
   },
   {
@@ -872,9 +968,33 @@
     "support": "emitted"
   },
   {
+    "code": "TS6142",
+    "category": "Error",
+    "message": "Module '{0}' was resolved to '{1}', but '--jsx' is not set.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6192",
+    "category": "Error",
+    "message": "All imports in import declaration are unused.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS6198",
     "category": "Error",
     "message": "All destructured elements are unused.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6199",
+    "category": "Error",
+    "message": "All variables are unused.",
     "source": "typescript",
     "arity": 0,
     "support": "emitted"
@@ -2152,6 +2272,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2661",
+    "category": "Error",
+    "message": "Cannot export '{0}'. Only local declarations can be exported from a module.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2662",
     "category": "Error",
     "message": "Cannot find name '{0}'. Did you mean the static member '{1}.{0}'?",
@@ -2165,6 +2293,22 @@
     "message": "Cannot find name '{0}'. Did you mean the instance member 'this.{0}'?",
     "source": "typescript",
     "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2301",
+    "category": "Error",
+    "message": "Initializer of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2844",
+    "category": "Error",
+    "message": "Type of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor.",
+    "source": "typescript",
+    "arity": 2,
     "support": "emitted"
   },
   {
@@ -3240,14 +3384,6 @@
     "support": "emitted"
   },
   {
-    "code": "TS1319",
-    "category": "Error",
-    "message": "A default export can only be used in an ECMAScript-style module.",
-    "source": "typescript",
-    "arity": 0,
-    "support": "emitted"
-  },
-  {
     "code": "TS1231",
     "category": "Error",
     "message": "An export assignment must be at the top level of a file or module declaration.",
@@ -3379,14 +3515,6 @@
     "code": "TS1162",
     "category": "Error",
     "message": "An object member cannot be declared optional.",
-    "source": "typescript",
-    "arity": 0,
-    "support": "emitted"
-  },
-  {
-    "code": "TS2754",
-    "category": "Error",
-    "message": "'super' may not use type arguments.",
     "source": "typescript",
     "arity": 0,
     "support": "emitted"
@@ -3736,14 +3864,6 @@
     "support": "emitted"
   },
   {
-    "code": "TS2301",
-    "category": "Error",
-    "message": "Initializer of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor.",
-    "source": "typescript",
-    "arity": 2,
-    "support": "emitted"
-  },
-  {
     "code": "TS2803",
     "category": "Error",
     "message": "Cannot assign to private method '{0}'. Private methods are not writable.",
@@ -3805,22 +3925,6 @@
     "message": "Duplicate identifier '{0}'. Compiler reserves name '{1}' when emitting 'super' references in static initializers.",
     "source": "typescript",
     "arity": 2,
-    "support": "emitted"
-  },
-  {
-    "code": "TS2661",
-    "category": "Error",
-    "message": "Cannot export '{0}'. Only local declarations can be exported from a module.",
-    "source": "typescript",
-    "arity": 1,
-    "support": "emitted"
-  },
-  {
-    "code": "TS1362",
-    "category": "Error",
-    "message": "'{0}' cannot be used as a value because it was exported using 'export type'.",
-    "source": "typescript",
-    "arity": 1,
     "support": "emitted"
   },
   {
@@ -3909,14 +4013,6 @@
     "message": "Cannot use JSX unless the '--jsx' flag is provided.",
     "source": "typescript",
     "arity": 0,
-    "support": "emitted"
-  },
-  {
-    "code": "TS2707",
-    "category": "Error",
-    "message": "Generic type '{0}' requires between {1} and {2} type arguments.",
-    "source": "typescript",
-    "arity": 3,
     "support": "emitted"
   },
   {
@@ -4022,14 +4118,6 @@
     "source": "typescript",
     "arity": 0,
     "support": "catalog-only"
-  },
-  {
-    "code": "TS2812",
-    "category": "Error",
-    "message": "Property '{0}' does not exist on type '{1}'. Try changing the 'lib' compiler option to include 'dom'.",
-    "source": "typescript",
-    "arity": 2,
-    "support": "emitted"
   },
   {
     "code": "TS2690",

@@ -7,6 +7,7 @@ mod diagnostic;
 mod generated;
 mod line_index;
 mod render;
+mod syntactic;
 mod tsc_render;
 
 pub use catalog::*;
@@ -16,6 +17,7 @@ pub use diagnostic::*;
 pub use generated::*;
 pub use line_index::*;
 pub use render::*;
+pub use syntactic::*;
 pub use tsc_render::*;
 
 #[cfg(test)]

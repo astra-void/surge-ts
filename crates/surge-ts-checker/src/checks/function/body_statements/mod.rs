@@ -12,8 +12,7 @@ use crate::checks::expr::evaluate_expression;
 use crate::checks::var::{VariableCheckOptions, check_variable_declaration_against_symbols};
 use crate::context::CheckerContext;
 use crate::flow::{
-    AssignmentState, FlowCheck, FunctionFlowState, apply_variable_declaration_state,
-    check_expression_flow,
+    FlowCheck, FunctionFlowState, apply_variable_declaration_state, check_expression_flow,
 };
 use crate::infer::InferredExpression;
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
@@ -26,6 +25,7 @@ pub(crate) mod evolving_arrays;
 mod returns;
 
 pub(crate) use alias_conditions::*;
+pub(crate) use branch_assignments::deep_assigned_names;
 pub(crate) use assignments::*;
 pub(crate) use evolving_arrays::{apply_array_mutations, collect_array_mutations};
 use evolving_arrays::{prime_loop_mutations, release_loop_mutations};
@@ -74,8 +74,17 @@ pub(crate) fn check_function_variable_declaration(
             .record_alias_guard_targets(local_name.clone(), guarded_value_identifiers(initializer));
         // A `const` whose initializer is plainly a condition keeps that
         // condition, so a later `if (ok)` narrows exactly as the written
-        // expression would (tsc's aliased-condition narrowing).
-        if matches!(variable_kind, ParsedVariableKind::Const) && is_condition_shaped(initializer) {
+        // expression would (tsc's aliased-condition narrowing). tsc inlines
+        // only an unannotated `const` declared on its own, not a destructured
+        // element; an alias of an alias and a type-predicate call qualify too.
+        let inlinable = matches!(variable_kind, ParsedVariableKind::Const)
+            && variable.declared_type.is_none()
+            && !variable.from_binding_pattern
+            && (is_condition_shaped(initializer)
+                || matches!(initializer, ParsedExpression::Identifier { name, .. }
+                    if scopes.visible_symbols().alias_condition(name).is_some())
+                || is_type_predicate_call(initializer, scopes, ctx));
+        if inlinable {
             let condition = std::sync::Arc::new(initializer.clone());
             flow_state.record_alias_guard_condition(local_name.clone(), condition.clone());
             scopes.record_alias_condition(local_name.as_str(), Some(condition));
@@ -128,17 +137,24 @@ pub(crate) fn check_function_variable_declaration(
     });
 
     let initializer_flow_blocked = variable.initializer.as_ref().is_some_and(|initializer| {
-        if flow_state.tracked_local_count() == 0 {
+        let block_scoped = matches!(
+            variable_kind,
+            ParsedVariableKind::Let | ParsedVariableKind::Const
+        );
+        if flow_state.tracked_local_count() == 0 && !block_scoped {
             return false;
         }
 
-        flow_state.begin_branch_capture();
-        if matches!(
-            variable_kind,
-            ParsedVariableKind::Let | ParsedVariableKind::Const
-        ) {
-            flow_state.declare_current(local_name.as_str(), AssignmentState::DeclaredUnassigned);
-        }
+        let initializing = block_scoped.then(|| {
+            let annotation_excludes_undefined = variable
+                .declared_type
+                .as_ref()
+                .map(|annotation| crate::flow::excludes_undefined(annotation, ctx, &[]));
+            flow_state.begin_initializer([crate::flow::InitializingBinding::declaration(
+                &variable,
+                annotation_excludes_undefined,
+            )])
+        });
 
         // A written annotation other than a bare type parameter is a
         // non-generic contextual type for the initializer.
@@ -160,7 +176,9 @@ pub(crate) fn check_function_variable_declaration(
             )
         }
         .is_blocked();
-        let _ = flow_state.finish_branch_capture();
+        if let Some(mark) = initializing {
+            flow_state.end_initializer(mark);
+        }
         blocked
     });
 

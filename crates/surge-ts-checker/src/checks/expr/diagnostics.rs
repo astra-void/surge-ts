@@ -21,7 +21,7 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
                         ty: widen_type(&v.ty),
                         optional: v.optional,
                         method: v.method,
-                        readonly: false,
+                        readonly: v.readonly,
                         restriction: v.restriction.clone(),
                         index_slot: v.index_slot,
                     },
@@ -185,136 +185,83 @@ pub(crate) fn missing_property_diagnostic(
     if let Some(suggestion) = property_spelling_suggestion(property_name, object_type) {
         return Diagnostic::ts2551(property_name, &object_type_name, suggestion, file_name);
     }
+    nonexistent_property_diagnostic(property_name, object_type, &object_type_name, ctx)
+}
+
+/// The last step of tsc's `reportNonexistentProperty`, when no suggestion
+/// applies: TS2812 for a receiver that looks like a DOM element without the DOM
+/// lib, TS2339 otherwise.
+pub(crate) fn nonexistent_property_diagnostic(
+    property_name: &str,
+    object_type: &Type,
+    object_type_name: &str,
+    ctx: &CheckerContext,
+) -> Diagnostic {
+    let file_name = ctx.file_name.clone();
     if container_seems_to_be_empty_dom_element(object_type, ctx) {
-        return Diagnostic::ts2812(property_name, &object_type_name, file_name);
+        Diagnostic::ts2812(property_name, object_type_name, file_name)
+    } else {
+        Diagnostic::ts2339(property_name, object_type_name, file_name)
     }
-    Diagnostic::ts2339(property_name, &object_type_name, file_name)
 }
 
-/// tsc's `containerSeemsToBeEmptyDomElement`: without the DOM lib, a member
-/// read off an empty `EventTarget`/`Node`/`Element`/`HTML…Element` suggests
-/// that lib (TS2812).
-pub(crate) fn container_seems_to_be_empty_dom_element(ty: &Type, ctx: &CheckerContext) -> bool {
-    fn declared_name(ty: &Type) -> Option<String> {
-        match ty {
-            Type::Reference(reference) => {
-                Some(reference.display.split('<').next().unwrap_or_default().to_string())
-            }
-            Type::Object(object) => object.alias_name.as_deref().map(str::to_string),
-            _ => None,
-        }
-    }
-    fn has_common_dom_type_name(ty: &Type) -> bool {
-        declared_name(ty).is_some_and(|name| {
-            matches!(name.as_str(), "EventTarget" | "Node" | "Element")
-                || (name.starts_with("HTML") && name.ends_with("Element"))
-        })
-    }
-    fn is_empty_object_type(ty: &Type) -> bool {
-        match ty.peeled() {
-            Type::Object(object) => {
-                object.properties.is_empty()
-                    && object.string_index_type.is_none()
-                    && object.number_index_type.is_none()
-                    && object.call_signature.is_none()
-                    && object.construct_signature.is_none()
-            }
-            Type::Union(union) => union.types().iter().any(is_empty_object_type),
-            _ => false,
-        }
-    }
-    let every_contained_named = match ty {
-        Type::Union(union) => union.types().iter().all(has_common_dom_type_name),
-        other => has_common_dom_type_name(other),
-    };
-    every_contained_named && is_empty_object_type(ty) && !dom_lib_loaded(ctx)
+/// tsc's `containerSeemsToBeEmptyDomElement`: `lib` does not list the DOM, the
+/// receiver is empty, and every constituent is declared as an `EventTarget`,
+/// `Node`, `Element` or `HTML…Element`.
+fn container_seems_to_be_empty_dom_element(object_type: &Type, ctx: &CheckerContext) -> bool {
+    !ctx.options.lib_lists_dom()
+        && every_contained_type(object_type, has_common_dom_type_name)
+        && is_empty_object_type(object_type)
 }
 
-fn dom_lib_loaded(ctx: &CheckerContext) -> bool {
-    matches!(
-        ctx.ambient_global_type_declarations.get("EventTarget"),
-        Some(crate::symbols::TypeDeclarationInfo::Interface(info))
-            if info.file_name.contains("lib.dom")
-    )
-}
-
-/// tsc's `getScriptTargetFeatures`, for the receivers surge answers from its
-/// own tables: the lib that first declares `member` on an array or a string.
-/// A member listed here that a receiver lacks is a lib the project did not
-/// ask for, which tsc says (TS2550) instead of calling the member unknown.
-pub(crate) fn lib_feature_of_missing_member(receiver: &Type, member: &str) -> Option<&'static str> {
-    const ARRAY: &[(&str, &[&str])] = &[
-        ("es2015", &["find", "findIndex", "fill", "copyWithin", "entries", "keys", "values"]),
-        ("es2016", &["includes"]),
-        ("es2019", &["flat", "flatMap"]),
-        ("es2022", &["at"]),
-        ("es2023", &["findLast", "findLastIndex", "toReversed", "toSorted", "toSpliced", "with"]),
-    ];
-    const STRING: &[(&str, &[&str])] = &[
-        (
-            "es2015",
-            &[
-                "codePointAt", "includes", "endsWith", "normalize", "repeat", "startsWith", "anchor",
-                "big", "blink", "bold", "fixed", "fontcolor", "fontsize", "italics", "link", "small",
-                "strike", "sub", "sup",
-            ],
-        ),
-        ("es2017", &["padStart", "padEnd"]),
-        ("es2019", &["trimStart", "trimEnd", "trimLeft", "trimRight"]),
-        ("es2020", &["matchAll"]),
-        ("es2021", &["replaceAll"]),
-        ("es2022", &["at"]),
-        ("esnext", &["isWellFormed", "toWellFormed"]),
-    ];
-    // Receivers resolved from the lib itself, keyed — as tsc keys them — by
-    // the name of the interface the member would have been declared on.
-    const OBJECT_CONSTRUCTOR: &[(&str, &[&str])] = &[
-        ("es2015", &["assign", "getOwnPropertySymbols", "keys", "is", "setPrototypeOf"]),
-        ("es2017", &["values", "entries", "getOwnPropertyDescriptors"]),
-        ("es2019", &["fromEntries"]),
-        ("es2022", &["hasOwn"]),
-        ("es2024", &["groupBy"]),
-    ];
-    const ARRAY_CONSTRUCTOR: &[(&str, &[&str])] =
-        &[("es2015", &["from", "of"]), ("esnext", &["fromAsync"])];
-    const NUMBER_CONSTRUCTOR: &[(&str, &[&str])] = &[(
-        "es2015",
-        &["isFinite", "isInteger", "isNaN", "isSafeInteger", "parseFloat", "parseInt"],
-    )];
-    const MATH: &[(&str, &[&str])] = &[
-        (
-            "es2015",
-            &[
-                "clz32", "imul", "sign", "log10", "log2", "log1p", "expm1", "cosh", "sinh", "tanh",
-                "acosh", "asinh", "atanh", "hypot", "trunc", "fround", "cbrt",
-            ],
-        ),
-        ("es2025", &["f16round"]),
-    ];
-    const PROMISE_CONSTRUCTOR: &[(&str, &[&str])] = &[
-        ("es2015", &["all", "race", "reject", "resolve"]),
-        ("es2020", &["allSettled"]),
-        ("es2021", &["any"]),
-        ("es2024", &["withResolvers"]),
-        ("es2025", &["try"]),
-    ];
-    let features = match receiver {
-        Type::Array(_) | Type::Tuple(_) => ARRAY,
-        Type::String | Type::StringLiteral(_) => STRING,
-        Type::Object(_) | Type::Reference(_) => match receiver.name().as_str() {
-            "ObjectConstructor" => OBJECT_CONSTRUCTOR,
-            "ArrayConstructor" => ARRAY_CONSTRUCTOR,
-            "NumberConstructor" => NUMBER_CONSTRUCTOR,
-            "Math" => MATH,
-            "PromiseConstructor" => PROMISE_CONSTRUCTOR,
-            _ => return None,
+/// tsc's `everyContainedType` over a union's members or the operands an
+/// intersection surface was merged from.
+fn every_contained_type(ty: &Type, predicate: fn(&Type) -> bool) -> bool {
+    if let Type::Union(union) = ty {
+        return union.types().iter().all(predicate);
+    }
+    match ty.peeled() {
+        Type::Object(object) if object.is_intersection => match &object.intersection_operands {
+            Some(operands) => operands.iter().all(predicate),
+            None => false,
         },
-        _ => return None,
+        _ => predicate(ty),
+    }
+}
+
+/// tsc's `hasCommonDomTypeName`, for the one kind of type whose symbol is a
+/// named declaration: the instance side of an interface or class.
+fn has_common_dom_type_name(ty: &Type) -> bool {
+    let Type::Reference(reference) = ty else {
+        return false;
     };
-    features
-        .iter()
-        .find(|(_, members)| members.contains(&member))
-        .map(|(lib, _)| *lib)
+    if !matches!(ty.peeled(), Type::Object(object) if object.without_inferable_index) {
+        return false;
+    }
+    let Some(declared) = reference.id.rsplit('\0').next() else {
+        return false;
+    };
+    let name = declared.rsplit('.').next().unwrap_or(declared);
+    matches!(name, "EventTarget" | "Node" | "Element")
+        || name.starts_with("HTML") && name.ends_with("Element")
+}
+
+/// tsc's `isEmptyObjectType`: no member, signature or index signature (for a
+/// union, some member is so).
+fn is_empty_object_type(ty: &Type) -> bool {
+    if let Type::Union(union) = ty {
+        return union.types().iter().any(is_empty_object_type);
+    }
+    match ty.peeled() {
+        Type::Object(object) => {
+            object.properties.is_empty()
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none()
+                && object.call_signature.is_none()
+                && object.construct_signature.is_none()
+        }
+        _ => false,
+    }
 }
 
 /// `String.prototype` members in lib declaration order, which breaks ties
@@ -568,7 +515,12 @@ pub(crate) fn reported_relation_target(source: &Type, target: &Type) -> Type {
     let Type::Union(union) = target else {
         return target.clone();
     };
-    if !definitely_non_nullable || union.types().len() > 3 {
+    // tsc's union holds `boolean` as `false | true`, so a nullable beside it
+    // never leaves a single member to name.
+    if !definitely_non_nullable
+        || union.types().len() > 3
+        || union.types().iter().any(|member| matches!(member, Type::Boolean))
+    {
         return target.clone();
     }
     let mut non_nullable = union

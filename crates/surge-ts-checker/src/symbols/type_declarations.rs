@@ -229,6 +229,11 @@ pub(crate) struct InterfaceInfo {
     /// expression, so its heritage names are reported by the class's own check
     /// rather than wherever the instance is first expanded.
     pub(crate) is_class_instance: bool,
+    /// For a namespace member, the symbol table tsc's binder declares it in
+    /// (`declareModuleMember`): the namespace's exports, which every block of
+    /// the namespace shares, or its own block's locals. Declarations merge
+    /// only within one table.
+    pub(crate) namespace_member_table: Option<Arc<str>>,
     pub(crate) body: Arc<InterfaceBody>,
     /// See [`TypeAliasInfo::cached_resolution_key`].
     pub(crate) cached_resolution_key: std::sync::OnceLock<crate::context::DeclarationResolutionKey>,
@@ -275,6 +280,7 @@ impl InterfaceInfo {
             declares_constructor: false,
             constructor_accessibility: None,
             is_class_instance: false,
+            namespace_member_table: None,
             body: Arc::new(InterfaceBody {
                 type_parameters,
                 extends,
@@ -309,6 +315,7 @@ impl Clone for InterfaceInfo {
             declares_constructor: self.declares_constructor,
             constructor_accessibility: self.constructor_accessibility,
             is_class_instance: self.is_class_instance,
+            namespace_member_table: self.namespace_member_table.clone(),
             body: self.body.clone(),
             cached_resolution_key: self.cached_resolution_key.clone(),
             cached_alias_id: self.cached_alias_id.clone(),
@@ -394,11 +401,8 @@ pub(crate) fn merge_interface_infos(
     }
     let mut extends = existing.body.extends.clone();
     extends.extend(incoming.body.extends.iter().cloned());
-    let type_parameters = if existing.body.type_parameters.is_empty() {
-        incoming.body.type_parameters.clone()
-    } else {
-        existing.body.type_parameters.clone()
-    };
+    let mut type_parameters = existing.body.type_parameters.clone();
+    merge_type_parameters(&mut type_parameters, &incoming.body.type_parameters);
     let mut merged_info = InterfaceInfo::new(
         existing.name.clone(),
         existing.file_name.clone(),
@@ -466,6 +470,35 @@ pub(crate) fn merge_interface_infos(
             .collect();
     }
     merged_info
+}
+
+/// tsc's binder declares each declaration's type parameters in the merged
+/// symbol's members, so a name an earlier declaration declared is the same
+/// parameter and any other name is one more: the merged type's parameters are
+/// every name in order of first appearance
+/// (`appendLocalTypeParametersOfClassOrInterfaceOrTypeAlias`). A parameter is
+/// then read off all of its declarations: its constraint and its default are
+/// the first ones written (`getConstraintDeclaration`,
+/// `getResolvedTypeParameterDefault`), so `interface I<T>` merged with
+/// `interface I<T = number>` takes `I` with no argument, and a modifier on any
+/// declaration applies (`getTypeParameterModifiers`).
+fn merge_type_parameters(
+    merged: &mut Vec<ParsedTypeParameter>,
+    incoming: &[ParsedTypeParameter],
+) {
+    for parameter in incoming {
+        let Some(known) = merged.iter_mut().find(|known| known.name == parameter.name) else {
+            merged.push(parameter.clone());
+            continue;
+        };
+        if known.constraint.is_none() {
+            known.constraint = parameter.constraint.clone();
+        }
+        if known.default_type.is_none() {
+            known.default_type = parameter.default_type.clone();
+        }
+        known.is_const |= parameter.is_const;
+    }
 }
 
 /// Declaration-merge an interface contributed by a `declare module` block in
@@ -684,9 +717,7 @@ fn fold_interface_declaration(
         body.member_fragments.push(fragment.clone());
     }
     body.extends.extend(incoming.body.extends.iter().cloned());
-    if body.type_parameters.is_empty() {
-        body.type_parameters = incoming.body.type_parameters.clone();
-    }
+    merge_type_parameters(&mut body.type_parameters, &incoming.body.type_parameters);
     if body.number_index_type.is_none() {
         body.number_index_type = incoming.body.number_index_type.clone();
     }

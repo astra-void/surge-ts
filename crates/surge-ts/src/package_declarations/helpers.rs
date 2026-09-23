@@ -156,6 +156,7 @@ pub(super) fn resolve_type_directive_in_node_modules(
     name: &str,
     lookup_dir: &Path,
     root_dir: &Path,
+    import_condition: bool,
     opts: &ResolverOptions,
     cache: &mut PackageDeclarationResolverCache,
 ) -> Option<PathBuf> {
@@ -171,9 +172,11 @@ pub(super) fn resolve_type_directive_in_node_modules(
         importer_dir: lookup_dir.to_path_buf(),
         importer_file: lookup_dir.to_path_buf(),
         is_imports: false,
+        usage: ImportUsage::Declaration,
+        import_condition,
     };
 
-    let resolution = resolve_package_entrypoint(&req, opts, true, cache, root_dir)?;
+    let resolution = resolve_package_entrypoint(&req, opts, import_condition, cache, root_dir)?;
     match resolution.kind {
         PackageEntrypointKind::Declaration => Some(prefer_declaration_sibling(resolution.path)),
         PackageEntrypointKind::RuntimeOnly => None,
@@ -310,7 +313,7 @@ pub(super) fn resolve_package_entrypoint(
 ) -> Option<PackageEntrypointResolution> {
     // `#alias` imports resolve against the importer's own enclosing package.
     if req.is_imports {
-        return resolve_imports_entrypoint(req, opts, importer_is_esm, cache);
+        return resolve_imports_entrypoint(req, opts, importer_is_esm, cache, root_dir);
     }
 
     // Package self-name imports: an enclosing package whose `name` matches takes
@@ -362,6 +365,7 @@ pub(super) fn resolve_imports_entrypoint(
     opts: &ResolverOptions,
     importer_is_esm: bool,
     cache: &mut PackageDeclarationResolverCache,
+    root_dir: &Path,
 ) -> Option<PackageEntrypointResolution> {
     if !opts.resolve_imports {
         return None;
@@ -371,7 +375,56 @@ pub(super) fn resolve_imports_entrypoint(
     let imports = json.get("imports")?;
     let conditions = opts.active_conditions(importer_is_esm);
     let targets = select_import_targets(imports, &req.specifier, &conditions);
-    resolve_first_target_in_package(&pkg_dir, &targets)
+    let mut runtime_fallback = None;
+    for target in &targets {
+        let resolution = if target.starts_with("./") {
+            resolve_target_in_package(&pkg_dir, target)
+        } else if let Some(module_request) = imports_module_target(req, target, &pkg_dir) {
+            resolve_package_entrypoint(&module_request, opts, importer_is_esm, cache, root_dir)
+        } else {
+            None
+        };
+        match resolution {
+            Some(resolution) if resolution.kind == PackageEntrypointKind::Declaration => {
+                return Some(resolution);
+            }
+            Some(resolution) => {
+                runtime_fallback.get_or_insert(resolution);
+            }
+            None => {}
+        }
+    }
+    runtime_fallback
+}
+
+/// tsc's `loadModuleFromTargetExportOrImport` for an `imports` target that
+/// is not a `./` path: a bare name resolves as a module specifier from the
+/// package scope (`"#type": "package"` reaches the package's own `exports`
+/// by self-name), while `../` and absolute targets are invalid.
+fn imports_module_target(
+    req: &PackageDeclarationRequest,
+    target: &str,
+    package_dir: &Path,
+) -> Option<PackageDeclarationRequest> {
+    if target.starts_with("../") || Path::new(target).has_root() {
+        return None;
+    }
+    let is_imports = target.starts_with('#');
+    let (package_name, subpath) = if is_imports {
+        (target.to_string(), None)
+    } else {
+        parse_package_specifier(target)?
+    };
+    Some(PackageDeclarationRequest {
+        specifier: target.to_string(),
+        package_name,
+        subpath,
+        importer_dir: package_dir.to_path_buf(),
+        importer_file: package_dir.join("package.json"),
+        is_imports,
+        usage: req.usage,
+        import_condition: req.import_condition,
+    })
 }
 
 /// Resolve a bare package import through an enclosing package whose `name`
@@ -406,6 +459,14 @@ pub(super) fn resolve_package_entrypoint_in_directory(
     importer_is_esm: bool,
     cache: &mut PackageDeclarationResolverCache,
 ) -> Option<PackageEntrypointResolution> {
+    let nested = resolve_nested_package_subpath(req, pkg_dir, opts, cache);
+    if nested
+        .as_ref()
+        .is_some_and(|resolution| resolution.kind == PackageEntrypointKind::Declaration)
+    {
+        return nested;
+    }
+
     let pkg_json_path = pkg_dir.join("package.json");
     let json = if crate::probe::is_existing_file(&pkg_json_path) {
         read_package_json(&pkg_json_path, cache)
@@ -538,6 +599,72 @@ pub(super) fn resolve_legacy_entrypoint_in_directory(
     runtime_fallback
 }
 
+/// tsc's `loadModuleFromSpecificNodeModulesDirectory` for a subpath whose
+/// own directory holds a package.json (`node_modules/foo/bar/package.json`):
+/// unless the package root's `exports` redirects around it, the subpath loads
+/// as a file, then as that nested package's directory — its `typings`,
+/// `types` or `main`, then its `index`.
+fn resolve_nested_package_subpath(
+    req: &PackageDeclarationRequest,
+    pkg_dir: &Path,
+    opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<PackageEntrypointResolution> {
+    let subpath = req.subpath.as_ref()?;
+    let candidate = pkg_dir.join(subpath);
+    let nested_json_path = candidate.join("package.json");
+    if !crate::probe::is_existing_file(&nested_json_path) {
+        return None;
+    }
+    if opts.resolve_exports {
+        let root_json_path = pkg_dir.join("package.json");
+        if crate::probe::is_existing_file(&root_json_path)
+            && read_package_json(&root_json_path, cache)
+                .is_some_and(|root| root.get("exports").is_some())
+        {
+            return None;
+        }
+    }
+
+    let mut runtime_fallback = None;
+    let mut consider = |resolution: Option<PackageEntrypointResolution>| match resolution {
+        Some(resolution) if resolution.kind == PackageEntrypointKind::Declaration => {
+            Some(resolution)
+        }
+        Some(resolution) => {
+            runtime_fallback.get_or_insert(resolution);
+            None
+        }
+        None => None,
+    };
+    if let Some(resolution) = consider(resolve_declaration_or_runtime_candidate(&candidate)) {
+        return Some(resolution);
+    }
+    if let Some(nested) = read_package_json(&nested_json_path, cache) {
+        for field in ["typings", "types", "main"] {
+            let Some(value) = nested.get(field).and_then(|value| value.as_str()) else {
+                continue;
+            };
+            if value.is_empty() {
+                continue;
+            }
+            let entry = candidate.join(value);
+            let resolution = resolve_declaration_or_runtime_candidate(&entry)
+                .or_else(|| resolve_declaration_or_runtime_candidate(&entry.join("index")));
+            if let Some(resolution) = consider(resolution) {
+                return Some(resolution);
+            }
+            break;
+        }
+    }
+    if let Some(resolution) =
+        consider(resolve_declaration_or_runtime_candidate(&candidate.join("index")))
+    {
+        return Some(resolution);
+    }
+    runtime_fallback
+}
+
 /// Bare `subpath`/`index` probing for a package directory with no usable
 /// `package.json` metadata.
 pub(super) fn resolve_legacy_file_probe(
@@ -661,34 +788,6 @@ pub(super) fn nearest_package_json(
     None
 }
 
-/// Whether the importing file is treated as ESM for condition selection. Bundler
-/// always behaves as ESM; node16/nodenext consult the file extension and the
-/// nearest `package.json` `"type"`.
-pub(super) fn importer_is_esm(
-    importer_file: &Path,
-    opts: &ResolverOptions,
-    cache: &mut PackageDeclarationResolverCache,
-) -> bool {
-    use surge_ts_config::ModuleResolutionKind;
-    if opts.module_resolution == ModuleResolutionKind::Bundler {
-        return true;
-    }
-
-    let lower = importer_file.to_string_lossy().to_ascii_lowercase();
-    if lower.ends_with(".mts") || lower.ends_with(".mjs") || lower.ends_with(".d.mts") {
-        return true;
-    }
-    if lower.ends_with(".cts") || lower.ends_with(".cjs") || lower.ends_with(".d.cts") {
-        return false;
-    }
-
-    let start = importer_file.parent().unwrap_or(importer_file);
-    match nearest_package_json(start, cache) {
-        Some((_, json)) => json.get("type").and_then(|t| t.as_str()) == Some("module"),
-        None => false,
-    }
-}
-
 pub(super) fn resolve_at_types_fallback_in_directory(
     req: &PackageDeclarationRequest,
     current_dir: &Path,
@@ -792,6 +891,9 @@ pub(super) fn resolve_declaration_or_runtime_candidate(
     resolve_runtime_only_candidate(path)
 }
 
+/// A candidate from tsc's fallback extensions: runtime JavaScript, or a
+/// `.json` file named outright, which the loader keeps as a module only under
+/// `resolveJsonModule`.
 pub(super) fn resolve_runtime_only_candidate(path: &Path) -> Option<PackageEntrypointResolution> {
     for candidate in runtime_javascript_candidates(path.to_path_buf()) {
         if crate::probe::is_existing_file(&candidate) {
@@ -800,6 +902,13 @@ pub(super) fn resolve_runtime_only_candidate(path: &Path) -> Option<PackageEntry
                 kind: PackageEntrypointKind::RuntimeOnly,
             });
         }
+    }
+
+    if path_ends_with_ignore_ascii_case(path, ".json") && crate::probe::is_existing_file(path) {
+        return Some(PackageEntrypointResolution {
+            path: path.to_path_buf(),
+            kind: PackageEntrypointKind::RuntimeOnly,
+        });
     }
 
     None
@@ -964,20 +1073,30 @@ pub(super) fn runtime_javascript_candidates(path: PathBuf) -> Vec<PathBuf> {
 }
 
 pub(super) fn extract_packages_from_source(
-    specifiers: &[String],
+    usages: &[crate::specifier_scan::ModuleUsage],
     file_name: &str,
     importer_dir: &Path,
     opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
     packages_to_resolve: &mut VecDeque<PackageDeclarationRequest>,
-    queued_specifiers: &mut HashSet<(String, String)>,
+    queued_specifiers: &mut HashSet<(String, String, ImportUsage)>,
 ) {
     let importer_file = PathBuf::from(file_name);
-    for specifier in specifiers {
+    for module_usage in usages {
+        let usage = if let Some(mode) = module_usage.resolution_mode {
+            ImportUsage::ModeOverride(mode)
+        } else if module_usage.import_equals {
+            ImportUsage::ImportEquals
+        } else {
+            ImportUsage::Declaration
+        };
         queue_specifier(
-            specifier,
+            &module_usage.specifier,
+            usage,
             importer_dir,
             &importer_file,
             opts,
+            cache,
             packages_to_resolve,
             queued_specifiers,
         );
@@ -1025,56 +1144,56 @@ fn resolved_by_path_mapping(specifier: &str, opts: &ResolverOptions) -> bool {
 /// `node_modules` and `#imports` scopes stay isolated.
 pub(super) fn queue_specifier(
     specifier: &str,
+    usage: ImportUsage,
     importer_dir: &Path,
     importer_file: &Path,
     opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
     packages_to_resolve: &mut VecDeque<PackageDeclarationRequest>,
-    queued_specifiers: &mut HashSet<(String, String)>,
+    queued_specifiers: &mut HashSet<(String, String, ImportUsage)>,
 ) {
     let queue_key = (
         canonicalize_if_exists_string(importer_file),
         specifier.to_string(),
+        usage,
     );
     if queued_specifiers.contains(&queue_key) {
         return;
     }
 
-    if let Some(rest) = specifier.strip_prefix('#') {
+    let is_imports = if let Some(rest) = specifier.strip_prefix('#') {
         // `#` alone or `#/...` is not a valid imports key.
         if rest.is_empty() || !opts.resolve_imports {
             return;
         }
-        queued_specifiers.insert(queue_key);
-        packages_to_resolve.push_back(PackageDeclarationRequest {
-            specifier: specifier.to_string(),
-            package_name: specifier.to_string(),
-            subpath: None,
-            importer_dir: importer_dir.to_path_buf(),
-            importer_file: importer_file.to_path_buf(),
-            is_imports: true,
-        });
-        return;
-    }
+        true
+    } else {
+        if !is_external_specifier(specifier) || resolved_by_path_mapping(specifier, opts) {
+            return;
+        }
+        false
+    };
+    let (package_name, subpath) = if is_imports {
+        (specifier.to_string(), None)
+    } else {
+        let Some(parsed) = parse_package_specifier(specifier) else {
+            return;
+        };
+        parsed
+    };
 
-    if !is_external_specifier(specifier) {
-        return;
-    }
-
-    if resolved_by_path_mapping(specifier, opts) {
-        return;
-    }
-
-    if let Some((package_name, subpath)) = parse_package_specifier(specifier) {
-        queued_specifiers.insert(queue_key);
-        packages_to_resolve.push_back(PackageDeclarationRequest {
-            specifier: specifier.to_string(),
-            package_name,
-            subpath,
-            importer_dir: importer_dir.to_path_buf(),
-            importer_file: importer_file.to_path_buf(),
-            is_imports: false,
-        });
-    }
+    let mode = usage_resolution_mode(importer_file, usage, opts, cache);
+    queued_specifiers.insert(queue_key);
+    packages_to_resolve.push_back(PackageDeclarationRequest {
+        specifier: specifier.to_string(),
+        package_name,
+        subpath,
+        importer_dir: importer_dir.to_path_buf(),
+        importer_file: importer_file.to_path_buf(),
+        is_imports,
+        usage,
+        import_condition: resolves_with_import_condition(mode, opts),
+    });
 }
 
 #[cfg(test)]

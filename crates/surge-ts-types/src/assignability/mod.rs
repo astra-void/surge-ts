@@ -68,6 +68,14 @@ thread_local! {
     /// answer the cap gives.
     static ASSIGNABILITY_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 
+    /// Apparent shapes built for one comparison (see
+    /// [`array_like_apparent_object`]). Their member types key the relation
+    /// memo by payload address, so they are held until the outermost query
+    /// ends: a freed member could otherwise hand its address to the next
+    /// shape's and be answered from the stale entry.
+    static SYNTHESIZED_TARGETS: std::cell::RefCell<Vec<Type>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+
     /// The relation the current outermost query is being decided under. Constant
     /// for the duration of one query; [`is_comparable_to`] sets and restores it.
     static CURRENT_RELATION: std::cell::Cell<Relation> =
@@ -319,6 +327,7 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
                     OBJECT_ASSIGNABILITY_IN_PROGRESS.with(|set| set.borrow_mut().clear());
                     ASSIGNABILITY_RELATION_CACHE.with(|cache| cache.borrow_mut().clear());
                     ASSIGNABILITY_STEPS.with(|steps| steps.set(0));
+                    SYNTHESIZED_TARGETS.with(|targets| targets.borrow_mut().clear());
                 }
             });
         }
@@ -343,11 +352,22 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         return true;
     }
 
-    // `any` relates to everything but `never` (`isSimpleTypeRelatedTo`,
-    // relater.go:214). Only tsc's error type takes the rule: surge's own `Any`
-    // is also a modelling placeholder and stays permissive.
-    if matches!(from, Type::ErrorType) && matches!(to, Type::Never) {
+    // `isSimpleTypeRelatedTo` (relater.go:211) rejects a `never` target before
+    // the rule that relates an `any` source to everything, so `any` and tsc's
+    // error type (an `any`) do not relate to `never`. surge's degradation
+    // sentinel is `Type::Unknown`, which stays permissive.
+    if matches!(from, Type::Any | Type::ErrorType) && matches!(to, Type::Never) {
         return false;
+    }
+
+    // The comparable relation is mostly bidirectional: before any structural
+    // step, a pair also relates when the target is simply related to the
+    // source (`isRelatedTo`, relater.go:2694).
+    if current_relation() == Relation::Comparable
+        && !matches!(to, Type::Never)
+        && is_simple_type_related_to(to, from)
+    {
+        return true;
     }
 
     // Only the outermost relation: a promise nested in a member may have been
@@ -516,6 +536,185 @@ fn current_relation_admits_anything(to: &Type) -> bool {
         && union.types().iter().any(is_empty_anonymous_object)
 }
 
+/// relater.go `isSimpleTypeRelatedTo` for the assignable and comparable
+/// relations: the flag-level rules, decided without looking at structure.
+/// Enum members and types are nominal references here, so their literal
+/// values are read through the reference rather than by peeling it.
+fn is_simple_type_related_to(source: &Type, target: &Type) -> bool {
+    if matches!(target, Type::Any | Type::ErrorType) || matches!(source, Type::Never) {
+        return true;
+    }
+    if target.is_unmodelled() {
+        return true;
+    }
+    if matches!(target, Type::Never) {
+        return false;
+    }
+    let related_by_kind = match target {
+        Type::String => is_string_like(source),
+        Type::Number => is_number_like(source),
+        Type::BigInt => matches!(source, Type::BigInt),
+        Type::Boolean => matches!(source, Type::Boolean | Type::BooleanLiteral(_)),
+        Type::Symbol => {
+            matches!(source, Type::Symbol)
+                || matches!(source, Type::Reference(reference) if reference.is_unique_symbol())
+        }
+        _ => false,
+    };
+    if related_by_kind {
+        return true;
+    }
+    if matches!(target, Type::StringLiteral(_) | Type::NumberLiteral(_))
+        && enum_member_value(source).is_some_and(|value| value == *target)
+    {
+        return true;
+    }
+    if let (Type::Reference(source_ref), Type::Reference(target_ref)) = (source, target)
+        && let (Some(source_enum), Some(target_enum)) = (&source_ref.enum_owner, &target_ref.enum_owner)
+        && source_enum == target_enum
+        && *source_ref.resolve_arc() == *target_ref.resolve_arc()
+    {
+        return true;
+    }
+    let strict = crate::strict_null_checks();
+    if matches!(source, Type::Undefined)
+        && (!strict && !is_union_or_intersection(target) || matches!(target, Type::Undefined | Type::Void))
+    {
+        return true;
+    }
+    if matches!(source, Type::Null) && (!strict && !is_union_or_intersection(target) || matches!(target, Type::Null)) {
+        return true;
+    }
+    if matches!(target, Type::Object(object) if object.non_primitive && !object.is_intersection)
+        && is_object_type(source)
+    {
+        return true;
+    }
+    if matches!(source, Type::Any | Type::ErrorType) {
+        return true;
+    }
+    let numeric_enum = |ty: &Type| matches!(ty, Type::Reference(reference) if reference.numeric_enum);
+    if matches!(source, Type::Number)
+        && numeric_enum(target)
+        && !matches!(&*resolved_reference(target), Type::Union(_))
+    {
+        return true;
+    }
+    if let Type::NumberLiteral(_) = source
+        && numeric_enum(target)
+        && match &*resolved_reference(target) {
+            Type::Number => true,
+            literal @ Type::NumberLiteral(_) => literal == source,
+            _ => false,
+        }
+    {
+        return true;
+    }
+    current_relation_admits_anything(target)
+}
+
+fn resolved_reference(ty: &Type) -> Arc<Type> {
+    match ty {
+        Type::Reference(reference) => reference.resolve_arc(),
+        other => Arc::new(other.clone()),
+    }
+}
+
+/// tsc's `StringLike` flags: `string`, a string literal (a string enum
+/// member's included), a template literal or a string mapping.
+fn is_string_like(ty: &Type) -> bool {
+    match ty {
+        Type::String | Type::StringLiteral(_) => true,
+        Type::Reference(reference) => {
+            crate::is_template_literal_type(ty)
+                || crate::string_mapping_parts(ty).is_some()
+                || reference.enum_owner.is_some()
+                    && matches!(&*reference.resolve_arc(), Type::StringLiteral(_))
+        }
+        _ => false,
+    }
+}
+
+/// tsc's `NumberLike` flags: `number`, a number literal, a numeric enum
+/// member, or an enum whose members are computed (`TypeFlagsEnum`). An enum of
+/// literal members is their union, which is not number-like by its flags.
+fn is_number_like(ty: &Type) -> bool {
+    match ty {
+        Type::Number | Type::NumberLiteral(_) => true,
+        Type::Reference(reference) => {
+            reference.numeric_enum && !matches!(&*reference.resolve_arc(), Type::Union(_))
+        }
+        _ => false,
+    }
+}
+
+/// The literal an enum member reference stands for.
+fn enum_member_value(ty: &Type) -> Option<Type> {
+    let Type::Reference(reference) = ty else {
+        return None;
+    };
+    reference.enum_owner.as_ref()?;
+    match &*reference.resolve_arc() {
+        literal @ (Type::StringLiteral(_) | Type::NumberLiteral(_)) => Some(literal.clone()),
+        _ => None,
+    }
+}
+
+fn is_union_or_intersection(ty: &Type) -> bool {
+    match ty {
+        Type::Union(_) => true,
+        Type::Object(object) => object.is_intersection,
+        Type::Reference(reference) => {
+            matches!(&*reference.resolve_arc(), Type::Union(_) | Type::Object(ObjectType { is_intersection: true, .. }))
+        }
+        _ => false,
+    }
+}
+
+/// tsc's `TypeFlagsObject`: an object, function, array or tuple type — not
+/// the `object` keyword, an intersection, or a primitive a reference names.
+fn is_object_type(ty: &Type) -> bool {
+    match ty {
+        Type::Object(object) => !object.non_primitive && !object.is_intersection,
+        Type::Function(_) | Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) => true,
+        Type::Reference(reference) => {
+            reference.is_readonly_array()
+                || reference.enum_owner.is_none()
+                    && !reference.is_unique_symbol()
+                    && !crate::is_template_literal_type(ty)
+                    && crate::string_mapping_parts(ty).is_none()
+                    && is_object_type(&reference.resolve_arc())
+        }
+        _ => false,
+    }
+}
+
+/// tsc's `isWeakType` for a plain object: members, every one optional, and no
+/// signature or index signature.
+fn is_weak_object(object: &ObjectType) -> bool {
+    !object.properties.is_empty()
+        && object.properties.values().all(crate::ObjectProperty::is_optional)
+        && object.string_index_type.is_none()
+        && object.number_index_type.is_none()
+        && object.call_signature().is_none()
+        && object.construct_signature().is_none()
+        && !object.is_intersection
+        && !object.synthetic_open_index
+        && !object.non_primitive
+}
+
+/// tsc's `isUnitType` for a source with an apparent type to list members of:
+/// a literal, an enum member or a unique symbol (`undefined` and `null` have
+/// no members). `boolean` is tsc's `false | true`, two unit types whose
+/// apparent type is the same, so it answers as either member does.
+fn is_unit_literal(ty: &Type) -> bool {
+    match ty {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) | Type::Boolean => true,
+        Type::Reference(reference) => reference.is_unique_symbol() || enum_member_value(ty).is_some(),
+        _ => false,
+    }
+}
+
 fn is_empty_anonymous_object(ty: &Type) -> bool {
     matches!(ty, Type::Object(object)
         if object.properties.is_empty()
@@ -576,6 +775,13 @@ fn effective_intersection_constraint(operands: &[Type]) -> Option<Type> {
         }
     }
     Some(if members.is_empty() { Type::Never } else { crate::union_type(members) })
+}
+
+fn some_type(ty: &Type, predicate: impl Fn(&Type) -> bool) -> bool {
+    match ty {
+        Type::Union(union) => union.types().iter().any(predicate),
+        other => predicate(other),
+    }
 }
 
 fn active_variable(ty: &Type) -> Option<(&crate::TypeParameterType, Option<Type>)> {
@@ -642,6 +848,15 @@ fn type_variable_related(from: &Type, to: &Type) -> Option<bool> {
         {
             return Some(true);
         }
+        // relater.go `structuredTypeRelatedToWorker`: comparability is mostly
+        // bidirectional, so a type parameter is comparable to another only
+        // through a constraint that itself holds a type parameter.
+        if current_relation() == Relation::Comparable && target_is_variable {
+            return Some(constraint.is_some_and(|constraint| {
+                constraint != *from && some_type(&constraint, |member| matches!(member, Type::TypeParameter(_)))
+                    && is_assignable_to(&constraint, to)
+            }));
+        }
         // `T extends T` is a circular constraint tsc reports and drops.
         let constraint = constraint.filter(|constraint| constraint != from).unwrap_or(Type::GenuineUnknown);
         return Some(is_assignable_to(&constraint, to));
@@ -654,6 +869,18 @@ fn type_variable_related(from: &Type, to: &Type) -> Option<bool> {
 }
 
 fn assignability_arms(from: &Type, to: &Type) -> bool {
+    // relater.go `isRelatedTo`: the comparable relation skips the weak type
+    // check (`isPerformingCommonPropertyChecks`) except for a unit source,
+    // which must still share a property with an all-optional target.
+    if current_relation() == Relation::Comparable
+        && let Type::Object(target) = to
+        && is_weak_object(target)
+        && is_unit_literal(from)
+        && !target.properties.keys().any(|name| from.get_property_access_type(name).is_some())
+    {
+        return false;
+    }
+
     // A string mapping target (`Uppercase<string>`): the same mapping relates
     // by what it maps, anything else has to be a member of it
     // (`isMemberOfStringMapping`).
@@ -663,7 +890,7 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             return source_kind == target_kind && is_assignable_to(source_inner, target_inner);
         }
         return match &source {
-            Type::Union(union) => union.types().iter().all(|member| is_assignable_to(member, to)),
+            Type::Union(union) => union_source_related(union, to),
             Type::Any | Type::Never | Type::Unknown | Type::ErrorType | Type::TypeParameter(_) => true,
             other => crate::is_member_of_string_mapping(other, to),
         };
@@ -676,9 +903,16 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
     if let Some((texts, types)) = crate::template_literal_parts(to) {
         let source = crate::peel_to_pattern_literal(from);
         return match &source {
-            Type::Union(union) => union.types().iter().all(|member| is_assignable_to(member, to)),
+            Type::Union(union) => union_source_related(union, to),
             Type::Any | Type::Never | Type::Unknown | Type::ErrorType | Type::TypeParameter(_) => true,
-            other => crate::is_type_matched_by_template_literal(other, &texts, &types),
+            other => match crate::template_literal_parts(other) {
+                // relater.go: two template literal types are comparable
+                // unless their fixed texts already rule it out.
+                Some((source_texts, _)) if current_relation() == Relation::Comparable => {
+                    !template_literal_types_definitely_unrelated(&source_texts, &texts)
+                }
+                _ => crate::is_type_matched_by_template_literal(other, &texts, &types),
+            },
         };
     }
 
@@ -781,6 +1015,13 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
     // comparing the structural expansion, so a reference stays interchangeable
     // with its expanded shape without forcing eager expansion at construction.
     if let Type::Reference(reference) = from {
+        // A written tuple relates to another tuple by the element flags it
+        // records, which its peeled shape no longer shows.
+        if let Some((elements, min_length)) = reference.written_tuple()
+            && let Some(related) = tuple_source_related(&fixed_tuple_kinds(elements, min_length), to)
+        {
+            return related;
+        }
         // A pattern source against a target that only *names* a pattern (an
         // annotation's lazy `Capitalize<string>`): resolve the target first,
         // or the source peels to `string` below and the pattern is gone.
@@ -795,11 +1036,46 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             }
         }
         // A readonly array or tuple is not assignable to a mutable one: the
-        // mutable surface has `push`/`splice` the readonly one lacks.
-        if reference.is_readonly_array()
-            && matches!(to, Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_))
+        // mutable surface has `push`/`splice` the readonly one lacks. A union
+        // target's members were each tried against the readonly source above
+        // (`typeRelatedToSomeType`); retrying them with the mutable shape it
+        // resolves to would accept `readonly T[]` as `T[] | undefined`. A
+        // target reference is read first for the same reason, and the lib's
+        // `Array<T>` written by name is the mutable array itself.
+        if reference.is_readonly_array() {
+            match to {
+                Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) | Type::Union(_) => return false,
+                Type::Reference(target) if !target.is_readonly_array() => {
+                    if target.arguments.len() == 1 && target.id.split('\u{0}').next_back() == Some("Array") {
+                        return false;
+                    }
+                    return is_assignable_to(from, &target.resolve_arc());
+                }
+                _ => {}
+            }
+        }
+        // relater.go: a pattern literal's base constraint is itself, so
+        // against a primitive it relates by the simple rules alone — `string`
+        // takes it and no literal does. Its `string` resolution would let the
+        // comparable relation read `string` against a literal.
+        if current_relation() == Relation::Comparable
+            && (crate::is_template_literal_type(from) || crate::string_mapping_parts(from).is_some())
+            && (matches!(
+                to,
+                Type::String
+                    | Type::Number
+                    | Type::Boolean
+                    | Type::BigInt
+                    | Type::Symbol
+                    | Type::Undefined
+                    | Type::Null
+                    | Type::Void
+                    | Type::StringLiteral(_)
+                    | Type::NumberLiteral(_)
+                    | Type::BooleanLiteral(_)
+            ) || enum_member_value(to).is_some())
         {
-            return false;
+            return is_simple_type_related_to(from, to);
         }
         // `resolve_arc` borrows the memoized/interned expansion instead of
         // deep-cloning it — this arm is peeled millions of times on
@@ -828,6 +1104,46 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             return true;
         }
         let resolved = reference.resolve_arc();
+        // A readonly target's apparent members are `ReadonlyArray<T>`'s, which
+        // the mutable shape it resolves to would overstate.
+        if reference.is_readonly_array()
+            && let Type::Object(source) = from
+        {
+            return match resolved.as_ref() {
+                Type::Array(element) => object_related_to_array_like(source, from, element, None, true),
+                other => match crate::fixed_tuple_parts(other) {
+                    Some(tuple) => object_related_to_array_like(
+                        source,
+                        from,
+                        &crate::tuple_element_union(tuple.0),
+                        Some(tuple),
+                        true,
+                    ),
+                    None => false,
+                },
+            };
+        }
+        if let Some((elements, min_length)) = reference.written_tuple() {
+            match from {
+                Type::Tuple(source) => {
+                    return tuple_related_to_fixed_tuple(
+                        &fixed_tuple_elements(source),
+                        &fixed_tuple_kinds(elements, min_length),
+                    );
+                }
+                Type::Union(from_union) => return union_source_related(from_union, to),
+                Type::Object(source) => {
+                    return object_related_to_array_like(
+                        source,
+                        from,
+                        &crate::tuple_element_union(elements),
+                        Some((elements, min_length)),
+                        false,
+                    );
+                }
+                _ => {}
+            }
+        }
         return is_assignable_to(from, &resolved);
     }
 
@@ -850,44 +1166,19 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
                     .iter()
                     .all(|target_ty| is_assignable_to(&Type::Undefined, target_ty))
         }
-        (Type::Tuple(source), Type::Array(target)) => source
-            .iter()
-            .all(|source_ty| is_assignable_to(source_ty, target)),
-        // A fixed tuple satisfies an open one when it covers the fixed slots on
-        // both sides and everything in between fits the rest element.
+        // relater.go relates a mutable tuple to an array through its number
+        // index type, the union of its elements (`never` for `[]`).
+        (Type::Tuple(source), Type::Array(target)) => match current_relation() {
+            Relation::Assignable => source.iter().all(|source_ty| is_assignable_to(source_ty, target)),
+            Relation::Comparable => {
+                source.is_empty() || source.iter().any(|source_ty| is_assignable_to(source_ty, target))
+            }
+        },
         (Type::Tuple(source), Type::OpenTuple(target)) => {
-            source.len() >= target.fixed_len()
-                && source
-                    .iter()
-                    .zip(target.leading.iter())
-                    .all(|(s, t)| is_assignable_to(s, t))
-                && source[source.len() - target.trailing.len()..]
-                    .iter()
-                    .zip(target.trailing.iter())
-                    .all(|(s, t)| is_assignable_to(s, t))
-                && source[target.leading.len()..source.len() - target.trailing.len()]
-                    .iter()
-                    .all(|s| is_assignable_to(s, &target.rest))
+            tuple_related_to_open_tuple(&fixed_tuple_elements(source), target)
         }
         (Type::OpenTuple(source), Type::OpenTuple(target)) => {
-            source.leading.len() >= target.leading.len()
-                && source.trailing.len() >= target.trailing.len()
-                && source
-                    .leading
-                    .iter()
-                    .zip(target.leading.iter())
-                    .all(|(s, t)| is_assignable_to(s, t))
-                && source.leading[target.leading.len()..]
-                    .iter()
-                    .all(|s| is_assignable_to(s, &target.rest))
-                && is_assignable_to(&source.rest, &target.rest)
-                && source.trailing[..source.trailing.len() - target.trailing.len()]
-                    .iter()
-                    .all(|s| is_assignable_to(s, &target.rest))
-                && source.trailing[source.trailing.len() - target.trailing.len()..]
-                    .iter()
-                    .zip(target.trailing.iter())
-                    .all(|(s, t)| is_assignable_to(s, t))
+            tuple_related_to_open_tuple(&open_tuple_elements(source), target)
         }
         (Type::OpenTuple(source), Type::Array(target)) => {
             is_assignable_to(&source.element_union(), target)
@@ -906,6 +1197,22 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
                 .chain(std::iter::once(target.rest.as_ref()))
                 .all(|slot| is_assignable_to(source, slot))
         }
+        // relater.go `structuredTypeRelatedToWorker`: an object that is not an
+        // array or tuple reaches an array or fixed-tuple target through the
+        // structural comparison, so `interface StrNum extends Array<string |
+        // number> { 0: string; 1: number; length: 2 }` satisfies `[string,
+        // number]`. A tuple with a rest element admits no such source
+        // (`propertiesRelatedTo`'s `ElementFlagsVariable` check).
+        (Type::Object(source), Type::Array(element)) => {
+            object_related_to_array_like(source, from, element, None, false)
+        }
+        (Type::Object(source), Type::Tuple(elements)) => object_related_to_array_like(
+            source,
+            from,
+            &crate::tuple_element_union(elements),
+            Some((elements.as_slice(), crate::tuple_min_length(elements))),
+            false,
+        ),
         (Type::Union(from_union), Type::Union(_)) => {
             // Check each source member against the whole target union rather
             // than `any` single target member: a source member that is itself a
@@ -1037,6 +1344,23 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         }
         _ => false,
     }
+}
+
+/// relater.go `templateLiteralTypesDefinitelyUnrelated`: the fixed texts
+/// disagree where both templates start or where both end.
+fn template_literal_types_definitely_unrelated(source_texts: &[&str], target_texts: &[&str]) -> bool {
+    let (Some(source_start), Some(target_start), Some(source_end), Some(target_end)) = (
+        source_texts.first().map(|text| text.as_bytes()),
+        target_texts.first().map(|text| text.as_bytes()),
+        source_texts.last().map(|text| text.as_bytes()),
+        target_texts.last().map(|text| text.as_bytes()),
+    ) else {
+        return false;
+    };
+    let start = source_start.len().min(target_start.len());
+    let end = source_end.len().min(target_end.len());
+    source_start[..start] != target_start[..start]
+        || source_end[source_end.len() - end..] != target_end[target_end.len() - end..]
 }
 
 /// Whether `ty` is a function or an object carrying a call/construct signature —
@@ -1175,10 +1499,12 @@ fn expanded_signature(function: &FunctionType) -> (std::borrow::Cow<'_, [Type]>,
         let mut expanded = parameters[..leading].to_vec();
         expanded.extend(elements.iter().cloned());
         let required = function.required_parameter_count().min(leading)
-            + elements
-                .iter()
-                .take_while(|element| !type_includes_undefined(element))
-                .count();
+            + written_tuple_min_length(rest).unwrap_or_else(|| {
+                elements
+                    .iter()
+                    .take_while(|element| !type_includes_undefined(element))
+                    .count()
+            });
         return (std::borrow::Cow::Owned(expanded), required, false);
     }
     (
@@ -1242,6 +1568,18 @@ fn rest_slot_shape(rest: &Type) -> Type {
     }
 }
 
+/// The recorded `minLength` of the written tuple a rest slot names, through
+/// the references in front of it.
+fn written_tuple_min_length(rest: &Type) -> Option<usize> {
+    let Type::Reference(reference) = rest else {
+        return None;
+    };
+    match reference.written_tuple() {
+        Some((_, min_length)) => Some(min_length),
+        None => written_tuple_min_length(&reference.resolve_arc()),
+    }
+}
+
 /// Widens a variadic signature's parameter list so a positional comparison
 /// reaches every slot the rest parameter covers. A rest parameter is stored as
 /// the array it is written as (`...items: T[]` -> `T[]`), so comparing it
@@ -1258,13 +1596,43 @@ fn widen_variadic_parameters<'a>(
     let Some(rest) = parameters.last() else {
         return parameters;
     };
-    let Type::Array(element) = rest_slot_shape(rest) else {
-        return parameters;
-    };
     let leading = parameters.len() - 1;
-    let element = *element;
     let mut widened = parameters[..leading].to_vec();
-    widened.resize(width.max(leading + 1), element);
+    match rest_slot_shape(rest) {
+        Type::Array(element) => widened.resize(width.max(leading + 1), *element),
+        // tsc's `getTypeAtPosition`: a rest parameter that is not itself a
+        // tuple is indexed at each position, which distributes over a union of
+        // tuples; a fixed tuple too short for the position reads `undefined`.
+        Type::Union(union)
+            if union
+                .types()
+                .iter()
+                .all(|member| matches!(member.peeled(), Type::Tuple(_) | Type::OpenTuple(_))) =>
+        {
+            for position in 0..width.max(leading + 1) - leading {
+                let elements = union
+                    .types()
+                    .iter()
+                    .map(|member| match member.peeled() {
+                        Type::Tuple(elements) => {
+                            elements.get(position).cloned().unwrap_or(Type::Undefined)
+                        }
+                        Type::OpenTuple(open) => match open.leading.get(position) {
+                            Some(element) => element.clone(),
+                            None => {
+                                let mut tail = vec![open.rest.as_ref().clone()];
+                                tail.extend(open.trailing.iter().cloned());
+                                crate::union_type(tail)
+                            }
+                        },
+                        _ => unreachable!("every member is a tuple"),
+                    })
+                    .collect();
+                widened.push(crate::union_type(elements));
+            }
+        }
+        _ => return parameters,
+    }
     std::borrow::Cow::Owned(widened)
 }
 
@@ -1299,6 +1667,13 @@ fn required_count_ignoring_trailing_void(parameters: &[Type], required: usize) -
 }
 
 fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bool {
+    // relater.go `signaturesRelatedTo`: the comparable relation erases the
+    // type parameters of both signatures instead of instantiating the source
+    // in the target's context, and an unsubstituted placeholder already
+    // relates like the `any` erasure leaves.
+    if current_relation() == Relation::Comparable {
+        return is_signature_assignable_to(source, target, false);
+    }
     if let Some(opaque_target) = opaque_generic_target(source, target) {
         return is_signature_assignable_to(source, &opaque_target, false);
     }
@@ -1626,6 +2001,238 @@ fn object_assignable(from_obj: &ObjectType, to_obj: &ObjectType, from: &Type, to
     result
 }
 
+/// A tuple element's `ElementFlags`, as far as surge's shapes carry them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ElementKind {
+    Required,
+    Optional,
+    Rest,
+}
+
+fn fixed_tuple_elements(elements: &[Type]) -> Vec<(ElementKind, &Type)> {
+    fixed_tuple_kinds(elements, crate::tuple_min_length(elements))
+}
+
+fn fixed_tuple_kinds(elements: &[Type], min_length: usize) -> Vec<(ElementKind, &Type)> {
+    elements
+        .iter()
+        .enumerate()
+        .map(|(index, element)| {
+            let kind = if index < min_length { ElementKind::Required } else { ElementKind::Optional };
+            (kind, element)
+        })
+        .collect()
+}
+
+/// A mutable tuple source against the tuple `to` names — through an alias,
+/// and a readonly target takes it as it is — or `None` when `to` is no tuple.
+fn tuple_source_related(source: &[(ElementKind, &Type)], to: &Type) -> Option<bool> {
+    match to {
+        Type::OpenTuple(target) => Some(tuple_related_to_open_tuple(source, target)),
+        Type::Reference(reference) if reference.written_tuple().is_none() => {
+            tuple_source_related(source, &reference.resolve_arc())
+        }
+        other => {
+            let (elements, min_length) = crate::fixed_tuple_parts(other)?;
+            Some(tuple_related_to_fixed_tuple(source, &fixed_tuple_kinds(elements, min_length)))
+        }
+    }
+}
+
+/// relater.go `propertiesRelatedTo` for a tuple source against a tuple target
+/// without a rest element: the source must reach the target's `minLength` and
+/// the target must hold the source's longest length, and each element is
+/// related to its counterpart, which must not be required where the source's
+/// may be missing.
+fn tuple_related_to_fixed_tuple(source: &[(ElementKind, &Type)], target: &[(ElementKind, &Type)]) -> bool {
+    let min_length = |elements: &[(ElementKind, &Type)]| {
+        elements
+            .iter()
+            .filter(|(kind, _)| *kind == ElementKind::Required)
+            .count()
+    };
+    let source_rest = source.iter().any(|(kind, _)| *kind == ElementKind::Rest);
+    if !source_rest && source.len() < min_length(target)
+        || target.len() < min_length(source)
+        || source_rest
+        || target.len() < source.len()
+    {
+        return false;
+    }
+    source
+        .iter()
+        .zip(target)
+        .all(|((source_kind, source_type), (target_kind, target_type))| {
+            (*target_kind != ElementKind::Required || *source_kind == ElementKind::Required)
+                && is_assignable_to(source_type, target_type)
+        })
+}
+
+fn open_tuple_elements(tuple: &crate::OpenTupleType) -> Vec<(ElementKind, &Type)> {
+    let mut elements = fixed_tuple_elements(&tuple.leading);
+    elements.push((ElementKind::Rest, tuple.rest.as_ref()));
+    elements.extend(tuple.trailing.iter().map(|element| (ElementKind::Required, element)));
+    elements
+}
+
+/// relater.go `propertiesRelatedTo` for a tuple source against a tuple target
+/// with a rest element: a fixed source must reach the target's `minLength`,
+/// and each source position is related to the target position it lands on —
+/// counted from the start within the target's leading elements, from the end
+/// past them — which must not be a required element the source may lack.
+fn tuple_related_to_open_tuple(source: &[(ElementKind, &Type)], target: &crate::OpenTupleType) -> bool {
+    let target_elements = open_tuple_elements(target);
+    let target_arity = target_elements.len();
+    let target_min_length = target_elements
+        .iter()
+        .filter(|(kind, _)| *kind == ElementKind::Required)
+        .count();
+    let source_rest = source.iter().any(|(kind, _)| *kind == ElementKind::Rest);
+    if !source_rest && source.len() < target_min_length {
+        return false;
+    }
+    let source_arity = source.len();
+    source
+        .iter()
+        .enumerate()
+        .all(|(source_position, (source_kind, source_type))| {
+            let from_end = source_arity - 1 - source_position;
+            let target_position = if source_position >= target.leading.len() {
+                target_arity - 1 - from_end.min(target.trailing.len())
+            } else {
+                source_position
+            };
+            let (target_kind, target_type) = target_elements[target_position];
+            (target_kind != ElementKind::Required || *source_kind == ElementKind::Required)
+                && is_assignable_to(source_type, target_type)
+        })
+}
+
+/// An object source against an array or fixed-tuple target, related as
+/// against the object type the target's apparent type is (see
+/// [`array_like_apparent_object`]). Most objects lack the array surface, so
+/// the member names are checked before any member type is built.
+fn object_related_to_array_like(
+    source: &ObjectType,
+    from: &Type,
+    element: &Type,
+    tuple: Option<(&[Type], usize)>,
+    readonly: bool,
+) -> bool {
+    let has_array_members = crate::array_property_names()
+        .iter()
+        .filter(|name| !readonly || !crate::MUTATING_ARRAY_MEMBERS.contains(name))
+        .all(|name| supplies_required_member(source, name));
+    let has_elements = tuple.is_none_or(|(_, min_length)| {
+        (0..min_length).all(|index| supplies_required_member(source, &index.to_string()))
+    });
+    if !has_array_members || !has_elements {
+        return false;
+    }
+    let target = Type::Object(array_like_apparent_object(element, tuple, readonly));
+    let Type::Object(target_object) = &target else {
+        return false;
+    };
+    let related = object_assignable(source, target_object, from, &target);
+    SYNTHESIZED_TARGETS.with(|targets| targets.borrow_mut().push(target));
+    related
+}
+
+/// The members of an array's or a fixed tuple's apparent type: `Array<T>`'s
+/// over the element type (`ReadonlyArray<T>`'s for a readonly one, which lacks
+/// the mutators), and for a tuple the element properties and the `length`
+/// `createTupleTargetType` declares, beside the number index signature.
+fn array_like_apparent_object(element: &Type, tuple: Option<(&[Type], usize)>, readonly: bool) -> ObjectType {
+    let mut properties = crate::PropertyMap::default();
+    for name in crate::array_property_names() {
+        if readonly && crate::MUTATING_ARRAY_MEMBERS.contains(name) {
+            continue;
+        }
+        let property = if *name == "length" {
+            let length = match tuple {
+                Some((elements, min_length)) => crate::ty::tuple_length_literals(min_length, elements.len()),
+                None => Type::Number,
+            };
+            crate::ObjectProperty::required(length)
+        } else {
+            let Some(member) = crate::array_member_type(name, element) else {
+                continue;
+            };
+            crate::ObjectProperty::required(member).with_method(true)
+        };
+        properties.insert((*name).into(), property);
+    }
+    if let Some((elements, min_length)) = tuple {
+        for (index, element) in elements.iter().enumerate() {
+            let property = if index < min_length {
+                crate::ObjectProperty::required(element.clone())
+            } else {
+                crate::ObjectProperty::optional(element.clone())
+            };
+            properties.insert(index.to_string().into(), property);
+        }
+    }
+    // Built directly rather than through `ObjectType::new`: this shape lives
+    // for one comparison and has no business in the canonical property-map
+    // store.
+    ObjectType {
+        properties: Arc::new(properties),
+        property_map_id: None,
+        string_index_type: None,
+        number_index_type: Some(Arc::new(element.clone())),
+        alias_name: None,
+        alias_id: None,
+        construct_signature: None,
+        call_signature: None,
+        is_intersection: false,
+        synthetic_open_index: false,
+        non_primitive: false,
+        without_inferable_index: false,
+        intersection_operands: None,
+    }
+}
+
+/// Whether `source` answers a required target member `name` the way
+/// [`object_assignability_failure`] looks it up: a property, an index
+/// signature standing for members surge could not enumerate, the `Function`
+/// surface of a callable object, or the global `Object` members.
+fn supplies_required_member(source: &ObjectType, name: &str) -> bool {
+    source.properties.contains_key(name)
+        || source
+            .applicable_index_type(crate::object::is_numeric_key(name))
+            .is_some_and(|index| source.synthetic_open_index || index.is_unknown())
+        || callable_object_function_member(source, name).is_some()
+        || object_prototype_member(name).is_some()
+}
+
+/// relater.go `reportUnmatchedProperty` for an object source against a fixed
+/// tuple target: the one member the source lacks, which TS2741 names. With
+/// more than one missing, `tryElaborateArrayLikeErrors` declines to list them
+/// for a source that is not an array, so the plain assignability head stands.
+pub fn tuple_target_missing_property(source: &Type, elements: &[Type]) -> Option<String> {
+    let Type::Object(source) = source else {
+        return None;
+    };
+    // `shouldReportUnmatchedPropertyError`: a source that is only a signature
+    // is not reported by its members.
+    if source.properties.is_empty()
+        && (source.call_signature().is_some() || source.construct_signature().is_some())
+    {
+        return None;
+    }
+    let target = array_like_apparent_object(
+        &crate::tuple_element_union(elements),
+        Some((elements, crate::tuple_min_length(elements))),
+        false,
+    );
+    let mut missing = target
+        .required_properties()
+        .filter(|(name, _)| !supplies_required_member(source, name))
+        .map(|(name, _)| name.to_string());
+    let first = missing.next()?;
+    missing.next().is_none().then_some(first)
+}
+
 /// tsc's `indexSignaturesRelatedTo`. A target index signature is satisfied by
 /// the source's applicable one, or — the source having none — by every source
 /// member it would cover (the implicit index signature of an object type).
@@ -1803,6 +2410,33 @@ fn strip_undefined_member(ty: &Type) -> Option<Type> {
     }
 }
 
+/// relater.go `propertyRelatedTo` under the comparable relation. Both members
+/// are read with their optionality (`getNonMissingTypeOfSymbol`), so two
+/// optional members always overlap in `undefined`, and an optional source is
+/// not held to a required target (`skipOptional`). A method target still
+/// compares its parameters bivariantly.
+fn comparable_property_related(source_ty: &Type, source_optional: bool, target: &crate::ObjectProperty) -> bool {
+    let effective_source = with_optionality(source_ty, source_optional);
+    let effective_target = with_optionality(&target.ty, target.is_optional());
+    if target.is_method()
+        && let (Type::Function(source_signature), Type::Function(target_signature)) = (source_ty, &target.ty)
+    {
+        return type_includes_undefined(&effective_source) && type_includes_undefined(&effective_target)
+            || is_signature_assignable_to(source_signature, target_signature, true);
+    }
+    is_assignable_to(&effective_source, &effective_target)
+}
+
+/// An optional member's declared type as `getTypeOfSymbol` reads it: with
+/// `undefined` under `strictNullChecks`.
+fn with_optionality(ty: &Type, optional: bool) -> Type {
+    if optional && crate::strict_null_checks() && !type_includes_undefined(ty) {
+        crate::union_type(vec![ty.clone(), Type::Undefined])
+    } else {
+        ty.clone()
+    }
+}
+
 /// tsc's `propertyRelatedTo` modifier rules. A private member on either side
 /// relates only to the same declaration. A protected target needs a protected
 /// source; tsc also requires the source's class to derive from the target's,
@@ -1827,6 +2461,7 @@ pub fn object_assignability_failure(
     let (Type::Object(source), Type::Object(target)) = (source, target) else {
         return None;
     };
+    let comparable = current_relation() == Relation::Comparable;
 
     for (property_name, target_property) in target.properties.iter() {
         let source_property = source.properties.get(property_name.as_ref());
@@ -1837,11 +2472,16 @@ pub fn object_assignability_failure(
         // surge could not enumerate — and so does an `any`-valued signature,
         // which is also how surge spells an object it could not model (the
         // stand-in a generic body's own type parameter is evaluated with).
+        // Under the comparable relation an optional target is not answered by
+        // the signature either: with no such property there is nothing to
+        // relate.
         let source_property_ty = source_property.map(|property| &property.ty).or_else(|| {
             let index = source
                 .applicable_index_type(crate::object::is_numeric_key(property_name.as_ref()))?;
-            (target_property.is_optional() || source.synthetic_open_index || index.is_unknown())
-                .then_some(index)
+            (target_property.is_optional() && !comparable
+                || source.synthetic_open_index
+                || index.is_unknown())
+            .then_some(index)
         });
 
         let source_property_ty = source_property_ty
@@ -1868,6 +2508,18 @@ pub fn object_assignability_failure(
             return Some(ObjectAssignabilityFailure::AccessibilityMismatch {
                 property_name: property_name.to_string(),
             });
+        }
+
+        if comparable {
+            let source_optional = source_property.is_some_and(|property| property.is_optional());
+            if !comparable_property_related(source_property_ty, source_optional, target_property) {
+                return Some(ObjectAssignabilityFailure::PropertyTypeMismatch {
+                    property_name: property_name.to_string(),
+                    source_type: source_property_ty.clone(),
+                    target_type: target_property.ty.clone(),
+                });
+            }
+            continue;
         }
 
         if source_property.is_some()

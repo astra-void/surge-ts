@@ -839,8 +839,7 @@ pub(crate) fn emit_grammar_diagnostics(
         }
         let answered: &'static [u32] = match finding.kind {
             surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2842) => &[7031],
-            surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2372 | 2373)
-            | surge_ts_syntax::ParsedGrammarDiagnosticKind::LaterParameterReference => &[2304, 2552],
+            surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2372 | 2373) => &[2304, 2552],
             // The name resolves to the constructor's local in the emitted
             // code, so tsc reports nothing about what it names in the source.
             surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2301) if diagnostic.is_some() => {
@@ -1078,6 +1077,17 @@ pub(crate) fn unclaimed_parser_errors<'a>(
                 return false;
             }
         }
+        // oxc rejects any parameter-property modifier outside a constructor
+        // as TS1090; tsc's modifier grammar rejects only `static`, `export`,
+        // `declare` and `async` on a parameter and reports a misplaced
+        // parameter property as TS2369 instead.
+        if error.code == Some(1090)
+            && error.span_text.as_deref().is_some_and(|modifier| {
+                matches!(modifier, "public" | "private" | "protected" | "readonly" | "override")
+            })
+        {
+            return false;
+        }
         !(error.code == Some(1030)
             && error.span.is_some_and(|span| {
                 abstract_members
@@ -1125,7 +1135,6 @@ fn grammar_finding_diagnostic(
     use surge_ts_syntax::ParsedGrammarDiagnosticKind as Kind;
 
     let diagnostic = match finding.kind {
-        Kind::LaterParameterReference => return None,
         Kind::Ts(2683 | 7041) if !ctx.options.no_implicit_this => return None,
         Kind::Ts(7028) if ctx.options.allow_unused_labels != Some(false) => return None,
         Kind::Ts(7032) => {
@@ -1255,9 +1264,6 @@ fn grammar_finding_diagnostic(
         Kind::ObjectLiteralPropertyAndAccessor => Diagnostic::ts1119(ctx.file_name.clone()),
         Kind::AbstractMethodOutsideAbstractClass => Diagnostic::ts1244(ctx.file_name.clone()),
         Kind::AbstractPropertyOutsideAbstractClass => Diagnostic::ts1253(ctx.file_name.clone()),
-        Kind::ParameterPropertyOutsideImplementation => {
-            Diagnostic::ts2369(ctx.file_name.clone())
-        }
         Kind::ParameterInitializerOutsideImplementation => {
             Diagnostic::ts2371(ctx.file_name.clone())
         }
@@ -1337,6 +1343,7 @@ pub(super) fn check_program_file(
     emit_grammar_diagnostics(&parsed_file.grammar_diagnostics, ctx);
     ctx.parenthesized_expressions = parsed_file.parenthesized_expressions.clone();
     ctx.let_assignments = parsed_file.let_assignments.clone();
+    ctx.jsx_factory_uses = parsed_file.jsx_factory_uses.clone();
 
     if parsed_file.is_module {
         let Some(module_analysis) = shared_state.module_analyses[file_index].as_ref() else {
@@ -1368,10 +1375,23 @@ pub(super) fn check_program_file(
         // read-only lookup backdrop for the file check; holding them as a
         // `parent` fallback keeps the per-file working set O(imports + locals)
         // where a clone-then-insert deep-copied every global per file.
-        let globals_parent = Arc::new(
+        let ambient_globals = Arc::new(
             ctx.ambient_global_symbols
                 .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
         );
+        // The scripts' globals sit behind the module's own scope, which is a
+        // declaration space of its own: a module-level `let` never redeclares a
+        // script's.
+        let globals_parent = match shared_state.module_script_globals.as_ref() {
+            Some(script_globals) => Arc::new(crate::symbols::SymbolTable::declaration_scope(
+                Arc::new(
+                    script_globals
+                        .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext)
+                        .with_parent_fallback(ambient_globals),
+                ),
+            )),
+            None => ambient_globals,
+        };
         let mut merged_symbols =
             crate::symbols::SymbolTable::file_check_root(globals_parent.clone());
         if let Some(imported_bindings) = imported_bindings {
@@ -1399,13 +1419,11 @@ pub(super) fn check_program_file(
                 .into_iter()
                 .filter(|name| !module_declared.contains(name)),
         );
-        ctx.set_file_type_only_export_import_names(
+        ctx.set_file_type_only_alias_names(
             imported_bindings
-                .map(|bindings| bindings.type_only_export_import_names.as_slice())
-                .unwrap_or_default()
-                .iter()
-                .map(String::as_str)
-                .filter(|name| !module_declared.contains(name)),
+                .into_iter()
+                .flat_map(|bindings| bindings.type_only_aliases.iter().cloned())
+                .filter(|(name, _)| !module_declared.contains(name.as_ref())),
         );
         ctx.set_file_import_names(
             crate::program::ambient::import_bound_names(&parsed_file.statements)
@@ -1438,6 +1456,13 @@ pub(super) fn check_program_file(
             parsed_file.is_module,
             ctx,
         );
+        // The collection backs its table with the lib's globals alone; the
+        // function bodies that fall back to it read the scripts' globals too.
+        let validation_symbols = if shared_state.module_script_globals.is_some() {
+            validation_symbols.with_parent_fallback(globals_parent.clone())
+        } else {
+            validation_symbols
+        };
         let saved_symbols = std::mem::replace(&mut ctx.symbols, validation_symbols);
 
         let validation_start = Instant::now();
@@ -1518,9 +1543,12 @@ pub(super) fn check_program_file(
         ctx.module_value_fallback = None;
 
         if ctx.options.no_unused_locals && ctx.current_file_kind == FileKind::RootSource {
+            let jsx_reads =
+                unused_locals::jsx_factory_reads(&parsed_file.jsx_factory_uses, &ctx.options);
             unused_locals::emit_unused_module_bindings(
                 &parsed_file.statements,
                 &parsed_file.module_reads,
+                &jsx_reads,
                 ctx,
             );
         }

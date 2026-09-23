@@ -1,15 +1,14 @@
 //! Name rules that follow from how a declaration is emitted: tsc's
 //! `checkCollisionsForDeclarationName` family (TS2441, TS2725, TS1216), the
-//! built-in global conflicts of a script (TS2397), the constructor-scope rule
-//! for property initializers (TS2301), and the private-name write rules
-//! (TS2803, TS2806). The findings that depend on `module`, `target`,
+//! built-in global conflicts of a script (TS2397), and the private-name write
+//! rules (TS2803, TS2806). The findings that depend on `module`, `target`,
 //! `useDefineForClassFields` or `noEmit` are gated by the checker.
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
     AssignmentOperator, AssignmentTarget, BindingPattern, Class, ClassElement, Declaration,
     Expression, ForStatementLeft, ImportDeclarationSpecifier, MethodDefinitionKind,
-    PrivateFieldExpression, Program, PropertyDefinition, PropertyKey, SimpleAssignmentTarget,
+    PrivateFieldExpression, Program, PropertyKey, SimpleAssignmentTarget,
     Statement, TSModuleDeclarationBody, TSModuleDeclarationName, VariableDeclaration,
 };
 use oxc_ast_visit::Visit;
@@ -364,203 +363,6 @@ impl<'a> Visit<'a> for PrivateFieldTargets {
     }
 }
 
-/// The constructor's locals a property initializer may not read: parameters,
-/// hoisted `var`s, and the body's own block-scoped declarations.
-fn constructor_locals(class: &Class<'_>) -> Vec<String> {
-    let Some(constructor) = class.body.body.iter().find_map(|element| match element {
-        ClassElement::MethodDefinition(method)
-            if method.kind == MethodDefinitionKind::Constructor && method.value.body.is_some() =>
-        {
-            Some(&method.value)
-        }
-        _ => None,
-    }) else {
-        return Vec::new();
-    };
-    let mut locals = Vec::new();
-    for parameter in &constructor.params.items {
-        let mut names = Vec::new();
-        collect_binding_names(&parameter.pattern, &mut names);
-        locals.extend(names.into_iter().map(|(name, _)| name.to_string()));
-    }
-    if let Some(rest) = &constructor.params.rest {
-        let mut names = Vec::new();
-        collect_binding_names(&rest.rest.argument, &mut names);
-        locals.extend(names.into_iter().map(|(name, _)| name.to_string()));
-    }
-    if let Some(body) = &constructor.body {
-        body_scope_names(&body.statements, true, &mut locals);
-    }
-    locals
-}
-
-/// The names a function body or block binds: its direct `let`/`const`/class/
-/// function declarations, plus every hoisted `var` when `hoist_var`.
-fn body_scope_names(statements: &[Statement<'_>], hoist_var: bool, out: &mut Vec<String>) {
-    struct HoistedVars<'o> {
-        out: &'o mut Vec<String>,
-    }
-    impl<'a> Visit<'a> for HoistedVars<'_> {
-        fn visit_variable_declaration(&mut self, declaration: &VariableDeclaration<'a>) {
-            if declaration.kind.is_var() {
-                for declarator in &declaration.declarations {
-                    let mut names = Vec::new();
-                    collect_binding_names(&declarator.id, &mut names);
-                    self.out.extend(names.into_iter().map(|(name, _)| name.to_string()));
-                }
-            }
-        }
-        fn visit_function(&mut self, _: &oxc_ast::ast::Function<'a>, _: oxc_syntax::scope::ScopeFlags) {}
-        fn visit_arrow_function_expression(&mut self, _: &oxc_ast::ast::ArrowFunctionExpression<'a>) {}
-        fn visit_class(&mut self, _: &Class<'a>) {}
-    }
-
-    for statement in statements {
-        match statement {
-            Statement::VariableDeclaration(declaration) if !declaration.kind.is_var() => {
-                for declarator in &declaration.declarations {
-                    let mut names = Vec::new();
-                    collect_binding_names(&declarator.id, &mut names);
-                    out.extend(names.into_iter().map(|(name, _)| name.to_string()));
-                }
-            }
-            Statement::FunctionDeclaration(function) => {
-                if let Some(id) = &function.id {
-                    out.push(id.name.to_string());
-                }
-            }
-            Statement::ClassDeclaration(class) => {
-                if let Some(id) = &class.id {
-                    out.push(id.name.to_string());
-                }
-            }
-            _ => {}
-        }
-    }
-    if hoist_var {
-        let mut hoisted = HoistedVars { out };
-        for statement in statements {
-            hoisted.visit_statement(statement);
-        }
-    }
-}
-
-/// The reads of a constructor local from a property initializer, walking the
-/// scopes between the two the way the binder's name resolution does: a nested
-/// function, block, catch clause or loop head that rebinds the name hides the
-/// constructor's.
-struct ConstructorLocalReads<'l> {
-    locals: &'l [String],
-    scopes: Vec<Vec<String>>,
-    found: Vec<(String, Span)>,
-}
-
-impl ConstructorLocalReads<'_> {
-    fn with_scope(&mut self, names: Vec<String>, walk: impl FnOnce(&mut Self)) {
-        self.scopes.push(names);
-        walk(self);
-        self.scopes.pop();
-    }
-}
-
-impl<'a> Visit<'a> for ConstructorLocalReads<'_> {
-    fn visit_identifier_reference(&mut self, identifier: &oxc_ast::ast::IdentifierReference<'a>) {
-        let name = identifier.name.as_str();
-        if self.locals.iter().any(|local| local == name)
-            && !self.scopes.iter().any(|scope| scope.iter().any(|bound| bound == name))
-        {
-            self.found.push((name.to_string(), identifier.span));
-        }
-    }
-    fn visit_function(&mut self, function: &oxc_ast::ast::Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
-        let mut names = Vec::new();
-        if let Some(id) = &function.id {
-            names.push(id.name.to_string());
-        }
-        for parameter in &function.params.items {
-            let mut bound = Vec::new();
-            collect_binding_names(&parameter.pattern, &mut bound);
-            names.extend(bound.into_iter().map(|(name, _)| name.to_string()));
-        }
-        if let Some(rest) = &function.params.rest {
-            let mut bound = Vec::new();
-            collect_binding_names(&rest.rest.argument, &mut bound);
-            names.extend(bound.into_iter().map(|(name, _)| name.to_string()));
-        }
-        if let Some(body) = &function.body {
-            body_scope_names(&body.statements, true, &mut names);
-        }
-        self.with_scope(names, |visitor| oxc_ast_visit::walk::walk_function(visitor, function, flags));
-    }
-    fn visit_arrow_function_expression(&mut self, arrow: &oxc_ast::ast::ArrowFunctionExpression<'a>) {
-        let mut names = Vec::new();
-        for parameter in &arrow.params.items {
-            let mut bound = Vec::new();
-            collect_binding_names(&parameter.pattern, &mut bound);
-            names.extend(bound.into_iter().map(|(name, _)| name.to_string()));
-        }
-        if let Some(rest) = &arrow.params.rest {
-            let mut bound = Vec::new();
-            collect_binding_names(&rest.rest.argument, &mut bound);
-            names.extend(bound.into_iter().map(|(name, _)| name.to_string()));
-        }
-        body_scope_names(&arrow.body.statements, true, &mut names);
-        self.with_scope(names, |visitor| oxc_ast_visit::walk::walk_arrow_function_expression(visitor, arrow));
-    }
-    fn visit_block_statement(&mut self, block: &oxc_ast::ast::BlockStatement<'a>) {
-        let mut names = Vec::new();
-        body_scope_names(&block.body, false, &mut names);
-        self.with_scope(names, |visitor| oxc_ast_visit::walk::walk_block_statement(visitor, block));
-    }
-    fn visit_catch_clause(&mut self, clause: &oxc_ast::ast::CatchClause<'a>) {
-        let mut names = Vec::new();
-        if let Some(parameter) = &clause.param {
-            let mut bound = Vec::new();
-            collect_binding_names(&parameter.pattern, &mut bound);
-            names.extend(bound.into_iter().map(|(name, _)| name.to_string()));
-        }
-        self.with_scope(names, |visitor| oxc_ast_visit::walk::walk_catch_clause(visitor, clause));
-    }
-    fn visit_for_statement(&mut self, statement: &oxc_ast::ast::ForStatement<'a>) {
-        let mut names = Vec::new();
-        if let Some(oxc_ast::ast::ForStatementInit::VariableDeclaration(declaration)) = &statement.init
-            && !declaration.kind.is_var()
-        {
-            for declarator in &declaration.declarations {
-                let mut bound = Vec::new();
-                collect_binding_names(&declarator.id, &mut bound);
-                names.extend(bound.into_iter().map(|(name, _)| name.to_string()));
-            }
-        }
-        self.with_scope(names, |visitor| oxc_ast_visit::walk::walk_for_statement(visitor, statement));
-    }
-    fn visit_for_in_statement(&mut self, statement: &oxc_ast::ast::ForInStatement<'a>) {
-        let names = for_left_names(&statement.left);
-        self.with_scope(names, |visitor| oxc_ast_visit::walk::walk_for_in_statement(visitor, statement));
-    }
-    fn visit_for_of_statement(&mut self, statement: &oxc_ast::ast::ForOfStatement<'a>) {
-        let names = for_left_names(&statement.left);
-        self.with_scope(names, |visitor| oxc_ast_visit::walk::walk_for_of_statement(visitor, statement));
-    }
-    fn visit_class(&mut self, _: &Class<'a>) {}
-    fn visit_ts_type_annotation(&mut self, _: &oxc_ast::ast::TSTypeAnnotation<'a>) {}
-    fn visit_ts_type(&mut self, _: &oxc_ast::ast::TSType<'a>) {}
-}
-
-fn for_left_names(left: &ForStatementLeft<'_>) -> Vec<String> {
-    let mut names = Vec::new();
-    if let ForStatementLeft::VariableDeclaration(declaration) = left
-        && !declaration.kind.is_var()
-    {
-        for declarator in &declaration.declarations {
-            let mut bound = Vec::new();
-            collect_binding_names(&declarator.id, &mut bound);
-            names.extend(bound.into_iter().map(|(name, _)| name.to_string()));
-        }
-    }
-    names
-}
-
 impl<'a> ContextCollector<'a, '_> {
     /// tsc's `checkClassNameCollisionWithObject`: a class named `Object` in a
     /// file emitted as CommonJS. The checker supplies the module kind.
@@ -739,49 +541,6 @@ impl<'a> ContextCollector<'a, '_> {
         });
         if innermost.is_some_and(|class| std::ptr::eq(class, declaring)) && container_is_static == is_static {
             self.push(2806, access.span, &[]);
-        }
-    }
-
-    /// TS2301: an instance property initializer that reads a name the
-    /// constructor binds. The emitted initializer runs inside the constructor,
-    /// where that local would shadow what the source meant. Gated by the
-    /// checker on `GetEmitStandardClassFields`.
-    pub(super) fn check_property_initializer_constructor_locals(&mut self, property: &PropertyDefinition<'a>) {
-        if property.r#static {
-            return;
-        }
-        let Some(value) = &property.value else {
-            return;
-        };
-        let Some(AstKind::Class(class)) = self.stack.iter().rev().nth(1) else {
-            return;
-        };
-        let locals = constructor_locals(class);
-        if locals.is_empty() {
-            return;
-        }
-        let mut reads = ConstructorLocalReads {
-            locals: &locals,
-            scopes: Vec::new(),
-            found: Vec::new(),
-        };
-        reads.visit_expression(value);
-        if reads.found.is_empty() {
-            return;
-        }
-        let property_name = match &property.key {
-            PropertyKey::PrivateIdentifier(key) => format!("#{}", key.name),
-            key if property.computed => {
-                let span = key.span();
-                format!("[{}]", &self.source_text[span.start as usize..span.end as usize])
-            }
-            key => key
-                .static_name()
-                .map(|name| name.into_owned())
-                .unwrap_or_default(),
-        };
-        for (name, span) in reads.found {
-            self.push(2301, span, &[&property_name, &name]);
         }
     }
 }

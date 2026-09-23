@@ -747,6 +747,19 @@ pub(crate) fn check_property_call_like(
                 ));
                 return None;
             }
+            if let Some(callee) = union_receiver_callee(&union_type, property_name) {
+                return super::check_callable_union_call(
+                    &callee,
+                    property_span,
+                    crate::checks::expr::element_access_span(object_span, property_span)
+                        .map(|span| SyntaxTextSpan { end: span.end - 1, ..span }),
+                    call_span,
+                    type_arguments,
+                    arguments,
+                    symbols,
+                    ctx,
+                );
+            }
             let mut result_types = vec![];
             for ty in union_type.types() {
                 if matches!(ty, Type::Undefined | Type::Null) {
@@ -944,15 +957,12 @@ pub(crate) fn check_property_call_like(
                         suggestion,
                         ctx.file_name.clone(),
                     ),
-                    None if crate::checks::expr::container_seems_to_be_empty_dom_element(
-                        &object_ty, ctx,
-                    ) =>
-                    {
-                        Diagnostic::ts2812(property_name, &object_type_name, ctx.file_name.clone())
-                    }
-                    None => {
-                        Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone())
-                    }
+                    None => crate::checks::expr::nonexistent_property_diagnostic(
+                        property_name,
+                        &object_ty,
+                        &object_type_name,
+                        ctx,
+                    ),
                 };
                 ctx.push(diagnostic_with_syntax_span(
                     diagnostic,
@@ -1495,13 +1505,12 @@ pub(crate) fn check_optional_property_call(
                         suggestion,
                         ctx.file_name.clone(),
                     ),
-                    None if crate::checks::expr::container_seems_to_be_empty_dom_element(
-                        &base_type, ctx,
-                    ) =>
-                    {
-                        Diagnostic::ts2812(property_name, &base_type_name, ctx.file_name.clone())
-                    }
-                    None => Diagnostic::ts2339(property_name, &base_type_name, ctx.file_name.clone()),
+                    None => crate::checks::expr::nonexistent_property_diagnostic(
+                        property_name,
+                        &base_type,
+                        &base_type_name,
+                        ctx,
+                    ),
                 };
                 ctx.push(diagnostic_with_syntax_span(
                     diagnostic,
@@ -1716,6 +1725,40 @@ pub(crate) fn overloaded_member_call_return_type(
 /// signatures, like expect-type's `toEqualTypeOf: { <E>(v: E): true; <E>(): true }`
 /// — is invoked like a function. Surface its call signature so the property-call
 /// match treats it as callable instead of a false TS2349.
+/// tsc reads `z.f` off a union receiver as the union of the members' `f`
+/// (`getPropertyOfType` on the union) and calls that union, whose signatures
+/// are `getUnionSignatures` of the members'. `None` leaves the call to the
+/// member-by-member walk: a nullish member, an array (whose members tsc reads
+/// off the element union, `getArrayMemberCallSignatures`), a member that is no
+/// plain signature, or a generic one, which is instantiated per member there.
+fn union_receiver_callee(receiver: &surge_ts_types::UnionType, property_name: &str) -> Option<surge_ts_types::UnionType> {
+    let mut members = Vec::with_capacity(receiver.types().len());
+    for ty in receiver.types() {
+        if matches!(ty, Type::Undefined | Type::Null)
+            || matches!(ty.peeled(), Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_))
+        {
+            return None;
+        }
+        let property = ty.get_property_access_type(property_name)?;
+        let Type::Function(signature) = callable_property_signature(property.clone()) else {
+            return None;
+        };
+        let mut signatures = Vec::new();
+        signature.push_overload_members(&mut signatures);
+        if signatures
+            .iter()
+            .any(|signature| !super::own_type_parameter_names(signature).is_empty())
+        {
+            return None;
+        }
+        members.push(property);
+    }
+    match union_type(members) {
+        Type::Union(union) => Some(union),
+        _ => None,
+    }
+}
+
 fn callable_property_signature(ty: Type) -> Type {
     let signature = match &ty {
         Type::Object(object) => object.call_signature().cloned(),

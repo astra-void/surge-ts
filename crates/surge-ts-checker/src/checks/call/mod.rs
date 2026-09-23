@@ -610,11 +610,11 @@ fn declaration_file_name(info: &crate::symbols::TypeDeclarationInfo) -> &str {
     }
 }
 
-/// Phase 1 callable-union calls: a union is callable when every member is a
-/// function type sharing one call signature (identical arity and pairwise
-/// mutually-assignable parameters). Return types may differ and are unified into
-/// the call result. An unresolved member already reported upstream suppresses the
-/// call cascade; any other non-callable union is pinned as TS2349.
+/// A call on a union callee, resolved against the union's own call signatures
+/// (tsc's `resolveUnionTypeMembers` → `getUnionSignatures`). An unresolved
+/// member already reported upstream suppresses the call cascade; a union with
+/// no signatures — a member that has none, or members whose signatures do not
+/// combine — is TS2349.
 fn check_callable_union_call(
     union: &UnionType,
     callee_span: Option<SyntaxTextSpan>,
@@ -678,23 +678,21 @@ fn check_callable_union_call(
         };
     }
 
-    let Some(members) = union_call_signature_members(union) else {
+    let (signatures, combined) = union_signature_lists(union)
+        .map(|lists| union_signatures(&lists))
+        .unwrap_or_default();
+    let Some(callee) = overload_group(signatures) else {
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts2349(ctx.file_name.clone()),
             callee_span,
         ));
         return None;
     };
-    if members.is_empty() {
-        return None;
-    }
 
-    let combined = combined_union_call_signature(&members);
-    let return_type = combined.return_type().clone();
-
+    COMBINED_UNION_SIGNATURE.with(|flag| flag.set(combined));
     with_type_copy_reason(TypeCopyReason::CallResolution, || {
         check_function_type_call(
-            &combined,
+            &callee,
             callee_span,
             call_span,
             type_arguments,
@@ -703,7 +701,6 @@ fn check_callable_union_call(
             symbols,
             ctx,
         )
-        .map(|_| return_type)
     })
 }
 
@@ -723,68 +720,302 @@ fn union_member_call_signature(ty: &Type) -> Option<FunctionType> {
     }
 }
 
-/// Returns the call signatures of a union's members, or `None` when some member
-/// has none at all.
-///
-/// A union is callable exactly when *every* constituent is
-/// (`getUnionSignatures` bails on the first empty signature list); differing
-/// parameter types do not make it uncallable, they are combined by
-/// [`combined_union_call_signature`].
-fn union_call_signature_members(union: &UnionType) -> Option<Vec<FunctionType>> {
-    let mut members = Vec::with_capacity(union.types().len());
-    for ty in union.types() {
-        members.push(union_member_call_signature(ty)?);
-    }
-
-    Some(members)
+/// Each member's call signature list, or `None` when some member has none
+/// (`getUnionSignatures` bails on the first empty list). The global `Function`
+/// interface contributes tsc's `unknownSignature`.
+fn union_signature_lists(union: &UnionType) -> Option<Vec<Vec<FunctionType>>> {
+    union
+        .types()
+        .iter()
+        .map(|ty| {
+            if surge_ts_types::is_global_function_interface(ty) {
+                return Some(vec![FunctionType::new(vec![], Type::ErrorType, false, 0)]);
+            }
+            let mut signatures = Vec::new();
+            union_member_call_signature(ty)?.push_overload_members(&mut signatures);
+            Some(signatures)
+        })
+        .collect()
 }
 
-/// The single signature tsc synthesizes for a callable union
-/// (`combineUnionOrIntersectionParameters` with `isUnion`): each position's
-/// parameter type is the **intersection** across the members that declare it, a
-/// position no member requires is optional, and the arity comes from the member
-/// declaring the most. A member that simply takes fewer parameters contributes
-/// nothing at the positions it omits (`T & unknown` is `T`), which is why the
-/// absent positions are skipped rather than intersected with a sentinel.
-///
-/// Requiring the members to *share* one signature instead — parameters mutually
-/// assignable — reported a false TS2349 on every union whose members merely
-/// differ, which is what left `j(file.source)` uncallable once jscodeshift's
-/// namespace intersection distributed.
-fn combined_union_call_signature(members: &[FunctionType]) -> FunctionType {
-    let parameter_count = members
-        .iter()
-        .map(|member| member.parameters().len())
-        .max()
-        .unwrap_or(0);
-    let parameters = (0..parameter_count)
-        .map(|index| {
-            let at_position: Vec<Type> = members
-                .iter()
-                .filter_map(|member| member.parameters().get(index).cloned())
-                .collect();
-            match at_position.len() {
-                1 => at_position.into_iter().next().expect("checked above"),
-                _ => crate::infer::types::merge_intersection_members(at_position),
+/// A union type's call signatures as one callee (see [`overload_group`]), or
+/// `None` when the union has none.
+pub(crate) fn union_call_signature(union: &UnionType) -> Option<FunctionType> {
+    overload_group(union_signatures(&union_signature_lists(union)?).0)
+}
+
+thread_local! {
+    /// Set for the one `check_function_type_call` that checks a union's
+    /// combined signature (`combineUnionOrIntersectionParameters`).
+    static COMBINED_UNION_SIGNATURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The signatures a call resolves against, as one callee: a lone signature,
+/// or the overload group of several in order. `None` for no signatures.
+fn overload_group(signatures: Vec<FunctionType>) -> Option<FunctionType> {
+    let mut signatures = signatures.into_iter();
+    let first = signatures.next()?;
+    Some(signatures.fold(first, |group, signature| {
+        crate::checks::function::merge_overload_group_signatures(&group, &signature)
+    }))
+}
+
+/// checker.go `getUnionSignatures`: a signature present in every constituent
+/// — identical, or taking a prefix of its parameters elsewhere — keeps its own
+/// parameters and unions the return types. Only when none is, and at most one
+/// constituent is overloaded, is each of that constituent's signatures combined
+/// with the others' single one (`combineUnionOrIntersectionMemberSignatures`),
+/// which the second value reports.
+fn union_signatures(lists: &[Vec<FunctionType>]) -> (Vec<FunctionType>, bool) {
+    let mut result: Vec<FunctionType> = Vec::new();
+    let mut index_with_length_over_one = 0;
+    let mut count_length_over_one = 0;
+    for (index, list) in lists.iter().enumerate() {
+        if list.is_empty() {
+            return (Vec::new(), false);
+        }
+        if list.len() > 1 {
+            index_with_length_over_one = index;
+            count_length_over_one += 1;
+        }
+        for signature in list {
+            if find_matching_signature(&result, signature, false, true).is_some() {
+                continue;
             }
-        })
-        .collect::<Vec<_>>();
-    let required_parameter_count = members
-        .iter()
-        .map(FunctionType::required_parameter_count)
-        .max()
-        .unwrap_or(0);
+            if let Some(matches) = find_matching_signatures(lists, signature, index) {
+                result.push(if matches.len() > 1 {
+                    create_union_signature(signature, &matches)
+                } else {
+                    signature.clone()
+                });
+            }
+        }
+    }
+    if !result.is_empty() || count_length_over_one > 1 {
+        return (result, false);
+    }
+    // Overloads in several constituents would need the power set of their
+    // signatures, whose order is not obvious; tsc makes no signature then.
+    let mut results = lists[index_with_length_over_one].clone();
+    for (index, list) in lists.iter().enumerate() {
+        if index == index_with_length_over_one {
+            continue;
+        }
+        let signature = &list[0];
+        if !own_type_parameter_names(signature).is_empty()
+            && results.iter().any(|result| {
+                !own_type_parameter_names(result).is_empty()
+                    && result.type_parameter_head() != signature.type_parameter_head()
+            })
+        {
+            return (Vec::new(), false);
+        }
+        results = results
+            .iter()
+            .map(|result| combine_union_member_signatures(result, signature))
+            .collect();
+    }
+    (results, true)
+}
+
+/// relater.go `findMatchingSignatures`: the signature matching `signature` in
+/// every list, preferring an identical one to a partial one. A generic
+/// signature must be matched exactly, and only from the first list.
+fn find_matching_signatures(
+    lists: &[Vec<FunctionType>],
+    signature: &FunctionType,
+    list_index: usize,
+) -> Option<Vec<FunctionType>> {
+    if !own_type_parameter_names(signature).is_empty() {
+        if list_index > 0 {
+            return None;
+        }
+        for list in &lists[1..] {
+            find_matching_signature(list, signature, false, false)?;
+        }
+        return Some(vec![signature.clone()]);
+    }
+    let mut result: Vec<FunctionType> = Vec::new();
+    for (index, list) in lists.iter().enumerate() {
+        let matched = if index == list_index {
+            signature
+        } else {
+            find_matching_signature(list, signature, false, true)
+                .or_else(|| find_matching_signature(list, signature, true, true))?
+        };
+        if !result.contains(matched) {
+            result.push(matched.clone());
+        }
+    }
+    Some(result)
+}
+
+fn find_matching_signature<'a>(
+    list: &'a [FunctionType],
+    signature: &FunctionType,
+    partial_match: bool,
+    ignore_return_types: bool,
+) -> Option<&'a FunctionType> {
+    list.iter().find(|candidate| {
+        compare_signatures_identical(candidate, signature, partial_match, ignore_return_types)
+    })
+}
+
+/// relater.go `compareSignaturesIdentical`: a partial match relates the
+/// target's parameter types to the source's by the subtype relation instead
+/// of identity, over the target's positions only.
+fn compare_signatures_identical(
+    source: &FunctionType,
+    target: &FunctionType,
+    partial_match: bool,
+    ignore_return_types: bool,
+) -> bool {
+    if source == target {
+        return true;
+    }
+    if !is_matching_signature(source, target, partial_match) {
+        return false;
+    }
+    let source_type_parameters = own_type_parameter_names(source);
+    if source_type_parameters.len() != own_type_parameter_names(target).len()
+        || !source_type_parameters.is_empty() && source.type_parameter_head() != target.type_parameter_head()
+    {
+        return false;
+    }
+    let compare = |source: &Type, target: &Type| {
+        if partial_match {
+            surge_ts_types::is_subtype_of(source, target)
+        } else {
+            surge_ts_types::is_type_identical_to(source, target)
+        }
+    };
+    (0..surge_ts_types::parameter_count(target)).all(|position| {
+        compare(
+            &surge_ts_types::type_at_position(target, position),
+            &surge_ts_types::type_at_position(source, position),
+        )
+    }) && (ignore_return_types || compare(source.return_type(), target.return_type()))
+}
+
+/// relater.go `isMatchingSignature`: the same number of required, optional
+/// and rest parameters — or, partially, no more required ones.
+fn is_matching_signature(source: &FunctionType, target: &FunctionType, partial_match: bool) -> bool {
+    let source_minimum = surge_ts_types::min_argument_count(source);
+    let target_minimum = surge_ts_types::min_argument_count(target);
+    surge_ts_types::parameter_count(source) == surge_ts_types::parameter_count(target)
+        && source_minimum == target_minimum
+        && surge_ts_types::has_effective_rest_parameter(source)
+            == surge_ts_types::has_effective_rest_parameter(target)
+        || partial_match && source_minimum <= target_minimum
+}
+
+/// checker.go `createUnionSignature`: `signature`'s parameters, returning the
+/// subtype-reduced union of what the matched signatures return.
+fn create_union_signature(signature: &FunctionType, matches: &[FunctionType]) -> FunctionType {
+    let return_type = surge_ts_types::subtype_reduced_union(
+        matches
+            .iter()
+            .map(|matched| (matched.return_type().clone(), surge_ts_types::LiteralShape::Regular))
+            .collect(),
+    );
+    let mut union_signature = FunctionType::new(
+        signature.parameters().to_vec(),
+        return_type,
+        signature.is_variadic(),
+        signature.required_parameter_count(),
+    )
+    .with_type_parameter_head(signature.type_parameter_head().map(str::to_string));
+    if let Some(names) = signature.parameter_names() {
+        union_signature = union_signature.with_parameter_names(names.to_vec());
+    }
+    union_signature
+}
+
+/// checker.go `combineUnionOrIntersectionMemberSignatures` for a union: the
+/// combined parameters, the larger minimum, and the union of the returns.
+fn combine_union_member_signatures(left: &FunctionType, right: &FunctionType) -> FunctionType {
+    let (parameters, names, has_rest) = combine_union_parameters(left, right);
+    let return_type = surge_ts_types::subtype_reduced_union(vec![
+        (left.return_type().clone(), surge_ts_types::LiteralShape::Regular),
+        (right.return_type().clone(), surge_ts_types::LiteralShape::Regular),
+    ]);
     FunctionType::new(
         parameters,
-        union_type(
-            members
-                .iter()
-                .map(|member| member.return_type().clone())
-                .collect(),
-        ),
-        members.iter().any(FunctionType::is_variadic),
-        required_parameter_count,
+        return_type,
+        has_rest,
+        left.required_parameter_count().max(right.required_parameter_count()),
     )
+    .with_type_parameter_head(
+        left.type_parameter_head()
+            .or(right.type_parameter_head())
+            .map(str::to_string),
+    )
+    .with_parameter_names(names)
+}
+
+/// checker.go `combineUnionOrIntersectionParameters` for a union: position by
+/// position the intersection of what the longer and the shorter signature take
+/// there (a rest parameter's element past its fixed parameters, `unknown` past
+/// the shorter one's end), a rest parameter when either has one, and an extra
+/// `...args` when only the shorter does.
+fn combine_union_parameters(
+    left: &FunctionType,
+    right: &FunctionType,
+) -> (Vec<Type>, Vec<Option<std::sync::Arc<str>>>, bool) {
+    let left_count = surge_ts_types::parameter_count(left);
+    let right_count = surge_ts_types::parameter_count(right);
+    let (longest_count, longest, shorter) = if left_count >= right_count {
+        (left_count, left, right)
+    } else {
+        (right_count, right, left)
+    };
+    let either_has_rest = surge_ts_types::has_effective_rest_parameter(left)
+        || surge_ts_types::has_effective_rest_parameter(right);
+    let needs_extra_rest_element =
+        either_has_rest && !surge_ts_types::has_effective_rest_parameter(longest);
+    let mut parameters = Vec::with_capacity(longest_count + 1);
+    let mut names = Vec::with_capacity(longest_count + 1);
+    for position in 0..longest_count {
+        let longest_type = surge_ts_types::type_at_position(longest, position);
+        let shorter_type =
+            surge_ts_types::try_type_at_position(shorter, position).unwrap_or(Type::GenuineUnknown);
+        let combined =
+            crate::infer::types::merge_intersection_members(vec![longest_type, shorter_type]);
+        let is_rest = either_has_rest && !needs_extra_rest_element && position == longest_count - 1;
+        parameters.push(if is_rest {
+            Type::Array(Box::new(combined))
+        } else {
+            combined
+        });
+        let left_name = (position < left_count)
+            .then(|| parameter_name_at_position(left, position))
+            .flatten();
+        let right_name = (position < right_count)
+            .then(|| parameter_name_at_position(right, position))
+            .flatten();
+        let name = match (left_name, right_name) {
+            (Some(left), Some(right)) if left == right => Some(left),
+            (Some(_), Some(_)) => None,
+            (left, right) => left.or(right),
+        };
+        names.push(name.or_else(|| Some(format!("arg{position}").into())));
+    }
+    if needs_extra_rest_element {
+        parameters.push(Type::Array(Box::new(surge_ts_types::type_at_position(
+            shorter,
+            longest_count,
+        ))));
+        names.push(Some("args".into()));
+    }
+    (parameters, names, either_has_rest)
+}
+
+/// relater.go `getParameterNameAtPosition`: a position past the fixed
+/// parameters is named by the rest parameter.
+fn parameter_name_at_position(signature: &FunctionType, position: usize) -> Option<std::sync::Arc<str>> {
+    let names = signature.parameter_names()?;
+    let index = position.min(names.len().checked_sub(1)?);
+    names.get(index).cloned().flatten()
 }
 
 pub(crate) fn check_new_like(
@@ -1075,7 +1306,10 @@ pub(crate) fn check_new_like(
             );
             let diagnostic = if ctx.options.no_implicit_any {
                 Some(Diagnostic::ts7009(ctx.file_name.clone()))
-            } else if *function_type.return_type() != Type::Void {
+            } else if *function_type.return_type() != Type::Void
+                // A return type surge has not inferred may well be `void`.
+                && !function_type.return_type().is_unmodelled()
+            {
                 Some(Diagnostic::ts2350(ctx.file_name.clone()))
             } else {
                 None
@@ -1432,14 +1666,24 @@ fn infer_generic_class_type_arguments(
     ))
 }
 
-/// Checks a call whose callee is an arbitrary expression (an IIFE, a call on a
-/// call). The callee and the arguments are always evaluated so everything
-/// written inside them is checked; the result is the callee's return type.
-/// An arrow invoked on the spot (`((table) => …)(f.field.table)`), checked with
-/// the call's own arguments standing in for the contextual type the arrow has no
-/// other way to get. Without this its parameters are un-annotated and
-/// `noImplicitAny` reports every one of them, which tsc never does — it types
-/// them from the argument at the same position.
+/// One of tsc's effective call arguments (`getEffectiveCallArguments`): a
+/// spread of a tuple type stands for one argument per element, and its rest
+/// element for a variadic one.
+enum EffectiveArgument {
+    /// A written argument or a fixed tuple element.
+    Plain(Type),
+    /// An open tuple's rest element, spread: the array of its element type.
+    Variadic(Type),
+    /// A spread of a type that is not a tuple.
+    Spread(Type),
+}
+
+/// An arrow invoked on the spot (`((table) => …)(f.field.table)`) is typed from
+/// the call's own arguments, which is the contextual type it has no other way to
+/// get (tsc's `getContextuallyTypedParameterType` for an IIFE): each parameter
+/// takes the argument at its position, a rest parameter the ones from there on,
+/// and a parameter no argument reaches `undefined`. Such a parameter is also
+/// optional to the call (`isOptionalParameter`).
 ///
 /// The arguments are typed with diagnostics dropped: they are checked for real
 /// by the call below, and reporting here would double every one of them.
@@ -1462,51 +1706,187 @@ fn immediately_invoked_arrow_type(
     }
 
     let diagnostics_before = ctx.diagnostics().len();
-    // The effective arguments: a tuple spread is one argument per element, an
-    // array spread one argument of its element type.
-    let mut argument_types: Vec<Type> = Vec::with_capacity(arguments.len());
+    let mut effective = Vec::with_capacity(arguments.len());
     for argument in arguments {
-        // tsc reads the widened literal type of the argument
-        // (`getContextuallyTypedParameterType`): `({ p = 14 }) => p` called with
-        // `{ p: 15 }` binds `p: number`.
         let ty = match evaluate_expression(&argument.expression, argument.span, symbols, ctx) {
-            InferredExpression::Known(ty) => {
+            InferredExpression::Known(ty) => ty,
+            _ => Type::Unknown,
+        };
+        if !argument.spread {
+            // tsc reads the widened literal type of a written argument:
+            // `({ p = 14 }) => p` called with `{ p: 15 }` binds `p: number`.
+            effective.push(EffectiveArgument::Plain(
                 crate::checks::var::widen_implicit_variable_initializer_type(
                     crate::symbols::SymbolKind::Let,
                     &argument.expression,
                     &ty,
                     false,
-                )
-            }
-            _ => Type::Unknown,
-        };
-        if !argument.spread {
-            argument_types.push(ty);
+                ),
+            ));
             continue;
         }
         match ty.peeled() {
-            Type::Tuple(elements) => argument_types.extend(elements),
-            other => argument_types.push(crate::checks::function::for_of_element_type(&other)),
+            Type::Tuple(elements) => {
+                effective.extend(elements.into_iter().map(EffectiveArgument::Plain));
+            }
+            Type::OpenTuple(open) => {
+                effective.extend(open.leading.into_iter().map(EffectiveArgument::Plain));
+                effective.push(EffectiveArgument::Variadic(Type::Array(open.rest)));
+                effective.extend(open.trailing.into_iter().map(EffectiveArgument::Plain));
+            }
+            other => effective.push(EffectiveArgument::Spread(other)),
         }
     }
     ctx.truncate_diagnostics(diagnostics_before);
-    if argument_types.iter().any(|ty| ty.is_unknown()) {
+    if effective.iter().any(|argument| match argument {
+        EffectiveArgument::Plain(ty) | EffectiveArgument::Variadic(ty) | EffectiveArgument::Spread(ty) => {
+            ty.is_unknown()
+        }
+    }) {
         return None;
     }
 
-    let required = argument_types.len();
-    let expected =
-        crate::metrics::alloc_function_type(argument_types, Type::Unknown, false, required);
+    // `checkExpression` of an effective argument: a spread reads as its element.
+    let argument_type = |argument: &EffectiveArgument| match argument {
+        EffectiveArgument::Plain(ty) => ty.clone(),
+        EffectiveArgument::Variadic(array) | EffectiveArgument::Spread(array) => {
+            crate::checks::function::for_of_element_type(array)
+        }
+    };
+    let parameter_count = arrow.parameters.len();
+    let rest_index = arrow
+        .parameters
+        .last()
+        .filter(|parameter| parameter.rest)
+        .map(|_| parameter_count - 1);
+    let mut expected_parameters = Vec::with_capacity(parameter_count);
+    for (index, parameter) in arrow.parameters.iter().enumerate() {
+        if Some(index) == rest_index {
+            expected_parameters.push(spread_argument_type(&effective[index.min(effective.len())..]));
+            continue;
+        }
+        let ty = match effective.get(index) {
+            Some(argument) => argument_type(argument),
+            // No argument leaves the parameter to its initializer, whose
+            // widened type it takes as a declaration would.
+            None => match parameter.initializer.as_ref() {
+                Some(initializer) => {
+                    let inferred =
+                        evaluate_expression(initializer, parameter.initializer_span, symbols, ctx);
+                    ctx.truncate_diagnostics(diagnostics_before);
+                    match inferred {
+                        InferredExpression::Known(ty) => {
+                            crate::checks::var::widen_implicit_variable_initializer_type(
+                                crate::symbols::SymbolKind::Let,
+                                initializer,
+                                &ty,
+                                false,
+                            )
+                        }
+                        _ => Type::Unknown,
+                    }
+                }
+                // `undefinedWideningType`, which widens to `any` without
+                // `strictNullChecks`.
+                None if ctx.options.strict_null_checks => Type::Undefined,
+                None => Type::Any,
+            },
+        };
+        expected_parameters.push(ty);
+    }
+
+    let expected_parameters_for_rest = rest_index.map(|index| expected_parameters[index].clone());
+    let expected = crate::metrics::alloc_function_type(
+        expected_parameters,
+        Type::Unknown,
+        rest_index.is_some(),
+        effective.len().min(parameter_count),
+    );
+    let checked = crate::checks::function::check_arrow_function_expression_with_expected_type(
+        (**arrow).clone(),
+        Some(&expected),
+        symbols,
+        ctx,
+    );
+    // An unannotated parameter past the last argument is optional to the call.
+    let required = arrow
+        .parameters
+        .iter()
+        .enumerate()
+        .filter(|(index, parameter)| {
+            !parameter.optional
+                && parameter.initializer.is_none()
+                && !parameter.rest
+                && (parameter.declared_type.is_some() || *index < effective.len())
+        })
+        .map(|(index, _)| index + 1)
+        .max()
+        .unwrap_or(0);
+    // The rest parameter's slot holds what it collects, which the call below
+    // matches its arguments against position by position.
+    let mut parameters = checked.parameters().to_vec();
+    let rest_collection = rest_index.and_then(|index| {
+        let collection = expected_parameters_for_rest.clone()?;
+        (index < parameters.len()).then(|| (index, collection))
+    });
+    if required >= checked.required_parameter_count() && rest_collection.is_none() {
+        return Some(checked);
+    }
+    if let Some((index, collection)) = rest_collection {
+        parameters[index] = collection;
+    }
     Some(
-        crate::checks::function::check_arrow_function_expression_with_expected_type(
-            (**arrow).clone(),
-            Some(&expected),
-            symbols,
-            ctx,
-        ),
+        surge_ts_types::FunctionType::new(
+            parameters,
+            checked.return_type().clone(),
+            checked.is_variadic(),
+            required.min(checked.required_parameter_count()),
+        )
+        .with_parameter_names(crate::checks::function::written_binding_names(&arrow.parameters)),
     )
 }
 
+/// tsc's `getSpreadArgumentType` for the arguments from a rest parameter's
+/// position on: a spread in the last position is the collection itself, and
+/// otherwise the arguments make up a tuple.
+fn spread_argument_type(arguments: &[EffectiveArgument]) -> Type {
+    if let [EffectiveArgument::Variadic(array) | EffectiveArgument::Spread(array)] = arguments {
+        return array.clone();
+    }
+    let mut leading = Vec::new();
+    let mut rest = None;
+    let mut trailing = Vec::new();
+    for argument in arguments {
+        let (element, variadic) = match argument {
+            EffectiveArgument::Plain(ty) => (ty.clone(), false),
+            EffectiveArgument::Variadic(array) | EffectiveArgument::Spread(array) => {
+                (crate::checks::function::for_of_element_type(array), true)
+            }
+        };
+        match (&rest, variadic) {
+            (None, false) => leading.push(element),
+            (None, true) => rest = Some(element),
+            (Some(_), false) => trailing.push(element),
+            // A second variadic run joins the first: tsc normalizes a tuple to
+            // one rest element and every later element into it.
+            (Some(existing), true) => {
+                rest = Some(surge_ts_types::union_type(vec![existing.clone(), element]));
+            }
+        }
+    }
+    match rest {
+        None => Type::Tuple(leading),
+        Some(rest) => Type::OpenTuple(surge_ts_types::OpenTupleType {
+            leading,
+            rest: Box::new(rest),
+            trailing,
+        }),
+    }
+}
+
+/// Checks a call whose callee is an arbitrary expression (an IIFE, a call on a
+/// call). The callee and the arguments are always evaluated so everything
+/// written inside them is checked; the result is the callee's return type.
 pub(crate) fn check_expression_call(
     callee: &surge_ts_syntax::ParsedExpression,
     callee_span: Option<SyntaxTextSpan>,
@@ -1565,6 +1945,16 @@ pub(crate) fn check_expression_call(
             type_arguments,
             arguments,
             None,
+            symbols,
+            ctx,
+        ),
+        Type::Union(union) if union_signature_lists(&union).is_some() => check_callable_union_call(
+            &union,
+            callee_span,
+            callee_span,
+            call_span,
+            type_arguments,
+            arguments,
             symbols,
             ctx,
         ),
@@ -1801,6 +2191,20 @@ fn last_candidate_rejected_argument(
         })
 }
 
+/// The arguments a call must pass: the declared minimum, less the trailing
+/// parameters a call may omit.
+fn call_site_required_count(signature: &FunctionType) -> usize {
+    let parameters = signature.parameters();
+    let mut required = signature.required_parameter_count();
+    while required > 0
+        && (parameter_is_void_optional(&parameters[required - 1])
+            || names_open_parameter(&parameters[required - 1]))
+    {
+        required -= 1;
+    }
+    required
+}
+
 fn overload_arity_fits(candidate: &FunctionType, argument_count: usize) -> bool {
     let parameters = candidate.parameters();
     let mut required = candidate.required_parameter_count();
@@ -1881,6 +2285,7 @@ pub(crate) fn check_function_type_call(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    let combined_union_signature = COMBINED_UNION_SIGNATURE.with(|flag| flag.replace(false));
     // tsc resolves an overloaded call against the candidates whose arity fits
     // (`hasCorrectArity`). With exactly one, a mismatch is that candidate's own
     // argument error; with several, it is TS2769. The permissive fold stays the
@@ -1903,9 +2308,11 @@ pub(crate) fn check_function_type_call(
         if let [chosen] = fitting.as_slice()
             && chosen.overloads().is_none()
             && !chosen.parameters().iter().any(|parameter| {
-                type_contains_unknown(parameter) || matches!(parameter, Type::Never)
+                type_contains_unknown(parameter)
+                    || matches!(parameter, Type::Never) && !combined_union_signature
             })
         {
+            COMBINED_UNION_SIGNATURE.with(|flag| flag.set(combined_union_signature));
             return check_function_type_call(
                 chosen,
                 callee_span,
@@ -1931,14 +2338,13 @@ pub(crate) fn check_function_type_call(
     // A trailing parameter surge could not type (`unknown | PromiseLike<T>`
     // with `T` still open — a Promise executor read through a polluted
     // instantiation) may well be that `void`, so it cannot count as required.
-    let parameters = function_type.parameters();
-    let mut required = function_type.required_parameter_count();
-    while required > 0
-        && (parameter_is_void_optional(&parameters[required - 1])
-            || names_open_parameter(&parameters[required - 1]))
-    {
-        required -= 1;
-    }
+    // An overload group's minimum is its candidates' smallest
+    // (`getArgumentArityError`), not its fold's, whose slot the overloads
+    // disagree on may be the sentinel.
+    let required = match function_type.overloads() {
+        Some(members) => members.iter().map(call_site_required_count).min().unwrap_or(0),
+        None => call_site_required_count(function_type),
+    };
 
     // `f(...xs)` supplies as many arguments as the spread's type has elements,
     // which is one for a tuple of one and any number for an array. Counting the
@@ -2174,9 +2580,12 @@ pub(crate) fn check_function_type_call(
                 // already does for the same shape.
                 // A rest slot of `never` (`push` on a `never[]`) is no such
                 // assertion, so it is checked like any other, and neither is an
-                // argument written as a literal, which no narrowing reaches.
+                // argument written as a literal, which no narrowing reaches. Nor
+                // is the `never` a union's combined signature takes where its
+                // members' parameters are disjoint.
                 if (!matches!(parameter_type, Type::Never)
                     || is_rest_position
+                    || combined_union_signature
                     || is_unnarrowable_literal(&argument.expression))
                     && ((!type_contains_unknown(&parameter_type)
                         && !surge_ts_types::parameter_type_is_degraded(&parameter_type)
@@ -2873,7 +3282,7 @@ pub(crate) fn as_source<R>(query: impl FnOnce() -> R) -> R {
     result
 }
 
-fn own_type_parameter_names(function: &FunctionType) -> Vec<String> {
+pub(crate) fn own_type_parameter_names(function: &FunctionType) -> Vec<String> {
     // A signature read from a type annotation (`static parse: <T>(s: string) =>
     // T`) carries no declaration, only its rendered parameter list.
     let Some(declaration) = function.declaration() else {

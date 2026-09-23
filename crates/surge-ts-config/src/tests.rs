@@ -594,6 +594,26 @@ fn module_resolution_nodenext_is_valid() {
 }
 
 #[test]
+fn module_resolution_follows_the_module_kind_when_unwritten() {
+    for (module, expected) in [
+        ("node16", ModuleResolutionKind::Node16),
+        ("node18", ModuleResolutionKind::Node16),
+        ("node20", ModuleResolutionKind::Node16),
+        ("nodenext", ModuleResolutionKind::NodeNext),
+        ("commonjs", ModuleResolutionKind::Bundler),
+    ] {
+        let root = temp_dir(&format!("module-resolution-from-{module}"));
+        write_file(
+            &root,
+            "tsconfig.json",
+            &format!(r#"{{ "compilerOptions": {{ "module": "{module}" }} }}"#),
+        );
+        let loaded = load(root.join("tsconfig.json"));
+        assert_eq!(loaded.compiler_options.module_resolution, expected, "{module}");
+    }
+}
+
+#[test]
 fn ts6_node20_and_newer_options_are_recognized() {
     let root = temp_dir("ts6-node20-options");
     write_file(
@@ -887,6 +907,21 @@ fn target_es5_is_legacy_and_falls_back_to_es2015() {
         &loaded.diagnostics,
         ConfigDiagnosticCode::UnsupportedLegacyCompilerOptionValue
     ));
+}
+
+#[test]
+fn es6_is_an_alias_of_es2015_for_target_and_module() {
+    let root = temp_dir("target-module-es6");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "target": "es6", "module": "es6" } }"#,
+    );
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert_eq!(loaded.compiler_options.target, ScriptTarget::ES2015);
+    assert_eq!(loaded.compiler_options.module, ModuleKind::ES2015);
+    assert!(loaded.diagnostics.is_empty());
 }
 
 #[test]

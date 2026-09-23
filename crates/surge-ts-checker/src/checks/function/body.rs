@@ -193,15 +193,16 @@ pub(crate) fn emit_missing_return_diagnostic(
     }
 
     // tsc's switch (checker.go:3777-3800), in order: a `never` return type with a
-    // reachable end point is TS2534; no explicit value return is TS2355; a type
-    // that does not admit `undefined` is TS2366; otherwise `noImplicitReturns`
-    // still owes TS7030.
+    // reachable end point is TS2534; no `return` statement at all
+    // (`hasExplicitReturn`, which a `throw` does not set) is TS2355; under
+    // `strictNullChecks` a type that does not admit `undefined` is TS2366;
+    // otherwise `noImplicitReturns` still owes TS7030.
     if matches!(return_type.peeled(), Type::Never) {
         ctx.push(with_span(Diagnostic::ts2534(ctx.file_name.clone())));
         return;
     }
 
-    if !body_flow.contains_value_return {
+    if !body_flow.contains_return {
         ctx.push(with_span(Diagnostic::ts2355(ctx.file_name.clone())));
         return;
     }
@@ -210,7 +211,7 @@ pub(crate) fn emit_missing_return_diagnostic(
         return;
     }
 
-    if !return_type_admits_undefined(return_type) {
+    if ctx.options.strict_null_checks && !return_type_admits_undefined(return_type) {
         ctx.push(with_span(Diagnostic::ts2366(ctx.file_name.clone())));
     } else if ctx.options.no_implicit_returns {
         ctx.push(with_span(Diagnostic::ts7030(ctx.file_name.clone())));
@@ -329,39 +330,48 @@ pub(crate) fn check_function_body(
 
     // Hoist nested `function` declarations into the current scope so a sibling
     // closure can call them (function declarations are function-scoped and
-    // callable before their statement position).
-    for statement in &body {
-        if let ParsedFunctionBodyStatement::Function(function) = statement {
-            // The signature mapper seeds parameter-default evaluation from
-            // `ctx.symbols`, a file-level table that never holds function locals,
-            // so a default referring to an enclosing local read as unresolved.
-            // The visible scope is already in hand two lines below.
-            let saved_symbols = std::mem::replace(&mut ctx.symbols, scopes.visible_symbols().clone());
-            let function_type = crate::checks::function::signature::map_function_signature(
-                &function.parameters,
-                function.return_type.as_ref(),
-                &function.type_parameters,
-                None,
-                ctx,
-            );
-            ctx.symbols = saved_symbols;
-            let signature_info =
-                crate::checks::function::signature::function_declaration_signature_info(
-                    function,
-                    &function_type,
-                    scopes.visible_symbols(),
-                    &ctx.file_name,
-                );
-            scopes.insert_current_handle(
+    // callable before their statement position). A signature that reads its own
+    // function or a later one gets the one-pass-earlier signature, as at the
+    // top level (`hoist_function_declarations`).
+    let nested_functions: Vec<&surge_ts_syntax::ParsedFunctionDeclaration> = body
+        .iter()
+        .filter_map(|statement| match statement {
+            ParsedFunctionBodyStatement::Function(function) => Some(function.as_ref()),
+            _ => None,
+        })
+        .collect();
+    let local_types: Vec<(&str, Vec<&surge_ts_syntax::ParsedType>)> = body
+        .iter()
+        .filter_map(|statement| match statement {
+            ParsedFunctionBodyStatement::TypeAlias(alias) => Some((alias.name.as_str(), vec![&alias.ty])),
+            ParsedFunctionBodyStatement::Interface(interface) => Some((
+                interface.name.as_str(),
+                crate::checks::function::interface_written_types(interface),
+            )),
+            _ => None,
+        })
+        .collect();
+    if crate::checks::function::signatures_read_ahead(&nested_functions, &local_types) {
+        for function in &nested_functions {
+            scopes.insert_current(
                 function.name.as_str(),
-                std::sync::Arc::new(SymbolInfo {
-                    ty: Type::Function(function_type),
+                SymbolInfo {
+                    ty: Type::Unknown,
                     kind: crate::symbols::SymbolKind::Function,
-                    function_signature: Some(signature_info),
-                }),
+                    function_signature: None,
+                },
             );
         }
+        let collection_order: Vec<&surge_ts_syntax::ParsedFunctionDeclaration> =
+            crate::checks::function::signature_collection_order(&nested_functions, &local_types)
+                .into_iter()
+                .map(|position| nested_functions[position])
+                .collect();
+        let diagnostics_before = ctx.diagnostics().len();
+        hoist_nested_functions(&collection_order, scopes, ctx);
+        ctx.truncate_diagnostics(diagnostics_before);
     }
+    hoist_nested_functions(&nested_functions, scopes, ctx);
 
 
     // A body-local type declaration's own body may name a body-local *value*
@@ -420,6 +430,42 @@ pub(crate) fn check_function_body(
 
     if let Some(saved) = saved_module_value_fallback {
         ctx.module_value_fallback = saved;
+    }
+}
+
+fn hoist_nested_functions(
+    functions: &[&surge_ts_syntax::ParsedFunctionDeclaration],
+    scopes: &mut ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    for function in functions {
+        // The signature mapper seeds parameter-default evaluation from
+        // `ctx.symbols`, a file-level table that never holds function locals,
+        // so a default referring to an enclosing local read as unresolved.
+        // The visible scope is already in hand two lines below.
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, scopes.visible_symbols().clone());
+        let function_type = crate::checks::function::signature::map_function_signature(
+            &function.parameters,
+            function.return_type.as_ref(),
+            &function.type_parameters,
+            None,
+            ctx,
+        );
+        ctx.symbols = saved_symbols;
+        let signature_info = crate::checks::function::signature::function_declaration_signature_info(
+            function,
+            &function_type,
+            scopes.visible_symbols(),
+            ctx,
+        );
+        scopes.insert_current_handle(
+            function.name.as_str(),
+            std::sync::Arc::new(SymbolInfo {
+                ty: Type::Function(function_type),
+                kind: crate::symbols::SymbolKind::Function,
+                function_signature: Some(signature_info),
+            }),
+        );
     }
 }
 

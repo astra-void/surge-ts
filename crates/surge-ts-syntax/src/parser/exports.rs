@@ -7,7 +7,7 @@ use oxc_span::GetSpan;
 
 use crate::{
     ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedExportSpecifier,
-    ParsedExpression, ParsedStatement,
+    ParsedExpression, ParsedImportKind, ParsedStatement,
 };
 
 use super::expressions::{
@@ -72,6 +72,10 @@ pub(crate) fn parse_export_named_declaration(
                 .as_ref()
                 .map(|source| text_span_from_oxc_span(source.span)),
             span,
+            resolution_mode: super::imports::resolution_mode_attribute(
+                declaration.with_clause.as_deref(),
+                matches!(declaration.export_kind, ImportOrExportKind::Type),
+            ),
         },
     ))])
 }
@@ -226,15 +230,13 @@ pub(crate) fn parse_export_assignment(
 ) -> Option<Vec<ParsedStatement>> {
     let span = Some(text_span_from_oxc_span(declaration.span));
 
-    // Declaration-lite `export = identifier`. Any non-identifier target
-    // (`export = require(...)`, object literals, member access, etc.) stays
-    // unsupported as an export shape.
     let Expression::Identifier(identifier) = &declaration.expression else {
         let (expression, expression_span) = parse_expression(&declaration.expression);
         return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
             ParsedExportDeclaration::EqualsExpression {
                 expression: Box::new(expression),
                 expression_span: Some(text_span_from_oxc_span(expression_span)),
+                entity_name: entity_name_expression_text(&declaration.expression),
                 span,
             },
         ))]);
@@ -247,6 +249,22 @@ pub(crate) fn parse_export_assignment(
             span,
         },
     ))])
+}
+
+/// tsc's `isEntityNameExpression`: an identifier, or a property access naming
+/// an identifier on one. Parentheses end it — `export = (A.B)` exports a value,
+/// not an alias — which is why this reads the oxc node rather than the parsed
+/// expression, where they are already gone.
+fn entity_name_expression_text(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::Identifier(identifier) => Some(identifier.name.to_string()),
+        Expression::StaticMemberExpression(member) if !member.optional => Some(format!(
+            "{}.{}",
+            entity_name_expression_text(&member.object)?,
+            member.property.name
+        )),
+        _ => None,
+    }
 }
 
 pub(crate) fn parse_export_all_declaration(
@@ -284,6 +302,10 @@ pub(crate) fn parse_export_all_declaration(
             module_specifier_span,
             span,
             is_type_only,
+            resolution_mode: super::imports::resolution_mode_attribute(
+                declaration.with_clause.as_deref(),
+                is_type_only,
+            ),
         },
     ))])
 }
@@ -308,6 +330,37 @@ fn parse_exported_declaration(
             super::enums::parse_enum_declaration(enum_declaration, true)
         }
         Declaration::TSModuleDeclaration(module) => super::parse_ts_module_declaration(module),
+        Declaration::TSImportEqualsDeclaration(import_equals) => {
+            let import = super::imports::parse_import_equals_declaration(import_equals)?;
+            // `export import local = require("m")` declares the alias and
+            // exports it — the exported alias `export { local }` would give.
+            if let ParsedImportKind::Equals {
+                local_name,
+                name_span,
+                ..
+            } = &import.kind
+            {
+                let export = ParsedExportDeclaration::Named {
+                    is_type_only: false,
+                    specifiers: vec![ParsedExportSpecifier {
+                        local_name: local_name.clone(),
+                        exported_name: local_name.clone(),
+                        name_span: *name_span,
+                        exported_name_span: *name_span,
+                        is_type_only: false,
+                    }],
+                    module_specifier: None,
+                    module_specifier_span: None,
+                    span: import.span,
+                    resolution_mode: None,
+                };
+                return Some(vec![
+                    ParsedStatement::ImportDeclaration(Box::new(import)),
+                    ParsedStatement::ExportDeclaration(Box::new(export)),
+                ]);
+            }
+            vec![ParsedStatement::ImportDeclaration(Box::new(import))]
+        }
         _ => return None,
     };
 

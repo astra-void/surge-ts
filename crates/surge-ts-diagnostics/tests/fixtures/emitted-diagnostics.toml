@@ -198,6 +198,18 @@ oracle = [
   "cannot-find-name-variants-basic",
 ]
 
+[TS2301]
+status = "emitted"
+oracle = [
+  "property-initializer-constructor-locals",
+]
+
+[TS2844]
+status = "emitted"
+oracle = [
+  "property-initializer-constructor-locals",
+]
+
 [TS2676]
 status = "emitted"
 oracle = [
@@ -468,6 +480,12 @@ fixtures = [
 span_tests = [
   "crates/surge-ts-checker/tests/generics.rs",
   "crates/surge-ts-checker/tests/generics_spans.rs",
+]
+
+[TS2707]
+status = "emitted"
+oracle = [
+  "tests/compat-projects/generic-reference-type-argument-range/tsconfig.json",
 ]
 
 [TS2315]
@@ -759,6 +777,15 @@ span_tests = [
   "crates/surge-ts-checker/tests/spans.rs",
 ]
 
+[TS2537]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/indexed-access-index-kinds-basic/src/index.ts",
+]
+oracle = [
+  "indexed-access-index-kinds-basic",
+]
+
 [TS2538]
 status = "emitted"
 fixtures = [
@@ -772,6 +799,15 @@ oracle = [
 status = "emitted"
 oracle = [
   "property-spelling-suggestion-basic",
+]
+
+[TS2812]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/missing-dom-property-message-basic/src/index.ts",
+]
+oracle = [
+  "missing-dom-property-message-basic",
 ]
 
 [TS2552]
@@ -852,6 +888,24 @@ oracle = [
   "tests/compat-projects/import-type-value-reference-basic/tsconfig.json",
 ]
 
+[TS1362]
+status = "emitted"
+oracle = [
+  "tests/compat-projects/type-only-export-value-use/tsconfig.json",
+]
+
+[TS1063]
+status = "emitted"
+oracle = [
+  "tests/compat-projects/export-default-inside-namespace/tsconfig.json",
+]
+
+[TS1319]
+status = "emitted"
+oracle = [
+  "tests/compat-projects/export-default-inside-namespace/tsconfig.json",
+]
+
 [TS2686]
 status = "emitted"
 fixtures = [
@@ -875,6 +929,26 @@ span_tests = [
 status = "emitted"
 oracle = [
   "tests/compat-projects/jsx-children-basic/tsconfig.json",
+]
+
+[TS2746]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/jsx-children-arity-basic/src/arity.tsx",
+  "tests/compat-projects/jsx-children-arity-unnamed-basic/src/arity.tsx",
+]
+oracle = [
+  "jsx-children-arity-basic",
+  "jsx-children-arity-unnamed-basic",
+]
+
+[TS2747]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/jsx-children-arity-basic/src/arity.tsx",
+]
+oracle = [
+  "jsx-children-arity-basic",
 ]
 
 [TS2749]
@@ -1017,6 +1091,7 @@ fixtures = [
   "crates/surge-ts-cli/tests/project_mode.rs",
 ]
 oracle = [
+  "untyped-javascript-module-basic",
   "zod real-project parity (untyped .mjs import)",
 ]
 
@@ -1024,6 +1099,13 @@ oracle = [
 status = "emitted"
 oracle = [
   "self-reference-and-placement-basic",
+]
+
+[TS7022]
+status = "emitted"
+oracle = [
+  "block-scoped-self-reference",
+  "parameter-initializer-scope",
 ]
 
 [TS4111]
@@ -2747,12 +2829,6 @@ oracle = [
   "export-assignment-context-basic",
 ]
 
-[TS1319]
-status = "emitted"
-oracle = [
-  "namespace-default-export-basic",
-]
-
 [TS2435]
 status = "emitted"
 oracle = [
@@ -2811,6 +2887,34 @@ oracle = [
 status = "emitted"
 oracle = [
   "use-strict-parameter-list-basic",
+[TS2661]
+status = "emitted"
+oracle = [
+  "export-clause-local-targets-basic",
+]
+
+[TS6142]
+status = "emitted"
+oracle = [
+  "untyped-javascript-module-basic",
+]
+
+[TS1121]
+status = "emitted"
+oracle = [
+  "leading-zero-numeric-literal-basic",
+]
+
+[TS1489]
+status = "emitted"
+oracle = [
+  "leading-zero-numeric-literal-basic",
+]
+
+[TS6192]
+status = "emitted"
+oracle = [
+  "unused-import-declaration-grouping",
 ]
 
 [TS2754]
@@ -3071,12 +3175,6 @@ oracle = [
   "super-call-placement-basic",
 ]
 
-[TS2301]
-status = "emitted"
-oracle = [
-  "property-initializer-constructor-locals-basic",
-]
-
 [TS2803]
 status = "emitted"
 oracle = [
@@ -3125,21 +3223,9 @@ fixtures = [
   "crates/surge-ts-checker/tests/program/compiler_flags.rs",
 ]
 
-[TS1362]
-status = "emitted"
-oracle = [
-  "type-only-export-value-use-basic",
-]
-
 [TS2578]
 status = "catalog-only"
 reason = "Opt-in via SURGE_REPORT_UNUSED_EXPECT_ERROR=1: every error surge misses under an @ts-expect-error would read as TS2578"
-
-[TS2661]
-status = "emitted"
-oracle = [
-  "export-global-name-basic",
-]
 
 [TS2664]
 status = "emitted"
@@ -3194,12 +3280,6 @@ oracle = [
 status = "emitted"
 oracle = [
   "jsx-flag-missing-basic",
-]
-
-[TS2707]
-status = "emitted"
-oracle = [
-  "generic-type-argument-range-basic",
 ]
 
 [TS7027]
@@ -3304,12 +3384,6 @@ oracle = [
   "computed-type-member-type-name-basic",
 ]
 
-[TS2812]
-status = "emitted"
-oracle = [
-  "missing-dom-lib-property-basic",
-]
-
 [TS7032]
 status = "emitted"
 oracle = [
@@ -3340,4 +3414,11 @@ reason = "Cataloged for future coverage"
 status = "emitted"
 oracle = [
   "for-of-invalid-target-basic",
+  "super-type-arguments-parse-error",
+]
+
+[TS6199]
+status = "emitted"
+oracle = [
+  "unused-declaration-list-grouping",
 ]

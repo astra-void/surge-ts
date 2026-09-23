@@ -562,6 +562,24 @@ fn generic_class_value_symbol(
     }
 }
 
+/// The constructor type tsc's `checkAndReportErrorForMissingPrefix` looks a
+/// static member up on. A generic class's value is modelled as `any` for its
+/// uses ([`generic_class_value_symbol`]), which would answer every name.
+fn generic_class_static_side(
+    class: &ParsedClassDeclaration,
+    instance_type: &Type,
+    ctx: &mut CheckerContext,
+) -> Type {
+    let mut properties = inherited_static_properties(class, None, ctx);
+    properties.insert(
+        "prototype".into(),
+        ObjectProperty::required(instance_type.clone()),
+    );
+    collect_static_members(class, &mut properties, ctx);
+    let construct_signature = FunctionType::new(vec![Type::Any], instance_type.clone(), true, 0);
+    Type::Object(ObjectType::new(properties, None).with_construct_signature(construct_signature))
+}
+
 /// Builds the constructor/static-side value symbol: a `Type::Object` whose
 /// properties are the static members and whose construct signature yields the
 /// instance type.
@@ -604,7 +622,18 @@ pub(crate) fn build_class_value_symbol_with_scope(
     );
     collect_static_members(class, &mut properties, ctx);
 
-    let static_type = ObjectType::new(properties, None)
+    // tsc's `resolveAnonymousTypeMembers`: the class symbol's static
+    // `__index` member is the constructor type's index signatures.
+    let static_string_index = class
+        .static_string_index_type
+        .clone()
+        .map(|ty| map_parsed_type(ty, ctx));
+    let static_number_index = class
+        .static_number_index_type
+        .clone()
+        .map(|ty| map_parsed_type(ty, ctx));
+    let static_type = ObjectType::new(properties, static_string_index)
+        .with_number_index_type(static_number_index)
         .with_construct_signature(construct_signature)
         .with_alias_name(format!("typeof {}", class.name));
     // tsc's `getBaseTypeVariableOfClass`: a class extending a value typed by a
@@ -636,17 +665,54 @@ fn base_type_variable(
 }
 
 /// The base class's static members, as the starting point for a derived class's
-/// static side. Empty when the class has no base, when the base's value is not
-/// in scope yet, or when the base's static side is not an object (a generic
-/// class models its value as `any`).
+/// static side (tsc's `resolveAnonymousTypeMembers` adds the properties of the
+/// base constructor type). Empty when the class has no base, when the base's
+/// value is not in scope yet, or when the base's static side is not an object (a
+/// generic class models its value as `any`).
 fn inherited_static_properties(
     class: &ParsedClassDeclaration,
     scope: Option<&SymbolTable>,
-    ctx: &CheckerContext,
+    ctx: &mut CheckerContext,
 ) -> PropertyMap {
-    base_static_side(class, scope, ctx)
+    let base_static = match class.heritage_expression.as_deref() {
+        Some(expression) => expression_base_constructor_type(expression, scope, ctx),
+        None => base_static_side(class, scope, ctx),
+    };
+    base_static
         .map(|base_static| base_static.properties.as_ref().clone())
         .unwrap_or_default()
+}
+
+/// tsc's `getBaseConstructorTypeOfClass` for an `extends` expression that is
+/// not a name (`extends Mixin(A, B)`): the expression's type where the class is
+/// bound, an intersection's being the merged surface of its constituents. What
+/// inferring it reports is dropped, as binding runs before every value the
+/// expression may name is in scope.
+fn expression_base_constructor_type(
+    expression: &surge_ts_syntax::ParsedExpression,
+    scope: Option<&SymbolTable>,
+    ctx: &mut CheckerContext,
+) -> Option<ObjectType> {
+    let enclosing;
+    let symbols = match scope {
+        Some(scope) => scope,
+        None => {
+            enclosing = ctx
+                .symbols
+                .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+            &enclosing
+        }
+    };
+    let diagnostics_before = ctx.diagnostics().len();
+    let inferred = crate::infer::infer_expression(expression, symbols, ctx);
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    match inferred {
+        crate::infer::InferredExpression::Known(ty) => match ty.peeled() {
+            Type::Object(object) => Some(object),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn base_static_side(
@@ -946,16 +1012,38 @@ fn check_inherited_abstract_members(class: &ParsedClassDeclaration, ctx: &mut Ch
         return;
     }
 
-    // tsc names the base as written, type arguments included (`Base<string>`).
+    // tsc names both classes by `typeToString` of their types: the base as the
+    // heritage clause instantiates it, under the class's own type parameters
+    // (`A<T>`), and a generic class as its declared type (`C<T>`). Resolving
+    // the arguments is only for their names; the heritage check reports them.
     let base_display = if base.type_arguments.is_empty() {
         base.name.clone()
     } else {
-        let arguments: Vec<String> = base
-            .type_arguments
-            .iter()
-            .map(|argument| map_parsed_type(argument.clone(), ctx).name())
-            .collect();
+        let checkpoint = ctx.diagnostics().len();
+        let _type_variables =
+            crate::checks::function::enter_body_type_variables(&class.type_parameters, ctx);
+        let arguments: Vec<String> = crate::checks::function::with_type_parameter_scope(
+            &class.type_parameters,
+            ctx,
+            |ctx| {
+                base.type_arguments
+                    .iter()
+                    .map(|argument| map_parsed_type(argument.clone(), ctx).name())
+                    .collect()
+            },
+        );
+        ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
         format!("{}<{}>", base.name, arguments.join(", "))
+    };
+    let class_display = if class.type_parameters.is_empty() {
+        class.name.clone()
+    } else {
+        let parameters: Vec<&str> = class
+            .type_parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect();
+        format!("{}<{}>", class.name, parameters.join(", "))
     };
     let quoted = |names: &[String]| {
         names
@@ -966,19 +1054,19 @@ fn check_inherited_abstract_members(class: &ParsedClassDeclaration, ctx: &mut Ch
     };
     let diagnostic = match missing.len() {
         1 => Diagnostic::ts2515(
-            &class.name,
+            &class_display,
             &missing[0],
             &base_display,
             ctx.file_name.clone(),
         ),
         count if count <= MAX_LISTED => Diagnostic::ts2654(
-            &class.name,
+            &class_display,
             &base_display,
             quoted(&missing),
             ctx.file_name.clone(),
         ),
         count => Diagnostic::ts2655(
-            &class.name,
+            &class_display,
             &base_display,
             quoted(&missing[..LISTED_WHEN_TRUNCATED]),
             count - LISTED_WHEN_TRUNCATED,
@@ -1427,6 +1515,11 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
     let checkpoint = ctx.diagnostics().len();
     let instance_type = class_instance_type(class, ctx);
     let static_value = build_class_value_symbol(class, ctx);
+    let member_prefix_static_type = if class.type_parameters.is_empty() {
+        static_value.ty.clone()
+    } else {
+        generic_class_static_side(class, &instance_type, ctx)
+    };
     ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
     // Signature collection built this class's value before its file's `const`s
     // were bound, so a base that is one of them left the instance open and the
@@ -1459,7 +1552,7 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
         .push(crate::checks::expr::EnclosingClassMembers {
             class_name: class.name.clone(),
             instance_type: instance_type.clone(),
-            static_type: static_type.clone(),
+            static_type: member_prefix_static_type,
         });
 
     let class_type_parameter_depth = ctx
@@ -1740,6 +1833,270 @@ fn check_class_property_initializer(
             ctx,
         );
     }
+}
+
+/// A non-static property of a class whose constructor implementation declares
+/// locals. tsc's name resolver records such a property while climbing out of
+/// it (`propertyWithInvalidInitializer` in `nameresolver.go`) when those locals
+/// hold a value of the name being resolved, and unless class fields are
+/// standard fields `checkAndReportErrorForInvalidInitializer` reports the
+/// reference instead of resolving it.
+#[derive(Debug, Clone)]
+pub(crate) struct ConstructorLocalProperty {
+    name: String,
+    /// From the property's name to the end of the member: a decorator is
+    /// resolved at the class, not inside the property.
+    span: surge_ts_syntax::TextSpan,
+    name_end: usize,
+    initializer: Option<surge_ts_syntax::TextSpan>,
+    constructor_locals: Arc<[String]>,
+}
+
+impl ConstructorLocalProperty {
+    /// TS2844 for a reference in the property's type annotation, TS2301
+    /// anywhere else in it.
+    pub(crate) fn invalid_reference_diagnostic(
+        &self,
+        name: &str,
+        reference: surge_ts_syntax::TextSpan,
+        file_name: String,
+    ) -> Diagnostic {
+        let in_initializer = self.initializer.is_some_and(|initializer| {
+            initializer.start <= reference.start && reference.end <= initializer.end
+        });
+        if !in_initializer && reference.start >= self.name_end {
+            Diagnostic::ts2844(&self.name, name, file_name)
+        } else {
+            Diagnostic::ts2301(&self.name, name, file_name)
+        }
+    }
+}
+
+/// Every [`ConstructorLocalProperty`] of the classes `statements` declare, at
+/// any statement depth.
+pub(crate) fn file_constructor_local_properties(
+    statements: &[surge_ts_syntax::ParsedStatement],
+    options: &crate::context::CheckerOptions,
+) -> Arc<[ConstructorLocalProperty]> {
+    // tsgo's `GetEmitStandardClassFields` also asks for an ES2022 target; the
+    // checker options carry `GetUseDefineForClassFields`, which differs from it
+    // only for an explicit `useDefineForClassFields: true` below ES2022.
+    if options.use_define_for_class_fields {
+        return Arc::from([]);
+    }
+    let mut properties = Vec::new();
+    for statement in statements {
+        collect_statement_constructor_locals(statement, &mut properties);
+    }
+    properties.into()
+}
+
+/// [`file_constructor_local_properties`] of every source file that has any.
+pub(crate) fn constructor_local_properties_by_file(
+    parsed_files: &[super::ParsedProgramFile],
+    options: &crate::context::CheckerOptions,
+) -> Arc<surge_ts_types::fx::FxHashMap<Arc<str>, Arc<[ConstructorLocalProperty]>>> {
+    let mut by_file = surge_ts_types::fx::FxHashMap::default();
+    for parsed_file in parsed_files {
+        if parsed_file.file_kind.is_declaration() {
+            continue;
+        }
+        let properties = file_constructor_local_properties(&parsed_file.statements, options);
+        if !properties.is_empty() {
+            by_file.insert(Arc::from(parsed_file.file_name.as_str()), properties);
+        }
+    }
+    Arc::new(by_file)
+}
+
+/// tsc's `propertyWithInvalidInitializer` for a reference to `name`: of the
+/// enclosing properties whose constructor declares the name, the outermost is
+/// the last one the resolver's climb records.
+pub(crate) fn property_with_invalid_initializer<'a>(
+    name: &str,
+    reference: surge_ts_syntax::TextSpan,
+    ctx: &'a CheckerContext,
+) -> Option<&'a ConstructorLocalProperty> {
+    ctx.constructor_local_properties
+        .get(ctx.file_name.as_str())?
+        .iter()
+        .filter(|property| {
+            property.span.start <= reference.start
+                && reference.end <= property.span.end
+                && property.constructor_locals.iter().any(|local| local == name)
+        })
+        .min_by_key(|property| property.span.start)
+}
+
+fn collect_statement_constructor_locals(
+    statement: &surge_ts_syntax::ParsedStatement,
+    properties: &mut Vec<ConstructorLocalProperty>,
+) {
+    use surge_ts_syntax::{ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedStatement};
+    match statement {
+        ParsedStatement::ClassDeclaration(class) => {
+            collect_class_constructor_locals(class, properties)
+        }
+        ParsedStatement::FunctionDeclaration(function) => {
+            collect_body_constructor_locals(&function.body, properties)
+        }
+        // An ambient namespace's classes have no constructor bodies.
+        ParsedStatement::NamespaceDeclaration(namespace) if !namespace.is_declare => {
+            for statement in &namespace.statements {
+                collect_statement_constructor_locals(statement, properties);
+            }
+        }
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => {
+                collect_statement_constructor_locals(declaration, properties)
+            }
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Class(class),
+                ..
+            } => collect_class_constructor_locals(class, properties),
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Function(function),
+                ..
+            } => collect_body_constructor_locals(&function.body, properties),
+            _ => {}
+        },
+        ParsedStatement::If(if_statement) => {
+            collect_body_constructor_locals(&if_statement.then_body, properties);
+            collect_body_constructor_locals(&if_statement.else_body, properties);
+        }
+        ParsedStatement::Block(body) => collect_body_constructor_locals(body, properties),
+        _ => {}
+    }
+}
+
+fn collect_body_constructor_locals(
+    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+    properties: &mut Vec<ConstructorLocalProperty>,
+) {
+    use surge_ts_syntax::ParsedFunctionBodyStatement;
+    for statement in body {
+        match statement {
+            ParsedFunctionBodyStatement::Class(class) => {
+                collect_class_constructor_locals(class, properties)
+            }
+            ParsedFunctionBodyStatement::Function(function) => {
+                collect_body_constructor_locals(&function.body, properties)
+            }
+            ParsedFunctionBodyStatement::Block(block) => {
+                collect_body_constructor_locals(block, properties)
+            }
+            ParsedFunctionBodyStatement::If(if_statement) => {
+                collect_body_constructor_locals(&if_statement.then_body, properties);
+                collect_body_constructor_locals(&if_statement.else_body, properties);
+            }
+            ParsedFunctionBodyStatement::While(while_statement) => {
+                collect_body_constructor_locals(&while_statement.body, properties)
+            }
+            ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
+                collect_body_constructor_locals(&for_of_statement.body, properties)
+            }
+            ParsedFunctionBodyStatement::Switch(switch_statement) => {
+                for case in &switch_statement.cases {
+                    collect_body_constructor_locals(&case.consequent, properties);
+                }
+            }
+            ParsedFunctionBodyStatement::Try(try_statement) => {
+                collect_body_constructor_locals(&try_statement.block, properties);
+                if let Some(handler) = &try_statement.handler {
+                    collect_body_constructor_locals(&handler.body, properties);
+                }
+                collect_body_constructor_locals(&try_statement.finalizer, properties);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_class_constructor_locals(
+    class: &ParsedClassDeclaration,
+    properties: &mut Vec<ConstructorLocalProperty>,
+) {
+    for member in &class.members {
+        match member {
+            ParsedClassMember::Method(method) => {
+                collect_body_constructor_locals(&method.body, properties)
+            }
+            ParsedClassMember::Constructor(constructor) => {
+                collect_body_constructor_locals(&constructor.body, properties)
+            }
+            ParsedClassMember::Accessor(accessor) => {
+                for declaration in &accessor.declarations {
+                    collect_body_constructor_locals(&declaration.body, properties);
+                }
+            }
+            ParsedClassMember::StaticBlock(block) => {
+                collect_body_constructor_locals(&block.body, properties)
+            }
+            ParsedClassMember::Property(_) => {}
+        }
+    }
+    if class.is_declare {
+        return;
+    }
+    // `FindConstructorDeclaration` takes the constructor with a body, which
+    // follows its overloads.
+    let Some(constructor) = class.members.iter().rev().find_map(|member| match member {
+        ParsedClassMember::Constructor(constructor) => Some(constructor),
+        _ => None,
+    }) else {
+        return;
+    };
+    let locals = constructor_local_value_names(constructor);
+    if locals.is_empty() {
+        return;
+    }
+    let locals: Arc<[String]> = locals.into();
+    for member in &class.members {
+        let ParsedClassMember::Property(property) = member else {
+            continue;
+        };
+        let (false, Some(name_span), Some(span)) =
+            (property.is_static, property.name_span, property.span)
+        else {
+            continue;
+        };
+        properties.push(ConstructorLocalProperty {
+            name: property.name.clone(),
+            span: surge_ts_syntax::TextSpan {
+                start: name_span.start,
+                end: span.end,
+            },
+            name_end: name_span.end,
+            initializer: property.initializer_span,
+            constructor_locals: Arc::clone(&locals),
+        });
+    }
+}
+
+/// The names `ctor.Locals()` answers with a value: the parameters, what the
+/// body declares at its top level, and every `var` it hoists.
+fn constructor_local_value_names(
+    constructor: &surge_ts_syntax::ParsedClassConstructor,
+) -> Vec<String> {
+    use surge_ts_syntax::ParsedFunctionBodyStatement;
+    let mut names: Vec<String> = constructor
+        .parameters
+        .iter()
+        .flat_map(|parameter| parameter.binding_name.bound_names())
+        .map(|bound| bound.name)
+        .collect();
+    for statement in &constructor.body {
+        match statement {
+            ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
+                names.push(variable.name.clone())
+            }
+            ParsedFunctionBodyStatement::Function(function) => names.push(function.name.clone()),
+            ParsedFunctionBodyStatement::Class(class) => names.push(class.name.clone()),
+            _ => {}
+        }
+    }
+    crate::flow::collect_var_names(&constructor.body, &mut names);
+    names
 }
 
 /// TS4114 under `noImplicitOverride`: an instance member that overrides a

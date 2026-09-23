@@ -9,6 +9,72 @@ use surge_ts_diagnostics::Diagnostic;
 use crate::context::CheckerContext;
 use super::ParsedProgramFile;
 
+/// oxc's own wording for the token-level failures tsc's parser reports too.
+/// oxc also rejects syntax tsc parses and then reports from its checker (a
+/// `const` without an initializer, modifiers out of order); those carry other
+/// messages, or codes outside tsc's parser set.
+const GENERIC_SYNTAX_ERROR_PREFIXES: &[&str] = &[
+    "Unexpected token",
+    "Unexpected end of file",
+    "Unexpected exponentiation expression",
+    "Unexpected private identifier",
+    "Expected `",
+    "Expected a semicolon or an implicit semicolon after a statement",
+    "Expected corresponding JSX closing tag",
+    "Expected corresponding closing tag for JSX fragment",
+    "Expected function name",
+    "Expected function body",
+    "Expected switch clause",
+    "Invalid Unicode escape sequence",
+    "Invalid Character",
+    "Invalid characters after number",
+    "Invalid escape sequence",
+    "Bad escape sequence in untagged template literal",
+    "Keywords cannot contain escape characters",
+    "Unterminated string",
+    "Unterminated template",
+    "Unterminated regular expression",
+    "Unterminated multiline comment",
+    "Empty parenthesized expression",
+    "Parenthesized expressions may not have a trailing comma",
+    "Encountered diff marker",
+    "File appears to be binary",
+];
+
+/// Whether tsc's parser reports this failure as well, which makes tsc report
+/// the program's syntactic diagnostics alone.
+pub(super) fn is_syntactic_parser_error(error: &surge_ts_syntax::ParserError) -> bool {
+    match error.code {
+        Some(code) => surge_ts_diagnostics::is_tsc_parser_code(code),
+        None => {
+            error.message == "Identifier expected."
+                || GENERIC_SYNTAX_ERROR_PREFIXES
+                    .iter()
+                    .any(|prefix| error.message.starts_with(prefix))
+        }
+    }
+}
+
+/// tsc's `GetDiagnosticsOfAnyProgram`: a program with a syntax error anywhere
+/// reports its syntactic diagnostics and nothing else.
+pub(super) fn program_has_syntax_errors(parsed_files: &[ParsedProgramFile]) -> bool {
+    parsed_files.iter().any(|file| {
+        !matches!(
+            file.file_kind,
+            crate::FileKind::GeneratedDeclaration | crate::FileKind::PhysicalDefaultLib
+        ) && file.parser_errors.iter().any(is_syntactic_parser_error)
+    })
+}
+
+pub(super) fn is_syntactic_diagnostic(diagnostic: &Diagnostic) -> bool {
+    match diagnostic.code {
+        surge_ts_diagnostics::DiagnosticCode::TypeScript(code) => {
+            surge_ts_diagnostics::is_tsc_parser_code(code)
+        }
+        surge_ts_diagnostics::DiagnosticCode::Custom(_) => false,
+    }
+}
+
 /// A parse failure reported the way tsc reports it when oxc classified the
 /// failure: the catalogued message for its code, anchored at oxc's own span.
 /// oxc's rendering is used only for a failure it left unnumbered, and for a
@@ -229,4 +295,43 @@ pub(crate) fn apply_comment_directives(
             .unwrap_or(diagnostics.len());
         diagnostics.insert(position, diagnostic);
     }
+}
+
+/// [`drop_suppressed_diagnostics`] for the semantic diagnostics reported
+/// against a file outside its own check — import binding runs first — which
+/// tsc's directive filter covers all the same. Syntax errors are never
+/// suppressed.
+pub(crate) fn drop_suppressed_program_diagnostics(
+    diagnostics: &mut Vec<surge_ts_diagnostics::Diagnostic>,
+    parsed_files: &[ParsedProgramFile],
+) {
+    let suppressed_ranges_by_file: std::collections::HashMap<&str, Vec<surge_ts_syntax::TextSpan>> =
+        parsed_files
+            .iter()
+            .filter_map(|file| {
+                let ranges: Vec<_> = file
+                    .comment_directives
+                    .iter()
+                    .filter_map(|directive| directive.suppressed_line)
+                    .collect();
+                (!ranges.is_empty()).then(|| (file.file_name.as_str(), ranges))
+            })
+            .collect();
+    if suppressed_ranges_by_file.is_empty() {
+        return;
+    }
+    diagnostics.retain(|diagnostic| {
+        let (Some(span), Some(suppressed_ranges)) = (
+            diagnostic.span.as_ref(),
+            suppressed_ranges_by_file.get(diagnostic.file_name.as_str()),
+        ) else {
+            return true;
+        };
+        if is_syntactic_diagnostic(diagnostic) {
+            return true;
+        }
+        !suppressed_ranges
+            .iter()
+            .any(|range| span.start >= range.start && span.start <= range.end)
+    });
 }

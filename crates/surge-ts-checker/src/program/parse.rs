@@ -224,5 +224,6 @@ pub(super) fn parse_program_file(
         parenthesized_expressions: parsed.parenthesized_expressions.into(),
         let_assignments: parsed.let_assignments.into(),
         json_module_type: parsed.json_module_type,
+        jsx_factory_uses: parsed.jsx_factory_uses,
     }
 }

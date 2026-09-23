@@ -56,6 +56,11 @@ impl NamespaceRegistry {
             .or_else(|| self.global.get(name))
     }
 
+    /// The namespace `name` declared in `file_name` itself, not a global one.
+    pub(crate) fn local_info(&self, file_name: &str, name: &str) -> Option<&NamespaceInfo> {
+        self.by_file.get(file_name).and_then(|names| names.get(name))
+    }
+
     /// The namespace `name` declared at the top of the module whose file name,
     /// without its TypeScript extension, is `module_path`.
     pub(crate) fn info_in_module(&self, module_path: &str, name: &str) -> Option<&NamespaceInfo> {

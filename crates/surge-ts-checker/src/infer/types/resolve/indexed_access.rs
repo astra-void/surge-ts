@@ -1,6 +1,6 @@
 use super::*;
 
-use surge_ts_syntax::{ParsedIndexedAccessType, TextSpan};
+use surge_ts_syntax::{ParsedIndexedAccessType, ParsedTupleElement, TextSpan};
 
 use crate::program::{
     record_generic_indexed_access_attempt, record_generic_indexed_access_invalid_key,
@@ -30,20 +30,6 @@ impl ParsedTypeSpan for ParsedType {
 /// structural shape is still usable, so the requested property can be selected
 /// without cascading a fresh missing-property diagnostic. Returns `None` when
 /// the receiver is not an indexable structure or the key is not present.
-/// tsc instantiates an indexed access with no access node — `getIndexedAccessType`
-/// returns `unknownType` silently rather than reporting — whenever the receiver is
-/// a type parameter a substitution has just replaced. Reporting there describes the
-/// *instantiation*, not anything the source wrote: the generated hey-api clients
-/// re-validate `T['baseUrl']` once per candidate substitution and collect one
-/// TS2339 per rendering of a receiver the user never named.
-///
-/// Only the failure branches consult this. A successful lookup on a substituted
-/// receiver still resolves — `T['responseStyle']` on the very same corpus line
-/// does, and must keep doing so.
-fn suppress_instantiation_indexed_access(object_is_concrete_substitution: bool) -> bool {
-    object_is_concrete_substitution
-}
-
 fn select_indexed_property_no_cascade(object: &Type, index: &Type) -> Option<Type> {
     match (object, index) {
         (Type::Object(object_type), Type::StringLiteral(key)) => {
@@ -93,6 +79,57 @@ fn index_narrows_to_keyof(index: &ParsedType, object_name: &str) -> bool {
     }
 }
 
+/// Whether `parsed` refers by name to a type parameter `bound` accepts.
+fn mentions_type_parameter(parsed: &ParsedType, bound: &dyn Fn(&str) -> bool) -> bool {
+    let mentions = |ty: &ParsedType| mentions_type_parameter(ty, bound);
+    match parsed {
+        ParsedType::Named(named) => bound(&named.name) || named.type_arguments.iter().any(mentions),
+        ParsedType::Array(inner) | ParsedType::KeyOf(inner) | ParsedType::Readonly(inner) => {
+            mentions(inner)
+        }
+        ParsedType::Tuple(members) | ParsedType::Union(members) | ParsedType::Intersection(members) => {
+            members.iter().any(mentions)
+        }
+        ParsedType::VariadicTuple(elements) => elements.iter().any(|element| match element {
+            ParsedTupleElement::Fixed(ty) | ParsedTupleElement::Rest(ty, _) => mentions(ty),
+        }),
+        ParsedType::IndexedAccess(indexed) => {
+            mentions(&indexed.object_type) || mentions(&indexed.index_type)
+        }
+        ParsedType::Conditional(conditional) => {
+            mentions(&conditional.check_type)
+                || mentions(&conditional.extends_type)
+                || mentions(&conditional.true_type)
+                || mentions(&conditional.false_type)
+        }
+        ParsedType::Mapped(mapped) => {
+            mentions(&mapped.constraint)
+                || mentions(&mapped.value_type)
+                || mapped.name_type.as_deref().is_some_and(mentions)
+        }
+        ParsedType::TemplateLiteral(template) => template.interpolations.iter().any(mentions),
+        ParsedType::Function(function) => {
+            function.parameters.iter().any(|parameter| mentions(&parameter.ty))
+                || mentions(&function.return_type)
+        }
+        ParsedType::Object(object) => {
+            object.properties.iter().any(|property| mentions(&property.ty))
+                || object.string_index_type.as_deref().is_some_and(mentions)
+                || object.number_index_type.as_deref().is_some_and(mentions)
+                || object
+                    .call_signature
+                    .as_deref()
+                    .into_iter()
+                    .chain(object.construct_signature.as_deref())
+                    .any(|signature| {
+                        signature.parameters.iter().any(|parameter| mentions(&parameter.ty))
+                            || mentions(&signature.return_type)
+                    })
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn resolve_indexed_access_type(
     indexed_access: ParsedIndexedAccessType,
     ctx: &mut CheckerContext,
@@ -113,6 +150,28 @@ pub(super) fn resolve_indexed_access_type(
         || index_placeholder_name.is_some()
         || object_is_concrete_substitution
         || index_is_concrete_substitution;
+    // tsc decides an indexed access's errors only while resolving the written
+    // node (`accessNode`), where an access naming a type parameter is deferred
+    // as generic; its instantiation resolves with no node at all. Surge
+    // re-resolves the node under the instantiating substitution instead, so a
+    // report there would describe the instantiation, not the source — the
+    // generated hey-api clients re-validate `T['baseUrl']` once per candidate
+    // substitution.
+    let bound = |name: &str| substitution.get(name).is_some();
+    let replaced = |name: &str| bound(name) && !substitution.is_placeholder(name);
+    let mentions_bound = mentions_type_parameter(object_type_for_placeholder.as_ref(), &bound)
+        || mentions_type_parameter(indexed_access.index_type.as_ref(), &bound);
+    let instantiating = object_is_concrete_substitution
+        || index_is_concrete_substitution
+        || mentions_type_parameter(object_type_for_placeholder.as_ref(), &replaced)
+        || mentions_type_parameter(indexed_access.index_type.as_ref(), &replaced);
+    // A key parameter bound to a type rather than to itself — a mapped type's
+    // key, a method's constrained parameter — is an instantiation of the key
+    // `checkIndexedAccessIndexType` validates, not the key itself.
+    let index_is_instantiated =
+        mentions_type_parameter(indexed_access.index_type.as_ref(), &|name: &str| {
+            replaced(name) && !matches!(substitution.get(name), Some(Type::TypeParameter(_)))
+        });
     let index_is_keyof_same_placeholder = object_placeholder_name
         .as_deref()
         .is_some_and(|object_name| {
@@ -262,6 +321,24 @@ pub(super) fn resolve_indexed_access_type(
     if !index_is_valid_generic_key
         && (index_placeholder_name.is_some() || object_placeholder_name.is_some())
     {
+        // `checkIndexedAccessIndexType` asks whether the index is assignable to
+        // `keyof T`: `any` and `never` are, and a key that resolved to surge's
+        // sentinel cannot be answered either way.
+        if index_is_instantiated
+            || (index_placeholder_name.is_none()
+                && matches!(
+                    resolved_index.ty,
+                    Type::Unknown | Type::Any | Type::ErrorType | Type::Never
+                ))
+        {
+            if generic_indexed_access {
+                record_generic_indexed_access_unknown_fallback();
+            }
+            return ResolvedType {
+                ty: Type::Unknown,
+                had_error: false,
+            };
+        }
         let index_name = index_placeholder_name
             .map(str::to_string)
             .unwrap_or_else(|| resolved_index.ty.name());
@@ -287,435 +364,662 @@ pub(super) fn resolve_indexed_access_type(
         };
     }
 
-    // `T[never]` is `never` in tsc — there is no key to select, so the access
-    // contributes nothing. This is the empty-interface escape hatch
-    // (`DO_NOT_USE_…[keyof DO_NOT_USE_…]` in React's `Key`/`ReactNode`), whose
-    // arm has to vanish from the enclosing union instead of reporting TS2538.
-    if matches!(resolved_index.ty, Type::Never) {
+    let receiver_unenumerable = receiver_is_unenumerable(&resolved_object.ty);
+    let index = index_view(&resolved_index.ty);
+    let index_is_degraded = matches!(index, Type::Unknown | Type::TypeParameter(_));
+    let index_has_degraded_member = matches!(&index, Type::Union(union) if union
+        .types()
+        .iter()
+        .any(|member| matches!(member, Type::Unknown | Type::TypeParameter(_))));
+
+    if (index_is_degraded || index_has_degraded_member) && matches!(resolved_object.ty, Type::Any) {
+        if generic_indexed_access {
+            record_generic_indexed_access_success();
+        }
         return ResolvedType {
-            ty: Type::Never,
+            ty: Type::Any,
             had_error: false,
         };
     }
 
-    // `never[K]` is `never`: a conditional that reduced to `never` under
-    // instantiation (`inferClientTypes<never>['errorShape']`) selects nothing,
-    // and tsc reports nothing at the alias for it.
-    if matches!(resolved_object.ty, Type::Never) && substitution.iter().next().is_some() {
-        return ResolvedType {
-            ty: Type::Never,
-            had_error: false,
-        };
-    }
-
-    match (&resolved_object.ty, &resolved_index.ty) {
-        // A string's apparent type has a numeric index signature of `string`
-        // and the `String` members (`"abc"["length"]`); a union of strings reads
-        // the same way.
-        (receiver, Type::Number | Type::NumberLiteral(_)) if is_string_like(receiver) => {
-            ResolvedType {
-                ty: Type::String,
-                had_error: false,
-            }
+    if index_is_degraded {
+        if generic_indexed_access {
+            record_generic_indexed_access_unknown_fallback();
         }
-        (receiver, Type::StringLiteral(key))
-            if is_string_like(receiver) && Type::String.get_property_access_type(key).is_some() =>
-        {
-            ResolvedType {
-                ty: Type::String.get_property_access_type(key).unwrap_or(Type::Unknown),
-                had_error: false,
-            }
-        }
-        (Type::Object(object_type), Type::StringLiteral(key)) => {
-            if let Some(property_ty) = object_type.get_property_access_type(&key) {
-                if generic_indexed_access {
-                    record_generic_indexed_access_success();
-                }
-                ResolvedType {
-                    ty: property_ty,
-                    had_error: false,
-                }
-            } else if suppress_instantiation_indexed_access(object_is_concrete_substitution) {
-                // A closed receiver that lacks the key is Go's `unknownType`, a
-                // real type (`TOptions['transformer']` for a `create({ isServer:
-                // true })` call decides tRPC's `transformer` flag through it).
-                // An open one has members surge never enumerated.
-                let ty = if object_type.synthetic_open_index {
-                    Type::Unknown
-                } else {
-                    Type::GenuineUnknown
-                };
-                ResolvedType {
-                    ty,
-                    had_error: false,
-                }
-            } else {
-                let mut diagnostic =
-                    Diagnostic::ts2339(key, &resolved_object.ty.name(), ctx.file_name.clone());
-                if let Some(span) = indexed_access.span {
-                    diagnostic = diagnostic.with_span(convert_span(span));
-                }
-                ctx.push(diagnostic);
-                ResolvedType {
-                    ty: Type::Unknown,
-                    had_error: true,
-                }
-            }
-        }
-        // The `string` keyword as an index reads the receiver's string index
-        // signature, which is what makes `Record<string, V>[string]` mean `V`.
-        // drizzle writes it twice (`SelectedFieldsFlat<TColumn>[string]`,
-        // `UpdateSet[string]`) and it is the normal way to name a `Record`'s
-        // value type. Without an index signature tsc answers TS2537, not the
-        // TS2538 the fallback below would report — surge has no TS2537, so the
-        // receiver degrades silently rather than report a code tsc never does.
-        (Type::Object(object_type), Type::String) => {
-            match object_type.string_index_type.as_deref() {
-                Some(value_ty) => {
-                    if generic_indexed_access {
-                        record_generic_indexed_access_success();
-                    }
-                    ResolvedType {
-                        ty: value_ty.clone(),
-                        had_error: false,
-                    }
-                }
-                None => {
-                    if generic_indexed_access {
-                        record_generic_indexed_access_unknown_fallback();
-                    }
-                    ResolvedType {
-                        ty: Type::Unknown,
-                        had_error: true,
-                    }
-                }
-            }
-        }
-        // A numeric-literal index keys an object by its stringified value:
-        // `{ 0: 1; 1: 0 }[0]` reads the `"0"` property. Object literals with
-        // numeric keys are common in library-generated conditional-type tables
-        // (e.g. Prisma's `{ 0: …; 1: … }[B]`).
-        (Type::Object(object_type), Type::NumberLiteral(num)) => {
-            if let Some(property_ty) = object_type.get_property_access_type(&num.value) {
-                if generic_indexed_access {
-                    record_generic_indexed_access_success();
-                }
-                ResolvedType {
-                    ty: property_ty,
-                    had_error: false,
-                }
-            } else if suppress_instantiation_indexed_access(object_is_concrete_substitution) {
-                ResolvedType {
-                    ty: Type::Unknown,
-                    had_error: false,
-                }
-            } else {
-                let mut diagnostic = Diagnostic::ts2339(
-                    &num.value,
-                    &resolved_object.ty.name(),
-                    ctx.file_name.clone(),
-                );
-                if let Some(span) = indexed_access.span {
-                    diagnostic = diagnostic.with_span(convert_span(span));
-                }
-                ctx.push(diagnostic);
-                ResolvedType {
-                    ty: Type::Unknown,
-                    had_error: true,
-                }
-            }
-        }
-        (Type::Object(object_type), Type::Union(union_ty)) => {
-            let mut types = Vec::new();
-            let mut had_error = false;
-            for key_ty in union_ty.types() {
-                let key = match key_ty {
-                    Type::StringLiteral(key) => Some(key.clone()),
-                    Type::NumberLiteral(num) => Some(num.value.clone()),
-                    _ => None,
-                };
-                if let Some(key) = key {
-                    if let Some(property_ty) = object_type.get_property_access_type(&key) {
-                        types.push(property_ty);
-                    } else if !suppress_instantiation_indexed_access(
-                        object_is_concrete_substitution,
-                    ) {
-                        let mut diagnostic = Diagnostic::ts2339(
-                            &key,
-                            &resolved_object.ty.name(),
-                            ctx.file_name.clone(),
-                        );
-                        if let Some(span) = indexed_access.span {
-                            diagnostic = diagnostic.with_span(convert_span(span));
-                        }
-                        ctx.push(diagnostic);
-                        had_error = true;
-                    }
-                } else {
-                    let mut diagnostic = Diagnostic::ts2538(&key_ty.name(), ctx.file_name.clone());
-                    if let Some(span) = indexed_access.span {
-                        diagnostic = diagnostic.with_span(convert_span(span));
-                    }
-                    ctx.push(diagnostic);
-                    had_error = true;
-                }
-            }
-
-            if had_error {
-                ResolvedType {
-                    ty: Type::Unknown,
-                    had_error: true,
-                }
-            } else {
-                if generic_indexed_access {
-                    record_generic_indexed_access_success();
-                }
-                ResolvedType {
-                    ty: union_type(types),
-                    had_error: false,
-                }
-            }
-        }
-        (Type::Tuple(elements), Type::NumberLiteral(num)) => {
-            if let Ok(index) = num.value.parse::<usize>() {
-                if let Some(element_ty) = elements.get(index) {
-                    if generic_indexed_access {
-                        record_generic_indexed_access_success();
-                    }
-                    ResolvedType {
-                        ty: element_ty.clone(),
-                        had_error: false,
-                    }
-                } else {
-                    let mut diagnostic = Diagnostic::ts2493(
-                        &resolved_object.ty.name(),
-                        elements.len(),
-                        index,
-                        ctx.file_name.clone(),
-                    );
-                    if let Some(span) = indexed_access.span {
-                        diagnostic = diagnostic.with_span(convert_span(span));
-                    }
-                    ctx.push(diagnostic);
-                    ResolvedType {
-                        ty: Type::Unknown,
-                        had_error: true,
-                    }
-                }
-            } else {
-                ResolvedType {
-                    ty: Type::Unknown,
-                    had_error: true,
-                }
-            }
-        }
-        (Type::Array(element_type), Type::Number) => ResolvedType {
-            ty: {
-                if generic_indexed_access {
-                    record_generic_indexed_access_success();
-                }
-                *element_type.clone()
-            },
-            had_error: false,
-        },
-        (Type::Tuple(elements), Type::Number) => {
-            if generic_indexed_access {
-                record_generic_indexed_access_success();
-            }
-            ResolvedType {
-                ty: union_type(elements.clone()),
-                had_error: false,
-            }
-        }
-        // `T['length']` on a tuple is its arity as a literal, which is how every
-        // type-level list walk states its base case (`Length<path> extends 5`).
-        // Without it the guard degrades and takes the whole recursion with it.
-        (Type::Tuple(elements), Type::StringLiteral(key)) if key == "length" => {
-            if generic_indexed_access {
-                record_generic_indexed_access_success();
-            }
-            ResolvedType {
-                ty: Type::NumberLiteral(surge_ts_types::NumberLiteralType { value: elements.len().to_string() }),
-                had_error: false,
-            }
-        }
-        (Type::OpenTuple(open), Type::Number | Type::NumberLiteral(_)) => {
-            if generic_indexed_access {
-                record_generic_indexed_access_success();
-            }
-            ResolvedType {
-                ty: open.element_union(),
-                had_error: false,
-            }
-        }
-        (Type::OpenTuple(_), Type::StringLiteral(key)) if key == "length" => {
-            if generic_indexed_access {
-                record_generic_indexed_access_success();
-            }
-            ResolvedType {
-                ty: Type::Number,
-                had_error: false,
-            }
-        }
-        (Type::Any, _) | (_, Type::Any) => {
-            if generic_indexed_access {
-                record_generic_indexed_access_success();
-            }
-            ResolvedType {
-                ty: Type::Any,
-                had_error: false,
-            }
-        }
-        // Index a union receiver by a string key (`(A | B)["k"]`, notably
-        // `T[number]["_zod"]`): read the key from each member and union the results.
-        // Each member is peeled by `get_property_access_type`, so a member that is a
-        // lazy/nominal reference (a deferred generic alias/interface instantiation)
-        // resolves to its structural shape instead of being misreported as missing
-        // the property. A member that degraded to `unknown`/`any` contributes that
-        // (no cascade), matching how the receiver-errored branch selects properties.
-        (Type::Union(union_ty), Type::StringLiteral(key)) => {
-            let mut types = Vec::new();
-            let mut missing = false;
-            for member in union_ty.types() {
-                if member.is_unknown() || matches!(member, Type::Any) {
-                    types.push(member.clone());
-                } else if let Some(property_ty) = member.get_property_access_type(key) {
-                    types.push(property_ty);
-                } else {
-                    missing = true;
-                    break;
-                }
-            }
-            if missing && suppress_instantiation_indexed_access(object_is_concrete_substitution) {
-                ResolvedType {
-                    ty: Type::Unknown,
-                    had_error: false,
-                }
-            } else if missing {
-                let mut diagnostic =
-                    Diagnostic::ts2339(key, &resolved_object.ty.name(), ctx.file_name.clone());
-                if let Some(span) = indexed_access.span {
-                    diagnostic = diagnostic.with_span(convert_span(span));
-                }
-                ctx.push(diagnostic);
-                ResolvedType {
-                    ty: Type::Unknown,
-                    had_error: true,
-                }
-            } else {
-                if generic_indexed_access {
-                    record_generic_indexed_access_success();
-                }
-                ResolvedType {
-                    ty: union_type(types),
-                    had_error: false,
-                }
-            }
-        }
-        (_, Type::StringLiteral(_))
-            if suppress_instantiation_indexed_access(object_is_concrete_substitution) =>
-        {
-            if generic_indexed_access {
-                record_generic_indexed_access_unknown_fallback();
-            }
-            ResolvedType {
+        if receiver_unenumerable {
+            return ResolvedType {
                 ty: Type::Unknown,
                 had_error: false,
-            }
+            };
         }
-        (_, Type::StringLiteral(key)) => {
+        // In a generic context (an access naming a type parameter) an `unknown`
+        // index is a resolution limitation we cannot validate — e.g.
+        // `X[keyof T]` where `keyof T` could not be computed, which tsc defers —
+        // not the literal `value[unknownKey]` that tsc flags.
+        let generic = generic_indexed_access || mentions_bound;
+        if !generic && ctx.options.diagnostic_profile != crate::context::DiagnosticProfile::Native {
             let mut diagnostic =
-                Diagnostic::ts2339(key, &resolved_object.ty.name(), ctx.file_name.clone());
-            if let Some(span) = indexed_access.span {
+                Diagnostic::ts2538(&resolved_index.ty.name(), ctx.file_name.clone());
+            if let Some(span) = indexed_access.index_span.or(indexed_access.span) {
                 diagnostic = diagnostic.with_span(convert_span(span));
             }
             ctx.push(diagnostic);
+        }
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: !generic,
+        };
+    }
+
+    // Symbol keys are not modelled: the parser keeps a computed member
+    // (`[matcher](): R`) under a name no symbol key reaches and reads a
+    // `[k: symbol]` signature as a string one, so a type keyed by a symbol has
+    // no member table to validate against — a report here would be about
+    // surge's own gap, not the source. ts-pattern's `CustomP<…>[matcher]` is
+    // the shape.
+    if index_has_degraded_member
+        || (matches!(index, Type::Symbol) && !matches!(resolved_object.ty, Type::Any))
+    {
+        if generic_indexed_access {
+            record_generic_indexed_access_unknown_fallback();
+        }
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
+    }
+
+    let site = (!instantiating && !receiver_unenumerable).then_some(AccessSite {
+        span: indexed_access.index_span.or(indexed_access.span),
+    });
+    match indexed_access_type_or_undefined(&resolved_object.ty, &resolved_index.ty, site, ctx) {
+        Some(ty) => {
             if generic_indexed_access {
-                record_generic_indexed_access_unknown_fallback();
+                record_generic_indexed_access_success();
             }
             ResolvedType {
-                ty: Type::Unknown,
-                had_error: true,
+                ty,
+                had_error: false,
             }
         }
-        (_, invalid_index) => {
-            // A receiver the checker marked open (`NonNullable<T>` is `T & {}`,
-            // and an intersection whose other operand degraded keeps the survivor
-            // open) has members surge never enumerated, so its index cannot be
-            // validated — degrade rather than emit a false TS2538.
-            if matches!(&resolved_object.ty, Type::Object(object) if object.synthetic_open_index) {
-                if generic_indexed_access {
-                    record_generic_indexed_access_unknown_fallback();
-                }
-                return ResolvedType {
-                    ty: Type::Unknown,
-                    had_error: false,
-                };
-            }
-            // The parser drops computed members (`[matcher](): R`), so a type
-            // whose key is a symbol has no member table to validate against — a
-            // report here would be about surge's own gap, not the source.
-            // ts-pattern's `CustomP<…>[matcher]` is the shape.
-            if matches!(invalid_index, Type::Symbol) {
-                if generic_indexed_access {
-                    record_generic_indexed_access_unknown_fallback();
-                }
-                return ResolvedType {
-                    ty: Type::Unknown,
-                    had_error: false,
-                };
-            }
-            if let Type::Unknown | Type::TypeParameter(_) = invalid_index {
-                // In a generic context (a type-parameter receiver/key or a
-                // substituted reference) an `unknown` index is a resolution
-                // limitation we cannot validate — e.g. `T[keyof T]` where `keyof T`
-                // could not be computed — not the literal `value[unknownKey]` that
-                // tsc flags. Degrade silently rather than emit a false TS2538.
-                if !generic_indexed_access
-                    && ctx.options.diagnostic_profile != crate::context::DiagnosticProfile::Native
-                {
-                    let mut diagnostic =
-                        Diagnostic::ts2538(&invalid_index.name(), ctx.file_name.clone());
-                    if let Some(span) = indexed_access.span {
-                        diagnostic = diagnostic.with_span(convert_span(span));
-                    }
-                    ctx.push(diagnostic);
-                }
-                if generic_indexed_access {
-                    record_generic_indexed_access_unknown_fallback();
-                }
-                return ResolvedType {
-                    ty: Type::Unknown,
-                    had_error: !generic_indexed_access,
-                };
-            }
-            // An unresolved index name was already reported (TS2304); the native
-            // profile does not cascade a second diagnostic off it.
-            let cascades_from_unresolved_name = matches!(invalid_index, Type::ErrorType)
-                && ctx.options.diagnostic_profile == crate::context::DiagnosticProfile::Native;
-            if !cascades_from_unresolved_name {
-                let mut diagnostic =
-                    Diagnostic::ts2538(&invalid_index.name(), ctx.file_name.clone());
-                if let Some(span) = indexed_access.span {
-                    diagnostic = diagnostic.with_span(convert_span(span));
-                }
-                ctx.push(diagnostic);
-            }
+        None => {
             if generic_indexed_access {
                 record_generic_indexed_access_unknown_fallback();
             }
+            if site.is_some() {
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: true,
+                };
+            }
+            // With no node tsc answers `unknownType`, a real type: a closed
+            // object that lacks the key (`TOptions['transformer']` for a
+            // `create({ isServer: true })` call decides tRPC's `transformer`
+            // flag through it). A receiver surge could not enumerate keeps the
+            // sentinel.
+            let ty = match (&resolved_object.ty, &index) {
+                (Type::Object(object), Type::StringLiteral(_)) if !object.synthetic_open_index => {
+                    Type::GenuineUnknown
+                }
+                _ => Type::Unknown,
+            };
             ResolvedType {
-                ty: Type::Unknown,
-                had_error: true,
+                ty,
+                had_error: false,
             }
         }
     }
 }
 
-fn is_string_like(ty: &Type) -> bool {
+/// Where tsc reports an indexed-access error: the index of the written node
+/// (`getIndexNodeForAccessExpression(accessNode)`). Absent while an
+/// instantiation re-resolves the access.
+#[derive(Clone, Copy)]
+struct AccessSite {
+    span: Option<TextSpan>,
+}
+
+impl AccessSite {
+    fn report(self, diagnostic: Diagnostic, ctx: &mut CheckerContext) {
+        ctx.push(match self.span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        });
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IndexKey {
+    String,
+    Number,
+}
+
+struct IndexInfo {
+    key: IndexKey,
+    value: Type,
+}
+
+/// The key kinds `isTypeAssignableToKind` is asked about.
+#[derive(Clone, Copy)]
+struct KeyKinds {
+    string: bool,
+    number: bool,
+    symbol: bool,
+}
+
+/// `StringLike | NumberLike | ESSymbolLike`.
+const ANY_KEY_KIND: KeyKinds = KeyKinds {
+    string: true,
+    number: true,
+    symbol: true,
+};
+
+/// `String | Number`.
+const STRING_OR_NUMBER_KIND: KeyKinds = KeyKinds {
+    string: true,
+    number: true,
+    symbol: false,
+};
+
+/// tsc's `getReducedApparentType`: a lazy reference reads as its structural
+/// expansion. A primitive stands for its lib interface as it is —
+/// `get_property_access_type` answers that interface's members.
+fn apparent_type(ty: &Type) -> Type {
     match ty {
-        Type::String | Type::StringLiteral(_) => true,
-        Type::Union(union) => union.types().iter().all(is_string_like),
+        Type::Reference(_) => crate::program::with_dts_expansion_reason(
+            crate::program::DtsExpansionReason::IndexedAccess,
+            || ty.peeled(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// The index as tsc's type flags read it: an enum member is its literal, while a
+/// pattern literal (`` `${number}` ``, `Uppercase<string>`) and a unique symbol
+/// keep their own identity.
+fn index_view(index: &Type) -> Type {
+    match index {
+        Type::Reference(reference) if reference.is_unique_symbol() => index.clone(),
+        Type::Reference(_) => surge_ts_types::peel_to_pattern_literal(index),
+        other => other.clone(),
+    }
+}
+
+/// A receiver surge could not enumerate: an intersection kept open over an
+/// operand it dropped, or a union with a member that degraded. Its reads still
+/// resolve, but a key it cannot answer says nothing about the source.
+fn receiver_is_unenumerable(receiver: &Type) -> bool {
+    match receiver {
+        Type::Object(object) => object.synthetic_open_index,
+        Type::Union(union) => union.types().iter().any(|member| {
+            let member = apparent_type(member);
+            member.is_degraded()
+                || matches!(member, Type::Any)
+                || matches!(&member, Type::Object(object) if object.synthetic_open_index)
+        }),
         _ => false,
     }
+}
+
+fn is_nullable(index: &Type) -> bool {
+    matches!(index, Type::Undefined | Type::Null)
+}
+
+/// tsc's `isTypeAssignableToKind` for the key kinds.
+fn is_assignable_to_key_kind(index: &Type, kinds: KeyKinds) -> bool {
+    let string_like = matches!(index, Type::String | Type::StringLiteral(_))
+        || surge_ts_types::is_template_literal_type(index)
+        || surge_ts_types::string_mapping_parts(index).is_some();
+    let number_like = matches!(index, Type::Number | Type::NumberLiteral(_));
+    let symbol_like = matches!(index, Type::Symbol)
+        || matches!(index, Type::Reference(reference) if reference.is_unique_symbol());
+    if (kinds.string && string_like) || (kinds.number && number_like) || (kinds.symbol && symbol_like)
+    {
+        return true;
+    }
+    // `unknown` relates to none of them, where surge's permissive sentinels
+    // would say otherwise.
+    if index.is_degraded() {
+        return false;
+    }
+    (kinds.number && surge_ts_types::is_assignable_to(index, &Type::Number))
+        || (kinds.string && surge_ts_types::is_assignable_to(index, &Type::String))
+        || (kinds.symbol && surge_ts_types::is_assignable_to(index, &Type::Symbol))
+}
+
+/// tsc's `isNumericLiteralName`: the name is the canonical spelling of a number.
+fn is_numeric_literal_name(name: &str) -> bool {
+    name.parse::<f64>()
+        .is_ok_and(|value| surge_ts_syntax::js_number_to_string(value) == name)
+}
+
+/// tsc's `numericStringType`, `` `${number}` ``.
+fn is_numeric_string_type(ty: &Type) -> bool {
+    surge_ts_types::template_literal_parts(ty).is_some_and(|(texts, types)| {
+        texts.iter().all(|text| text.is_empty()) && matches!(types.as_slice(), [Type::Number])
+    })
+}
+
+/// The position a tuple element property is named by (`"0"`, `"1"`, …).
+fn tuple_element_position(name: &str) -> Option<usize> {
+    let position = name.parse::<usize>().ok()?;
+    (position.to_string() == name).then_some(position)
+}
+
+fn is_tuple_type(apparent: &Type) -> bool {
+    matches!(apparent, Type::Tuple(_) | Type::OpenTuple(_))
+}
+
+/// tsc's `everyType` over the members of an apparent receiver.
+fn every_member(apparent: &Type, predicate: impl Fn(&Type) -> bool) -> bool {
+    match apparent {
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .all(|member| predicate(&apparent_type(member))),
+        other => predicate(other),
+    }
+}
+
+/// The union of a tuple's elements, which is `never` for `[]`.
+fn tuple_element_union(elements: &[Type]) -> Type {
+    if elements.is_empty() {
+        Type::Never
+    } else {
+        union_type(elements.to_vec())
+    }
+}
+
+/// tsc's `getRestTypeOfTupleType`: every element from the first variable one on.
+fn rest_type_of_tuple(tuple: &Type) -> Option<Type> {
+    let Type::OpenTuple(open) = tuple else {
+        return None;
+    };
+    let mut elements = vec![open.rest.as_ref().clone()];
+    elements.extend(open.trailing.iter().cloned());
+    Some(union_type(elements))
+}
+
+/// tsc's `getTupleElementTypeOutOfStartCount`: past its named elements a tuple
+/// reads its rest elements, and a fixed tuple reads `undefined`.
+fn tuple_element_type_out_of_start_count(apparent: &Type) -> Type {
+    match apparent {
+        Type::Union(union) => union_type(
+            union
+                .types()
+                .iter()
+                .map(|member| tuple_element_type_out_of_start_count(&apparent_type(member)))
+                .collect(),
+        ),
+        tuple => rest_type_of_tuple(tuple).unwrap_or(Type::Undefined),
+    }
+}
+
+/// tsc's `getIndexInfosOfType` over surge's shapes: an object's declared string
+/// and number signatures, the element type of an array or tuple, and `String`'s
+/// numeric signature on a string.
+fn index_infos(apparent: &Type) -> Vec<IndexInfo> {
+    match apparent {
+        Type::Object(object) => {
+            let mut infos = Vec::new();
+            if let Some(value) = object.string_index_type.as_deref() {
+                infos.push(IndexInfo {
+                    key: IndexKey::String,
+                    value: value.clone(),
+                });
+            }
+            if let Some(value) = object.number_index_type.as_deref() {
+                infos.push(IndexInfo {
+                    key: IndexKey::Number,
+                    value: value.clone(),
+                });
+            } else if object
+                .intersected_primitive()
+                .is_some_and(|primitive| matches!(primitive, Type::String | Type::StringLiteral(_)))
+            {
+                infos.push(IndexInfo {
+                    key: IndexKey::Number,
+                    value: Type::String,
+                });
+            }
+            infos
+        }
+        Type::Array(element) => vec![IndexInfo {
+            key: IndexKey::Number,
+            value: element.as_ref().clone(),
+        }],
+        Type::Tuple(elements) => vec![IndexInfo {
+            key: IndexKey::Number,
+            value: tuple_element_union(elements),
+        }],
+        Type::OpenTuple(open) => vec![IndexInfo {
+            key: IndexKey::Number,
+            value: open.element_union(),
+        }],
+        Type::String | Type::StringLiteral(_) => vec![IndexInfo {
+            key: IndexKey::Number,
+            value: Type::String,
+        }],
+        Type::Union(union) => union_index_infos(union.types()),
+        _ => Vec::new(),
+    }
+}
+
+/// tsc's `getUnionIndexInfos`: a signature every member declares, reading the
+/// union of their value types.
+fn union_index_infos(members: &[Type]) -> Vec<IndexInfo> {
+    let members: Vec<Type> = members.iter().map(apparent_type).collect();
+    let Some(first) = members.first() else {
+        return Vec::new();
+    };
+    index_infos(first)
+        .into_iter()
+        .filter_map(|info| {
+            let values = members
+                .iter()
+                .map(|member| index_info_of_type(member, info.key))
+                .collect::<Option<Vec<_>>>()?;
+            Some(IndexInfo {
+                key: info.key,
+                value: union_type(values),
+            })
+        })
+        .collect()
+}
+
+/// tsc's `getIndexInfoOfType`: the signature declared for exactly `key`.
+fn index_info_of_type(apparent: &Type, key: IndexKey) -> Option<Type> {
+    index_infos(apparent)
+        .into_iter()
+        .find(|info| info.key == key)
+        .map(|info| info.value)
+}
+
+/// tsc's `isApplicableIndexType`: a string signature answers numeric keys too,
+/// and a number signature answers `` `${number}` `` and numeric string literals.
+fn is_applicable_index_type(source: &Type, key: IndexKey) -> bool {
+    match key {
+        IndexKey::String => {
+            surge_ts_types::is_assignable_to(source, &Type::String)
+                || surge_ts_types::is_assignable_to(source, &Type::Number)
+        }
+        IndexKey::Number => {
+            surge_ts_types::is_assignable_to(source, &Type::Number)
+                || is_numeric_string_type(source)
+                || matches!(source, Type::StringLiteral(value) if is_numeric_literal_name(value))
+        }
+    }
+}
+
+/// tsc's `findApplicableIndexInfo`: the string signature answers only when no
+/// other one applies.
+fn applicable_index_info(infos: Vec<IndexInfo>, key: &Type) -> Option<IndexInfo> {
+    let mut string_info = None;
+    for info in infos {
+        match info.key {
+            IndexKey::String => string_info = Some(info),
+            IndexKey::Number if is_applicable_index_type(key, IndexKey::Number) => {
+                return Some(info);
+            }
+            IndexKey::Number => {}
+        }
+    }
+    string_info.filter(|_| is_applicable_index_type(key, IndexKey::String))
+}
+
+/// tsc's `getPropertyOfType` on an apparent type, read the way an indexed
+/// access type node reads it: an optional property includes `undefined`
+/// (`containsMissingType`). An index signature is not a property.
+fn property_of_type(apparent: &Type, name: &str) -> Option<Type> {
+    match apparent {
+        Type::Object(object) => {
+            if let Some(property) = object.get_property(name) {
+                return Some(if property.is_optional() {
+                    union_type(vec![property.ty.clone(), Type::Undefined])
+                } else {
+                    property.ty.clone()
+                });
+            }
+            if object.string_index_type.is_none() && object.number_index_type.is_none() {
+                return apparent.get_property_access_type(name);
+            }
+            let mut members_only = object.clone();
+            members_only.string_index_type = None;
+            members_only.number_index_type = None;
+            Type::Object(members_only).get_property_access_type(name)
+        }
+        Type::Tuple(elements) => {
+            if name == "length" {
+                return Some(Type::NumberLiteral(NumberLiteralType {
+                    value: elements.len().to_string(),
+                }));
+            }
+            match tuple_element_position(name) {
+                Some(position) => elements.get(position).cloned(),
+                None => apparent.get_property_access_type(name),
+            }
+        }
+        Type::OpenTuple(open) => match tuple_element_position(name) {
+            Some(position) => open.leading.get(position).cloned(),
+            None => apparent.get_property_access_type(name),
+        },
+        Type::Union(union) => union_property(union.types(), name),
+        Type::Any | Type::Never | Type::Void | Type::Undefined | Type::Null => None,
+        other if other.is_unknown() => None,
+        other => other.get_property_access_type(name),
+    }
+}
+
+/// tsc's `createUnionOrIntersectionProperty` for a read: a member lacking the
+/// property contributes what its index signature reads (a tuple's rest
+/// elements, or `undefined` past a fixed tuple's end); a member with neither
+/// makes the property partial, which a read does not see.
+fn union_property(members: &[Type], name: &str) -> Option<Type> {
+    let key = Type::StringLiteral(name.to_string());
+    let mut found = false;
+    let mut types = Vec::with_capacity(members.len());
+    for member in members {
+        let apparent = apparent_type(member);
+        if matches!(apparent, Type::ErrorType | Type::Never) {
+            continue;
+        }
+        // A member surge could not model contributes itself instead of deciding
+        // the read.
+        if apparent.is_unknown() || matches!(apparent, Type::Any) {
+            found = true;
+            types.push(apparent);
+            continue;
+        }
+        if let Some(property) = property_of_type(&apparent, name) {
+            found = true;
+            types.push(property);
+            continue;
+        }
+        let info = applicable_index_info(index_infos(&apparent), &key)?;
+        types.push(if is_tuple_type(&apparent) {
+            rest_type_of_tuple(&apparent).unwrap_or(Type::Undefined)
+        } else {
+            info.value
+        });
+    }
+    found.then(|| union_type(types))
+}
+
+/// tsc's `isStringIndexSignatureOnlyType`.
+fn is_string_index_signature_only_type(ty: &Type) -> bool {
+    match ty {
+        Type::Object(object) => {
+            object.properties.is_empty()
+                && object.string_index_type.is_some()
+                && object.number_index_type.is_none()
+                && !object.synthetic_open_index
+        }
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .all(|member| is_string_index_signature_only_type(&apparent_type(member))),
+        _ => false,
+    }
+}
+
+/// How tsc prints the apparent receiver in a missing-member message: a
+/// primitive reads as its lib interface.
+fn apparent_display_name(apparent: &Type) -> String {
+    match apparent {
+        Type::String | Type::StringLiteral(_) => "String".to_string(),
+        Type::Number | Type::NumberLiteral(_) => "Number".to_string(),
+        Type::Boolean | Type::BooleanLiteral(_) => "Boolean".to_string(),
+        Type::BigInt => "BigInt".to_string(),
+        Type::Symbol => "Symbol".to_string(),
+        other => other.name(),
+    }
+}
+
+/// tsc's `getIndexedAccessTypeOrUndefined` for an access it does not defer.
+fn indexed_access_type_or_undefined(
+    object: &Type,
+    index: &Type,
+    site: Option<AccessSite>,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let view = index_view(index);
+    // A string index signature and nothing else answers every string or numeric
+    // key with its value, `{ [k: string]: V }["toString"]` included.
+    let index = if is_string_index_signature_only_type(object)
+        && !is_nullable(&view)
+        && is_assignable_to_key_kind(&view, STRING_OR_NUMBER_KIND)
+    {
+        Type::String
+    } else {
+        index.clone()
+    };
+    let apparent = apparent_type(object);
+    // `boolean` alone stays whole, so its error names `boolean`; inside a larger
+    // union it is `false | true`.
+    let Type::Union(union) = index_view(&index) else {
+        return property_type_for_index_type(&apparent, &index, site, ctx);
+    };
+    let mut members = Vec::with_capacity(union.types().len() + 1);
+    for member in union.types() {
+        if matches!(member, Type::Boolean) {
+            members.push(Type::BooleanLiteral(false));
+            members.push(Type::BooleanLiteral(true));
+        } else {
+            members.push(member.clone());
+        }
+    }
+    let mut property_types = Vec::with_capacity(members.len());
+    let mut was_missing = false;
+    for member in &members {
+        match property_type_for_index_type(&apparent, member, site, ctx) {
+            Some(ty) => property_types.push(ty),
+            None if site.is_none() => return None,
+            None => was_missing = true,
+        }
+    }
+    (!was_missing).then(|| union_type(property_types))
+}
+
+/// tsc's `getPropertyTypeForIndexType` for an indexed access type node.
+fn property_type_for_index_type(
+    apparent: &Type,
+    index: &Type,
+    site: Option<AccessSite>,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let view = index_view(index);
+    let property_name = match &view {
+        Type::StringLiteral(value) => Some(value.as_str()),
+        Type::NumberLiteral(number) => Some(number.value.as_str()),
+        _ => None,
+    };
+    if let Some(name) = property_name {
+        if let Some(property) = property_of_type(apparent, name) {
+            return Some(property);
+        }
+        if every_member(apparent, is_tuple_type) && is_numeric_literal_name(name) {
+            let position = name.parse::<f64>().unwrap_or(f64::NAN);
+            if let Some(site) = site
+                && every_member(apparent, |member| matches!(member, Type::Tuple(_)))
+            {
+                if let Type::Tuple(elements) = apparent {
+                    if position < 0.0 {
+                        site.report(Diagnostic::ts2514(ctx.file_name.clone()), ctx);
+                        return Some(Type::Undefined);
+                    }
+                    let diagnostic = Diagnostic::ts2493(
+                        apparent.name(),
+                        elements.len(),
+                        name,
+                        ctx.file_name.clone(),
+                    );
+                    site.report(diagnostic, ctx);
+                } else {
+                    let diagnostic =
+                        Diagnostic::ts2339(name, apparent.name(), ctx.file_name.clone());
+                    site.report(diagnostic, ctx);
+                }
+            }
+            if position >= 0.0 {
+                return Some(tuple_element_type_out_of_start_count(apparent));
+            }
+        }
+    }
+    if !is_nullable(&view) && is_assignable_to_key_kind(&view, ANY_KEY_KIND) {
+        if matches!(apparent, Type::Any | Type::ErrorType | Type::Never) {
+            return Some(apparent.clone());
+        }
+        // No applicable signature defaults to the string one, so a symbol key
+        // reads it too — and is reported below.
+        let info = applicable_index_info(index_infos(apparent), &view).or_else(|| {
+            index_info_of_type(apparent, IndexKey::String).map(|value| IndexInfo {
+                key: IndexKey::String,
+                value,
+            })
+        });
+        if let Some(info) = info {
+            if let Some(site) = site
+                && info.key == IndexKey::String
+                && !is_assignable_to_key_kind(&view, STRING_OR_NUMBER_KIND)
+            {
+                site.report(Diagnostic::ts2538(index.name(), ctx.file_name.clone()), ctx);
+            }
+            return Some(info.value);
+        }
+        if matches!(view, Type::Never) {
+            return Some(Type::Never);
+        }
+    }
+    if let Some(site) = site {
+        let diagnostic = match &view {
+            Type::StringLiteral(value) => Some(Diagnostic::ts2339(
+                value,
+                apparent_display_name(apparent),
+                ctx.file_name.clone(),
+            )),
+            Type::NumberLiteral(number) => Some(Diagnostic::ts2339(
+                &number.value,
+                apparent_display_name(apparent),
+                ctx.file_name.clone(),
+            )),
+            Type::String | Type::Number => Some(Diagnostic::ts2537(
+                apparent_display_name(apparent),
+                index.name(),
+                ctx.file_name.clone(),
+            )),
+            // An unresolved index name was already reported (TS2304); the
+            // native profile does not cascade a second diagnostic off it.
+            Type::ErrorType
+                if ctx.options.diagnostic_profile
+                    == crate::context::DiagnosticProfile::Native =>
+            {
+                None
+            }
+            _ => Some(Diagnostic::ts2538(index.name(), ctx.file_name.clone())),
+        };
+        if let Some(diagnostic) = diagnostic {
+            site.report(diagnostic, ctx);
+        }
+    }
+    matches!(view, Type::Any | Type::ErrorType).then_some(view)
 }

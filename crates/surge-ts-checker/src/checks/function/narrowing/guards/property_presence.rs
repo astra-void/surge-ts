@@ -30,6 +30,9 @@ pub(super) fn property_presence_of(member: &Type, property: &str) -> PropertyPre
             }
             None => PropertyPresence::Absent,
         },
+        // No key is present on `null` or `undefined` (`isTypePresencePossible`
+        // finds neither a property nor an index signature).
+        Type::Null | Type::Undefined | Type::Void => PropertyPresence::Absent,
         _ => PropertyPresence::Undecidable,
     }
 }
@@ -85,8 +88,6 @@ pub(super) fn narrow_member_by_property_presence(
     }
 }
 
-/// Narrows a union by whether each member has `property` (`"prop" in obj`).
-/// `keep_present` selects members that have it (the `in` true branch).
 /// Members every object answers through `Object.prototype`. `"toString" in x` is
 /// true for any object, so it proves nothing new, and synthesizing the key would
 /// shadow the real member and turn a working `x.toString()` into an error.
@@ -104,56 +105,76 @@ pub(super) fn is_object_prototype_member(property: &str) -> bool {
     )
 }
 
+/// tsc's `narrowTypeByInKeyword` (flow.go). When some constituent can have
+/// the key (`isTypePresencePossible`), the type is filtered by whether each
+/// constituent can have it in this branch — which leaves `never` when none can,
+/// a non-union type included. Otherwise only the true branch learns the key,
+/// as tsc's intersection with `Record<"p", unknown>`.
 pub(crate) fn narrow_union_by_property_presence(
     ty: &Type,
     property: &str,
     keep_present: bool,
 ) -> Option<Type> {
     let peeled = ty.peeled();
-    // A non-union object learns the key it was just tested for. tsc reports the
-    // result as `T & Record<"p", unknown>`; carrying the property on the object
-    // itself is the same member surface. Only the true branch learns anything —
-    // absence proves nothing about a type that never declared the key — and the
-    // key is a required literal, never an index signature, which would make
-    // every other read off the value a permissive hit.
-    if keep_present
-        && let Type::Object(object) = &peeled
-        && matches!(
-            property_presence_of(&peeled, property),
-            PropertyPresence::Absent
-        )
-        && !is_object_prototype_member(property)
-    {
-        let mut properties = (*object.properties).clone();
-        properties.insert(
-            std::sync::Arc::from(property),
-            surge_ts_types::ObjectProperty::required(Type::GenuineUnknown),
-        );
-        return Some(Type::Object(crate::metrics::alloc_object_type(
-            properties,
-            object.string_index_type.as_deref().cloned(),
-        )));
+    if presence_possible(&peeled, property) {
+        return match narrow_member_by_property_presence(ty, property, keep_present) {
+            PresenceNarrowing::Kept => None,
+            PresenceNarrowing::Removed => Some(Type::Never),
+            PresenceNarrowing::Narrowed(narrowed) => Some(narrowed),
+        };
     }
-    let Type::Union(union) = &peeled else {
+    // The key is a required literal, never an index signature, which would make
+    // every other read off the value a permissive hit. A member every object
+    // answers through `Object.prototype` is left alone: synthesizing it would
+    // shadow the real member.
+    if !keep_present || is_object_prototype_member(property) {
+        return None;
+    }
+    match &peeled {
+        Type::Union(union) => {
+            let members: Vec<Type> = union
+                .types()
+                .iter()
+                .map(|member| {
+                    with_unknown_property(member, property).unwrap_or_else(|| member.clone())
+                })
+                .collect();
+            let narrowed = union_type(members);
+            (narrowed != peeled).then_some(narrowed)
+        }
+        other => with_unknown_property(other, property),
+    }
+}
+
+/// Whether some constituent of `ty` can have `property`: it declares it, or an
+/// index signature answers it (`isTypePresencePossible` assuming presence).
+fn presence_possible(ty: &Type, property: &str) -> bool {
+    match ty.peeled() {
+        Type::Union(union) => {
+            union.types().iter().any(|member| presence_possible(member, property))
+        }
+        member @ Type::Object(_) => !matches!(
+            property_presence_of(&member, property),
+            PropertyPresence::Absent
+        ),
+        _ => false,
+    }
+}
+
+/// An object that learned `property` is present, typed `unknown`.
+fn with_unknown_property(member: &Type, property: &str) -> Option<Type> {
+    let Type::Object(object) = member.peeled() else {
         return None;
     };
-    let mut kept = Vec::new();
-    let mut changed = false;
-    for member in union.types().iter() {
-        match narrow_member_by_property_presence(member, property, keep_present) {
-            PresenceNarrowing::Kept => kept.push(member.clone()),
-            PresenceNarrowing::Removed => changed = true,
-            PresenceNarrowing::Narrowed(narrowed) => {
-                changed = true;
-                kept.push(narrowed);
-            }
-        }
-    }
-
-    if !changed || kept.is_empty() {
-        return None;
-    }
-    Some(union_type(kept))
+    let mut properties = (*object.properties).clone();
+    properties.insert(
+        std::sync::Arc::from(property),
+        surge_ts_types::ObjectProperty::required(Type::GenuineUnknown),
+    );
+    Some(Type::Object(crate::metrics::alloc_object_type(
+        properties,
+        object.string_index_type.as_deref().cloned(),
+    )))
 }
 
 /// Parses a `"property" in object` test, returning the object expression and the
@@ -173,6 +194,16 @@ pub(crate) fn parse_in_condition(
     };
     let property = match left.as_ref() {
         ParsedExpression::StringLiteral(property) => property.as_str(),
+        // A number names the property its canonical spelling does
+        // (`getPropertyNameFromType`: `1 in x` tests `"1"`); a literal written
+        // any other way is left unparsed.
+        ParsedExpression::NumberLiteral(value)
+            if value
+                .parse::<f64>()
+                .is_ok_and(|number| surge_ts_syntax::js_number_to_string(number) == *value) =>
+        {
+            value.as_str()
+        }
         // `Symbol.iterator in heads`: a well-known symbol is a property name
         // too (tsc's `isTypeUsableAsPropertyName`), keyed the way a computed
         // `[Symbol.iterator]` member is.
@@ -216,14 +247,15 @@ pub(crate) fn narrow_property_presence_symbol_table(
     branch_is_true: bool,
 ) -> Option<SymbolTable> {
     let (object, property) = parse_in_condition(condition)?;
-    let ParsedExpression::Identifier { name, .. } = object else {
+    let (name, path) = super::super::reference_path(object)?;
+    if !path.is_empty() {
         return None;
-    };
-    let symbol = symbols.get(name)?;
+    }
+    let symbol = symbols.get(&name)?;
     let narrowed = narrow_union_by_property_presence(&symbol.ty, property, branch_is_true)?;
     let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
     narrowed_symbols.insert_narrowed(
-        name.clone(),
+        name,
         SymbolInfo {
             ty: narrowed,
             kind: symbol.kind,

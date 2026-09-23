@@ -149,6 +149,9 @@ fn project_mode_maps_strict_to_no_implicit_any() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
+            jsx_factory_names: Default::default(),
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             no_lib: false,

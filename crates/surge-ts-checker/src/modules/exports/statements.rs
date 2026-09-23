@@ -12,6 +12,9 @@ pub(crate) fn collect_exports_from_statement(
     statement: &ParsedStatement,
     exportable_values: &SymbolTable,
     imported_symbols: &SymbolTable,
+    imported_names: &std::collections::HashSet<&str>,
+    statement_list: &[ParsedStatement],
+    parenthesized_expressions: &[surge_ts_syntax::ParenthesizedExpressionSpan],
     local_type_declarations: &TypeDeclarationTable,
     local_symbols: &SymbolTable,
     resolution_scope: Option<&Arc<TypeDeclarationScope>>,
@@ -19,16 +22,43 @@ pub(crate) fn collect_exports_from_statement(
     symbols: &mut SymbolTable,
     default_symbol: &mut Option<Arc<SymbolInfo>>,
     export_assignment_symbol: &mut Option<Arc<SymbolInfo>>,
-    module_scope_names: Option<&std::collections::HashSet<&str>>,
+    type_only_exports: &mut surge_ts_types::fx::FxHashMap<Arc<str>, TypeOnlyAliasKind>,
     ctx: &mut CheckerContext,
 ) {
     match statement {
         ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            // `export import local = N.M` exports every meaning of the entity.
+            ParsedExportDeclaration::Statement { declaration, .. }
+                if let ParsedStatement::ImportDeclaration(import) = declaration.as_ref()
+                    && let surge_ts_syntax::ParsedImportKind::EntityAlias {
+                        local_name,
+                        target,
+                        ..
+                    } = &import.kind =>
+            {
+                if let Some(symbol) =
+                    entity_alias_value(target, exportable_values, imported_symbols, ctx)
+                    && symbols.get(local_name).is_none()
+                {
+                    symbols.insert_shared(local_name.clone(), symbol);
+                }
+                export_entity_alias_types(
+                    target,
+                    local_name,
+                    local_type_declarations,
+                    resolution_scope,
+                    type_declarations,
+                    ctx,
+                );
+            }
             ParsedExportDeclaration::Statement { declaration, .. } => {
                 collect_exports_from_statement(
                     declaration.as_ref(),
                     exportable_values,
                     imported_symbols,
+                    imported_names,
+                    statement_list,
+                    parenthesized_expressions,
                     local_type_declarations,
                     local_symbols,
                     resolution_scope,
@@ -36,7 +66,7 @@ pub(crate) fn collect_exports_from_statement(
                     symbols,
                     default_symbol,
                     export_assignment_symbol,
-                    module_scope_names,
+                    type_only_exports,
                     ctx,
                 )
             }
@@ -98,6 +128,52 @@ pub(crate) fn collect_exports_from_statement(
                         );
                     }
                 }
+                publish_export_assignment_types(
+                    exported_name,
+                    local_type_declarations,
+                    resolution_scope,
+                    type_declarations,
+                    ctx,
+                );
+            }
+            ParsedExportDeclaration::EqualsExpression {
+                entity_name: Some(entity_name),
+                ..
+            } => {
+                // `getTargetOfAliasLikeExpression`: a dotted entity name is an
+                // alias of the entity, resolved with every meaning.
+                if let Some(symbol) =
+                    entity_alias_value(entity_name, exportable_values, imported_symbols, ctx)
+                {
+                    *export_assignment_symbol = Some(symbol);
+                }
+                publish_export_assignment_types(
+                    entity_name,
+                    local_type_declarations,
+                    resolution_scope,
+                    type_declarations,
+                    ctx,
+                );
+            }
+            ParsedExportDeclaration::EqualsExpression {
+                expression,
+                entity_name: None,
+                ..
+            } => {
+                // Any other expression is bound as a property, not an alias
+                // (`bindExportAssignment`): the module's export is the value of
+                // the expression and nothing else.
+                let ty = match crate::infer::infer_expression(expression, exportable_values, ctx) {
+                    crate::infer::InferredExpression::Known(ty) => ty,
+                    crate::infer::InferredExpression::Unknown
+                    | crate::infer::InferredExpression::UnresolvedIdentifier { .. }
+                    | crate::infer::InferredExpression::MissingProperty { .. } => Type::Unknown,
+                };
+                *export_assignment_symbol = Some(Arc::new(SymbolInfo {
+                    ty,
+                    kind: SymbolKind::Const,
+                    function_signature: None,
+                }));
             }
             ParsedExportDeclaration::Named {
                 is_type_only,
@@ -110,32 +186,11 @@ pub(crate) fn collect_exports_from_statement(
                 }
 
                 for specifier in specifiers {
+                    // tsc's `checkExportSpecifier` resolves every meaning of the
+                    // name; `type` only keeps an importer from reading a value
+                    // through it, so a type-only specifier naming a value is
+                    // resolved as any other and its value marked.
                     let specifier_is_type_only = *is_type_only || specifier.is_type_only;
-
-                    if module_scope_names
-                        .is_some_and(|names| !names.contains(specifier.local_name.as_str()))
-                        && is_global_scope_name(ctx, &specifier.local_name)
-                    {
-                        push_unresolved_export_diagnostic(
-                            ctx,
-                            &specifier.local_name,
-                            specifier.name_span,
-                        );
-                        continue;
-                    }
-
-                    if specifier_is_type_only {
-                        export_local_type_name(
-                            &specifier.local_name,
-                            &specifier.exported_name,
-                            &specifier.name_span,
-                            local_type_declarations,
-                            resolution_scope,
-                            type_declarations,
-                            ctx,
-                        );
-                        continue;
-                    }
 
                     let mut found = false;
 
@@ -158,8 +213,10 @@ pub(crate) fn collect_exports_from_statement(
                         found = true;
                     }
 
+                    // The module's own values only: a global reached through the
+                    // table's ambient fallback is not a local to export.
                     if let Some(symbol) = exportable_values
-                        .get_shared(&specifier.local_name)
+                        .get_own_shared(&specifier.local_name)
                         .or_else(|| imported_symbols.get_shared(&specifier.local_name))
                     {
                         if specifier.exported_name == "default" {
@@ -171,15 +228,122 @@ pub(crate) fn collect_exports_from_statement(
                         } else if symbols.get(&specifier.exported_name).is_none() {
                             symbols.insert_shared(specifier.exported_name.clone(), symbol);
                         }
+                        if specifier_is_type_only {
+                            type_only_exports
+                                .entry(Arc::from(specifier.exported_name.as_str()))
+                                .or_insert(TypeOnlyAliasKind::Export);
+                        }
+                        found = true;
+                    }
+
+                    // A namespace is exportable by its namespace meaning alone
+                    // (`export { TypesOnly }`); its type members travel under
+                    // the exported name.
+                    if ctx
+                        .namespace_registry
+                        .local_info(&ctx.file_name, &specifier.local_name)
+                        .is_some_and(|info| !info.is_enum)
+                    {
+                        export_namespace_type_members(
+                            &specifier.local_name,
+                            &specifier.exported_name,
+                            local_type_declarations,
+                            type_declarations,
+                        );
+                        found = true;
+                    }
+
+                    // `import local = N.M; export { local }` exports every
+                    // meaning of the entity the alias names.
+                    if !found
+                        && let Some(target) = entity_alias_target(statement_list, &specifier.local_name)
+                    {
+                        if let Some(symbol) =
+                            entity_alias_value(target, exportable_values, imported_symbols, ctx)
+                        {
+                            if specifier.exported_name == "default" {
+                                if default_symbol.is_none() {
+                                    *default_symbol = Some(symbol);
+                                }
+                            } else if symbols.get(&specifier.exported_name).is_none() {
+                                symbols.insert_shared(specifier.exported_name.clone(), symbol);
+                            }
+                        }
+                        export_entity_alias_types(
+                            target,
+                            &specifier.exported_name,
+                            local_type_declarations,
+                            resolution_scope,
+                            type_declarations,
+                            ctx,
+                        );
+                        found = true;
+                    }
+
+                    // An import binding is a local of the module whatever its
+                    // target's meanings are (a namespace-only import has no
+                    // value or type entry of its own).
+                    if !found && imported_names.contains(specifier.local_name.as_str()) {
+                        found = true;
+                    }
+
+                    // A global only an augmentation declares is declared in that
+                    // block, not in a global source file, so the specifier is a
+                    // local export of it (`@types/node` re-exports its buffer
+                    // aliases from `node:buffer` this way).
+                    if !found && ctx.global_augmentation_only_names.contains(specifier.local_name.as_str()) {
+                        if let Some(handle) = ctx.lookup_type_declaration_handle(&specifier.local_name) {
+                            export_local_type_declaration(
+                                handle.get(),
+                                &specifier.exported_name,
+                                resolution_scope,
+                                type_declarations,
+                            );
+                        }
+                        if let Some(symbol) = ctx.ambient_global_symbols.get_shared(&specifier.local_name) {
+                            if specifier.exported_name == "default" {
+                                if default_symbol.is_none() {
+                                    *default_symbol = Some(symbol);
+                                }
+                            } else if symbols.get(&specifier.exported_name).is_none() {
+                                symbols.insert_shared(specifier.exported_name.clone(), symbol);
+                            }
+                            if specifier_is_type_only {
+                                type_only_exports
+                                    .entry(Arc::from(specifier.exported_name.as_str()))
+                                    .or_insert(TypeOnlyAliasKind::Export);
+                            }
+                        }
                         found = true;
                     }
 
                     if !found {
-                        push_unresolved_export_diagnostic(
-                            ctx,
-                            &specifier.local_name,
-                            specifier.name_span,
-                        );
+                        // tsc's `checkExportSpecifier`: a name that resolves to
+                        // `undefined`, `globalThis`, or a global declaration is
+                        // not a local to export (TS2661), and a primitive type
+                        // name that resolves to nothing is reported the same way
+                        // (`checkAndReportErrorForExportingPrimitiveType`); only
+                        // any other name that resolves to nothing is TS2304.
+                        let name = specifier.local_name.as_str();
+                        let global = matches!(name, "undefined" | "globalThis")
+                            || crate::checks::expr::is_primitive_type_name(name)
+                            || ctx.ambient_global_symbols.get(name).is_some()
+                            || ctx.lookup_type_declaration_handle(name).is_some()
+                            || ctx.namespace_registry.is_global(name);
+                        if global {
+                            let mut diagnostic =
+                                surge_ts_diagnostics::Diagnostic::ts2661(&specifier.local_name, ctx.file_name.clone());
+                            if let Some(span) = specifier.name_span {
+                                diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+                            }
+                            ctx.push(diagnostic);
+                        } else {
+                            push_unresolved_export_diagnostic(
+                                ctx,
+                                &specifier.local_name,
+                                specifier.name_span,
+                            );
+                        }
                     }
                 }
             }
@@ -225,6 +389,7 @@ pub(crate) fn collect_exports_from_statement(
                         local_type_declarations,
                         resolution_scope,
                         type_declarations,
+                        ctx,
                     );
                     if let Some(symbol) = local_symbols.get_shared(&class.name) {
                         if default_symbol.is_none() {
@@ -238,13 +403,18 @@ pub(crate) fn collect_exports_from_statement(
                     }
 
                     // `export default Dispatcher` re-exports the named
-                    // declaration's type side too, not just its value.
-                    if let ParsedExpression::Identifier { name, .. } = expression {
+                    // declaration's type side too, not just its value
+                    // (`getTargetOfExportAssignment`: an entity name is an
+                    // alias of every meaning it has).
+                    if let Some(entity_name) =
+                        entity_name_expression(expression, parenthesized_expressions)
+                    {
                         publish_default_type_export(
-                            name,
+                            &entity_name,
                             local_type_declarations,
                             resolution_scope,
                             type_declarations,
+                            ctx,
                         );
                     }
 
@@ -404,17 +574,219 @@ fn publish_default_type_export(
     local_type_declarations: &TypeDeclarationTable,
     resolution_scope: Option<&Arc<TypeDeclarationScope>>,
     type_declarations: &mut TypeDeclarationTable,
+    ctx: &CheckerContext,
 ) {
-    let Some(handle) = local_type_declarations
-        .get_handle(local_name)
-        .or_else(|| resolution_scope.and_then(|scope| scope.get_handle(local_name)))
-    else {
-        return;
-    };
-
     if type_declarations.get("default").is_some() {
         return;
     }
 
-    export_local_type_declaration(handle.get(), "default", resolution_scope, type_declarations);
+    if let Some(handle) = local_type_declarations
+        .get_handle(local_name)
+        .or_else(|| resolution_scope.and_then(|scope| scope.get_handle(local_name)))
+    {
+        export_local_type_declaration(handle.get(), "default", resolution_scope, type_declarations);
+    } else if let Some(declaration) = ctx.ambient_global_type_declarations.get(local_name) {
+        export_local_type_declaration(declaration, "default", None, type_declarations);
+    }
+}
+
+/// tsc's `isEntityNameExpression`: an identifier, or a property access naming
+/// an identifier on one, with no parentheses anywhere in it — `export default
+/// (A.B)` exports a value, not an alias. The parsed tree drops parentheses, so
+/// they are read back from the file's parenthesized-expression spans.
+fn entity_name_expression(
+    expression: &ParsedExpression,
+    parenthesized_expressions: &[surge_ts_syntax::ParenthesizedExpressionSpan],
+) -> Option<String> {
+    let (name, span) = match expression {
+        ParsedExpression::Identifier { name, span } => (name.clone(), *span),
+        ParsedExpression::PropertyAccess {
+            object,
+            object_span,
+            property_name,
+            property_span,
+            is_bracketed: false,
+        } => {
+            let object_name = entity_name_expression(object, parenthesized_expressions)?;
+            let span = object_span
+                .zip(*property_span)
+                .map(|(object_span, property_span)| TextSpan {
+                    start: object_span.start,
+                    end: property_span.end,
+                });
+            (format!("{object_name}.{property_name}"), span)
+        }
+        _ => return None,
+    };
+    let parenthesized = span.is_some_and(|span| {
+        parenthesized_expressions
+            .binary_search_by_key(&(span.start, span.end), |parenthesized| {
+                (parenthesized.inner.start, parenthesized.inner.end)
+            })
+            .is_ok()
+    });
+    (!parenthesized).then_some(name)
+}
+
+/// The qualified type members of the local namespace `local` (`local.T`),
+/// published under `exported` (`exported.T`) for an importer's qualified names.
+fn export_namespace_type_members(
+    local: &str,
+    exported: &str,
+    local_type_declarations: &TypeDeclarationTable,
+    type_declarations: &mut TypeDeclarationTable,
+) {
+    let prefix = format!("{local}.");
+    for (key, declaration) in local_type_declarations.iter() {
+        if let Some(member) = key.strip_prefix(prefix.as_str()) {
+            let _ = type_declarations.insert(format!("{exported}.{member}"), declaration.clone());
+        }
+    }
+}
+
+/// The entity `local` aliases when `statements` declare `import local = N.M`.
+fn entity_alias_target<'s>(statements: &'s [ParsedStatement], local: &str) -> Option<&'s str> {
+    statements.iter().find_map(|statement| {
+        let import = match statement {
+            ParsedStatement::ImportDeclaration(import) => import,
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => match declaration.as_ref() {
+                    ParsedStatement::ImportDeclaration(import) => import,
+                    _ => return None,
+                },
+                _ => return None,
+            },
+            _ => return None,
+        };
+        match &import.kind {
+            surge_ts_syntax::ParsedImportKind::EntityAlias {
+                local_name, target, ..
+            } if local_name == local => Some(target.as_str()),
+            _ => None,
+        }
+    })
+}
+
+/// The value an alias's entity path names, read the way the path resolves
+/// from the module: its first name in the module (or `globalThis`), then each
+/// member.
+fn entity_alias_value(
+    target: &str,
+    exportable_values: &SymbolTable,
+    imported_symbols: &SymbolTable,
+    ctx: &CheckerContext,
+) -> Option<Arc<SymbolInfo>> {
+    if let Some(symbol) = exportable_values.get_shared(target) {
+        return Some(symbol);
+    }
+    let mut segments = target.split('.');
+    let mut first = segments.next()?;
+    let root = if first == "globalThis" {
+        first = segments.next()?;
+        ctx.ambient_global_symbols.get_shared(first)
+    } else {
+        exportable_values
+            .get_shared(first)
+            .or_else(|| imported_symbols.get_shared(first))
+    }?;
+    let mut members = segments.peekable();
+    if members.peek().is_none() {
+        return Some(root);
+    }
+    let mut ty = root.ty.clone();
+    for member in members {
+        let Type::Object(object) = &ty else {
+            return None;
+        };
+        ty = object.properties.get(member)?.ty.clone();
+    }
+    Some(Arc::new(SymbolInfo {
+        ty,
+        kind: SymbolKind::Const,
+        function_signature: None,
+    }))
+}
+
+/// The type declarations an alias's entity path names: the entity itself and
+/// its qualified members, published under `exported`.
+fn export_entity_alias_types(
+    target: &str,
+    exported: &str,
+    local_type_declarations: &TypeDeclarationTable,
+    resolution_scope: Option<&Arc<TypeDeclarationScope>>,
+    type_declarations: &mut TypeDeclarationTable,
+    ctx: &CheckerContext,
+) {
+    let (table, target) = match target.strip_prefix("globalThis.") {
+        Some(global) => (ctx.ambient_global_type_declarations.as_ref(), global),
+        None => (local_type_declarations, target),
+    };
+    if let Some(declaration) = table.get(target) {
+        export_local_type_declaration(declaration, exported, resolution_scope, type_declarations);
+    }
+    let prefix = format!("{target}.");
+    for (key, declaration) in table.iter() {
+        if let Some(member) = key.strip_prefix(prefix.as_str()) {
+            let _ = type_declarations.insert(format!("{exported}.{member}"), declaration.clone());
+        }
+    }
+}
+
+/// The type and namespace meanings of an `export =` entity, resolved the way
+/// tsc's `resolveEntityName` resolves it from the export assignment: the
+/// module's own declarations, then its imports, then the globals. The entity's
+/// type is published as [`EXPORT_ASSIGNMENT_NAME`] and each namespace member
+/// both under `export=.<member>` and bare — `getExportsOfModule` resolves the
+/// `export =` first, so the members are what a named import reaches.
+fn publish_export_assignment_types(
+    entity: &str,
+    local_type_declarations: &TypeDeclarationTable,
+    resolution_scope: Option<&Arc<TypeDeclarationScope>>,
+    type_declarations: &mut TypeDeclarationTable,
+    ctx: &CheckerContext,
+) {
+    let (entity, globals_only) = match entity.strip_prefix("globalThis.") {
+        Some(global) => (global, true),
+        None => (entity, false),
+    };
+    let prefix = format!("{entity}.");
+    let declares = |table: &TypeDeclarationTable| {
+        table.get(entity).is_some() || table.iter().any(|(key, _)| key.starts_with(&prefix))
+    };
+    let module_tables = std::iter::once(local_type_declarations).chain(
+        resolution_scope
+            .into_iter()
+            .flat_map(|scope| scope.layers().iter().map(Arc::as_ref)),
+    );
+    let (table, scope) = match module_tables
+        .filter(|_| !globals_only)
+        .find(|table| declares(table))
+    {
+        Some(table) => (table, resolution_scope),
+        None if declares(ctx.ambient_global_type_declarations.as_ref()) => {
+            (ctx.ambient_global_type_declarations.as_ref(), None)
+        }
+        None => return,
+    };
+
+    if let Some(declaration) = table.get(entity)
+        && type_declarations.get(EXPORT_ASSIGNMENT_NAME).is_none()
+    {
+        let _ = type_declarations.insert(
+            EXPORT_ASSIGNMENT_NAME,
+            attach_type_resolution_scope_if_missing(declaration.clone(), scope),
+        );
+    }
+    for (key, declaration) in table.iter() {
+        let Some(member) = key.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        let _ = type_declarations.insert(
+            format!("{EXPORT_ASSIGNMENT_NAME}.{member}"),
+            attach_type_resolution_scope_if_missing(declaration.clone(), scope),
+        );
+        if type_declarations.get(member).is_none() {
+            export_local_type_declaration(declaration, member, scope, type_declarations);
+        }
+    }
 }

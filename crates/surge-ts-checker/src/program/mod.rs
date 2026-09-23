@@ -55,6 +55,7 @@ use parse::*;
 pub(crate) use phase::*;
 pub(crate) use probes::*;
 pub(crate) use statements::*;
+pub(crate) use unused_locals::report_unused_declaration_list;
 
 #[derive(Debug, Clone)]
 pub struct SourceFileInput {
@@ -108,12 +109,18 @@ pub(crate) struct ParsedProgramFile {
     /// `.json` file; its export table is built from this instead of from
     /// `statements`, which are always empty for such a file.
     pub(crate) json_module_type: Option<surge_ts_syntax::ParsedType>,
+    /// See [`surge_ts_syntax::ParsedSource::jsx_factory_uses`].
+    pub(crate) jsx_factory_uses: surge_ts_syntax::JsxFactoryUses,
 }
 
 #[derive(Debug, Clone)]
 pub struct ProgramCheckResult {
     pub diagnostics: Vec<Diagnostic>,
     pub stats: CompatibilityStats,
+    /// A program file failed to parse the way tsc's parser fails, so
+    /// `diagnostics` holds only syntactic diagnostics (tsc then reports no
+    /// program or semantic diagnostics either).
+    pub syntax_errors: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +134,8 @@ struct ProgramCheckSharedState {
     /// Each script's own top-level values, indexed by file; see
     /// [`globals::collect_script_values`].
     script_values: Vec<Option<Arc<SymbolTable>>>,
+    /// See [`globals::module_script_globals`].
+    module_script_globals: Option<Arc<SymbolTable>>,
     function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
     module_analyses: Vec<Option<ModuleAnalysis>>,
     module_import_bindings: Vec<Option<ModuleImportBindings>>,
@@ -278,6 +287,7 @@ fn check_program_with_stats_and_jobs_inner(
         return ProgramCheckResult {
             diagnostics: Vec::new(),
             stats: CompatibilityStats::default(),
+            syntax_errors: false,
         };
     }
 
@@ -290,6 +300,8 @@ fn check_program_with_stats_and_jobs_inner(
         mut ctx,
     } = start_program_run(files, prescanned, options, jobs, &store);
     namespaces::report_cross_file_namespace_merges(&mut parsed_files);
+    ctx.constructor_local_properties = constructor_local_properties_by_file(&parsed_files, &ctx.options);
+    let syntax_errors = diagnostics::program_has_syntax_errors(&parsed_files);
     let globals = collect_program_globals(&parsed_files, &mut ctx, &timings, program_start);
     let preliminary = run_preliminary_pass(
         &mut parsed_files,
@@ -370,7 +382,7 @@ fn check_program_with_stats_and_jobs_inner(
         drop(shared_state);
         drop(parsed_files);
     }
-    finish_program_run(
+    let mut result = finish_program_run(
         ctx,
         &store,
         &timings,
@@ -378,7 +390,12 @@ fn check_program_with_stats_and_jobs_inner(
         program_start,
         census_external,
         skip_teardown,
-    )
+    );
+    if syntax_errors {
+        result.diagnostics.retain(diagnostics::is_syntactic_diagnostic);
+        result.syntax_errors = true;
+    }
+    result
 }
 
 fn start_program_run(
@@ -488,6 +505,7 @@ fn collect_program_globals(
     let ambient_collection_start = Instant::now();
     emit_parser_diagnostics(&parsed_files, ctx);
     ctx.begin_resolution_stage();
+    ctx.global_augmentation_only_names = Arc::new(global_augmentation_only_names(&parsed_files));
     // Three ordered steps, and the order is load-bearing in both directions.
     //
     // Ambient global *types* merge first so the ambient declaration is the merge
@@ -1014,10 +1032,13 @@ fn finalize_module_bindings(
     drop(module_import_bindings);
     drop(preliminary_module_import_bindings);
     crate::metrics::release_free_memory();
+    let module_script_globals =
+        module_script_globals(&global_symbols, &script_values, &ctx.ambient_global_symbols);
     let shared_state = ProgramCheckSharedState {
         script_type_declarations,
         global_symbols,
         script_values,
+        module_script_globals,
         function_signatures,
         module_analyses,
         module_import_bindings: merged_module_import_bindings,
@@ -1235,6 +1256,7 @@ fn run_check_phase(
         ctx.stats.suppressed_rust_only_diagnostics_total +=
             result.stats.suppressed_rust_only_diagnostics_total;
     }
+    diagnostics::drop_suppressed_program_diagnostics(&mut ctx.diagnostics, parsed_files);
 }
 
 fn finish_program_run(
@@ -1299,7 +1321,11 @@ fn finish_program_run(
         eprintln!("  total: {total}");
     }
 
-    ProgramCheckResult { diagnostics, stats }
+    ProgramCheckResult {
+        diagnostics,
+        stats,
+        syntax_errors: false,
+    }
 }
 
 fn inject_generated_default_lib_inputs(files: &mut Vec<SourceFileInput>, no_lib: bool) {

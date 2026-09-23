@@ -58,6 +58,26 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
         support: TsConfigOptionSupport::Supported,
     },
     TsConfigOptionDefinition {
+        name: "jsxFactory",
+        value_kind: TsConfigOptionValueKind::String,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
+        name: "jsxFragmentFactory",
+        value_kind: TsConfigOptionValueKind::String,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
+        name: "reactNamespace",
+        value_kind: TsConfigOptionValueKind::String,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
+        name: "jsxImportSource",
+        value_kind: TsConfigOptionValueKind::String,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
         name: "allowJs",
         value_kind: TsConfigOptionValueKind::Boolean,
         support: TsConfigOptionSupport::Supported,

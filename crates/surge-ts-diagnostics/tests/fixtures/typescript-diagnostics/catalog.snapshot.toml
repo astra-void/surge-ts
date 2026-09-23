@@ -73,6 +73,30 @@ message = "'{0}' cannot be used as a value because it was imported using 'import
 arity = 1
 
 [[diagnostic]]
+code = "TS1362"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' cannot be used as a value because it was exported using 'export type'."
+arity = 1
+
+[[diagnostic]]
+code = "TS1063"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An export assignment cannot be used in a namespace."
+arity = 0
+
+[[diagnostic]]
+code = "TS1319"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A default export can only be used in an ECMAScript-style module."
+arity = 0
+
+[[diagnostic]]
 code = "TS2302"
 category = "Error"
 source = "typescript"
@@ -231,6 +255,14 @@ source = "typescript"
 support = "emitted"
 message = "Generic type '{0}' requires {1} type argument(s)."
 arity = 2
+
+[[diagnostic]]
+code = "TS2707"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Generic type '{0}' requires between {1} and {2} type arguments."
+arity = 3
 
 [[diagnostic]]
 code = "TS2315"
@@ -569,6 +601,14 @@ message = "Type '{0}' cannot be used to index type '{1}'."
 arity = 2
 
 [[diagnostic]]
+code = "TS2537"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' has no matching index signature for type '{1}'."
+arity = 2
+
+[[diagnostic]]
 code = "TS2538"
 category = "Error"
 source = "typescript"
@@ -591,6 +631,14 @@ source = "typescript"
 support = "emitted"
 message = "Property '{0}' does not exist on type '{1}'. Did you mean '{2}'?"
 arity = 3
+
+[[diagnostic]]
+code = "TS2812"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' does not exist on type '{1}'. Try changing the 'lib' compiler option to include 'dom'."
+arity = 2
 
 [[diagnostic]]
 code = "TS2552"
@@ -695,6 +743,30 @@ source = "typescript"
 support = "emitted"
 message = "This JSX tag's '{0}' prop expects type '{1}' which requires multiple children, but only a single child was provided."
 arity = 2
+
+[[diagnostic]]
+code = "TS2746"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This JSX tag's '{0}' prop expects a single child of type '{1}', but multiple children were provided."
+arity = 2
+
+[[diagnostic]]
+code = "TS2747"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' components don't accept text as child elements. Text in JSX has the type 'string', but the expected type of '{1}' is '{2}'."
+arity = 3
+
+[[diagnostic]]
+code = "TS2754"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'super' may not use type arguments."
+arity = 0
 
 [[diagnostic]]
 code = "TS2749"
@@ -857,12 +929,36 @@ message = "Rest parameter '{0}' implicitly has an 'any[]' type."
 arity = 1
 
 [[diagnostic]]
+code = "TS7022"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer."
+arity = 1
+
+[[diagnostic]]
 code = "TS4111"
 category = "Error"
 source = "typescript"
 support = "emitted"
 message = "Property '{0}' comes from an index signature, so it must be accessed with ['{0}']."
 arity = 1
+
+[[diagnostic]]
+code = "TS1121"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Octal literals are not allowed. Use the syntax '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS1489"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Decimals with leading zeros are not allowed."
+arity = 0
 
 [[diagnostic]]
 code = "TS6133"
@@ -873,11 +969,35 @@ message = "'{0}' is declared but its value is never read."
 arity = 1
 
 [[diagnostic]]
+code = "TS6142"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Module '{0}' was resolved to '{1}', but '--jsx' is not set."
+arity = 2
+
+[[diagnostic]]
+code = "TS6192"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "All imports in import declaration are unused."
+arity = 0
+
+[[diagnostic]]
 code = "TS6198"
 category = "Error"
 source = "typescript"
 support = "emitted"
 message = "All destructured elements are unused."
+arity = 0
+
+[[diagnostic]]
+code = "TS6199"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "All variables are unused."
 arity = 0
 
 [[diagnostic]]
@@ -2153,6 +2273,14 @@ message = "Cannot find name '{0}'. Do you need to install type definitions for a
 arity = 1
 
 [[diagnostic]]
+code = "TS2661"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot export '{0}'. Only local declarations can be exported from a module."
+arity = 1
+
+[[diagnostic]]
 code = "TS2662"
 category = "Error"
 source = "typescript"
@@ -2167,6 +2295,22 @@ source = "typescript"
 support = "emitted"
 message = "Cannot find name '{0}'. Did you mean the instance member 'this.{0}'?"
 arity = 1
+
+[[diagnostic]]
+code = "TS2301"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Initializer of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor."
+arity = 2
+
+[[diagnostic]]
+code = "TS2844"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor."
+arity = 2
 
 [[diagnostic]]
 code = "TS2708"
@@ -3241,14 +3385,6 @@ message = "An import declaration cannot have modifiers."
 arity = 0
 
 [[diagnostic]]
-code = "TS1319"
-category = "Error"
-source = "typescript"
-support = "emitted"
-message = "A default export can only be used in an ECMAScript-style module."
-arity = 0
-
-[[diagnostic]]
 code = "TS1231"
 category = "Error"
 source = "typescript"
@@ -3382,14 +3518,6 @@ category = "Error"
 source = "typescript"
 support = "emitted"
 message = "An object member cannot be declared optional."
-arity = 0
-
-[[diagnostic]]
-code = "TS2754"
-category = "Error"
-source = "typescript"
-support = "emitted"
-message = "'super' may not use type arguments."
 arity = 0
 
 [[diagnostic]]
@@ -3737,14 +3865,6 @@ message = "A 'super' call must be a root-level statement within a constructor of
 arity = 0
 
 [[diagnostic]]
-code = "TS2301"
-category = "Error"
-source = "typescript"
-support = "emitted"
-message = "Initializer of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor."
-arity = 2
-
-[[diagnostic]]
 code = "TS2803"
 category = "Error"
 source = "typescript"
@@ -3807,22 +3927,6 @@ source = "typescript"
 support = "emitted"
 message = "Duplicate identifier '{0}'. Compiler reserves name '{1}' when emitting 'super' references in static initializers."
 arity = 2
-
-[[diagnostic]]
-code = "TS2661"
-category = "Error"
-source = "typescript"
-support = "emitted"
-message = "Cannot export '{0}'. Only local declarations can be exported from a module."
-arity = 1
-
-[[diagnostic]]
-code = "TS1362"
-category = "Error"
-source = "typescript"
-support = "emitted"
-message = "'{0}' cannot be used as a value because it was exported using 'export type'."
-arity = 1
 
 [[diagnostic]]
 code = "TS2578"
@@ -3911,14 +4015,6 @@ source = "typescript"
 support = "emitted"
 message = "Cannot use JSX unless the '--jsx' flag is provided."
 arity = 0
-
-[[diagnostic]]
-code = "TS2707"
-category = "Error"
-source = "typescript"
-support = "emitted"
-message = "Generic type '{0}' requires between {1} and {2} type arguments."
-arity = 3
 
 [[diagnostic]]
 code = "TS7027"
@@ -4023,14 +4119,6 @@ source = "typescript"
 support = "catalog-only"
 message = "This expression is not callable because it is a 'get' accessor. Did you mean to use it without '()'?"
 arity = 0
-
-[[diagnostic]]
-code = "TS2812"
-category = "Error"
-source = "typescript"
-support = "emitted"
-message = "Property '{0}' does not exist on type '{1}'. Try changing the 'lib' compiler option to include 'dom'."
-arity = 2
 
 [[diagnostic]]
 code = "TS2690"

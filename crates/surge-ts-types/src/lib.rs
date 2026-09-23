@@ -11,6 +11,7 @@ mod object;
 mod reference;
 mod store;
 mod identity;
+mod subtype;
 mod template_literal;
 pub mod type_variable;
 mod ty;
@@ -23,6 +24,10 @@ pub use object::*;
 pub use reference::*;
 pub use store::*;
 pub use identity::is_type_identical_to;
+pub use subtype::{
+    LiteralShape, has_effective_rest_parameter, is_strict_subtype_of, is_subtype_of, min_argument_count,
+    parameter_count, subtype_reduced_union, try_type_at_position, type_at_position,
+};
 pub use template_literal::{
     STRING_MAPPING_REFERENCE_ID, StringMappingKind, TEMPLATE_LITERAL_REFERENCE_ID,
     infer_template_literal_placeholders, is_member_of_string_mapping, is_template_literal_type, peel_to_pattern_literal,

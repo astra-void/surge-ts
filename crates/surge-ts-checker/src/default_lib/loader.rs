@@ -7,7 +7,7 @@ use super::physical::{
     DefaultLibIoStats, default_full_lib_seed_for_target, find_typescript_lib_dir,
     resolve_default_libs_from_source,
 };
-use super::provider::{DirectoryLibSource, EmbeddedLibSource, LibSource};
+use super::provider::{DirectoryLibSource, EmbeddedLibSource, LibSource, ReplacingLibSource};
 
 /// Which declarations the standard library is loaded from.
 ///
@@ -32,6 +32,9 @@ pub struct DefaultLibRequest<'a> {
     pub no_lib: bool,
     /// `compilerOptions.lib`. Empty means "derive the lib set from `target`".
     pub lib_entries: &'a [String],
+    /// `/// <reference lib>` names declared by the program's files, loaded in
+    /// addition to the configured set.
+    pub referenced_libs: &'a [String],
     /// Project root, used to discover an installed TypeScript when asked.
     pub root_dir: &'a Path,
     /// Target lib basename (e.g. `"es2022"`) used to derive the implicit
@@ -39,6 +42,8 @@ pub struct DefaultLibRequest<'a> {
     pub target_basename: &'a str,
     /// Where the declarations come from.
     pub source: LibSourceChoice,
+    /// Under `libReplacement`, the file replacing a normalized lib name.
+    pub lib_replacement: Option<&'a dyn Fn(&str) -> Option<PathBuf>>,
 }
 
 #[derive(Debug, Default)]
@@ -106,12 +111,24 @@ pub fn load_default_lib_inputs(request: DefaultLibRequest<'_>) -> DefaultLibLoad
         Some(directory) => directory,
         None => &embedded,
     };
+    let replacing;
+    let active: &dyn LibSource = match request.lib_replacement {
+        Some(replacement) => {
+            replacing = ReplacingLibSource {
+                inner: active,
+                replacement,
+            };
+            &replacing
+        }
+        None => active,
+    };
 
     let resolution = resolve_default_libs_from_source(
         active,
         request.no_lib,
         request.lib_entries,
         &seed,
+        request.referenced_libs,
         DefaultLibIoStats::default(),
     );
 
@@ -136,6 +153,7 @@ pub fn load_generated_default_lib_inputs(
         no_lib,
         lib_entries.unwrap_or_default(),
         &default_full_lib_seed_for_target("es2024"),
+        &[],
         DefaultLibIoStats::default(),
     )
     .inputs

@@ -1320,7 +1320,7 @@ impl GrammarCollector {
                     }
                     if method.kind == MethodDefinitionKind::Constructor {
                         if method.value.body.is_none() {
-                            self.check_signature_parameters(&method.value.params, true);
+                            self.check_signature_parameters(&method.value.params);
                         }
                         constructors.push((
                             method.key.span(),
@@ -1629,24 +1629,12 @@ impl GrammarCollector {
         }
     }
 
-    /// A signature has no body to run a default in, and no instance to declare
-    /// a parameter property on.
-    fn check_signature_parameters(
-        &mut self,
-        parameters: &FormalParameters<'_>,
-        is_constructor: bool,
-    ) {
+    /// A signature has no body to run a default in.
+    fn check_signature_parameters(&mut self, parameters: &FormalParameters<'_>) {
         for parameter in &parameters.items {
             if parameter.initializer.is_some() {
                 self.push(
                     Kind::ParameterInitializerOutsideImplementation,
-                    parameter.span,
-                    None,
-                );
-            }
-            if is_constructor && (parameter.accessibility.is_some() || parameter.readonly) {
-                self.push(
-                    Kind::ParameterPropertyOutsideImplementation,
                     parameter.span,
                     None,
                 );
@@ -1941,7 +1929,7 @@ fn assigned_property_names(class: &Class<'_>) -> (Vec<String>, Vec<String>) {
                             self.names.push(literal.value.to_string());
                         }
                         Expression::NumericLiteral(literal) => {
-                            self.names.push(literal.value.to_string());
+                            self.names.push(super::number_text::js_number_to_string(literal.value));
                         }
                         _ => {}
                     }
@@ -2162,7 +2150,7 @@ fn property_key_name(key: &PropertyKey<'_>) -> Option<String> {
     match key {
         PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
-        PropertyKey::NumericLiteral(literal) => Some(literal.value.to_string()),
+        PropertyKey::NumericLiteral(literal) => Some(super::number_text::js_number_to_string(literal.value)),
         PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
         _ => None,
     }
@@ -2397,7 +2385,7 @@ impl<'a> Visit<'a> for GrammarCollector {
             self.check_async_return_type(function.return_type.as_deref());
         }
         if function.body.is_none() {
-            self.check_signature_parameters(&function.params, false);
+            self.check_signature_parameters(&function.params);
         }
         self.function_async.push(function.r#async);
         oxc_ast_visit::walk::walk_function(self, function, flags);
@@ -2475,7 +2463,7 @@ impl<'a> Visit<'a> for GrammarCollector {
         if signature.return_type.is_none() {
             self.push(Kind::ImplicitAnyCallReturn, signature.span, None);
         }
-        self.check_signature_parameters(&signature.params, false);
+        self.check_signature_parameters(&signature.params);
         self.check_implicit_any_signature_parameters(&signature.params, true);
         oxc_ast_visit::walk::walk_ts_call_signature_declaration(self, signature);
     }
@@ -2487,7 +2475,7 @@ impl<'a> Visit<'a> for GrammarCollector {
         if signature.return_type.is_none() {
             self.push(Kind::ImplicitAnyConstructReturn, signature.span, None);
         }
-        self.check_signature_parameters(&signature.params, false);
+        self.check_signature_parameters(&signature.params);
         self.check_implicit_any_signature_parameters(&signature.params, false);
         oxc_ast_visit::walk::walk_ts_construct_signature_declaration(self, signature);
     }
@@ -2503,7 +2491,7 @@ impl<'a> Visit<'a> for GrammarCollector {
     }
 
     fn visit_ts_method_signature(&mut self, method: &TSMethodSignature<'a>) {
-        self.check_signature_parameters(&method.params, false);
+        self.check_signature_parameters(&method.params);
         self.check_implicit_any_signature_parameters(&method.params, true);
         if method.kind == TSMethodSignatureKind::Method
             && method.return_type.is_none()

@@ -293,12 +293,14 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             json_module_type: Some(
                 super::parse_json_module_type(source_text).unwrap_or(ParsedType::Unknown),
             ),
+            jsx_factory_uses: Default::default(),
         };
     }
 
     let source_type = SourceType::from_path(file_name).unwrap_or_else(|_| SourceType::ts());
     let parser = Parser::new(allocator, source_text, source_type);
-    let parsed = parser.parse();
+    let mut parsed = parser.parse();
+    super::import_aliases::expand_import_aliases(allocator, &mut parsed.program);
 
     let reference_type_directives = super::extract_reference_type_directives(source_text);
     let comment_directives =
@@ -329,7 +331,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         })
     };
 
-    let parser_errors = parsed
+    let mut parser_errors: Vec<crate::ParserError> = parsed
         .errors
         .into_iter()
         .map(|error| {
@@ -363,6 +365,10 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             crate::ParserError { code, message: error.to_string(), span, span_text }
         })
         .collect();
+    parser_errors.extend(super::scanner_checks::collect_missing_parser_errors(
+        &parsed.program,
+        source_text,
+    ));
 
     let is_module = parsed.program.source_type.is_module()
         || statements.iter().any(|statement| {
@@ -392,6 +398,11 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
 
     let let_assignments =
         super::let_assignments::collect_let_assignments(&parsed.program, source_text);
+    let jsx_factory_uses = if source_type.is_jsx() {
+        super::jsx_uses::collect_jsx_factory_uses(&parsed.program, source_text)
+    } else {
+        Default::default()
+    };
     ParsedSource {
         file_name: file_name.to_string(),
         statements,
@@ -406,6 +417,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         grammar_diagnostics,
         parenthesized_expressions,
         json_module_type: None,
+        jsx_factory_uses,
     }
 }
 

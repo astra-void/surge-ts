@@ -1,0 +1,18 @@
+declare const source: { x: string; n: { y: string }; t: [string, number] };
+let a: string, b: string, c: number, d: string[], e: string, f: string;
+({ n: { y: a } } = source);
+a;
+[, { y: b }] = [0, source.n];
+b;
+({ t: [, c] } = source);
+c;
+[...d] = ["one", "two"];
+d;
+({ x: e, ...f } = source);
+e;
+let g: number;
+({ n: { y: g } } = source);
+let h: string;
+({ x: e } = source);
+h;
+export {};

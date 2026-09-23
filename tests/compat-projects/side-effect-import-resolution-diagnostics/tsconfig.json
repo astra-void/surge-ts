@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "module": "nodenext",
+    "moduleDetection": "legacy",
+    "noUncheckedSideEffectImports": true,
+    "resolveJsonModule": false
+  },
+  "include": ["src/**/*"]
+}

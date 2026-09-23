@@ -15,6 +15,7 @@ pub(crate) fn resolve_tuple_type(
 ) -> ResolvedType {
     let mut resolved_elements = Vec::new();
     let mut had_error = false;
+    let min_length = ParsedType::tuple_min_length(&elements);
 
     for element in elements {
         let resolved_element = resolve_parsed_type(element, ctx, resolving, substitution);
@@ -23,7 +24,7 @@ pub(crate) fn resolve_tuple_type(
     }
 
     ResolvedType {
-        ty: Type::Tuple(resolved_elements),
+        ty: surge_ts_types::written_tuple_type(resolved_elements, min_length),
         had_error,
     }
 }
@@ -57,7 +58,7 @@ impl surge_ts_types::ResolveReference for ReadonlyShape {
 pub(crate) fn readonly_reference(ty: Type) -> Type {
     match ty {
         Type::Reference(ref reference) if reference.is_readonly_array() => ty,
-        Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) => {
+        _ if matches!(ty, Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)) || surge_ts_types::is_written_tuple(&ty) => {
             let display = format!("readonly {}", ty.name());
             Type::Reference(surge_ts_types::TypeReference::new(
                 surge_ts_types::READONLY_REFERENCE_ID,
@@ -591,7 +592,23 @@ pub(crate) fn resolve_object_type(
         );
         had_error |= resolved.had_error;
         if let Type::Function(function_type) = resolved.ty {
-            resolved_object = resolved_object.with_call_signature(function_type);
+            // A type literal's call signatures are overloads as an interface's
+            // are: the fold answers consumers that want one signature, and the
+            // group is what a call resolves against.
+            let mut overloads = Vec::with_capacity(object_type.call_signature_overloads.len());
+            for overload in &object_type.call_signature_overloads {
+                let resolved = resolve_parsed_type(
+                    ParsedType::Function(std::sync::Arc::new(overload.clone())),
+                    ctx,
+                    resolving,
+                    substitution,
+                );
+                had_error |= resolved.had_error;
+                if let Type::Function(overload) = resolved.ty {
+                    overloads.push(overload);
+                }
+            }
+            resolved_object = resolved_object.with_call_signature(function_type.with_overloads(overloads));
         }
     }
     if let Some(construct_signature) = object_type.construct_signature.as_deref() {

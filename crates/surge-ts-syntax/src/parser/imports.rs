@@ -1,10 +1,13 @@
 use oxc_ast::ast::{
-    ImportDeclaration, ImportDeclarationSpecifier, ImportOrExportKind, ImportSpecifier,
-    ModuleExportName, TSImportEqualsDeclaration, TSModuleReference,
+    ImportAttributeKey, ImportDeclaration, ImportDeclarationSpecifier, ImportOrExportKind,
+    ImportSpecifier, ModuleExportName, TSImportEqualsDeclaration, TSModuleReference, WithClause,
 };
 use oxc_span::GetSpan;
 
-use crate::{ParsedImportDeclaration, ParsedImportKind, ParsedImportSpecifier};
+use crate::{
+    ParsedImportDeclaration, ParsedImportKind, ParsedImportSpecifier,
+    ParsedResolutionModeAttribute, ResolutionModeOverride,
+};
 
 use super::spans::text_span_from_oxc_span;
 
@@ -14,6 +17,82 @@ use super::spans::text_span_from_oxc_span;
 pub(crate) fn parse_import_declarations(
     declaration: &ImportDeclaration<'_>,
 ) -> Option<Vec<ParsedImportDeclaration>> {
+    let resolution_mode = resolution_mode_attribute(
+        declaration.with_clause.as_deref(),
+        matches!(declaration.import_kind, ImportOrExportKind::Type),
+    );
+    let mut parsed = parse_import_declaration_parts(declaration)?;
+    for import in &mut parsed {
+        import.resolution_mode = resolution_mode;
+    }
+    Some(parsed)
+}
+
+/// tsc's `GetResolutionModeOverride`: the first attribute keyed
+/// `resolution-mode`, when its value is `import` or `require`.
+pub(crate) fn resolution_mode_attribute(
+    with_clause: Option<&WithClause<'_>>,
+    type_only: bool,
+) -> Option<ParsedResolutionModeAttribute> {
+    let attribute = with_clause?.with_entries.iter().find(|attribute| {
+        let key = match &attribute.key {
+            ImportAttributeKey::Identifier(identifier) => identifier.name.as_str(),
+            ImportAttributeKey::StringLiteral(literal) => literal.value.as_str(),
+        };
+        key == "resolution-mode"
+    })?;
+    let mode = match attribute.value.value.as_str() {
+        "import" => ResolutionModeOverride::Import,
+        "require" => ResolutionModeOverride::Require,
+        _ => return None,
+    };
+    Some(ParsedResolutionModeAttribute {
+        mode,
+        selects_resolution: type_only,
+    })
+}
+
+fn parse_import_declaration_parts(
+    declaration: &ImportDeclaration<'_>,
+) -> Option<Vec<ParsedImportDeclaration>> {
+    // `import d, * as ns from "m"` binds the module's default and its
+    // namespace, as the two imports written apart would.
+    if let Some(specifiers) = declaration.specifiers.as_ref()
+        && let [
+            ImportDeclarationSpecifier::ImportDefaultSpecifier(default),
+            ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace),
+        ] = specifiers.as_slice()
+    {
+        let is_type_only = matches!(declaration.import_kind, ImportOrExportKind::Type);
+        let import = |kind| ParsedImportDeclaration {
+            kind,
+            module_specifier: declaration.source.value.to_string(),
+            module_specifier_span: Some(text_span_from_oxc_span(declaration.source.span)),
+            span: Some(text_span_from_oxc_span(declaration.span)),
+            resolution_mode: None,
+        };
+        let default_name = default.local.name.to_string();
+        let default_span = Some(text_span_from_oxc_span(default.local.span));
+        let default_kind = if is_type_only {
+            ParsedImportKind::TypeOnlyDefault {
+                local_name: default_name,
+                name_span: default_span,
+            }
+        } else {
+            ParsedImportKind::Default {
+                local_name: default_name,
+                name_span: default_span,
+            }
+        };
+        return Some(vec![
+            import(default_kind),
+            import(ParsedImportKind::Namespace {
+                local_name: namespace.local.name.to_string(),
+                name_span: Some(text_span_from_oxc_span(namespace.local.span)),
+                is_type_only,
+            }),
+        ]);
+    }
     let mut parsed = vec![parse_import_declaration(declaration)?];
     if matches!(declaration.import_kind, ImportOrExportKind::Type) {
         return Some(parsed);
@@ -40,6 +119,7 @@ pub(crate) fn parse_import_declarations(
             module_specifier: declaration.source.value.to_string(),
             module_specifier_span: Some(text_span_from_oxc_span(declaration.source.span)),
             span: Some(text_span_from_oxc_span(declaration.span)),
+            resolution_mode: None,
         });
     }
     Some(parsed)
@@ -58,6 +138,7 @@ fn parse_import_declaration(
             module_specifier,
             module_specifier_span,
             span,
+            resolution_mode: None,
         });
     };
 
@@ -78,6 +159,7 @@ fn parse_import_declaration(
                         module_specifier,
                         module_specifier_span,
                         span,
+                        resolution_mode: None,
                     });
                 };
 
@@ -90,6 +172,7 @@ fn parse_import_declaration(
                         module_specifier,
                         module_specifier_span,
                         span,
+                        resolution_mode: None,
                     });
                 }
 
@@ -108,6 +191,7 @@ fn parse_import_declaration(
                         module_specifier,
                         module_specifier_span,
                         span,
+                        resolution_mode: None,
                     });
                 }
 
@@ -136,6 +220,7 @@ fn parse_import_declaration(
             module_specifier,
             module_specifier_span,
             span,
+            resolution_mode: None,
         });
     }
 
@@ -159,6 +244,7 @@ fn parse_import_declaration(
                 module_specifier,
                 module_specifier_span,
                 span,
+                resolution_mode: None,
             });
         }
 
@@ -167,6 +253,7 @@ fn parse_import_declaration(
             module_specifier,
             module_specifier_span,
             span,
+            resolution_mode: None,
         });
     }
 
@@ -189,6 +276,7 @@ fn parse_import_declaration(
             module_specifier,
             module_specifier_span,
             span,
+            resolution_mode: None,
         });
     }
 
@@ -200,6 +288,7 @@ fn parse_import_declaration(
         module_specifier,
         module_specifier_span,
         span,
+        resolution_mode: None,
     })
 }
 
@@ -208,15 +297,23 @@ pub(crate) fn parse_import_equals_declaration(
 ) -> Option<ParsedImportDeclaration> {
     let span = Some(text_span_from_oxc_span(declaration.span));
 
-    // Only the `require("specifier")` form participates in the declaration-lite
-    // slice. Entity-name references (`import x = a.b`) stay unsupported.
     let TSModuleReference::ExternalModuleReference(reference) = &declaration.module_reference
     else {
+        let target = match &declaration.module_reference {
+            TSModuleReference::IdentifierReference(identifier) => identifier.name.to_string(),
+            TSModuleReference::QualifiedName(name) => qualified_name_text(name),
+            TSModuleReference::ExternalModuleReference(_) => unreachable!(),
+        };
         return Some(ParsedImportDeclaration {
-            kind: ParsedImportKind::Unsupported,
+            kind: ParsedImportKind::EntityAlias {
+                local_name: declaration.id.name.to_string(),
+                name_span: Some(text_span_from_oxc_span(declaration.id.span)),
+                target,
+            },
             module_specifier: String::new(),
             module_specifier_span: span,
             span,
+            resolution_mode: None,
         });
     };
 
@@ -227,10 +324,12 @@ pub(crate) fn parse_import_equals_declaration(
         kind: ParsedImportKind::Equals {
             local_name: declaration.id.name.to_string(),
             name_span: Some(text_span_from_oxc_span(declaration.id.span)),
+            is_type_only: declaration.import_kind.is_type(),
         },
         module_specifier,
         module_specifier_span,
         span,
+        resolution_mode: None,
     })
 }
 
@@ -251,4 +350,13 @@ fn module_export_name_to_string(name: &ModuleExportName<'_>) -> String {
         ModuleExportName::IdentifierReference(identifier) => identifier.name.to_string(),
         ModuleExportName::StringLiteral(string_literal) => string_literal.value.to_string(),
     }
+}
+
+fn qualified_name_text(name: &oxc_ast::ast::TSQualifiedName<'_>) -> String {
+    let left = match &name.left {
+        oxc_ast::ast::TSTypeName::IdentifierReference(identifier) => identifier.name.to_string(),
+        oxc_ast::ast::TSTypeName::QualifiedName(left) => qualified_name_text(left),
+        oxc_ast::ast::TSTypeName::ThisExpression(_) => "this".to_string(),
+    };
+    format!("{left}.{}", name.right.name)
 }

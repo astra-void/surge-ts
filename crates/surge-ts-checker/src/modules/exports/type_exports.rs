@@ -234,6 +234,10 @@ pub(crate) fn copy_namespace_alias_value_exports(
         if symbol.function_signature.is_none() {
             continue;
         }
+        let head = key.split_once('.').map_or(key.as_ref(), |(head, _)| head);
+        if export_table.type_only_exports.contains_key(head) {
+            continue;
+        }
         if !has_export_assignment && !key.contains('.') {
             continue;
         }

@@ -165,6 +165,7 @@ fn lower_enum_declaration(
             }))),
             initializer: None,
             initializer_span: None,
+            declaration_list: None,
         },
     )
 }
@@ -216,11 +217,7 @@ fn constant_member_type(initializer: &Expression<'_>) -> Option<ParsedType> {
 }
 
 fn format_auto_value(value: f64) -> String {
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        format!("{}", value as i64)
-    } else {
-        format!("{value}")
-    }
+    super::number_text::js_number_to_string(value)
 }
 
 /// An `enum` declared more than once in one scope is one enum: tsc merges the
@@ -259,12 +256,14 @@ pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStateme
     for indices in duplicated {
         let (first, rest) = indices.split_first().expect("non-empty group");
         let mut properties: Vec<ParsedObjectTypeProperty> = Vec::new();
+        let mut reverse_mapping = None;
         let mut member_types: Vec<ParsedType> = Vec::new();
         for index in rest {
             match peel_exported(&statements[*index]) {
                 ParsedStatement::VariableDeclaration(variable) => {
                     if let Some(ParsedType::Object(object)) = variable.declared_type.as_ref() {
                         properties.extend(object.properties.iter().cloned());
+                        reverse_mapping = reverse_mapping.or_else(|| object.number_index_type.clone());
                     }
                 }
                 ParsedStatement::TypeAliasDeclaration(alias) => {
@@ -282,6 +281,9 @@ pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStateme
             ParsedStatement::VariableDeclaration(variable) => {
                 if let Some(ParsedType::Object(object)) = variable.declared_type.as_mut() {
                     let object = std::sync::Arc::make_mut(object);
+                    if object.number_index_type.is_none() {
+                        object.number_index_type = reverse_mapping;
+                    }
                     for property in properties {
                         if !object.properties.iter().any(|kept| kept.name == property.name) {
                             object.properties.push(property);

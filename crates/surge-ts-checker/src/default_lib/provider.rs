@@ -63,6 +63,47 @@ impl LibSource for EmbeddedLibSource {
     }
 }
 
+/// tsc's `libReplacement`: a lib an installed `@typescript/lib-*` package
+/// replaces is read from the file that package resolves to, and its own
+/// `/// <reference lib>` directives are what the graph follows from there.
+pub(crate) struct ReplacingLibSource<'a> {
+    pub(crate) inner: &'a dyn LibSource,
+    pub(crate) replacement: &'a dyn Fn(&str) -> Option<PathBuf>,
+}
+
+impl LibSource for ReplacingLibSource<'_> {
+    fn file_name(&self, normalized_name: &str) -> String {
+        match (self.replacement)(normalized_name) {
+            Some(path) => path.to_string_lossy().into_owned(),
+            None => self.inner.file_name(normalized_name),
+        }
+    }
+
+    fn contains(&self, normalized_name: &str, stats: &mut DefaultLibIoStats) -> bool {
+        self.inner.contains(normalized_name, stats)
+    }
+
+    fn load(
+        &self,
+        normalized_name: &str,
+        stats: &mut DefaultLibIoStats,
+    ) -> Option<(String, String)> {
+        let Some(path) = (self.replacement)(normalized_name) else {
+            return self.inner.load(normalized_name, stats);
+        };
+        let read_start = Instant::now();
+        let source_text = fs::read_to_string(&path).ok()?;
+        stats.read_io += read_start.elapsed();
+        stats.files_read += 1;
+        stats.bytes_read += source_text.len() as u64;
+        Some((path.to_string_lossy().into_owned(), source_text))
+    }
+
+    fn describe(&self) -> String {
+        self.inner.describe()
+    }
+}
+
 /// Serves `lib.*.d.ts` from a real directory, for an explicit user override.
 pub struct DirectoryLibSource {
     pub lib_dir: PathBuf,
