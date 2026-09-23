@@ -470,6 +470,9 @@ fn infer_expression_unsettled(
             };
 
             let base_type = surge_ts_types::remove_nullish(&object_type);
+            // The chain's `undefined` only when its receiver can be nullish
+            // (tsc's `getOptionalExpressionType`).
+            let short_circuits = optional_chain_can_short_circuit(&object_type);
 
             match base_type {
                 Type::Any => InferredExpression::Known(Type::Any),
@@ -477,13 +480,15 @@ fn infer_expression_unsettled(
                     Some(property_type) => {
                         let prop_base = surge_ts_types::remove_nullish(&property_type);
                         if let Type::Function(function_type) = prop_base {
-                            InferredExpression::Known(union_type(vec![
-                                clone_type_with_metrics(
-                                    function_type.return_type(),
-                                    CopySource::OptionalCallReturn,
-                                ),
-                                Type::Undefined,
-                            ]))
+                            let returned = clone_type_with_metrics(
+                                function_type.return_type(),
+                                CopySource::OptionalCallReturn,
+                            );
+                            InferredExpression::Known(if short_circuits {
+                                union_type(vec![returned, Type::Undefined])
+                            } else {
+                                returned
+                            })
                         } else {
                             InferredExpression::Unknown
                         }
@@ -514,12 +519,18 @@ fn infer_expression_unsettled(
             };
 
             let base_type = surge_ts_types::remove_nullish(&callee_type);
+            let short_circuits = optional_chain_can_short_circuit(&callee_type);
 
             match base_type {
-                Type::Function(function_type) => InferredExpression::Known(union_type(vec![
-                    clone_type_with_metrics(function_type.return_type(), CopySource::CallReturn),
-                    Type::Undefined,
-                ])),
+                Type::Function(function_type) => {
+                    let returned =
+                        clone_type_with_metrics(function_type.return_type(), CopySource::CallReturn);
+                    InferredExpression::Known(if short_circuits {
+                        union_type(vec![returned, Type::Undefined])
+                    } else {
+                        returned
+                    })
+                }
                 Type::Any => InferredExpression::Known(Type::Any),
                 _ => InferredExpression::Unknown,
             }

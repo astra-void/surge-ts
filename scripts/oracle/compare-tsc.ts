@@ -823,6 +823,7 @@ export const fixturePresets: Record<string, string> = {
   'computed-name-index-contextual-type': path.join(workspaceRoot, 'tests/compat-projects/computed-name-index-contextual-type/tsconfig.json'),
   'assignment-contextual-callback': path.join(workspaceRoot, 'tests/compat-projects/assignment-contextual-callback/tsconfig.json'),
   'loose-null-widening': path.join(workspaceRoot, 'tests/compat-projects/loose-null-widening/tsconfig.json'),
+  'optional-call-chain-nullability': path.join(workspaceRoot, 'tests/compat-projects/optional-call-chain-nullability/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -1946,6 +1946,16 @@ fn report_uncallable_unknown(
     }
 }
 
+/// A call that continues an optional chain adds the chain's `undefined` only
+/// when the chain's receiver can be nullish (tsc's `getOptionalExpressionType`).
+pub(crate) fn with_chain_undefined(returned: Type, receiver: &Type) -> Type {
+    if crate::infer::expression::optional_chain_can_short_circuit(receiver) {
+        union_type(vec![returned, Type::Undefined])
+    } else {
+        returned
+    }
+}
+
 pub(crate) fn check_optional_call_like(
     callee: &surge_ts_syntax::ParsedExpression,
     callee_span: Option<SyntaxTextSpan>,
@@ -1999,7 +2009,7 @@ pub(crate) fn check_optional_call_like(
             symbols,
             ctx,
         )
-        .map(|ret| union_type(vec![ret, Type::Undefined])),
+        .map(|ret| with_chain_undefined(ret, &callee_type)),
         _ => {
             ctx.push(diagnostic_with_syntax_span(
                 Diagnostic::ts2349(ctx.file_name.clone()),
