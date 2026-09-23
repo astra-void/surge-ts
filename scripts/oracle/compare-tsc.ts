@@ -734,6 +734,7 @@ export const fixturePresets: Record<string, string> = {
   'export-equals-namespace-top-level-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/export-equals-namespace-top-level-scope-basic/tsconfig.json'),
   'lazy-export-nested-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/lazy-export-nested-reference-basic/tsconfig.json'),
   'optional-chain-truthy-contained-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-truthy-contained-reference-basic/tsconfig.json'),
+  'generic-function-value-binding-call-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-function-value-binding-call-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -67,6 +67,26 @@ enum CopySource {
     OptionalCallReturn,
 }
 
+/// A generic function read as a value keeps its written signature on the type,
+/// as `typeof fn` does: Go's signature carries its type parameters wherever the
+/// value flows, so a binding copied from it (`const h = g`) still infers them
+/// at a call.
+fn with_generic_declaration(ty: Type, symbol: &crate::symbols::SymbolInfo) -> Type {
+    match (ty, symbol.function_signature.as_ref()) {
+        (Type::Function(function), Some(signature))
+            if function.declaration().is_none()
+                && !signature.type_parameters.is_empty()
+                && !signature.overloaded =>
+        {
+            let concrete: std::sync::Arc<crate::symbols::FunctionSignatureInfo> =
+                std::sync::Arc::clone(signature);
+            let declaration: std::sync::Arc<dyn std::any::Any + Send + Sync> = concrete;
+            Type::Function(function.with_declaration(declaration))
+        }
+        (ty, _) => ty,
+    }
+}
+
 fn clone_type_with_metrics(ty: &Type, source: CopySource) -> Type {
     record_type_clone_count();
     match ty {
@@ -165,9 +185,9 @@ fn infer_expression_unsettled(
             };
             resolved
                 .map(|symbol| {
-                    InferredExpression::Known(clone_type_with_metrics(
-                        &symbol.ty,
-                        CopySource::Identifier,
+                    InferredExpression::Known(with_generic_declaration(
+                        clone_type_with_metrics(&symbol.ty, CopySource::Identifier),
+                        &symbol,
                     ))
                 })
                 .unwrap_or_else(|| InferredExpression::UnresolvedIdentifier {
