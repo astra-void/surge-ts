@@ -188,6 +188,23 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                 }
             };
             let Some(init) = declarator.init.as_ref() else {
+                // A destructuring declaration with no initializer — an ambient
+                // one — declares its elements with the annotation's types.
+                if let (
+                    BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_),
+                    Some(ty),
+                ) = (&declarator.id, declared_type.clone())
+                {
+                    let mut declarations = Vec::new();
+                    annotated_pattern_declarations(
+                        &declarator.id,
+                        ty,
+                        declaration.declare,
+                        kind,
+                        &mut declarations,
+                    );
+                    return declarations;
+                }
                 return parse_binding_pattern_declarations_with_definite(
                     &declarator.id,
                     None,
@@ -235,6 +252,80 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
             other => other,
         })
         .collect()
+}
+
+/// Each element of a pattern with no initializer is typed as the annotation
+/// indexed by its key (`T["a"]`, `T[0]`), the type tsc's
+/// `getTypeForBindingElement` reads off the annotated parent. A computed key
+/// and a rest element name no single member and are left out.
+fn annotated_pattern_declarations(
+    pattern: &BindingPattern<'_>,
+    parent: crate::ParsedType,
+    is_declare: bool,
+    kind: ParsedVariableKind,
+    declarations: &mut Vec<ParsedStatement>,
+) {
+    let indexed = |index: crate::ParsedType| {
+        crate::ParsedType::IndexedAccess(std::sync::Arc::new(crate::ParsedIndexedAccessType {
+            object_type: Box::new(parent.clone()),
+            index_type: Box::new(index),
+            span: None,
+        }))
+    };
+    match pattern {
+        BindingPattern::BindingIdentifier(identifier) => {
+            declarations.push(ParsedStatement::VariableDeclaration(Box::new(
+                ParsedVariableDeclaration {
+                    is_enum_object: false,
+                    is_declare,
+                    kind,
+                    from_binding_pattern: true,
+                    has_definite_assertion: false,
+                    array_pattern_span: None,
+                    name: identifier.name.to_string(),
+                    name_span: Some(text_span_from_oxc_span(identifier.span)),
+                    declared_type: Some(parent),
+                    initializer: None,
+                    initializer_span: None,
+                    declaration_list: None,
+                },
+            )));
+        }
+        BindingPattern::AssignmentPattern(assignment) => {
+            annotated_pattern_declarations(&assignment.left, parent, is_declare, kind, declarations);
+        }
+        BindingPattern::ObjectPattern(object) => {
+            for property in &object.properties {
+                if property.computed {
+                    continue;
+                }
+                let Some(key) = property.key.static_name() else {
+                    continue;
+                };
+                annotated_pattern_declarations(
+                    &property.value,
+                    indexed(crate::ParsedType::StringLiteral(key.to_string())),
+                    is_declare,
+                    kind,
+                    declarations,
+                );
+            }
+        }
+        BindingPattern::ArrayPattern(array) => {
+            for (index, element) in array.elements.iter().enumerate() {
+                let Some(element) = element else {
+                    continue;
+                };
+                annotated_pattern_declarations(
+                    element,
+                    indexed(crate::ParsedType::NumberLiteral(index.to_string())),
+                    is_declare,
+                    kind,
+                    declarations,
+                );
+            }
+        }
+    }
 }
 
 fn declaration_list_shape(declaration: &VariableDeclaration<'_>) -> crate::ParsedDeclarationList {
