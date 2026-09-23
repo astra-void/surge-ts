@@ -74,14 +74,24 @@ fn narrow_type_for_identifier(
             right,
             ..
         } if branch_is_true => {
-            // `A || B` true branch: the value satisfies A or B, so its type is the
-            // union of each disjunct's narrowing. A disjunct that does not
-            // constrain `var_name` leaves it unconstrained, so the whole guard
-            // cannot narrow — bail.
+            // `A || B` true branch: A held, or A failed and then B held — the
+            // union of what the two edges into the branch prove. A disjunct that
+            // does not constrain `var_name` leaves it unconstrained, so the whole
+            // guard cannot narrow — bail.
             let left_narrowed =
                 narrow_type_for_identifier(left, var_name, ty, true, scopes, operand_types, ctx)?;
-            let right_narrowed =
-                narrow_type_for_identifier(right, var_name, ty, true, scopes, operand_types, ctx)?;
+            let after_left =
+                narrow_type_for_identifier(left, var_name, ty, false, scopes, operand_types, ctx)
+                    .unwrap_or_else(|| ty.clone());
+            let right_narrowed = narrow_type_for_identifier(
+                right,
+                var_name,
+                &after_left,
+                true,
+                scopes,
+                operand_types,
+                ctx,
+            )?;
             Some(union_type(vec![left_narrowed, right_narrowed]))
         }
         ParsedExpression::Logical {
@@ -133,8 +143,8 @@ fn narrow_type_for_identifier(
                 .unwrap_or(after_left),
             )
         }
-        // Fall-through of `A && B` is `!A || !B` — a union, and only sound when
-        // both operands constrain the value.
+        // Fall-through of `A && B`: A failed, or A held and then B failed — a
+        // union, and only sound when both operands constrain the value.
         ParsedExpression::Logical {
             left,
             operator: ParsedLogicalOperator::And,
@@ -143,8 +153,18 @@ fn narrow_type_for_identifier(
         } => {
             let left_narrowed =
                 narrow_type_for_identifier(left, var_name, ty, false, scopes, operand_types, ctx)?;
-            let right_narrowed =
-                narrow_type_for_identifier(right, var_name, ty, false, scopes, operand_types, ctx)?;
+            let after_left =
+                narrow_type_for_identifier(left, var_name, ty, true, scopes, operand_types, ctx)
+                    .unwrap_or_else(|| ty.clone());
+            let right_narrowed = narrow_type_for_identifier(
+                right,
+                var_name,
+                &after_left,
+                false,
+                scopes,
+                operand_types,
+                ctx,
+            )?;
             Some(union_type(vec![left_narrowed, right_narrowed]))
         }
         _ => narrow_single_guard_for_identifier(
@@ -1050,10 +1070,11 @@ fn narrow_condition_symbol_table_by_guard(
         return narrow_condition_symbol_table(right, base, false).or(left_narrowed);
     }
 
-    // `A || B` holds when either disjunct does, so the subject is the union of
-    // what each proves. A disjunct that narrows nothing leaves the subject
-    // unconstrained, and the union collapses back to the declared type — which
-    // is why both sides have to narrow for this to say anything.
+    // `A || B` holds when A does, or when A fails and B then holds, so the
+    // subject is the union of what those two edges prove. A disjunct that
+    // narrows nothing leaves the subject unconstrained, and the union collapses
+    // back to the declared type — which is why both sides have to narrow for
+    // this to say anything.
     if branch_is_true
         && let ParsedExpression::Logical {
             left,
@@ -1062,10 +1083,39 @@ fn narrow_condition_symbol_table_by_guard(
             ..
         } = condition
     {
+        let left_holds = narrow_condition_symbol_table(left, symbols, true)?;
+        let left_fails = narrow_condition_symbol_table(left, symbols, false);
+        let right_holds = narrow_condition_symbol_table(
+            right,
+            left_fails.as_ref().unwrap_or(symbols),
+            true,
+        )?;
+        return union_disjunct_narrowings(symbols, &left_holds, &right_holds);
+    }
+
+    // `A && B` fails when A does, or when A holds and B then fails.
+    if !branch_is_true
+        && let ParsedExpression::Logical {
+            left,
+            operator: ParsedLogicalOperator::And,
+            right,
+            ..
+        } = condition
+    {
+        let left_fails = narrow_condition_symbol_table(left, symbols, false);
+        let left_holds = narrow_condition_symbol_table(left, symbols, true);
+        let right_fails = narrow_condition_symbol_table(
+            right,
+            left_holds.as_ref().unwrap_or(symbols),
+            false,
+        );
+        if left_fails.is_none() && right_fails.is_none() {
+            return None;
+        }
         return union_disjunct_narrowings(
             symbols,
-            &narrow_condition_symbol_table(left, symbols, true)?,
-            &narrow_condition_symbol_table(right, symbols, true)?,
+            left_fails.as_ref().unwrap_or(symbols),
+            right_fails.as_ref().or(left_holds.as_ref()).unwrap_or(symbols),
         );
     }
 
