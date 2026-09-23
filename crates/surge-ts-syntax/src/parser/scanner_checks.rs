@@ -53,16 +53,17 @@ impl<'a> Visit<'a> for Collector<'_> {
     }
 
     fn visit_super(&mut self, keyword: &Super) {
-        // `parseSuperExpression` reads only the next token: `(`, `.` or `[`,
-        // or `<` for type arguments (TS2754), and anything else — `?.`
-        // included — is TS1034 on that token (`parseErrorAtCurrentToken`).
-        let after = keyword.span.end as usize;
-        let start = after
-            + self.source_text[after..]
-                .char_indices()
-                .find(|(_, c)| !c.is_whitespace())
-                .map_or(self.source_text.len() - after, |(offset, _)| offset);
-        if matches!(self.source_text[start..].chars().next(), Some('(' | '.' | '[' | '<')) {
+        // `parseSuperExpression` reads only the next token — past type
+        // arguments `parseTypeArgumentsInExpression` takes (TS2754) — and
+        // anything but `(`, `.` or `[`, `?.` included, is TS1034 on that
+        // token (`parseErrorAtCurrentToken`).
+        let mut start = skip_whitespace(self.source_text, keyword.span.end as usize);
+        if self.source_text[start..].starts_with('<')
+            && let Some(after) = type_arguments_end(self.source_text, start)
+        {
+            start = after;
+        }
+        if matches!(self.source_text[start..].chars().next(), Some('(' | '.' | '[')) {
             return;
         }
         let end = super::grammar_context::first_token_end(self.source_text, start);
@@ -140,4 +141,50 @@ impl Collector<'_> {
             span_text: self.source_text.get(start..end).map(str::to_string),
         });
     }
+}
+
+fn skip_whitespace(text: &str, position: usize) -> usize {
+    position
+        + text[position..]
+            .char_indices()
+            .find(|(_, c)| !c.is_whitespace())
+            .map_or(text.len() - position, |(offset, _)| offset)
+}
+
+/// Where the token after `<…>` starts when tsc's
+/// `parseTypeArgumentsInExpression` takes the angle brackets at `open` as type
+/// arguments: they must close, and the next token must be one
+/// `canFollowTypeArgumentsInExpression` accepts — `(` or a template, or,
+/// after a line break, anything; otherwise anything but `<`, `>`, `+`, `-` or
+/// the start of an expression.
+fn type_arguments_end(text: &str, open: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut position = open;
+    let close = loop {
+        match *bytes.get(position)? {
+            b'<' => depth += 1,
+            // The arrow of a function type.
+            b'>' if bytes[position - 1] == b'=' => {}
+            b'>' => {
+                depth -= 1;
+                if depth == 0 {
+                    break position + 1;
+                }
+            }
+            _ => {}
+        }
+        position += 1;
+    };
+    let after = skip_whitespace(text, close);
+    let accepted = match text[after..].chars().next() {
+        Some('(' | '`') | None => true,
+        Some('<' | '>' | '+' | '-') => false,
+        Some(next) => {
+            text[close..after].contains('\n')
+                || !(next.is_alphanumeric()
+                    || matches!(next, '_' | '$' | '"' | '\'' | '[' | '{' | '!' | '~' | '/' | '@' | '#'))
+        }
+    };
+    accepted.then_some(after)
 }

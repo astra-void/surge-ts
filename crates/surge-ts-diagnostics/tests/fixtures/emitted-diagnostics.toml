@@ -2951,6 +2951,7 @@ oracle = [
 status = "emitted"
 oracle = [
   "super-type-arguments-basic",
+  "super-type-arguments-follower",
 ]
 
 [TS2848]
@@ -3096,6 +3097,7 @@ status = "emitted"
 oracle = [
   "super-follower-grammar-basic",
   "bare-super-parse-error",
+  "super-type-arguments-follower",
 ]
 
 [TS1225]

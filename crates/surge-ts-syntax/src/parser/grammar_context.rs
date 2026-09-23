@@ -2887,6 +2887,13 @@ impl<'a> ContextCollector<'a, '_> {
                     self.push(2754, expression.type_arguments.span, &[]);
                 }
             }
+            AstKind::TaggedTemplateExpression(tagged) => {
+                if let Some(type_arguments) = &tagged.type_arguments
+                    && matches!(tagged.tag, oxc_ast::ast::Expression::Super(_))
+                {
+                    self.push(2754, type_arguments.span, &[]);
+                }
+            }
             AstKind::CallExpression(call) => {
                 if let Some(type_arguments) = &call.type_arguments
                     && matches!(call.callee, oxc_ast::ast::Expression::Super(_))
