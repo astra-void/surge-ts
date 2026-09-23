@@ -288,6 +288,9 @@ pub(crate) struct CheckerContext {
     /// naming its own or a later parameter (TS2372/TS2373) resolves the name —
     /// surge's scope lacks the later parameter, which is not a TS2304.
     pub(crate) grammar_answered_spans: Vec<(DiagnosticTextSpan, &'static [u32])>,
+    /// Grammar findings held until the file's type declarations are installed
+    /// (`emit_deferred_grammar_diagnostics`).
+    pub(crate) deferred_grammar_findings: Vec<surge_ts_syntax::ParsedGrammarDiagnostic>,
     /// Parameters already bound while a signature's annotations are being
     /// mapped, so a later annotation's `typeof <earlier parameter>` resolves the
     /// way tsc's parameter scope does. Empty outside signature mapping.
@@ -740,6 +743,7 @@ impl CheckerContext {
             diagnostics: Vec::new(),
             suppressed_argument_mismatch_span: None,
             grammar_answered_spans: Vec::new(),
+            deferred_grammar_findings: Vec::new(),
             signature_parameter_bindings: Vec::new(),
             diagnostic_keys: HashSet::default(),
             diagnostic_keys_len: 0,
@@ -903,6 +907,7 @@ impl CheckerContext {
             diagnostics: Vec::new(),
             suppressed_argument_mismatch_span: None,
             grammar_answered_spans: Vec::new(),
+            deferred_grammar_findings: Vec::new(),
             signature_parameter_bindings: Vec::new(),
             diagnostic_keys: HashSet::default(),
             diagnostic_keys_len: 0,
@@ -1534,6 +1539,7 @@ impl CheckerContext {
         self.file_type_only_import_names_owner = None;
         self.checked_function_declaration_names.clear();
         self.grammar_answered_spans.clear();
+        self.deferred_grammar_findings.clear();
         self.definite_writes = Arc::default();
         self.inherited_never_initialized.clear();
         self.never_initialized_constraint_exempt.clear();

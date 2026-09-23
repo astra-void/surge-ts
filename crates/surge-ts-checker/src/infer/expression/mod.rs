@@ -220,7 +220,16 @@ fn infer_expression_unsettled(
         ParsedExpression::Update { operand, .. } => {
             crate::checks::expr::update_result_type(&infer_expression(operand, symbols, ctx))
         }
-        ParsedExpression::ObjectRest { source, omitted } => match infer_expression(source, symbols, ctx) {
+        ParsedExpression::ObjectRest {
+            source, omitted, ..
+        } => match infer_expression(source, symbols, ctx) {
+            // A source that is not an object type is TS2700 where it is
+            // checked; the binding reads as the error type.
+            InferredExpression::Known(ty)
+                if crate::checks::function::rest_source_validity(&ty) == Some(false) =>
+            {
+                InferredExpression::Known(Type::ErrorType)
+            }
             InferredExpression::Known(ty) => InferredExpression::Known(
                 crate::checks::function::object_rest_type(&ty, omitted),
             ),

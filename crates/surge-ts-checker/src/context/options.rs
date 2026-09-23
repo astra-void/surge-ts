@@ -134,6 +134,9 @@ pub struct CheckerOptions {
     /// an error only then, and as a suggestion (which surge does not emit)
     /// when the option is unset.
     pub report_unreachable_code: bool,
+    /// `allowUnusedLabels` as written: an unused label is an error only under
+    /// an explicit `false` (tsc reports a suggestion when it is unset).
+    pub allow_unused_labels: Option<bool>,
     pub stub_external_modules: bool,
     pub resolved_modules: FxHashMap<String, String>,
     /// Importer-scoped module resolutions: canonical importer file name →
@@ -239,6 +242,7 @@ impl Default for CheckerOptions {
             no_unused_parameters: false,
             allow_unreachable_code: false,
             report_unreachable_code: false,
+            allow_unused_labels: None,
             stub_external_modules: false,
             resolved_modules: FxHashMap::default(),
             resolved_modules_by_importer: FxHashMap::default(),

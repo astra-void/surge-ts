@@ -79,6 +79,7 @@ fn check_single_source(
     ctx.merge_script_interfaces_with_globals = !parsed.is_module;
     collect_type_declarations(&parsed.statements, &mut ctx);
     ctx.merge_script_interfaces_with_globals = false;
+    crate::program::emit_deferred_grammar_diagnostics(&mut ctx);
     collect_global_augmentations_from_statements(&parsed.statements, &mut ctx);
     // Ambient value lowering (`declare var Document: {…}`) already resolved some
     // of these names against the lib-only declarations. The file's own

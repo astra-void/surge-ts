@@ -109,6 +109,10 @@ pub(crate) fn normalize_compiler_options(
                     normalized.report_unreachable_code = !allow;
                 }
             }
+            "allowUnusedLabels" => {
+                normalized.allow_unused_labels = parse_bool_option(key, value, config_dir, diagnostics)
+                    .or(normalized.allow_unused_labels);
+            }
             "target" => {
                 normalized.target = parse_target_option(value, config_dir, diagnostics);
             }

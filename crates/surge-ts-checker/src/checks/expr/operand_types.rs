@@ -178,7 +178,44 @@ pub(crate) fn check_iterable_operand(
         return;
     }
     let file_name = ctx.file_name.clone();
-    ctx.push(Diagnostic::ts2488(ty.name(), file_name).with_span(convert_span(span)));
+    // Without a global `Iterable` tsc falls back to `isArrayLikeType` and
+    // `getIterationDiagnosticDetails`: a `for…of` operand with no string
+    // constituent is TS2495. A string constituent (TS2461) or an ES2015
+    // iterable name (TS2802) keeps the protocol message.
+    let diagnostic = if !nullish_is_error
+        && ctx.ambient_global_type_declarations.get("Iterable").is_none()
+        && !has_string_like_constituent(ty)
+        && !is_es2015_or_later_iterable_name(&ty.name())
+    {
+        Diagnostic::ts2495(ty.name(), file_name)
+    } else {
+        Diagnostic::ts2488(ty.name(), file_name)
+    };
+    ctx.push(diagnostic.with_span(convert_span(span)));
+}
+
+fn has_string_like_constituent(ty: &Type) -> bool {
+    match ty {
+        Type::Union(union) => union.types().iter().any(has_string_like_constituent),
+        Type::String | Type::StringLiteral(_) => true,
+        _ => false,
+    }
+}
+
+fn is_es2015_or_later_iterable_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Float32Array"
+            | "Float64Array"
+            | "Int16Array"
+            | "Int32Array"
+            | "Int8Array"
+            | "NodeList"
+            | "Uint16Array"
+            | "Uint32Array"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+    )
 }
 
 pub(crate) fn is_definitely_not_iterable(ty: &Type, nullish_is_error: bool) -> bool {

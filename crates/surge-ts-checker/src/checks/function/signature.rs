@@ -519,6 +519,57 @@ pub(crate) fn insert_object_binding_pattern_bindings(
     }
 }
 
+/// tsc's `getBindingElementTypeFromParentType` rule for `{ ...rest }`: the
+/// source must be an object type (`isValidSpreadType`, with `unknown` refused
+/// outright), else the binding is TS2700 and the error type. `None` for a
+/// source surge could not resolve.
+pub(crate) fn rest_source_validity(source: &Type) -> Option<bool> {
+    fn is_definitely_falsy(ty: &Type) -> bool {
+        match ty {
+            Type::Null | Type::Undefined | Type::Void | Type::BooleanLiteral(false) => true,
+            Type::StringLiteral(text) => text.is_empty(),
+            Type::NumberLiteral(literal) => literal.value == "0",
+            _ => false,
+        }
+    }
+    match source.peeled() {
+        Type::Unknown | Type::ErrorType => None,
+        Type::GenuineUnknown => Some(false),
+        Type::Any
+        | Type::Object(_)
+        | Type::Function(_)
+        | Type::Array(_)
+        | Type::Tuple(_)
+        | Type::OpenTuple(_) => Some(true),
+        // `getBaseConstraintOrType`: an unconstrained variable stands for itself.
+        Type::TypeParameter(parameter) => match surge_ts_types::type_variable::active_constraint(&parameter) {
+            Some(Some(constraint)) => rest_source_validity(&constraint),
+            Some(None) => Some(true),
+            None => None,
+        },
+        Type::Union(union) => {
+            let mut valid = Some(true);
+            for member in union.types().iter().filter(|member| !is_definitely_falsy(member)) {
+                match rest_source_validity(member) {
+                    None => return None,
+                    Some(false) => valid = Some(false),
+                    Some(true) => {}
+                }
+            }
+            valid
+        }
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => Some(false),
+        _ => None,
+    }
+}
+
 /// tsc's `getRestType`: `source` without the `omitted` properties, taken
 /// member by member from a union and with `undefined` dropped. A type surge
 /// cannot enumerate — a sentinel, a type parameter (tsc's `Omit<T, K>`) —
@@ -696,6 +747,16 @@ pub(crate) fn map_function_signature(
             Type::Any
         };
 
+        if let ParsedBindingName::ObjectPattern(pattern) = &parameter.binding_name
+            && let Some(ParsedBindingName::Identifier { span: Some(span), .. }) =
+                pattern.rest.as_deref()
+            && rest_source_validity(&inferred_parameter_type) == Some(false)
+        {
+            ctx.push_utility_diagnostic_once(
+                Diagnostic::ts2700(ctx.file_name.clone()).with_span(convert_span(*span)),
+            );
+        }
+
         if let Some(name) = parameter_identifier_name(parameter) {
             let parameter_binding_type =
                 with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || {
@@ -769,6 +830,15 @@ pub(crate) fn map_function_signature(
             })
         })
         .unwrap_or(Type::Unknown);
+    if let Some(ParsedType::Predicate(predicate)) = return_type {
+        check_type_predicate_type(
+            predicate,
+            parameters,
+            &parameter_types,
+            &type_parameter_substitution,
+            ctx,
+        );
+    }
     ctx.signature_parameter_bindings = outer_parameter_bindings;
 
     if pushed_type_parameter_scope {
@@ -783,6 +853,83 @@ pub(crate) fn map_function_signature(
     )
     .with_parameter_names(written_binding_names(parameters))
     .with_type_parameter_head(type_parameter_head(type_parameters))
+}
+
+/// tsc's `checkTypePredicate`: the predicate's type must be assignable to the
+/// named parameter's type — TS2677 on the written type. A `this` predicate is
+/// not related here, nor one naming the rest parameter (TS2777), nor a pair
+/// with a part surge could not model.
+fn check_type_predicate_type(
+    predicate: &surge_ts_syntax::ParsedPredicateType,
+    parameters: &[ParsedFunctionParameter],
+    parameter_types: &[Type],
+    substitution: &TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+) {
+    let (Some(written), Some(span)) = (&predicate.ty, predicate.type_span) else {
+        return;
+    };
+    if predicate.parameter_name == "this" {
+        return;
+    }
+    let Some(index) = parameters.iter().position(|parameter| {
+        parameter_identifier_name(parameter) == Some(predicate.parameter_name.as_str())
+    }) else {
+        return;
+    };
+    let (Some(parameter), Some(parameter_type)) = (parameters.get(index), parameter_types.get(index))
+    else {
+        return;
+    };
+    if parameter.rest {
+        return;
+    }
+    let mut parameter_type = parameter_type.clone();
+    if parameter.optional && ctx.options.strict_null_checks {
+        parameter_type = surge_ts_types::union_type(vec![parameter_type, Type::Undefined]);
+    }
+    let predicate_type = map_parsed_type_with_substitution(written.clone(), ctx, substitution);
+    if !is_fully_modelled(&predicate_type) || !is_fully_modelled(&parameter_type) {
+        return;
+    }
+    if !surge_ts_types::is_assignable_to(&predicate_type, &parameter_type) {
+        ctx.push_utility_diagnostic_once(
+            Diagnostic::ts2677(ctx.file_name.clone()).with_span(convert_span(span)),
+        );
+    }
+}
+
+/// Whether every part of `ty` a relation reads is concrete: no sentinel,
+/// error type or type variable.
+fn is_fully_modelled(ty: &Type) -> bool {
+    fn walk(ty: &Type, depth: usize) -> bool {
+        if depth > 8 {
+            return true;
+        }
+        match ty {
+            Type::Unknown | Type::ErrorType | Type::TypeParameter(_) => false,
+            Type::Array(element) => walk(element, depth + 1),
+            Type::Tuple(elements) => elements.iter().all(|element| walk(element, depth + 1)),
+            Type::Union(union) => union.types().iter().all(|member| walk(member, depth + 1)),
+            Type::Object(object) => object
+                .properties
+                .values()
+                .all(|property| walk(&property.ty, depth + 1)),
+            Type::Function(function) => {
+                function
+                    .parameters()
+                    .iter()
+                    .all(|parameter| walk(parameter, depth + 1))
+                    && walk(function.return_type(), depth + 1)
+            }
+            Type::Reference(reference) => reference
+                .arguments
+                .iter()
+                .all(|argument| walk(argument, depth + 1)),
+            _ => true,
+        }
+    }
+    walk(ty, 0)
 }
 
 /// Renders a signature's type-parameter list the way tsc prefixes it

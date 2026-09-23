@@ -519,6 +519,7 @@ fn run_single_file_mode(
             no_unused_parameters: false,
             allow_unreachable_code: false,
             report_unreachable_code: false,
+            allow_unused_labels: None,
             no_lib,
             skip_lib_check: false,
             stub_external_modules,

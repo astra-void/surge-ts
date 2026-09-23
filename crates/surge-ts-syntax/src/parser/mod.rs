@@ -639,6 +639,12 @@ fn parse_object_pattern_declarations(
             Some(omitted) => ParsedExpression::ObjectRest {
                 source: Box::new(initializer),
                 omitted,
+                name_span: match &rest.argument {
+                    BindingPattern::BindingIdentifier(identifier) => {
+                        Some(text_span_from_oxc_span(identifier.span))
+                    }
+                    _ => None,
+                },
             },
             None => initializer,
         };

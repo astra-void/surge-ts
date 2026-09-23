@@ -1163,7 +1163,7 @@ fn deferred_parameter_conditional(
 
 fn tuple_element_type(element: &surge_ts_syntax::ParsedTupleElement) -> &ParsedType {
     let (surge_ts_syntax::ParsedTupleElement::Fixed(ty)
-    | surge_ts_syntax::ParsedTupleElement::Rest(ty)) = element;
+    | surge_ts_syntax::ParsedTupleElement::Rest(ty, _)) = element;
     ty
 }
 
@@ -1417,7 +1417,7 @@ fn tuple_pattern_pairs(extends: &ParsedType, check: &Type) -> Option<Vec<(Parsed
     let rest_positions = elements
         .iter()
         .enumerate()
-        .filter(|(_, element)| matches!(element, surge_ts_syntax::ParsedTupleElement::Rest(_)))
+        .filter(|(_, element)| matches!(element, surge_ts_syntax::ParsedTupleElement::Rest(_, _)))
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     if rest_positions.len() > 1 {
@@ -1429,7 +1429,7 @@ fn tuple_pattern_pairs(extends: &ParsedType, check: &Type) -> Option<Vec<(Parsed
         // `T[] extends [...infer rest]` captures the array itself; any pattern
         // with a fixed slot needs a length an array does not have.
         Type::Array(_) if elements.len() == 1 && rest_positions.len() == 1 => {
-            let surge_ts_syntax::ParsedTupleElement::Rest(written) = &elements[0] else {
+            let surge_ts_syntax::ParsedTupleElement::Rest(written, _) = &elements[0] else {
                 return None;
             };
             return Some(vec![(written.clone(), check.clone())]);
@@ -1453,7 +1453,7 @@ fn tuple_pattern_pairs(extends: &ParsedType, check: &Type) -> Option<Vec<(Parsed
                 };
                 pairs.push((written.clone(), member.clone()));
             }
-            let surge_ts_syntax::ParsedTupleElement::Rest(rest_written) = &elements[rest_index]
+            let surge_ts_syntax::ParsedTupleElement::Rest(rest_written, _) = &elements[rest_index]
             else {
                 return None;
             };
@@ -1490,7 +1490,7 @@ fn tuple_pattern_pairs(extends: &ParsedType, check: &Type) -> Option<Vec<(Parsed
                 .zip(members)
                 .map(|(element, member)| match element {
                     surge_ts_syntax::ParsedTupleElement::Fixed(written) => (written, member),
-                    surge_ts_syntax::ParsedTupleElement::Rest(written) => (written, member),
+                    surge_ts_syntax::ParsedTupleElement::Rest(written, _) => (written, member),
                 })
                 .collect(),
         );
@@ -1511,7 +1511,7 @@ fn tuple_pattern_pairs(extends: &ParsedType, check: &Type) -> Option<Vec<(Parsed
     }
 
     let middle_end = members.len() - trailing.len();
-    let surge_ts_syntax::ParsedTupleElement::Rest(rest_written) = &elements[rest_index] else {
+    let surge_ts_syntax::ParsedTupleElement::Rest(rest_written, _) = &elements[rest_index] else {
         return None;
     };
     pairs.push((

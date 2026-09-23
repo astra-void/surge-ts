@@ -182,6 +182,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             no_unused_parameters: false,
             allow_unreachable_code: false,
             report_unreachable_code: false,
+            allow_unused_labels: None,
         },
     );
 

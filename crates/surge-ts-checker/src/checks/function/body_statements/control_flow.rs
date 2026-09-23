@@ -486,6 +486,16 @@ pub(crate) fn check_function_for_of_statement(
                     for_of_statement.iterable_span,
                     ctx,
                 );
+                if for_of_statement.binding_kind
+                    == surge_ts_syntax::ParsedForBindingKind::ExistingBinding
+                    && let surge_ts_syntax::ParsedBindingName::Identifier {
+                        name,
+                        span: Some(span),
+                    } = &for_of_statement.binding_name
+                    && let Some(left_type) = visible_symbols.get(name).map(|symbol| symbol.ty.clone())
+                {
+                    check_for_in_left_operand(&left_type, iterable_type, *span, ctx);
+                }
             }
             // Over a type variable tsc binds the generic `Extract<keyof T,
             // string>` (`getIndexTypeOrString`), which a write through it
@@ -668,6 +678,80 @@ fn check_for_in_right_operand(
         Diagnostic::ts2407(right_type.name(), ctx.file_name.clone()),
         span,
     ));
+}
+
+/// tsc's `checkForInStatement` left-hand rule (TS2405): `for (x in o)` over an
+/// existing binding needs `getIndexTypeOrString(o)` assignable to `x`.
+fn check_for_in_left_operand(
+    left_type: &Type,
+    right_type: &Type,
+    span: surge_ts_syntax::TextSpan,
+    ctx: &mut CheckerContext,
+) {
+    if left_type.is_unknown() {
+        return;
+    }
+    let Some(index_type) = index_type_or_string(right_type) else {
+        return;
+    };
+    if surge_ts_types::is_assignable_to(&index_type, left_type) {
+        return;
+    }
+    ctx.push(crate::spans::diagnostic_with_syntax_span(
+        Diagnostic::ts2405(ctx.file_name.clone()),
+        Some(span),
+    ));
+}
+
+/// tsc's `getIndexTypeOrString`: `Extract<keyof T, string>`, or `string` when
+/// that is `never`. A shape whose keys surge does not enumerate — an array, a
+/// callable, a type variable, a primitive, a string-indexed object — reads as
+/// `string`, which relates like the real key set to every target but a
+/// literal one. `None` for an operand surge could not resolve.
+fn index_type_or_string(right_type: &Type) -> Option<Type> {
+    // A numeric-looking key is a number literal in `keyof` when it was written
+    // as a number and a string literal when quoted; surge keeps no record of
+    // which, so such a shape is left unanswered.
+    fn string_keys(object: &surge_ts_types::ObjectType) -> Option<Vec<String>> {
+        let keys: Vec<String> = object
+            .properties
+            .keys()
+            .filter(|key| !key.starts_with('['))
+            .map(|key| key.to_string())
+            .collect();
+        (!keys.iter().any(|key| key.parse::<f64>().is_ok())).then_some(keys)
+    }
+    let right_type = surge_ts_types::remove_nullish(right_type).peeled();
+    let keys = match &right_type {
+        Type::Unknown | Type::ErrorType => return None,
+        Type::Object(object) if object.string_index_type.is_none() => string_keys(object)?,
+        // `keyof (A | B)` is the keys common to every member.
+        Type::Union(union) => {
+            let mut common: Option<Vec<String>> = None;
+            for member in union.types() {
+                let member_keys = match member.peeled() {
+                    Type::Unknown | Type::ErrorType => return None,
+                    Type::Object(object) if object.string_index_type.is_some() => continue,
+                    Type::Object(object) => string_keys(&object)?,
+                    _ => Vec::new(),
+                };
+                common = Some(match common {
+                    None => member_keys,
+                    Some(keys) => keys
+                        .into_iter()
+                        .filter(|key| member_keys.contains(key))
+                        .collect(),
+                });
+            }
+            common.unwrap_or_default()
+        }
+        _ => Vec::new(),
+    };
+    Some(if keys.is_empty() {
+        Type::String
+    } else {
+        surge_ts_types::union_type(keys.into_iter().map(Type::StringLiteral).collect())
+    })
 }
 
 /// tsc's `hasNumericPropertyNames`: the type's only index signature is the

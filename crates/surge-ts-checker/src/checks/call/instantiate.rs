@@ -1172,7 +1172,7 @@ fn parsed_type_mentions_name(ty: &ParsedType, name: &str) -> bool {
         // the outer middleware was dropped from the mutator list.
         ParsedType::VariadicTuple(elements) => elements.iter().any(|element| match element {
             surge_ts_syntax::ParsedTupleElement::Fixed(ty)
-            | surge_ts_syntax::ParsedTupleElement::Rest(ty) => {
+            | surge_ts_syntax::ParsedTupleElement::Rest(ty, _) => {
                 parsed_type_mentions_name(ty, name)
             }
         }),

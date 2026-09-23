@@ -140,6 +140,20 @@ pub enum ParsedGrammarDiagnosticKind {
     /// A type-level signature's parameter with neither annotation nor
     /// initializer — TS7006, under `noImplicitAny`.
     ImplicitAnySignatureParameter,
+    /// A call signature, method signature or function type's parameter with
+    /// neither annotation nor initializer, where tsc asks whether the name is
+    /// a type keyword or a type in scope (`(string) => void`) — TS7051 under
+    /// `noImplicitAny`, otherwise the plain implicit `any`. `name` holds the
+    /// written name, the `argN` tsc suggests, and `[]` for a rest parameter,
+    /// NUL-separated.
+    NamedSignatureParameterWithoutType,
+    /// A module-level type literal or interface member whose computed name is
+    /// a bare identifier that no top-level value in the file declares, which
+    /// tsc resolves as a value (`{ [Keys]: string }`). The checker answers it
+    /// once the file's types are installed: TS2693, or TS2690 when the member
+    /// is a type literal's only one. `name` holds the identifier and `1` when
+    /// the member is a type literal's only property, NUL-separated.
+    ComputedTypeMemberName,
     /// Two members of one class, interface, or object literal declaring the
     /// same name where neither is an overload of the other — TS2300.
     DuplicateMember,
@@ -401,8 +415,10 @@ impl Eq for ParsedInferredMember {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedTupleElement {
     Fixed(ParsedType),
-    /// `...T` — spreads every element of another tuple or array type.
-    Rest(ParsedType),
+    /// `...T` — spreads every element of another tuple or array type. The
+    /// span is the written element, where a non-array operand is reported
+    /// (TS2574).
+    Rest(ParsedType, Option<TextSpan>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -411,6 +427,9 @@ pub struct ParsedPredicateType {
     pub parameter_name: String,
     /// `None` for a bare `asserts x` assertion with no type.
     pub ty: Option<ParsedType>,
+    /// Where `ty` is written, for a predicate type its parameter does not
+    /// admit (TS2677).
+    pub type_span: Option<TextSpan>,
     pub asserts: bool,
 }
 
@@ -1436,6 +1455,9 @@ pub enum ParsedExpression {
     ObjectRest {
         source: Box<ParsedExpression>,
         omitted: Vec<String>,
+        /// The rest binding's name, where a source that is not an object type
+        /// is reported (TS2700).
+        name_span: Option<TextSpan>,
     },
     /// The strings array a tagged template passes as its tag's first argument
     /// (`getEffectiveCallArguments`): a value of the global
@@ -1969,7 +1991,7 @@ impl ParsedType {
             ParsedType::VariadicTuple(elements) => {
                 for element in elements.iter() {
                     match element {
-                        ParsedTupleElement::Fixed(ty) | ParsedTupleElement::Rest(ty) => {
+                        ParsedTupleElement::Fixed(ty) | ParsedTupleElement::Rest(ty, _) => {
                             ty.for_each_named_type(visit);
                         }
                     }

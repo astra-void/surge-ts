@@ -387,6 +387,7 @@ impl<'a> ContextCollector<'a, '_> {
     fn check_this_expression(&mut self, span: Span) {
         let mut index = self.stack.len();
         let mut child_span = span;
+        let mut captured_by_arrow = false;
         while index > 0 {
             index -= 1;
             let kind = self.stack[index];
@@ -436,11 +437,81 @@ impl<'a> ContextCollector<'a, '_> {
                 | AstKind::TSMethodSignature(_)
                 | AstKind::TSCallSignatureDeclaration(_)
                 | AstKind::TSConstructSignatureDeclaration(_)
-                | AstKind::TSIndexSignature(_)
-                | AstKind::Program(_) => return,
+                | AstKind::TSIndexSignature(_) => return,
+                // `tryGetThisTypeAt` answers a script file's top level with
+                // `globalThis`, and an arrow that captured it is TS7041 under
+                // `noImplicitThis`; a module's top-level `this` is `undefined`.
+                AstKind::Program(_) => {
+                    if captured_by_arrow && !self.external_module {
+                        self.push(7041, span, &[]);
+                    }
+                    return;
+                }
+                AstKind::ArrowFunctionExpression(_) => captured_by_arrow = true,
                 _ => {}
             }
             child_span = kind.span();
+        }
+    }
+
+    /// tsc's `checkTypeParametersNotReferenced`: a type parameter's default may
+    /// name only the parameters declared before it — TS2744 on each reference
+    /// to itself or a later one. A nested signature, `infer` capture or mapped
+    /// type that redeclares the name hides the outer parameter.
+    fn check_type_parameter_defaults(
+        &mut self,
+        declaration: &oxc_ast::ast::TSTypeParameterDeclaration<'a>,
+    ) {
+        for (index, parameter) in declaration.params.iter().enumerate() {
+            let Some(default) = &parameter.default else {
+                continue;
+            };
+            let mut references = LaterTypeParameterReferences {
+                later: declaration.params[index..]
+                    .iter()
+                    .map(|later| later.name.name.as_str())
+                    .collect(),
+                shadowed: Vec::new(),
+                found: Vec::new(),
+            };
+            references.visit_ts_type(default);
+            for span in references.found {
+                self.push(2744, span, &[]);
+            }
+        }
+    }
+
+    /// tsc's `checkGrammarBindingElement`: a rest element with a property name
+    /// (`{ ...a: b }`) — TS2566 on the name. oxc keeps the element but drops
+    /// the `: b` it parsed as a type annotation, so the name is read from the
+    /// source text after the element.
+    fn check_rest_binding_property_name(&mut self, rest: &oxc_ast::ast::BindingRestElement<'a>) {
+        if !matches!(self.stack.last(), Some(AstKind::ObjectPattern(_))) {
+            return;
+        }
+        let text = self.source_text;
+        let after = rest.argument.span().end as usize;
+        let Some(colon) = text[after..]
+            .find(|ch: char| !ch.is_whitespace())
+            .map(|offset| after + offset)
+        else {
+            return;
+        };
+        if !text[colon..].starts_with(':') {
+            return;
+        }
+        let Some(start) = text[colon + 1..]
+            .find(|ch: char| !ch.is_whitespace())
+            .map(|offset| colon + 1 + offset)
+        else {
+            return;
+        };
+        let end = match text.as_bytes()[start] {
+            b'{' | b'[' => matching_bracket_end(text, start),
+            _ => first_token_end(text, start),
+        };
+        if end > start {
+            self.push(2566, Span::new(start as u32, end as u32), &[]);
         }
     }
 
@@ -1702,6 +1773,12 @@ impl<'a> ContextCollector<'a, '_> {
                 }
             }
         }
+        // The binder leaves a label no `break`/`continue` targets unreachable
+        // and `checkLabeledStatement` reports it — TS7028, an error only under
+        // an explicit `allowUnusedLabels: false`, which the checker gates.
+        if !label_is_referenced(&labeled.body, name) {
+            self.push(7028, labeled.label.span, &[]);
+        }
         // The binder's `checkStrictModeLabeledStatement`.
         let is_declaration = matches!(
             labeled.body,
@@ -2035,6 +2112,150 @@ fn collect_binding_names<'n>(pattern: &'n BindingPattern<'_>, out: &mut Vec<(&'n
     }
 }
 
+/// The end of the bracketed run starting at `start`, or `start` when it never
+/// closes.
+fn matching_bracket_end(text: &str, start: usize) -> usize {
+    let mut depth = 0usize;
+    for (offset, byte) in text.as_bytes()[start..].iter().enumerate() {
+        match byte {
+            b'{' | b'[' | b'(' => depth += 1,
+            b'}' | b']' | b')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return start + offset + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    start
+}
+
+/// Whether a `break` or `continue` under `body` targets `name`, as the
+/// binder's active-label list sees it: a nested function or static block
+/// starts a fresh list, and a nested label of the same name takes the jumps
+/// under it.
+fn label_is_referenced(body: &Statement<'_>, name: &str) -> bool {
+    struct LabelReferences<'n> {
+        name: &'n str,
+        found: bool,
+    }
+
+    impl<'a> Visit<'a> for LabelReferences<'_> {
+        fn visit_break_statement(&mut self, statement: &oxc_ast::ast::BreakStatement<'a>) {
+            if statement.label.as_ref().is_some_and(|label| label.name == self.name) {
+                self.found = true;
+            }
+        }
+
+        fn visit_continue_statement(&mut self, statement: &oxc_ast::ast::ContinueStatement<'a>) {
+            if statement.label.as_ref().is_some_and(|label| label.name == self.name) {
+                self.found = true;
+            }
+        }
+
+        fn visit_labeled_statement(&mut self, labeled: &oxc_ast::ast::LabeledStatement<'a>) {
+            if labeled.label.name != self.name {
+                oxc_ast_visit::walk::walk_labeled_statement(self, labeled);
+            }
+        }
+
+        fn visit_function(&mut self, _: &oxc_ast::ast::Function<'a>, _: oxc_syntax::scope::ScopeFlags) {}
+
+        fn visit_arrow_function_expression(&mut self, _: &oxc_ast::ast::ArrowFunctionExpression<'a>) {}
+
+        fn visit_static_block(&mut self, _: &oxc_ast::ast::StaticBlock<'a>) {}
+    }
+
+    let mut references = LabelReferences { name, found: false };
+    references.visit_statement(body);
+    references.found
+}
+
+/// The type references in a type parameter's default that resolve to one of
+/// the parameters from `later` (the parameter itself and those after it).
+struct LaterTypeParameterReferences<'n> {
+    later: Vec<&'n str>,
+    /// Names redeclared by an enclosing nested scope, innermost last.
+    shadowed: Vec<&'n str>,
+    found: Vec<Span>,
+}
+
+impl<'a> LaterTypeParameterReferences<'a> {
+    fn scoped(&mut self, walk: impl FnOnce(&mut Self)) {
+        let depth = self.shadowed.len();
+        walk(self);
+        self.shadowed.truncate(depth);
+    }
+}
+
+impl<'a> Visit<'a> for LaterTypeParameterReferences<'a> {
+    fn visit_ts_type_reference(&mut self, reference: &oxc_ast::ast::TSTypeReference<'a>) {
+        if let oxc_ast::ast::TSTypeName::IdentifierReference(identifier) = &reference.type_name
+            && self.later.contains(&identifier.name.as_str())
+            && !self.shadowed.contains(&identifier.name.as_str())
+        {
+            self.found.push(reference.span);
+        }
+        oxc_ast_visit::walk::walk_ts_type_reference(self, reference);
+    }
+
+    // A signature's own parameters and an `infer` capture arrive here; the
+    // enclosing node bounds the scope.
+    fn visit_ts_type_parameter(&mut self, parameter: &oxc_ast::ast::TSTypeParameter<'a>) {
+        self.shadowed.push(parameter.name.name.as_str());
+        oxc_ast_visit::walk::walk_ts_type_parameter(self, parameter);
+    }
+
+    fn visit_ts_function_type(&mut self, function: &oxc_ast::ast::TSFunctionType<'a>) {
+        self.scoped(|this| oxc_ast_visit::walk::walk_ts_function_type(this, function));
+    }
+
+    fn visit_ts_constructor_type(&mut self, constructor: &oxc_ast::ast::TSConstructorType<'a>) {
+        self.scoped(|this| oxc_ast_visit::walk::walk_ts_constructor_type(this, constructor));
+    }
+
+    fn visit_ts_method_signature(&mut self, method: &oxc_ast::ast::TSMethodSignature<'a>) {
+        self.scoped(|this| oxc_ast_visit::walk::walk_ts_method_signature(this, method));
+    }
+
+    fn visit_ts_call_signature_declaration(
+        &mut self,
+        signature: &oxc_ast::ast::TSCallSignatureDeclaration<'a>,
+    ) {
+        self.scoped(|this| oxc_ast_visit::walk::walk_ts_call_signature_declaration(this, signature));
+    }
+
+    fn visit_ts_construct_signature_declaration(
+        &mut self,
+        signature: &oxc_ast::ast::TSConstructSignatureDeclaration<'a>,
+    ) {
+        self.scoped(|this| {
+            oxc_ast_visit::walk::walk_ts_construct_signature_declaration(this, signature);
+        });
+    }
+
+    // oxc keeps a mapped type's key as a plain binding rather than a type
+    // parameter.
+    fn visit_ts_mapped_type(&mut self, mapped: &oxc_ast::ast::TSMappedType<'a>) {
+        self.scoped(|this| {
+            this.shadowed.push(mapped.key.name.as_str());
+            oxc_ast_visit::walk::walk_ts_mapped_type(this, mapped);
+        });
+    }
+
+    // An `infer` capture is in scope for the `extends` clause and the true
+    // branch only.
+    fn visit_ts_conditional_type(&mut self, conditional: &oxc_ast::ast::TSConditionalType<'a>) {
+        self.scoped(|this| {
+            this.visit_ts_type(&conditional.check_type);
+            this.visit_ts_type(&conditional.extends_type);
+            this.visit_ts_type(&conditional.true_type);
+        });
+        self.visit_ts_type(&conditional.false_type);
+    }
+}
+
 impl<'a> Visit<'a> for ContextCollector<'a, '_> {
     fn enter_node(&mut self, kind: AstKind<'a>) {
         self.check_declaration_position(&kind);
@@ -2048,6 +2269,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             }
             AstKind::LabeledStatement(statement) => self.check_labeled_statement(statement),
             AstKind::WithStatement(statement) => self.check_with_statement(statement),
+            AstKind::BindingRestElement(rest) => self.check_rest_binding_property_name(rest),
             AstKind::BindingIdentifier(identifier) => {
                 self.check_contextual_identifier(&identifier.name, identifier.span);
                 if self.is_strict_checked_binding() {
@@ -2177,7 +2399,10 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     }
                 }
             }
-            AstKind::TSTypeParameterDeclaration(declaration) => self.check_circular_constraints(declaration),
+            AstKind::TSTypeParameterDeclaration(declaration) => {
+                self.check_circular_constraints(declaration);
+                self.check_type_parameter_defaults(declaration);
+            }
             AstKind::Decorator(decorator) => self.check_parameter_decorator(decorator),
             AstKind::TSImportEqualsDeclaration(declaration) => {
                 // tsc's `checkGrammarModuleElementContext` bails first.

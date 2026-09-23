@@ -57,6 +57,47 @@ struct GrammarCollector {
     /// Module-level enum declarations, which alone may consult
     /// `top_level_constants` (a nested one could see a shadowing binding).
     top_level_enums: std::collections::HashSet<(u32, u32)>,
+    /// Block and namespace nesting; a computed type member name is answered
+    /// only outside both, where the file's top-level scope is the one it reads.
+    nested_scope_depth: usize,
+    /// Every name the file binds, with where; a computed type member name any
+    /// of them could answer — a value, a type parameter — is left alone.
+    binding_names: Vec<(String, Span)>,
+    /// The names of type aliases and interfaces, the bindings that do not.
+    type_declaration_name_spans: std::collections::HashSet<(u32, u32)>,
+}
+
+/// One `get`/`set` accessor of a class, interface, type literal or object
+/// literal, as [`GrammarCollector::check_untyped_setters`] reads it.
+struct AccessorRecord {
+    key: String,
+    display: Option<String>,
+    is_static: bool,
+    is_getter: bool,
+    /// A getter's return annotation, or a setter's parameter annotation.
+    annotated: bool,
+    has_body: bool,
+    private: bool,
+    span: Span,
+}
+
+fn accessor_display_name(key: &PropertyKey<'_>, computed: bool) -> Option<String> {
+    if computed {
+        return None;
+    }
+    match key {
+        PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
+        PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
+        PropertyKey::StringLiteral(literal) => Some(format!("\"{}\"", literal.value)),
+        _ => None,
+    }
+}
+
+fn setter_parameter_annotated(parameters: &FormalParameters<'_>) -> bool {
+    parameters
+        .items
+        .first()
+        .is_some_and(|parameter| parameter.type_annotation.is_some())
 }
 
 /// What tsc's enum constant evaluation can say about an initializer without
@@ -1064,6 +1105,53 @@ impl GrammarCollector {
         }
     }
 
+    /// tsc's `getTypeOfAccessors` when neither accessor of a name is typed: no
+    /// getter return annotation, no getter body to infer from and no setter
+    /// parameter annotation leave the property an implicit `any`, reported on
+    /// the setter (TS7032) unless it is private in an ambient context. Only
+    /// names whose `symbolToString` surge can spell are reported.
+    fn check_untyped_setters(&mut self, accessors: &[AccessorRecord], ambient: bool) {
+        for setter in accessors.iter().filter(|accessor| !accessor.is_getter) {
+            let Some(display) = setter.display.as_deref() else {
+                continue;
+            };
+            if setter.annotated || (setter.private && ambient) {
+                continue;
+            }
+            let getter = accessors.iter().find(|accessor| {
+                accessor.is_getter && accessor.key == setter.key && accessor.is_static == setter.is_static
+            });
+            if getter.is_some_and(|getter| getter.annotated || getter.has_body) {
+                continue;
+            }
+            // A private setter in a declaration file is ambient too, which
+            // only the checker knows.
+            let payload = if setter.private { format!("{display}\0private") } else { display.to_string() };
+            self.push(Kind::Ts(7032), setter.span, Some(&payload));
+        }
+    }
+
+    /// A member name `[Name]` in a module-level type literal or interface,
+    /// which tsc resolves as a value; see [`Kind::ComputedTypeMemberName`].
+    fn check_computed_type_member_names(&mut self, members: &[TSSignature<'_>], type_literal: bool) {
+        if !self.function_async.is_empty() || self.nested_scope_depth > 0 {
+            return;
+        }
+        for member in members {
+            let (key, mapped) = match member {
+                TSSignature::TSPropertySignature(property) if property.computed => {
+                    (&property.key, type_literal && members.len() == 1)
+                }
+                TSSignature::TSMethodSignature(method) if method.computed => (&method.key, false),
+                _ => continue,
+            };
+            if let PropertyKey::Identifier(identifier) = key {
+                let payload = format!("{}\0{}", identifier.name, u8::from(mapped));
+                self.push(Kind::ComputedTypeMemberName, identifier.span, Some(&payload));
+            }
+        }
+    }
+
     /// tsc's "A 'get' accessor must return a value" (TS2378): a body with no
     /// `return` at all whose end is reachable. Reachability is approximated by
     /// the body not ending in `throw`.
@@ -1294,6 +1382,35 @@ impl GrammarCollector {
             self.check_method_overloads(class);
         }
         self.check_accessor_pairs(class);
+        let accessors: Vec<AccessorRecord> = class
+            .body
+            .body
+            .iter()
+            .filter_map(|element| match element {
+                ClassElement::MethodDefinition(method)
+                    if matches!(method.kind, MethodDefinitionKind::Get | MethodDefinitionKind::Set) =>
+                {
+                    let is_getter = method.kind == MethodDefinitionKind::Get;
+                    Some(AccessorRecord {
+                        key: property_key_name(&method.key)?,
+                        display: accessor_display_name(&method.key, method.computed),
+                        is_static: method.r#static,
+                        is_getter,
+                        annotated: if is_getter {
+                            method.value.return_type.is_some()
+                        } else {
+                            setter_parameter_annotated(&method.value.params)
+                        },
+                        has_body: method.value.body.is_some(),
+                        private: method.accessibility == Some(oxc_ast::ast::TSAccessibility::Private)
+                            || matches!(method.key, PropertyKey::PrivateIdentifier(_)),
+                        span: method.key.span(),
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        self.check_untyped_setters(&accessors, ambient);
 
         // A property with no annotation and no initializer has an implicit
         // `any` type *unless* the constructor assigns it: tsc infers the
@@ -1417,6 +1534,30 @@ impl GrammarCollector {
     /// An interface reports the duplicate half only: a bodyless method there is
     /// a signature, never a missing implementation.
     fn check_interface_members(&mut self, members: &[TSSignature<'_>]) {
+        let accessors: Vec<AccessorRecord> = members
+            .iter()
+            .filter_map(|member| match member {
+                TSSignature::TSMethodSignature(method) if method.kind != TSMethodSignatureKind::Method => {
+                    let is_getter = method.kind == TSMethodSignatureKind::Get;
+                    Some(AccessorRecord {
+                        key: property_key_name(&method.key)?,
+                        display: accessor_display_name(&method.key, method.computed),
+                        is_static: false,
+                        is_getter,
+                        annotated: if is_getter {
+                            method.return_type.is_some()
+                        } else {
+                            setter_parameter_annotated(&method.params)
+                        },
+                        has_body: false,
+                        private: false,
+                        span: method.key.span(),
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        self.check_untyped_setters(&accessors, false);
         let mut groups: Vec<MemberGroup> = Vec::new();
         let mut group_slots: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
@@ -1657,18 +1798,45 @@ impl GrammarCollector {
 
     /// A type-level signature has no body to infer a parameter from, so an
     /// unannotated one is `any` unless an (erroneous) initializer types it.
-    fn check_implicit_any_signature_parameters(&mut self, parameters: &FormalParameters<'_>) {
-        for parameter in &parameters.items {
+    /// `may_name_type` is tsc's `reportImplicitAny` test for a call signature,
+    /// method signature or function type, whose bare parameter name may be a
+    /// forgotten type (`(string) => void`); the checker resolves the name.
+    fn check_implicit_any_signature_parameters(
+        &mut self,
+        parameters: &FormalParameters<'_>,
+        may_name_type: bool,
+    ) {
+        for (index, parameter) in parameters.items.iter().enumerate() {
             if parameter.type_annotation.is_some() || parameter.initializer.is_some() {
                 continue;
             }
-            if let oxc_ast::ast::BindingPattern::BindingIdentifier(binding) = &parameter.pattern {
+            let oxc_ast::ast::BindingPattern::BindingIdentifier(binding) = &parameter.pattern else {
+                continue;
+            };
+            if may_name_type {
+                self.push(
+                    Kind::NamedSignatureParameterWithoutType,
+                    binding.span,
+                    Some(&format!("{}\0arg{index}\0", binding.name)),
+                );
+            } else {
                 self.push(
                     Kind::ImplicitAnySignatureParameter,
                     binding.span,
                     Some(binding.name.as_str()),
                 );
             }
+        }
+        if may_name_type
+            && let Some(rest) = parameters.rest.as_deref()
+            && rest.type_annotation.is_none()
+            && let oxc_ast::ast::BindingPattern::BindingIdentifier(binding) = &rest.rest.argument
+        {
+            self.push(
+                Kind::NamedSignatureParameterWithoutType,
+                rest.span,
+                Some(&format!("{}\0arg{}\0[]", binding.name, parameters.items.len())),
+            );
         }
     }
 
@@ -2007,7 +2175,49 @@ impl<'a> Visit<'a> for GrammarCollector {
         self.check_default_exports(&program.body);
         self.check_function_implementations(&program.body);
         oxc_ast_visit::walk::walk_program(self, program);
+        let bound: std::collections::HashSet<&str> = self
+            .binding_names
+            .iter()
+            .filter(|(_, span)| {
+                !self
+                    .type_declaration_name_spans
+                    .contains(&(span.start, span.end))
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let findings = std::mem::take(&mut self.diagnostics);
+        self.diagnostics = findings
+            .into_iter()
+            .filter(|finding| {
+                finding.kind != Kind::ComputedTypeMemberName
+                    || finding
+                        .name
+                        .as_deref()
+                        .and_then(|payload| payload.split('\0').next())
+                        .is_some_and(|name| !bound.contains(name))
+            })
+            .collect();
     }
+
+    fn visit_binding_identifier(&mut self, identifier: &oxc_ast::ast::BindingIdentifier<'a>) {
+        self.binding_names.push((identifier.name.to_string(), identifier.span));
+    }
+
+    fn visit_ts_type_alias_declaration(
+        &mut self,
+        declaration: &oxc_ast::ast::TSTypeAliasDeclaration<'a>,
+    ) {
+        self.type_declaration_name_spans
+            .insert((declaration.id.span.start, declaration.id.span.end));
+        oxc_ast_visit::walk::walk_ts_type_alias_declaration(self, declaration);
+    }
+
+    fn visit_block_statement(&mut self, block: &oxc_ast::ast::BlockStatement<'a>) {
+        self.nested_scope_depth += 1;
+        oxc_ast_visit::walk::walk_block_statement(self, block);
+        self.nested_scope_depth -= 1;
+    }
+
 
     fn visit_function_body(&mut self, body: &FunctionBody<'a>) {
         self.check_function_implementations(&body.statements);
@@ -2070,13 +2280,16 @@ impl<'a> Visit<'a> for GrammarCollector {
     // ambient: a bodyless declaration there is a declaration, not a missing
     // implementation.
     fn visit_ts_global_declaration(&mut self, declaration: &TSGlobalDeclaration<'a>) {
+        self.nested_scope_depth += 1;
         self.ambient_depth += 1;
         oxc_ast_visit::walk::walk_ts_global_declaration(self, declaration);
         self.ambient_depth -= 1;
+        self.nested_scope_depth -= 1;
     }
 
     fn visit_ts_module_declaration(&mut self, declaration: &TSModuleDeclaration<'a>) {
         let ambient = declaration.declare || self.is_ambient();
+        self.nested_scope_depth += 1;
         if ambient {
             self.ambient_depth += 1;
         }
@@ -2091,6 +2304,7 @@ impl<'a> Visit<'a> for GrammarCollector {
         if ambient {
             self.ambient_depth -= 1;
         }
+        self.nested_scope_depth -= 1;
     }
 
     fn visit_class(&mut self, class: &Class<'a>) {
@@ -2103,12 +2317,16 @@ impl<'a> Visit<'a> for GrammarCollector {
         &mut self,
         declaration: &oxc_ast::ast::TSInterfaceDeclaration<'a>,
     ) {
+        self.type_declaration_name_spans
+            .insert((declaration.id.span.start, declaration.id.span.end));
         self.check_interface_members(&declaration.body.body);
+        self.check_computed_type_member_names(&declaration.body.body, false);
         oxc_ast_visit::walk::walk_ts_interface_declaration(self, declaration);
     }
 
     fn visit_ts_type_literal(&mut self, literal: &oxc_ast::ast::TSTypeLiteral<'a>) {
         self.check_interface_members(&literal.members);
+        self.check_computed_type_member_names(&literal.members, true);
         oxc_ast_visit::walk::walk_ts_type_literal(self, literal);
     }
 
@@ -2255,7 +2473,7 @@ impl<'a> Visit<'a> for GrammarCollector {
             self.push(Kind::ImplicitAnyCallReturn, signature.span, None);
         }
         self.check_signature_parameters(&signature.params, false);
-        self.check_implicit_any_signature_parameters(&signature.params);
+        self.check_implicit_any_signature_parameters(&signature.params, true);
         oxc_ast_visit::walk::walk_ts_call_signature_declaration(self, signature);
     }
 
@@ -2267,23 +2485,23 @@ impl<'a> Visit<'a> for GrammarCollector {
             self.push(Kind::ImplicitAnyConstructReturn, signature.span, None);
         }
         self.check_signature_parameters(&signature.params, false);
-        self.check_implicit_any_signature_parameters(&signature.params);
+        self.check_implicit_any_signature_parameters(&signature.params, false);
         oxc_ast_visit::walk::walk_ts_construct_signature_declaration(self, signature);
     }
 
     fn visit_ts_function_type(&mut self, function: &oxc_ast::ast::TSFunctionType<'a>) {
-        self.check_implicit_any_signature_parameters(&function.params);
+        self.check_implicit_any_signature_parameters(&function.params, true);
         oxc_ast_visit::walk::walk_ts_function_type(self, function);
     }
 
     fn visit_ts_constructor_type(&mut self, constructor: &oxc_ast::ast::TSConstructorType<'a>) {
-        self.check_implicit_any_signature_parameters(&constructor.params);
+        self.check_implicit_any_signature_parameters(&constructor.params, false);
         oxc_ast_visit::walk::walk_ts_constructor_type(self, constructor);
     }
 
     fn visit_ts_method_signature(&mut self, method: &TSMethodSignature<'a>) {
         self.check_signature_parameters(&method.params, false);
-        self.check_implicit_any_signature_parameters(&method.params);
+        self.check_implicit_any_signature_parameters(&method.params, true);
         if method.kind == TSMethodSignatureKind::Method
             && method.return_type.is_none()
             && !method.computed
@@ -2300,6 +2518,36 @@ impl<'a> Visit<'a> for GrammarCollector {
 
     fn visit_object_expression(&mut self, object: &ObjectExpression<'a>) {
         self.check_duplicate_properties(object);
+        let accessors: Vec<AccessorRecord> = object
+            .properties
+            .iter()
+            .filter_map(|property| match property {
+                ObjectPropertyKind::ObjectProperty(property)
+                    if matches!(property.kind, PropertyKind::Get | PropertyKind::Set) =>
+                {
+                    let Expression::FunctionExpression(function) = &property.value else {
+                        return None;
+                    };
+                    let is_getter = property.kind == PropertyKind::Get;
+                    Some(AccessorRecord {
+                        key: property_key_name(&property.key)?,
+                        display: accessor_display_name(&property.key, property.computed),
+                        is_static: false,
+                        is_getter,
+                        annotated: if is_getter {
+                            function.return_type.is_some()
+                        } else {
+                            setter_parameter_annotated(&function.params)
+                        },
+                        has_body: function.body.is_some(),
+                        private: false,
+                        span: property.key.span(),
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        self.check_untyped_setters(&accessors, false);
         for property in &object.properties {
             if let ObjectPropertyKind::ObjectProperty(property) = property
                 && property.kind == PropertyKind::Get

@@ -1080,6 +1080,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             no_unused_parameters: false,
             allow_unreachable_code: false,
             report_unreachable_code: false,
+            allow_unused_labels: None,
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
