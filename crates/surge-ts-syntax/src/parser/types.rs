@@ -344,6 +344,7 @@ fn parse_indexed_access_type(indexed_access: &TSIndexedAccessType<'_>) -> Option
         object_type: Box::new(object_type),
         index_type: Box::new(index_type),
         span: Some(text_span_from_oxc_span(indexed_access.span)),
+        index_span: Some(text_span_from_oxc_span(indexed_access.index_type.span())),
     })))
 }
 

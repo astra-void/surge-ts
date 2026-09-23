@@ -715,6 +715,16 @@ pub const TS2536: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2537: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2537",
+    number: Some(2537),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type '{0}' has no matching index signature for type '{1}'.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2538: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2538",
     number: Some(2538),
@@ -4137,6 +4147,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2862,
     TS4104,
     TS2536,
+    TS2537,
     TS2538,
     TS2550,
     TS2551,
@@ -5159,6 +5170,18 @@ impl Diagnostic {
     pub fn ts2536(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS2536,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2537(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2537,
             vec![
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),

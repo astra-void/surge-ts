@@ -585,6 +585,8 @@ pub struct ParsedIndexedAccessType {
     pub object_type: Box<ParsedType>,
     pub index_type: Box<ParsedType>,
     pub span: Option<TextSpan>,
+    /// Where tsc reports a key the object cannot be indexed by.
+    pub index_span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

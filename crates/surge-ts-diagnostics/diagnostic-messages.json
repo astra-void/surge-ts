@@ -568,6 +568,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2537",
+    "category": "Error",
+    "message": "Type '{0}' has no matching index signature for type '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2538",
     "category": "Error",
     "message": "Type '{0}' cannot be used as an index type.",

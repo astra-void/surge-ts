@@ -569,6 +569,14 @@ message = "Type '{0}' cannot be used to index type '{1}'."
 arity = 2
 
 [[diagnostic]]
+code = "TS2537"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' has no matching index signature for type '{1}'."
+arity = 2
+
+[[diagnostic]]
 code = "TS2538"
 category = "Error"
 source = "typescript"

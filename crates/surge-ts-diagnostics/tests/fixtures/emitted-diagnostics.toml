@@ -761,6 +761,15 @@ span_tests = [
   "crates/surge-ts-checker/tests/spans.rs",
 ]
 
+[TS2537]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/indexed-access-index-kinds-basic/src/index.ts",
+]
+oracle = [
+  "indexed-access-index-kinds-basic",
+]
+
 [TS2538]
 status = "emitted"
 fixtures = [
