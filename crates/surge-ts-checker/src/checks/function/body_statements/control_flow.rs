@@ -484,8 +484,18 @@ pub(crate) fn check_function_for_of_statement(
     // A `let`/`const` head is declared by the statement, so the expression it
     // iterates already sees it — only a deferred read can get past the
     // temporal dead zone reported above, and its type is circular there.
-    let head_scoped =
-        for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::BlockScoped;
+    // A `var` head is hoisted, so the expression reads the variable the head
+    // declares; unless an earlier declaration already typed it, its type
+    // depends on that expression (`getTypeForVariableLikeDeclaration`) and is
+    // circular there — `any` (`reportCircularityError`).
+    let head_var_circular = for_of_statement.binding_kind
+        == surge_ts_syntax::ParsedForBindingKind::Var
+        && matches!(
+            &for_of_statement.binding_name,
+            surge_ts_syntax::ParsedBindingName::Identifier { name, .. } if scopes.resolve(name).is_none()
+        );
+    let head_scoped = head_var_circular
+        || for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::BlockScoped;
     if head_scoped {
         scopes.push_child();
         insert_binding_name(&for_of_statement.binding_name, Type::Any, scopes);
