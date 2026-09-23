@@ -286,6 +286,48 @@ fn object_property_is_readonly(receiver: &Type, property_name: &str) -> bool {
     }
 }
 
+/// What a write through an index into a `readonly` array or tuple reaches: a
+/// tuple's fixed element is a property, and any other index the read-only
+/// index signature, named as tsc prints the receiver.
+pub(crate) enum ReadonlyElementWrite {
+    Property(String),
+    IndexSignature(String),
+}
+
+pub(crate) fn readonly_element_write(receiver: &Type, index_type: &Type) -> Option<ReadonlyElementWrite> {
+    let Type::Reference(reference) = receiver else {
+        return None;
+    };
+    // The lib's `ReadonlyArray<T>` written by name is the same readonly array
+    // as `readonly T[]`, which tsc also prints it as.
+    let lib_readonly_array = reference.arguments.len() == 1
+        && reference.id.split('\u{0}').next_back() == Some("ReadonlyArray");
+    if !reference.is_readonly_array() && !lib_readonly_array {
+        return None;
+    }
+
+    // Only the leading fixed elements of an open tuple are properties; the
+    // rest of it is read through its index signature.
+    let key = literal_index_key(index_type);
+    match (receiver.peeled(), key) {
+        (Type::Tuple(_), Some(key)) => return Some(ReadonlyElementWrite::Property(key)),
+        (Type::OpenTuple(tuple), Some(key)) if tuple.leading_element(&key).is_some() => {
+            return Some(ReadonlyElementWrite::Property(key));
+        }
+        _ => {}
+    }
+    let name = if lib_readonly_array {
+        let element = &reference.arguments[0];
+        match element {
+            Type::Union(_) | Type::Function(_) => format!("readonly ({})[]", element.name()),
+            _ => format!("readonly {}[]", element.name()),
+        }
+    } else {
+        receiver.name()
+    };
+    Some(ReadonlyElementWrite::IndexSignature(name))
+}
+
 /// A write through an index into a `readonly` array or tuple. tsc reports the
 /// index signature (TS2542) for an array-like receiver and the element itself
 /// (TS2540) for a tuple, whose elements are properties.
@@ -296,35 +338,17 @@ fn report_readonly_element_write(
     access_span: Option<surge_ts_syntax::TextSpan>,
     ctx: &mut CheckerContext,
 ) -> bool {
-    let Type::Reference(reference) = receiver else {
+    let Some(write) = readonly_element_write(receiver, index_type) else {
         return false;
     };
-    // The lib's `ReadonlyArray<T>` written by name is the same readonly array
-    // as `readonly T[]`, which tsc also prints it as.
-    let lib_readonly_array = reference.arguments.len() == 1
-        && reference.id.split('\u{0}').next_back() == Some("ReadonlyArray");
-    if !reference.is_readonly_array() && !lib_readonly_array {
-        return false;
-    }
 
     // A tuple element is a property, reported on the index; an array's index
     // signature is reported on the whole access (`errorIfWritingToReadonlyIndex`).
-    let (diagnostic, span) = match (receiver.peeled(), literal_index_key(index_type)) {
-        (Type::Tuple(_), Some(key)) => {
+    let (diagnostic, span) = match write {
+        ReadonlyElementWrite::Property(key) => {
             (Diagnostic::ts2540(key, ctx.file_name.clone()), element_span)
         }
-        _ => {
-            let name = if lib_readonly_array {
-                let element = &reference.arguments[0];
-                match element {
-                    Type::Union(_) | Type::Function(_) => {
-                        format!("readonly ({})[]", element.name())
-                    }
-                    _ => format!("readonly {}[]", element.name()),
-                }
-            } else {
-                receiver.name()
-            };
+        ReadonlyElementWrite::IndexSignature(name) => {
             (Diagnostic::ts2542(name, ctx.file_name.clone()), access_span)
         }
     };

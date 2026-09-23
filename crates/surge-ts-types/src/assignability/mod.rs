@@ -981,11 +981,23 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             }
         }
         // A readonly array or tuple is not assignable to a mutable one: the
-        // mutable surface has `push`/`splice` the readonly one lacks.
-        if reference.is_readonly_array()
-            && matches!(to, Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_))
-        {
-            return false;
+        // mutable surface has `push`/`splice` the readonly one lacks. A union
+        // target's members were each tried against the readonly source above
+        // (`typeRelatedToSomeType`); retrying them with the mutable shape it
+        // resolves to would accept `readonly T[]` as `T[] | undefined`. A
+        // target reference is read first for the same reason, and the lib's
+        // `Array<T>` written by name is the mutable array itself.
+        if reference.is_readonly_array() {
+            match to {
+                Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) | Type::Union(_) => return false,
+                Type::Reference(target) if !target.is_readonly_array() => {
+                    if target.arguments.len() == 1 && target.id.split('\u{0}').next_back() == Some("Array") {
+                        return false;
+                    }
+                    return is_assignable_to(from, &target.resolve_arc());
+                }
+                _ => {}
+            }
         }
         // `resolve_arc` borrows the memoized/interned expansion instead of
         // deep-cloning it — this arm is peeled millions of times on
