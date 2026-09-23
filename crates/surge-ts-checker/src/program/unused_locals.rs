@@ -250,6 +250,7 @@ fn import_local_bindings(kind: &ParsedImportKind) -> Vec<(&str, Option<TextSpan>
         | ParsedImportKind::Equals {
             local_name,
             name_span,
+            ..
         } => vec![(local_name.as_str(), *name_span)],
         ParsedImportKind::SideEffect
         | ParsedImportKind::Unsupported

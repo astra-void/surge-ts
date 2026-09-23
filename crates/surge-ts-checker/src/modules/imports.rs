@@ -1961,7 +1961,8 @@ fn import_is_type_only(kind: &ParsedImportKind) -> bool {
     match kind {
         ParsedImportKind::Named { is_type_only, .. }
         | ParsedImportKind::DefaultAndNamed { is_type_only, .. }
-        | ParsedImportKind::Namespace { is_type_only, .. } => *is_type_only,
+        | ParsedImportKind::Namespace { is_type_only, .. }
+        | ParsedImportKind::Equals { is_type_only, .. } => *is_type_only,
         ParsedImportKind::TypeOnlyDefault { .. } => true,
         _ => false,
     }

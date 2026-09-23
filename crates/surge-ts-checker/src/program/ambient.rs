@@ -193,7 +193,8 @@ pub(crate) fn import_bound_names(statements: &[ParsedStatement]) -> HashSet<&str
 
 /// The local names a file's imports bind **in type space only**
 /// (`import type X from …`, `import type { X } from …`,
-/// `import type * as X from …`). Referencing one as a value is TS1361.
+/// `import type * as X from …`, `import type X = require(…)`). Referencing one
+/// as a value is TS1361.
 pub(crate) fn type_only_import_bound_names(statements: &[ParsedStatement]) -> HashSet<&str> {
     let mut names = HashSet::new();
 
@@ -227,6 +228,11 @@ pub(crate) fn type_only_import_bound_names(statements: &[ParsedStatement]) -> Ha
                 );
             }
             surge_ts_syntax::ParsedImportKind::Namespace {
+                local_name,
+                is_type_only: true,
+                ..
+            }
+            | surge_ts_syntax::ParsedImportKind::Equals {
                 local_name,
                 is_type_only: true,
                 ..

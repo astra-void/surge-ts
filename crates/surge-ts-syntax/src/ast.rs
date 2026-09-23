@@ -1076,6 +1076,8 @@ pub enum ParsedImportKind {
     Equals {
         local_name: String,
         name_span: Option<TextSpan>,
+        /// `import type local = require("specifier")`.
+        is_type_only: bool,
     },
     /// `import local = N.M` — an alias of an entity name. The parser already
     /// rewrote every reference to it; this records the alias for what names it

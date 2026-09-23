@@ -369,6 +369,7 @@ export const fixturePresets: Record<string, string> = {
   'export-equals-entity-meanings': path.join(workspaceRoot, 'tests/compat-projects/export-equals-entity-meanings/tsconfig.json'),
   'import-equals-module-namespace-as-type': path.join(workspaceRoot, 'tests/compat-projects/import-equals-module-namespace-as-type/tsconfig.json'),
   'unresolved-import-generic-reference': path.join(workspaceRoot, 'tests/compat-projects/unresolved-import-generic-reference/tsconfig.json'),
+  'type-only-import-equals': path.join(workspaceRoot, 'tests/compat-projects/type-only-import-equals/tsconfig.json'),
   'indexed-access-index-kinds-basic': path.join(workspaceRoot, 'tests/compat-projects/indexed-access-index-kinds-basic/tsconfig.json'),
   'missing-member-prefix-lookup': path.join(workspaceRoot, 'tests/compat-projects/missing-member-prefix-lookup/tsconfig.json'),
   'property-initializer-constructor-locals': path.join(workspaceRoot, 'tests/compat-projects/property-initializer-constructor-locals/tsconfig.json'),

@@ -326,7 +326,12 @@ fn parse_exported_declaration(
             let import = super::imports::parse_import_equals_declaration(import_equals)?;
             // `export import local = require("m")` declares the alias and
             // exports it — the exported alias `export { local }` would give.
-            if let ParsedImportKind::Equals { local_name, name_span } = &import.kind {
+            if let ParsedImportKind::Equals {
+                local_name,
+                name_span,
+                ..
+            } = &import.kind
+            {
                 let export = ParsedExportDeclaration::Named {
                     is_type_only: false,
                     specifiers: vec![ParsedExportSpecifier {
