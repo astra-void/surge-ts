@@ -540,13 +540,23 @@ pub(crate) fn instantiate_function_type_with_substitution<'a>(
             ));
         }
 
-        let instantiated_return_type = function_signature
-            .return_type
-            .as_ref()
-            .map(|return_type| {
+        let instantiated_return_type = match function_signature.return_type.as_ref() {
+            Some(return_type) => {
                 map_parsed_type_with_substitution(return_type.clone(), ctx, substitution)
-            })
-            .unwrap_or_else(|| function_type.return_type().clone());
+            }
+            None => function_signature
+                .body_return
+                .as_ref()
+                .and_then(|function| {
+                    crate::checks::function::instantiated_body_return(
+                        function,
+                        substitution,
+                        &instantiated_parameters,
+                        ctx,
+                    )
+                })
+                .unwrap_or_else(|| function_type.return_type().clone()),
+        };
 
         Cow::Owned(alloc_function_type(
             instantiated_parameters,

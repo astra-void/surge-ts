@@ -85,6 +85,8 @@ fn body_inference_shadow_context(ctx: &CheckerContext) -> CheckerContext {
     shadow.import_type_namespaces = ctx.import_type_namespaces.clone();
     shadow.import_type_globals = ctx.import_type_globals.clone();
     shadow.namespace_member_prefix_stack = ctx.namespace_member_prefix_stack.clone();
+    shadow.type_parameter_scopes = ctx.type_parameter_scopes.clone();
+    shadow.type_parameter_constraint_scopes = ctx.type_parameter_constraint_scopes.clone();
     shadow
 }
 
@@ -410,12 +412,84 @@ fn lazy_body_return_reference(
 /// Whether a declaration's return type comes from its body at all: it is
 /// unannotated, has a body to read, and is not a generator (whose result is a
 /// `Generator`, not what its body completes with).
-fn return_type_comes_from_body(function: &ParsedFunctionDeclaration) -> bool {
+pub(crate) fn return_type_comes_from_body(function: &ParsedFunctionDeclaration) -> bool {
     function.return_type.is_none()
         && !function.is_declare
         && function.has_body
         && !function.is_generator
         && !function.body.is_empty()
+}
+
+/// A generic declaration's unannotated return for one call: the body read with
+/// the declaration's type parameters bound to the call's type arguments and its
+/// parameters at their instantiated types. Go computes the return once over the
+/// type parameters and instantiates it per call (`instantiateType(
+/// getReturnTypeOfSignature(sig.target), sig.mapper)`); a body surge reads
+/// lazily has no substitutable form, so each call reads it under its own
+/// bindings, which is the same type. `None` keeps the sentinel: a type argument
+/// the call left unresolved, a recursive call, or a body not typed cleanly.
+pub(crate) fn instantiated_body_return(
+    function: &ParsedFunctionDeclaration,
+    substitution: &crate::infer::TypeParameterSubstitution,
+    parameter_types: &[Type],
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let start = function.name_span.map_or(0, |span| span.start);
+    let id: std::sync::Arc<str> = std::sync::Arc::from(format!(
+        "{}{BODY_RETURN_ID_TAG}{}\u{0}{start}",
+        ctx.file_name, function.name
+    ));
+    let re_entered = BODY_RETURNS_IN_PROGRESS.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        if stack.iter().any(|entry| **entry == *id) {
+            return true;
+        }
+        stack.push(id.clone());
+        false
+    });
+    if re_entered {
+        return None;
+    }
+    struct PopInProgress;
+    impl Drop for PopInProgress {
+        fn drop(&mut self) {
+            BODY_RETURNS_IN_PROGRESS.with(|stack| {
+                stack.borrow_mut().pop();
+            });
+        }
+    }
+    let _pop = PopInProgress;
+
+    let mut bindings = std::collections::HashMap::new();
+    for type_parameter in &function.type_parameters {
+        let bound = substitution
+            .get(&type_parameter.name)
+            .filter(|ty| !ty.is_unknown() && !substitution.is_placeholder(&type_parameter.name))?;
+        bindings.insert(type_parameter.name.clone(), bound.clone());
+    }
+    // The body names what its own module has in scope, not the caller's.
+    let file_name = ctx.file_name.clone();
+    let scope = match ctx.module_local_values_for_file(&file_name) {
+        Some(values) => values
+            .as_ref()
+            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+        None => ctx
+            .symbols
+            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+    };
+    let saved_declarations = std::mem::take(&mut ctx.type_declarations);
+    let saved_scope = std::mem::replace(
+        &mut ctx.type_declaration_scope,
+        crate::program::program_module_scope_for_file(&file_name),
+    );
+    ctx.type_parameter_scopes.push(bindings);
+    ctx.type_parameter_constraint_scopes
+        .push(std::collections::HashMap::new());
+    let inferred = infer_body_return(function, parameter_types, scope, ctx);
+    ctx.pop_type_parameter_scope();
+    ctx.type_declaration_scope = saved_scope;
+    ctx.type_declarations = saved_declarations;
+    inferred
 }
 
 fn inferred_declaration_return_type(

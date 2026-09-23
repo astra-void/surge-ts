@@ -293,7 +293,14 @@ pub(crate) fn merged_type_parameter_substitution(
 
     for scope in &ctx.type_parameter_scopes {
         for (name, ty) in scope {
-            merged.insert_placeholder(name.clone(), ty.clone());
+            // A scope holds a declaration's own type variables (or the sentinel)
+            // while it is resolved or checked; any other type is a call's type
+            // argument its body is read under (`instantiated_body_return`).
+            if matches!(ty, Type::TypeParameter(_) | Type::Unknown) {
+                merged.insert_placeholder(name.clone(), ty.clone());
+            } else {
+                merged.insert(name.clone(), ty.clone());
+            }
         }
     }
 

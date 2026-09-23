@@ -1036,6 +1036,7 @@ pub(crate) fn function_signature_info(
         predicate_overload: None,
         overload_alternatives: Vec::new(),
         inferred_predicate: None,
+        body_return: None,
     })
 }
 
@@ -1054,6 +1055,13 @@ pub(crate) fn function_declaration_signature_info(
         function.return_type.as_ref(),
         declaring_file,
     );
+    if !function.type_parameters.is_empty()
+        && crate::checks::function::return_type_comes_from_body(function)
+    {
+        let mut carried = (*info).clone();
+        carried.body_return = Some(Arc::new(function.clone()));
+        return Arc::new(carried);
+    }
     if function.return_type.is_some()
         || function.is_async
         || function.is_generator
@@ -1121,6 +1129,7 @@ pub(crate) fn function_type_signature_info(
         predicate_overload: None,
         overload_alternatives: Vec::new(),
         inferred_predicate: None,
+        body_return: None,
     })
 }
 

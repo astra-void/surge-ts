@@ -88,6 +88,10 @@ pub(crate) struct FunctionSignatureInfo {
     /// parameter types are known; guard narrowing reads it as it reads a
     /// written `x is T`.
     pub(crate) inferred_predicate: Option<InferredPredicate>,
+    /// A generic declaration with a body and no written return type: tsc reads
+    /// its return from the body (`getReturnTypeFromBody`) and instantiates it
+    /// per call, so each call infers the body under its own type arguments.
+    pub(crate) body_return: Option<Arc<surge_ts_syntax::ParsedFunctionDeclaration>>,
 }
 
 #[derive(Debug, Clone)]

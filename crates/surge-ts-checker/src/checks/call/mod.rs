@@ -2726,6 +2726,7 @@ fn substituted_construct_signature(
         predicate_overload: None,
         overload_alternatives: Vec::new(),
         inferred_predicate: None,
+        body_return: None,
     };
     let mut substitution = crate::infer::TypeParameterSubstitution::new();
     for (type_parameter, argument) in parsed.type_parameters.iter().zip(type_arguments.iter()) {
