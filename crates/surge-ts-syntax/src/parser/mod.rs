@@ -23,6 +23,7 @@ mod import_calls;
 mod imports;
 mod interfaces;
 mod json;
+mod reachability;
 mod reads;
 mod reference_directives;
 mod spans;

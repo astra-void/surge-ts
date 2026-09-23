@@ -557,6 +557,7 @@ impl Project {
             no_unused_locals: loaded.compiler_options.no_unused_locals,
             no_unused_parameters: loaded.compiler_options.no_unused_parameters,
             allow_unreachable_code: loaded.compiler_options.allow_unreachable_code,
+            report_unreachable_code: loaded.compiler_options.report_unreachable_code,
             no_lib: loaded.compiler_options.no_lib,
             skip_lib_check: loaded.compiler_options.skip_lib_check,
             stub_external_modules: options.stub_external_modules,
@@ -568,6 +569,7 @@ impl Project {
                 Some(surge_ts_config::JsxMode::ReactJsx | surge_ts_config::JsxMode::ReactJsxDev)
             ),
             jsx_classic_react: loaded.compiler_options.jsx == Some(surge_ts_config::JsxMode::React),
+            jsx_emit_none: loaded.compiler_options.jsx.is_none(),
             allow_umd_global_access: loaded.compiler_options.allow_umd_global_access,
             resolve_json_module: loaded.compiler_options.resolve_json_module,
             diagnostic_profile: options.diagnostic_profile,

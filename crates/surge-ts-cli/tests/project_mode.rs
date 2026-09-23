@@ -155,6 +155,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             skip_lib_check: false,
             jsx_automatic_runtime: false,
             jsx_classic_react: false,
+            jsx_emit_none: false,
             allow_umd_global_access: false,
             types: Vec::new(),
             stub_external_modules: false,
@@ -178,6 +179,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,
+            report_unreachable_code: false,
         },
     );
 

@@ -29,6 +29,7 @@ pub(crate) fn collect_grammar_diagnostics(
     let mut collector = GrammarCollector::default();
     collector.visit_program(program);
     super::grammar_context::collect_context_grammar_diagnostics(program, &mut collector.diagnostics);
+    super::reachability::collect_unreachable_code(program, &mut collector.diagnostics);
     let mut parenthesized = collector.parenthesized_expressions;
     parenthesized.sort_unstable_by_key(|span| (span.inner.start, span.inner.end));
     (collector.diagnostics, parenthesized)

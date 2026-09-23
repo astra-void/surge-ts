@@ -913,6 +913,9 @@ fn grammar_finding_diagnostic(
         Kind::Ts(1202) if !ctx.options.module_emit.is_ecmascript() => return None,
         Kind::Ts(1203) if !export_assignment_targets_esm(ctx) => return None,
         Kind::Ts(2699) if ctx.options.use_define_for_class_fields => return None,
+        // tsc reports unreachable code as an error only under an explicit
+        // `allowUnreachableCode: false`; unset makes it a suggestion.
+        Kind::Ts(7027) if !ctx.options.report_unreachable_code => return None,
         Kind::TsUnderStrictNullChecks(_) if !ctx.options.strict_null_checks => return None,
         Kind::Ts(number) | Kind::TsUnderStrictNullChecks(number) => {
             let args: Vec<surge_ts_diagnostics::DiagnosticArg> = finding

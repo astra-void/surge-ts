@@ -679,6 +679,7 @@ fn evaluate_expression_unsettled(
             children,
             span,
         } => {
+            crate::checks::jsx::check_jsx_preconditions(*span, fallback_span, ctx);
             crate::checks::jsx::check_jsx_factory_reference(*tag_name_span, fallback_span, ctx);
             crate::checks::jsx::check_jsx_element(
                 tag_name,
@@ -696,6 +697,7 @@ fn evaluate_expression_unsettled(
             infer_expression(expression, symbols, ctx)
         }
         ParsedExpression::JsxFragment { children, span } => {
+            crate::checks::jsx::check_jsx_preconditions(*span, fallback_span, ctx);
             crate::checks::jsx::check_jsx_factory_reference(*span, fallback_span, ctx);
             for child in children {
                 evaluate_jsx_child(child, fallback_span, symbols, ctx);
