@@ -737,6 +737,7 @@ export const fixturePresets: Record<string, string> = {
   'callable-object-function-members': path.join(workspaceRoot, 'tests/compat-projects/callable-object-function-members/tsconfig.json'),
   'leading-zero-numeric-literal-basic': path.join(workspaceRoot, 'tests/compat-projects/leading-zero-numeric-literal-basic/tsconfig.json'),
   'numeric-literal-forms-valid': path.join(workspaceRoot, 'tests/compat-projects/numeric-literal-forms-valid/tsconfig.json'),
+  'var-case-narrowing-scope': path.join(workspaceRoot, 'tests/compat-projects/var-case-narrowing-scope/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
