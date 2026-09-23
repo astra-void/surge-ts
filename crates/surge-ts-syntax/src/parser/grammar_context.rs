@@ -30,8 +30,19 @@ pub(crate) fn collect_context_grammar_diagnostics(
         source_text: program.source_text,
         external_module: is_external_module(program),
         ambient_depth: 0,
+        with_bodies: Vec::new(),
     };
     collector.visit_program(program);
+    // tsc's `checkWithStatement` checks the object but never the body, so no
+    // checker grammar error comes from inside one.
+    let with_bodies = std::mem::take(&mut collector.with_bodies);
+    if !with_bodies.is_empty() {
+        collector.out.retain(|finding| {
+            !with_bodies.iter().any(|body| {
+                body.start as usize <= finding.span.start && finding.span.end <= body.end as usize
+            })
+        });
+    }
 }
 
 /// tsc's `ExternalModuleIndicator` under the default `moduleDetection: auto`:
@@ -64,6 +75,8 @@ struct ContextCollector<'a, 'o> {
     external_module: bool,
     /// How many enclosing nodes carry tsc's `NodeFlagsAmbient`.
     ambient_depth: usize,
+    /// The bodies of the file's `with` statements, which tsc never checks.
+    with_bodies: Vec<Span>,
 }
 
 fn is_ambient_marker(kind: &AstKind<'_>) -> bool {
@@ -1290,16 +1303,35 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
-    /// Whether the node being entered is a statement of a source file or a
-    /// namespace body — where tsc's `checkGrammarModuleElementContext` allows
-    /// `export` and `declare`. Anywhere else they are TS1184.
+    /// tsc's `checkGrammarModuleElementContext`: whether the node being
+    /// entered is a statement of a source file or a namespace body, or the
+    /// inner declaration of a dotted namespace (`namespace A.B`). Only there may
+    /// a module element appear, and `export` and `declare` with it.
     fn at_module_element_level(&self) -> bool {
         let mut ancestors = self.stack.iter().rev();
         let mut parent = ancestors.next();
-        if matches!(parent, Some(AstKind::ExportNamedDeclaration(_))) {
+        if matches!(
+            parent,
+            Some(AstKind::ExportNamedDeclaration(_) | AstKind::ExportDefaultDeclaration(_))
+        ) {
             parent = ancestors.next();
         }
-        matches!(parent, None | Some(AstKind::Program(_) | AstKind::TSModuleBlock(_)))
+        matches!(
+            parent,
+            None | Some(AstKind::Program(_) | AstKind::TSModuleBlock(_) | AstKind::TSModuleDeclaration(_))
+        )
+    }
+
+    /// A module element out of place: `code` on its first token, the `export`
+    /// of an exported one (tsc's node owns its modifiers). tsc then skips the
+    /// element's other checks.
+    fn push_on_module_element(&mut self, code: u32, start: u32) {
+        let start = match self.stack.last() {
+            Some(AstKind::ExportNamedDeclaration(export)) => export.span.start,
+            _ => start,
+        };
+        let end = first_token_end(self.source_text, start as usize) as u32;
+        self.push(code, Span::new(start, end), &[]);
     }
 
     /// tsc's `checkClassForStaticPropertyNameConflicts`: a static member named
@@ -1806,7 +1838,10 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             }
             AstKind::LabeledStatement(statement) => self.check_labeled_statement(statement),
             AstKind::FormalParameter(parameter) => self.check_parameter_property(parameter),
-            AstKind::WithStatement(statement) => self.check_with_statement(statement),
+            AstKind::WithStatement(statement) => {
+                self.check_with_statement(statement);
+                self.with_bodies.push(statement.body.span());
+            }
             AstKind::BindingIdentifier(identifier) => {
                 self.check_contextual_identifier(&identifier.name, identifier.span);
                 if self.is_strict_checked_binding() {
@@ -1909,12 +1944,14 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             }
             AstKind::TSTypeParameterDeclaration(declaration) => self.check_circular_constraints(declaration),
             AstKind::Decorator(decorator) => self.check_parameter_decorator(decorator),
+            AstKind::TSImportEqualsDeclaration(declaration) if !self.at_module_element_level() => {
+                self.push_on_module_element(1232, declaration.span.start);
+            }
             AstKind::TSImportEqualsDeclaration(declaration) => {
                 // Gated on `module` by the checker: ES2015..ESNext cannot emit it.
                 // Inside a namespace it is TS1147 instead, and tsc stops there
                 // (`checkExternalImportOrExportDeclaration`).
                 if !self.check_import_require_in_namespace(declaration)
-                    && self.at_module_element_level()
                     && !matches!(self.stack.last(), Some(AstKind::TSModuleBlock(_)))
                     && matches!(
                     declaration.module_reference,
@@ -1924,6 +1961,9 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 {
                     self.push(1202, declaration.span, &[]);
                 }
+            }
+            AstKind::TSExportAssignment(assignment) if !self.at_module_element_level() => {
+                self.push_on_module_element(1231, assignment.span.start);
             }
             AstKind::TSExportAssignment(assignment) => {
                 // Gated on `module` and the file's emit format by the checker.
@@ -1935,24 +1975,60 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_reserved_type_name(2368, &parameter.name);
                 self.check_variance_modifier_owner(parameter);
             }
+            AstKind::ImportDeclaration(declaration) if !self.at_module_element_level() => {
+                self.push_on_module_element(1232, declaration.span.start);
+            }
             AstKind::ImportDeclaration(declaration) => {
                 if let Some(clause) = &declaration.with_clause {
                     self.check_import_assertion(clause);
+                }
+            }
+            AstKind::ExportNamedDeclaration(declaration) if !self.at_module_element_level() => {
+                let start = declaration.span.start;
+                match &declaration.declaration {
+                    // These report their own context error on this `export`.
+                    Some(
+                        oxc_ast::ast::Declaration::TSModuleDeclaration(_)
+                        | oxc_ast::ast::Declaration::TSGlobalDeclaration(_)
+                        | oxc_ast::ast::Declaration::TSImportEqualsDeclaration(_),
+                    ) => {}
+                    Some(_) => self.push(1184, Span::new(start, start + 6), &[]),
+                    None => self.push(1233, Span::new(start, start + 6), &[]),
                 }
             }
             AstKind::ExportNamedDeclaration(declaration) => {
                 if let Some(clause) = &declaration.with_clause {
                     self.check_import_assertion(clause);
                 }
-                if !self.at_module_element_level() {
-                    let start = declaration.span.start;
-                    self.push(1184, Span::new(start, start + 6), &[]);
-                }
+            }
+            AstKind::ExportAllDeclaration(declaration) if !self.at_module_element_level() => {
+                self.push_on_module_element(1233, declaration.span.start);
             }
             AstKind::ExportAllDeclaration(declaration) => {
                 if let Some(clause) = &declaration.with_clause {
                     self.check_import_assertion(clause);
                 }
+            }
+            // `export default <expression>` is tsc's export assignment; the
+            // `export` of a default-exported declaration is a modifier.
+            AstKind::ExportDefaultDeclaration(declaration) if !self.at_module_element_level() => {
+                let code = match &declaration.declaration {
+                    oxc_ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(_)
+                    | oxc_ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(_)
+                    | oxc_ast::ast::ExportDefaultDeclarationKind::TSInterfaceDeclaration(_) => 1184,
+                    _ => 1258,
+                };
+                self.push_on_module_element(code, declaration.span.start);
+            }
+            AstKind::TSModuleDeclaration(module) if !self.at_module_element_level() => {
+                let code = match module.id {
+                    oxc_ast::ast::TSModuleDeclarationName::StringLiteral(_) => 1234,
+                    oxc_ast::ast::TSModuleDeclarationName::Identifier(_) => 1235,
+                };
+                self.push_on_module_element(code, module.span.start);
+            }
+            AstKind::TSGlobalDeclaration(global) if !self.at_module_element_level() => {
+                self.push_on_module_element(1234, global.span.start);
             }
             AstKind::ClassBody(body) => {
                 self.check_private_name_staticness(body);

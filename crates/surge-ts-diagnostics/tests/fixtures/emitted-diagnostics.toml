@@ -2712,3 +2712,39 @@ status = "emitted"
 oracle = [
   "ambient-initializer-constants",
 ]
+
+[TS1231]
+status = "emitted"
+oracle = [
+  "module-element-wrong-context",
+]
+
+[TS1232]
+status = "emitted"
+oracle = [
+  "module-element-wrong-context",
+]
+
+[TS1233]
+status = "emitted"
+oracle = [
+  "module-element-wrong-context",
+]
+
+[TS1234]
+status = "emitted"
+oracle = [
+  "module-element-wrong-context",
+]
+
+[TS1235]
+status = "emitted"
+oracle = [
+  "module-element-wrong-context",
+]
+
+[TS1258]
+status = "emitted"
+oracle = [
+  "module-element-wrong-context",
+]

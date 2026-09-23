@@ -3895,6 +3895,66 @@ pub const TS1203: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1231: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1231",
+    number: Some(1231),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An export assignment must be at the top level of a file or module declaration.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1232: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1232",
+    number: Some(1232),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An import declaration can only be used at the top level of a namespace or module.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1233: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1233",
+    number: Some(1233),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An export declaration can only be used at the top level of a namespace or module.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1234: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1234",
+    number: Some(1234),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An ambient module declaration is only allowed at the top level in a file.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1235: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1235",
+    number: Some(1235),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A namespace declaration is only allowed at the top level of a namespace or module.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1258: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1258",
+    number: Some(1258),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A default export must be at the top level of a file or module declaration.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2699: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2699",
     number: Some(2699),
@@ -4505,6 +4565,12 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1089,
     TS1202,
     TS1203,
+    TS1231,
+    TS1232,
+    TS1233,
+    TS1234,
+    TS1235,
+    TS1258,
     TS2699,
     TS1274,
     TS2637,
@@ -7616,6 +7682,36 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts1203(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS1203, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1231(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1231, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1232(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1232, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1233(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1233, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1234(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1234, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1235(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1235, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1258(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1258, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

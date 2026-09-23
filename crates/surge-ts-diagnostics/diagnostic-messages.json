@@ -3112,6 +3112,54 @@
     "support": "emitted"
   },
   {
+    "code": "TS1231",
+    "category": "Error",
+    "message": "An export assignment must be at the top level of a file or module declaration.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1232",
+    "category": "Error",
+    "message": "An import declaration can only be used at the top level of a namespace or module.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1233",
+    "category": "Error",
+    "message": "An export declaration can only be used at the top level of a namespace or module.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1234",
+    "category": "Error",
+    "message": "An ambient module declaration is only allowed at the top level in a file.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1235",
+    "category": "Error",
+    "message": "A namespace declaration is only allowed at the top level of a namespace or module.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1258",
+    "category": "Error",
+    "message": "A default export must be at the top level of a file or module declaration.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2699",
     "category": "Error",
     "message": "Static property '{0}' conflicts with built-in property 'Function.{0}' of constructor function '{1}'.",
