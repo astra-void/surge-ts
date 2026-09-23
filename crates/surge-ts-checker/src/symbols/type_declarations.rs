@@ -209,6 +209,11 @@ pub(crate) struct InterfaceInfo {
     /// Only the abstract-instantiation check reads it; nothing about the shape
     /// depends on it.
     pub(crate) is_abstract_class: bool,
+    /// The class body writes a constructor, and the modifier it carries. A
+    /// class without one inherits its base's construct signatures, modifier
+    /// included, which is what `new`/`extends` accessibility walks up to.
+    pub(crate) declares_constructor: bool,
+    pub(crate) constructor_accessibility: Option<surge_ts_syntax::ParsedMemberAccessibility>,
     /// Set when this is the instance side of a class. A class base is an
     /// expression, so its heritage names are reported by the class's own check
     /// rather than wherever the instance is first expanded.
@@ -256,6 +261,8 @@ impl InterfaceInfo {
             name_span,
             resolution_scope,
             is_abstract_class: false,
+            declares_constructor: false,
+            constructor_accessibility: None,
             is_class_instance: false,
             body: Arc::new(InterfaceBody {
                 type_parameters,
@@ -288,6 +295,8 @@ impl Clone for InterfaceInfo {
             name_span: self.name_span,
             resolution_scope: self.resolution_scope.clone(),
             is_abstract_class: self.is_abstract_class,
+            declares_constructor: self.declares_constructor,
+            constructor_accessibility: self.constructor_accessibility,
             is_class_instance: self.is_class_instance,
             body: self.body.clone(),
             cached_resolution_key: self.cached_resolution_key.clone(),

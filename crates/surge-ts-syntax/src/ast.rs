@@ -994,6 +994,10 @@ pub struct ParsedClassMethod {
 pub struct ParsedClassConstructor {
     /// See [`ParsedFunctionDeclaration::body_reads`].
     pub body_reads: Vec<String>,
+    /// `private constructor()` / `protected constructor()`: `new` and
+    /// `extends` are allowed only within the class (or, for `protected`, a
+    /// class deriving from it).
+    pub accessibility: Option<ParsedMemberAccessibility>,
     pub parameters: Vec<ParsedFunctionParameter>,
     pub body: Vec<ParsedFunctionBodyStatement>,
     pub span: Option<TextSpan>,

@@ -197,6 +197,31 @@ pub(super) fn resolve_indexed_access_type(
         };
     }
 
+    // `getIndexedAccessTypeOrUndefined`: a literal key naming a private or
+    // protected member of a type parameter's class constraint is not in
+    // `keyof T`, and tsc says why (TS4105) rather than reporting the index.
+    if let Some(object_name) = object_placeholder_name.as_deref()
+        && let Type::StringLiteral(key) = &resolved_index.ty
+        && let Some(ParsedType::Named(constraint)) = ctx.type_parameter_constraint(object_name)
+        && let Some(crate::symbols::TypeDeclarationInfo::Interface(class)) =
+            ctx.lookup_type_declaration(&constraint.name)
+        && class.is_class_instance
+        && crate::checks::expr::restricted_member_owner(&class.clone(), key, false, false, ctx).is_some()
+    {
+        let mut diagnostic = Diagnostic::ts4105(key, ctx.file_name.clone());
+        if let Some(span) = indexed_access.span {
+            diagnostic = diagnostic.with_span(convert_span(span));
+        }
+        ctx.push(diagnostic);
+        if generic_indexed_access {
+            record_generic_indexed_access_invalid_key();
+        }
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: true,
+        };
+    }
+
     if (object_placeholder_name.is_some() && index_is_valid_generic_key)
         || involves_constrained_type_parameter
     {

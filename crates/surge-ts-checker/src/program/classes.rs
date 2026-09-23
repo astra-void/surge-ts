@@ -56,6 +56,13 @@ pub(crate) fn class_instance_interface_info(
         None,
     );
     info.is_abstract_class = class.is_abstract;
+    if let Some(constructor) = class.members.iter().find_map(|member| match member {
+        ParsedClassMember::Constructor(constructor) => Some(constructor),
+        _ => None,
+    }) {
+        info.declares_constructor = true;
+        info.constructor_accessibility = constructor.accessibility;
+    }
     info.is_class_instance = true;
     if !class.restricted_members.is_empty() {
         Arc::make_mut(&mut info.body).restricted_members = class.restricted_members.clone();
@@ -117,7 +124,7 @@ fn class_member_to_interface_member(
 /// parameter carrying a `public`/`private`/`protected`/`readonly` modifier
 /// declares a field of the same name and type. Only identifier-named parameters
 /// can be parameter properties (TS rejects destructuring patterns here).
-fn constructor_parameter_property_members(
+pub(crate) fn constructor_parameter_property_members(
     class: &ParsedClassDeclaration,
 ) -> Vec<ParsedInterfaceMember> {
     class
@@ -1071,7 +1078,9 @@ fn check_extended_base_class(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
         {
             continue;
         }
-        super::heritage::report_incompatible_heritage_members(class, &base.name, ctx);
+        if !super::heritage::report_incompatible_heritage_members(class, &base.name, ctx) {
+            super::heritage::check_base_class_relation(class, &base.name, ctx);
+        }
     }
 }
 
@@ -1250,10 +1259,21 @@ fn constructor_writable_members(
 /// where every value declared before the class is bound.
 fn check_heritage_base_resolves(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
     for base in &class.extends {
-        if base.name.contains('.')
-            || base.name == surge_ts_syntax::EXPRESSION_HERITAGE_BASE
-            || ctx.symbols.get(&base.name).is_some()
-        {
+        if base.name.contains('.') || base.name == surge_ts_syntax::EXPRESSION_HERITAGE_BASE {
+            continue;
+        }
+        if ctx.symbols.get(&base.name).is_some() {
+            check_base_is_constructor_type(base, ctx);
+            continue;
+        }
+        // tsc's `checkAndReportErrorForUsingTypeAsValue`: a primitive keyword
+        // in an `extends` clause is TS2863 instead of an unresolved name.
+        if is_primitive_type_name(&base.name) {
+            let diagnostic = Diagnostic::ts2863(&base.name, ctx.file_name.clone());
+            ctx.push(match base.span {
+                Some(span) => diagnostic.with_span(convert_span(span)),
+                None => diagnostic,
+            });
             continue;
         }
         match ctx.lookup_type_declaration(&base.name) {
@@ -1277,6 +1297,14 @@ fn check_heritage_base_resolves(class: &ParsedClassDeclaration, ctx: &mut Checke
     // one.
     crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
         for implemented in &class.implements {
+            if is_primitive_type_name(&implemented.name) {
+                let diagnostic = Diagnostic::ts2864(&implemented.name, ctx.file_name.clone());
+                ctx.push(match implemented.span {
+                    Some(span) => diagnostic.with_span(convert_span(span)),
+                    None => diagnostic,
+                });
+                continue;
+            }
             let _ = crate::infer::map_parsed_type(
                 ParsedType::Named(Arc::new(implemented.clone())),
                 ctx,
@@ -1285,8 +1313,79 @@ fn check_heritage_base_resolves(class: &ParsedClassDeclaration, ctx: &mut Checke
     });
 }
 
+/// tsc's `isPrimitiveTypeName`: the keywords `resolveName` reports specially
+/// when they are used as values.
+fn is_primitive_type_name(name: &str) -> bool {
+    matches!(name, "any" | "string" | "number" | "boolean" | "never" | "unknown")
+}
+
+/// tsc's `getBaseConstructorTypeOfClass`: a base that names a value must be
+/// constructable (TS2507). A class is always one, so only a name with no type
+/// declaration is looked at, through the value it binds; anything surge could
+/// not type, a type variable (a mixin base) and an unexpanded reference are
+/// left alone.
+fn check_base_is_constructor_type(base: &ParsedNamedType, ctx: &mut CheckerContext) {
+    if ctx.lookup_type_declaration(&base.name).is_some() {
+        return;
+    }
+    let Some(symbol) = ctx.symbols.get(&base.name) else {
+        return;
+    };
+    let ty = symbol.ty.peeled();
+    let constructable = match &ty {
+        Type::Any
+        | Type::ErrorType
+        | Type::Null
+        | Type::TypeParameter(_)
+        | Type::Reference(_)
+        | Type::Union(_) => true,
+        Type::Object(object) => object.construct_signature().is_some(),
+        _ if ty.is_unknown() => true,
+        _ => false,
+    };
+    if constructable {
+        return;
+    }
+    let diagnostic = Diagnostic::ts2507(ty.name(), ctx.file_name.clone());
+    ctx.push(match base.span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
+}
+
+/// tsc's `checkBaseTypeAccessibility`: a class whose constructor is private
+/// can be extended only from inside its own body (TS2675).
+fn check_base_constructor_accessibility(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    for base in &class.extends {
+        let Some(TypeDeclarationInfo::Interface(info)) = ctx.lookup_type_declaration(&base.name)
+        else {
+            continue;
+        };
+        if !info.is_class_instance {
+            continue;
+        }
+        let info = info.clone();
+        let Some((declaring, _)) =
+            crate::checks::expr::constructor_accessibility_error(&info, false, ctx)
+        else {
+            continue;
+        };
+        let name = declaring
+            .declared_name
+            .as_deref()
+            .unwrap_or(&declaring.name)
+            .to_string();
+        let diagnostic = Diagnostic::ts2675(name, ctx.file_name.clone());
+        ctx.push(match base.span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        });
+    }
+}
+
 fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
     check_heritage_base_resolves(class, ctx);
+    check_base_constructor_accessibility(class, ctx);
     check_inherited_abstract_members(class, ctx);
     check_extended_base_class(class, ctx);
     check_implemented_interfaces(class, ctx);

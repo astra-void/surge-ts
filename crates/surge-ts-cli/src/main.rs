@@ -500,6 +500,8 @@ fn run_single_file_mode(
             no_implicit_this: no_implicit_any,
             module_emit: surge_ts_checker::ModuleEmitKind::ES2022,
             use_define_for_class_fields: true,
+            target_es2022: true,
+            no_emit: false,
             node_module_resolution: false,
             esm_module_files: Default::default(),
             strict_null_checks: true,

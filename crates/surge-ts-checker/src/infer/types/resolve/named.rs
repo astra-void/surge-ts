@@ -244,6 +244,19 @@ fn resolve_named_type_inner(
         if let Some(resolved) = resolve_value_heritage_base(&named_type, ctx) {
             return resolved;
         }
+        // `class C extends number`: the class check reports the primitive as a
+        // value (TS2863), and tsc says nothing more about the base.
+        if ctx.resolving_class_heritage
+            && matches!(
+                named_type.name.as_str(),
+                "any" | "string" | "number" | "boolean" | "never" | "unknown"
+            )
+        {
+            return ResolvedType {
+                ty: Type::Unknown,
+                had_error: true,
+            };
+        }
         // A qualified reference (`React.Foo`, `Prisma.Bar`) reports only on a
         // head nothing could resolve: surge does not model a namespace's full
         // member surface (`@types/*`, generated clients), so a miss past the

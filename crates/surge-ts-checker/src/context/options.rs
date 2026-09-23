@@ -27,6 +27,22 @@ pub enum ModuleEmitKind {
 }
 
 impl ModuleEmitKind {
+    /// The `module` option's name, as tsgo's `ModuleKind.String()` prints it.
+    pub(crate) fn option_name(self) -> &'static str {
+        match self {
+            Self::CommonJS => "CommonJS",
+            Self::ES2015 => "ES2015",
+            Self::ES2020 => "ES2020",
+            Self::ES2022 => "ES2022",
+            Self::ESNext => "ESNext",
+            Self::Node16 => "Node16",
+            Self::Node18 => "Node18",
+            Self::Node20 => "Node20",
+            Self::NodeNext => "NodeNext",
+            Self::Preserve => "Preserve",
+        }
+    }
+
     /// `ES2015 <= kind <= ESNext`.
     pub fn is_ecmascript(self) -> bool {
         matches!(self, Self::ES2015 | Self::ES2020 | Self::ES2022 | Self::ESNext)
@@ -84,6 +100,13 @@ pub struct CheckerOptions {
     /// tsgo's `GetUseDefineForClassFields`; off, a static `name`/`length`
     /// member collides with the constructor function's own (TS2699).
     pub use_define_for_class_fields: bool,
+    /// `target` is ES2022 or later. Below it a static initializer's `super.x`
+    /// is emitted through `Reflect` (TS2818), and together with
+    /// `use_define_for_class_fields` it is tsgo's `GetEmitStandardClassFields`.
+    pub target_es2022: bool,
+    /// `noEmit`: tsgo drops the diagnostics it marks `SkippedOnNoEmit`, the
+    /// emit-time name collisions (TS2441, TS2818, TS1216).
+    pub no_emit: bool,
     /// `moduleResolution` is `node16` or `nodenext`, where an ESM import of a
     /// relative path must spell its extension (TS2834/TS2835).
     pub node_module_resolution: bool,
@@ -156,6 +179,13 @@ impl CheckerOptions {
         self.types.iter().any(|name| name == "*")
     }
 
+    /// tsgo's `GetEmitStandardClassFields`: class fields are emitted as
+    /// [[Define]] semantics, which lifts the constructor-emit rules
+    /// (TS2301, TS2376, TS2401).
+    pub(crate) fn emit_standard_class_fields(&self) -> bool {
+        self.use_define_for_class_fields && self.target_es2022
+    }
+
     pub(crate) fn allow_synthetic_default_imports(&self) -> bool {
         self.resolved_modules
             .contains_key(Self::ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL)
@@ -185,6 +215,8 @@ impl Default for CheckerOptions {
             no_implicit_this: false,
             module_emit: ModuleEmitKind::Preserve,
             use_define_for_class_fields: true,
+            target_es2022: true,
+            no_emit: false,
             node_module_resolution: false,
             esm_module_files: Default::default(),
             strict_null_checks: true,

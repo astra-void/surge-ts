@@ -828,17 +828,23 @@ pub(crate) fn emit_grammar_diagnostics(
     ctx: &mut CheckerContext,
 ) {
     for finding in findings {
+        let diagnostic = grammar_finding_diagnostic(finding, ctx);
         let answered: &'static [u32] = match finding.kind {
             surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2842) => &[7031],
             surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2372 | 2373)
             | surge_ts_syntax::ParsedGrammarDiagnosticKind::LaterParameterReference => &[2304, 2552],
+            // The name resolves to the constructor's local in the emitted
+            // code, so tsc reports nothing about what it names in the source.
+            surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2301) if diagnostic.is_some() => {
+                &[2304, 2552, 2663]
+            }
             _ => &[],
         };
         if !answered.is_empty() {
             ctx.grammar_answered_spans
                 .push((crate::context::convert_span(finding.span), answered));
         }
-        if let Some(diagnostic) = grammar_finding_diagnostic(finding, ctx) {
+        if let Some(diagnostic) = diagnostic {
             ctx.push(diagnostic);
         }
     }
@@ -901,6 +907,24 @@ fn export_assignment_targets_esm(ctx: &CheckerContext) -> bool {
     module.is_ecmascript() && !lower.ends_with(".cts") && !lower.ends_with(".cjs")
 }
 
+/// tsc's `GetEmitModuleFormatOfFile` answering CommonJS: `module: commonjs`,
+/// a node module kind for a file whose implied format is not ESM, or a
+/// `.cts`/`.cjs` file under any other kind. A package.json `"type"` is only
+/// read under node resolution, where `esm_module_files` records it.
+fn file_emits_commonjs(ctx: &CheckerContext) -> bool {
+    let module = ctx.options.module_emit;
+    if module.is_node() {
+        return !ctx.options.esm_module_files.contains(ctx.file_name.as_str());
+    }
+    let lower = ctx.file_name.to_ascii_lowercase();
+    if lower.ends_with(".mts") || lower.ends_with(".mjs") {
+        return false;
+    }
+    module == crate::ModuleEmitKind::CommonJS
+        || lower.ends_with(".cts")
+        || lower.ends_with(".cjs")
+}
+
 fn grammar_finding_diagnostic(
     finding: &surge_ts_syntax::ParsedGrammarDiagnostic,
     ctx: &CheckerContext,
@@ -913,6 +937,23 @@ fn grammar_finding_diagnostic(
         Kind::Ts(1202) if !ctx.options.module_emit.is_ecmascript() => return None,
         Kind::Ts(1203) if !export_assignment_targets_esm(ctx) => return None,
         Kind::Ts(2699) if ctx.options.use_define_for_class_fields => return None,
+        Kind::Ts(2301 | 2376 | 2401) if ctx.options.emit_standard_class_fields() => return None,
+        // `errorSkippedOnNoEmit`: the CommonJS wrapper's names only collide
+        // when the file is emitted.
+        Kind::Ts(2441 | 1216) if ctx.options.no_emit || !file_emits_commonjs(ctx) => return None,
+        Kind::Ts(2818) if ctx.options.no_emit || ctx.options.target_es2022 => return None,
+        // `import string = N.T` is reported only when the target has a type
+        // meaning; the finding carries the entity name to resolve.
+        Kind::Ts(2438) => {
+            let (name, entity) = finding.name.as_deref()?.split_once('\0')?;
+            let entity: String = entity.chars().filter(|c| !c.is_whitespace()).collect();
+            ctx.lookup_type_declaration(&entity)?;
+            Diagnostic::ts2438(name, ctx.file_name.clone())
+        }
+        Kind::Ts(2725) if !file_emits_commonjs(ctx) => return None,
+        Kind::Ts(2725) => {
+            Diagnostic::ts2725(ctx.options.module_emit.option_name(), ctx.file_name.clone())
+        }
         Kind::TsUnderStrictNullChecks(_) if !ctx.options.strict_null_checks => return None,
         Kind::Ts(number) | Kind::TsUnderStrictNullChecks(number) => {
             let args: Vec<surge_ts_diagnostics::DiagnosticArg> = finding

@@ -539,6 +539,8 @@ impl Project {
             no_implicit_this: loaded.compiler_options.no_implicit_this,
             module_emit: checker_module_emit(loaded.compiler_options.emit_module),
             use_define_for_class_fields: loaded.compiler_options.use_define_for_class_fields,
+            target_es2022: loaded.compiler_options.target >= ScriptTarget::ES2022,
+            no_emit: loaded.compiler_options.no_emit,
             node_module_resolution,
             esm_module_files,
             strict_null_checks: loaded.compiler_options.strict_null_checks,
