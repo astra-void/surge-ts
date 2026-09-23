@@ -256,6 +256,8 @@ pub(crate) fn collect_function_signatures_from_statements(
         count_function_declarations(statement, &mut declaration_counts);
     }
     let outer_collecting_signatures = std::mem::replace(&mut ctx.collecting_signatures, true);
+    let outer_fallback =
+        hoist_function_declarations(statements, file_index, symbols, &declaration_counts, ctx);
     for (statement_index, statement) in statements.iter().enumerate() {
         collect_function_signature_from_statement(
             statement,
@@ -267,10 +269,94 @@ pub(crate) fn collect_function_signatures_from_statements(
             &declaration_counts,
         );
     }
+    if let Some(outer_fallback) = outer_fallback {
+        ctx.module_value_fallback = outer_fallback;
+    }
     // Expando members are hoisted with the function they are written on, so a
     // function declared earlier in the file can already read them.
     crate::modules::exports::apply_expando_members(statements, symbols, ctx);
     ctx.collecting_signatures = outer_collecting_signatures;
+}
+
+fn declared_function(statement: &ParsedStatement) -> Option<&surge_ts_syntax::ParsedFunctionDeclaration> {
+    match statement {
+        ParsedStatement::FunctionDeclaration(function) => Some(function),
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => declared_function(declaration),
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Function(function),
+                ..
+            } => Some(function),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// tsc's binder declares every function of a scope before any signature is
+/// resolved, so a signature may read its own function or one declared after it
+/// (`function f(n: typeof f)`, `function f(o = defaults())`). Signatures are
+/// collected in source order, so when one reads ahead like that, a first pass
+/// over the declarations — each of them standing in as the degradation
+/// sentinel meanwhile — gives every function the signature the second,
+/// reporting pass reads it by until its own turn comes. Returns the fallback to
+/// restore once the pass is over.
+fn hoist_function_declarations(
+    statements: &[ParsedStatement],
+    file_index: usize,
+    symbols: &SymbolTable,
+    declaration_counts: &HashMap<String, usize>,
+    ctx: &mut CheckerContext,
+) -> Option<Option<Arc<SymbolTable>>> {
+    let functions: Vec<&surge_ts_syntax::ParsedFunctionDeclaration> =
+        statements.iter().filter_map(declared_function).collect();
+    if !check_function::signatures_read_ahead(&functions) {
+        return None;
+    }
+    let outer_fallback = ctx.module_value_fallback.clone();
+    let layered = |table: SymbolTable| {
+        Arc::new(match &outer_fallback {
+            Some(outer) => table.with_parent_fallback(outer.clone()),
+            None => table,
+        })
+    };
+    let mut sentinels = SymbolTable::new();
+    for function in &functions {
+        let _ = sentinels.insert(
+            function.name.clone(),
+            crate::symbols::SymbolInfo {
+                ty: surge_ts_types::Type::Unknown,
+                kind: crate::symbols::SymbolKind::Function,
+                function_signature: None,
+            },
+        );
+    }
+    ctx.module_value_fallback = Some(layered(sentinels));
+    let mut first_pass = symbols.clone();
+    let mut discarded = HashMap::new();
+    let diagnostics_before = ctx.diagnostics().len();
+    for (statement_index, statement) in statements.iter().enumerate() {
+        if declared_function(statement).is_some() {
+            collect_function_signature_from_statement(
+                statement,
+                file_index,
+                statement_index,
+                &mut first_pass,
+                &mut discarded,
+                ctx,
+                declaration_counts,
+            );
+        }
+    }
+    ctx.truncate_diagnostics(diagnostics_before);
+    let mut hoisted = SymbolTable::new();
+    for function in &functions {
+        if let Some(symbol) = first_pass.get_handle(&function.name) {
+            let _ = hoisted.insert_handle(function.name.clone(), symbol);
+        }
+    }
+    ctx.module_value_fallback = Some(layered(hoisted));
+    Some(outer_fallback)
 }
 
 fn count_function_declarations(

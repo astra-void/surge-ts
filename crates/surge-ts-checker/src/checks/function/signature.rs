@@ -792,6 +792,57 @@ pub(crate) fn collect_type_query_reads(ty: &ParsedType, deferred: bool, reads: &
     }
 }
 
+/// The value names a function declaration's signature reads while it is
+/// resolved: its `typeof` queries and its parameters' initializers.
+pub(crate) fn signature_value_reads(
+    type_parameters: &[ParsedTypeParameter],
+    parameters: &[ParsedFunctionParameter],
+    return_type: Option<&ParsedType>,
+) -> Vec<String> {
+    let mut reads = ValueReads::default();
+    for type_parameter in type_parameters {
+        for written in [&type_parameter.constraint, &type_parameter.default_type]
+            .into_iter()
+            .flatten()
+        {
+            collect_type_query_reads(written, false, &mut reads);
+        }
+    }
+    for parameter in parameters {
+        if let Some(declared_type) = &parameter.declared_type {
+            collect_type_query_reads(declared_type, false, &mut reads);
+        }
+        if let Some(initializer) = &parameter.initializer {
+            collect_value_reads(initializer, false, &mut reads);
+        }
+    }
+    if let Some(return_type) = return_type {
+        collect_type_query_reads(return_type, false, &mut reads);
+    }
+    let ValueReads { mut eager, deferred } = reads;
+    eager.extend(deferred);
+    eager
+}
+
+/// Whether a signature among `functions` — the function declarations of one
+/// scope, in source order — reads a function of the scope whose first
+/// declaration is not before it: itself, or one declared later.
+pub(crate) fn signatures_read_ahead(functions: &[&surge_ts_syntax::ParsedFunctionDeclaration]) -> bool {
+    let mut first_declared: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (position, function) in functions.iter().enumerate() {
+        first_declared.entry(function.name.as_str()).or_insert(position);
+    }
+    functions.iter().enumerate().any(|(position, function)| {
+        signature_value_reads(
+            &function.type_parameters,
+            &function.parameters,
+            function.return_type.as_ref(),
+        )
+        .iter()
+        .any(|name| first_declared.get(name.as_str()).is_some_and(|first| *first >= position))
+    })
+}
+
 /// The names a parameter binds, each with the type it reads from the
 /// parameter's type.
 fn parameter_bindings(parameter: &ParsedFunctionParameter, parameter_type: &Type) -> Vec<(String, Type)> {

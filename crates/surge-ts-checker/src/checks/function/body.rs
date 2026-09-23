@@ -329,39 +329,32 @@ pub(crate) fn check_function_body(
 
     // Hoist nested `function` declarations into the current scope so a sibling
     // closure can call them (function declarations are function-scoped and
-    // callable before their statement position).
-    for statement in &body {
-        if let ParsedFunctionBodyStatement::Function(function) = statement {
-            // The signature mapper seeds parameter-default evaluation from
-            // `ctx.symbols`, a file-level table that never holds function locals,
-            // so a default referring to an enclosing local read as unresolved.
-            // The visible scope is already in hand two lines below.
-            let saved_symbols = std::mem::replace(&mut ctx.symbols, scopes.visible_symbols().clone());
-            let function_type = crate::checks::function::signature::map_function_signature(
-                &function.parameters,
-                function.return_type.as_ref(),
-                &function.type_parameters,
-                None,
-                ctx,
-            );
-            ctx.symbols = saved_symbols;
-            let signature_info =
-                crate::checks::function::signature::function_declaration_signature_info(
-                    function,
-                    &function_type,
-                    scopes.visible_symbols(),
-                    &ctx.file_name,
-                );
-            scopes.insert_current_handle(
+    // callable before their statement position). A signature that reads its own
+    // function or a later one gets the one-pass-earlier signature, as at the
+    // top level (`hoist_function_declarations`).
+    let nested_functions: Vec<&surge_ts_syntax::ParsedFunctionDeclaration> = body
+        .iter()
+        .filter_map(|statement| match statement {
+            ParsedFunctionBodyStatement::Function(function) => Some(function.as_ref()),
+            _ => None,
+        })
+        .collect();
+    if crate::checks::function::signatures_read_ahead(&nested_functions) {
+        for function in &nested_functions {
+            scopes.insert_current(
                 function.name.as_str(),
-                std::sync::Arc::new(SymbolInfo {
-                    ty: Type::Function(function_type),
+                SymbolInfo {
+                    ty: Type::Unknown,
                     kind: crate::symbols::SymbolKind::Function,
-                    function_signature: Some(signature_info),
-                }),
+                    function_signature: None,
+                },
             );
         }
+        let diagnostics_before = ctx.diagnostics().len();
+        hoist_nested_functions(&nested_functions, scopes, ctx);
+        ctx.truncate_diagnostics(diagnostics_before);
     }
+    hoist_nested_functions(&nested_functions, scopes, ctx);
 
 
     // A body-local type declaration's own body may name a body-local *value*
@@ -420,6 +413,42 @@ pub(crate) fn check_function_body(
 
     if let Some(saved) = saved_module_value_fallback {
         ctx.module_value_fallback = saved;
+    }
+}
+
+fn hoist_nested_functions(
+    functions: &[&surge_ts_syntax::ParsedFunctionDeclaration],
+    scopes: &mut ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    for function in functions {
+        // The signature mapper seeds parameter-default evaluation from
+        // `ctx.symbols`, a file-level table that never holds function locals,
+        // so a default referring to an enclosing local read as unresolved.
+        // The visible scope is already in hand two lines below.
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, scopes.visible_symbols().clone());
+        let function_type = crate::checks::function::signature::map_function_signature(
+            &function.parameters,
+            function.return_type.as_ref(),
+            &function.type_parameters,
+            None,
+            ctx,
+        );
+        ctx.symbols = saved_symbols;
+        let signature_info = crate::checks::function::signature::function_declaration_signature_info(
+            function,
+            &function_type,
+            scopes.visible_symbols(),
+            &ctx.file_name,
+        );
+        scopes.insert_current_handle(
+            function.name.as_str(),
+            std::sync::Arc::new(SymbolInfo {
+                ty: Type::Function(function_type),
+                kind: crate::symbols::SymbolKind::Function,
+                function_signature: Some(signature_info),
+            }),
+        );
     }
 }
 

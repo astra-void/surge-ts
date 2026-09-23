@@ -366,6 +366,7 @@ export const fixturePresets: Record<string, string> = {
   'intersection-two-union-operands-basic': path.join(workspaceRoot, 'tests/compat-projects/intersection-two-union-operands-basic/tsconfig.json'),
   'void-parameter-arity-basic': path.join(workspaceRoot, 'tests/compat-projects/void-parameter-arity-basic/tsconfig.json'),
   'parameter-initializer-scope': path.join(workspaceRoot, 'tests/compat-projects/parameter-initializer-scope/tsconfig.json'),
+  'function-name-in-own-signature': path.join(workspaceRoot, 'tests/compat-projects/function-name-in-own-signature/tsconfig.json'),
   'namespace-merged-member-value': path.join(workspaceRoot, 'tests/compat-projects/namespace-merged-member-value/tsconfig.json'),
   'export-equals-entity-meanings': path.join(workspaceRoot, 'tests/compat-projects/export-equals-entity-meanings/tsconfig.json'),
   'import-equals-module-namespace-as-type': path.join(workspaceRoot, 'tests/compat-projects/import-equals-module-namespace-as-type/tsconfig.json'),
