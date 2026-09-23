@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "strict": true,
+    "allowJs": true,
+    "types": [],
+    "noEmit": true
+  },
+  "files": ["src/globals.js", "src/main.ts"]
+}

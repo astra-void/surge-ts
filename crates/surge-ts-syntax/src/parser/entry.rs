@@ -211,7 +211,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     let (module_reads, statements) = if is_declaration_file_name(file_name) {
         (Vec::new(), collect_statements())
     } else {
-        super::spans::with_lowering_source(source_text, || {
+        super::spans::with_lowering_source(source_text, is_javascript_file_name(file_name), || {
             super::reads::with_body_read_index(&parsed.program, collect_statements)
         })
     };
@@ -314,6 +314,15 @@ pub fn is_declaration_file_name(file_name: &str) -> bool {
         bytes.len() >= suffix.len() && bytes[bytes.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
     };
     ends_with(".d.ts") || ends_with(".d.mts") || ends_with(".d.cts") || (base.ends_with(".ts") && base.contains(".d."))
+}
+
+/// A JavaScript source file: `.js`, `.jsx`, `.mjs` or `.cjs`.
+pub fn is_javascript_file_name(file_name: &str) -> bool {
+    let bytes = file_name.as_bytes();
+    [".js", ".jsx", ".mjs", ".cjs"].iter().any(|suffix| {
+        bytes.len() >= suffix.len()
+            && bytes[bytes.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+    })
 }
 
 fn collects_grammar_diagnostics(file_name: &str) -> bool {

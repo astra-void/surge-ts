@@ -289,10 +289,16 @@ fn check_program_with_stats_and_jobs_inner(
     }
 
     // tsc's `SkipTypeChecking`: a `// @ts-nocheck` file keeps only its
-    // syntactic diagnostics.
+    // syntactic diagnostics. So does a JavaScript file: it declares what a
+    // TypeScript file may use, but surge does not model JavaScript's own
+    // semantics (JSDoc types, CommonJS exports, `this` members), so the
+    // semantic diagnostics tsc gives it under `checkJs` are not reported.
     let unchecked_files: HashSet<String> = files
         .iter()
-        .filter(|file| surge_ts_syntax::extract_check_directive(&file.source_text) == Some(false))
+        .filter(|file| {
+            surge_ts_syntax::extract_check_directive(&file.source_text) == Some(false)
+                || surge_ts_syntax::is_javascript_file_name(&file.file_name)
+        })
         .map(|file| file.file_name.clone())
         .collect();
     let ProgramRun {

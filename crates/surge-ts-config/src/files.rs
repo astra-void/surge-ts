@@ -19,8 +19,10 @@ pub(crate) fn resolve_source_files(
     compiler_options: &NormalizedCompilerOptions,
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) -> Vec<PathBuf> {
+    // tsc's `getAllowJSCompilerOption`: `checkJs` implies `allowJs`.
+    let allow_js = compiler_options.allow_js || compiler_options.check_js;
     if let Some(files) = files {
-        return resolve_explicit_files(root_dir, files, diagnostics);
+        return resolve_explicit_files(root_dir, files, allow_js, diagnostics);
     }
 
     let include_patterns = match include {
@@ -86,7 +88,7 @@ pub(crate) fn resolve_source_files(
             }
         }
 
-        if is_supported_source_file(path, compiler_options.allow_js) {
+        if is_supported_source_file(path, allow_js) {
             files.push(canonicalize_if_exists(path));
         }
     }
@@ -204,6 +206,7 @@ fn is_unreachable_dot_directory(
 fn resolve_explicit_files(
     root_dir: &Path,
     files: &[Value],
+    allow_js: bool,
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) -> Vec<PathBuf> {
     let mut results = Vec::new();
@@ -229,7 +232,7 @@ fn resolve_explicit_files(
             continue;
         }
 
-        if !is_supported_source_file(&candidate, false) {
+        if !is_supported_source_file(&candidate, allow_js) {
             continue;
         }
 

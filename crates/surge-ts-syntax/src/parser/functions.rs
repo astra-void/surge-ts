@@ -874,7 +874,12 @@ pub(crate) fn parse_function_parameter(
         declared_type,
         initializer,
         initializer_span,
-        optional: parameter.optional || parameter.initializer.is_some(),
+        // tsc's `isUntypedSignatureInJSFile`: every parameter of a JavaScript
+        // signature is optional. (A JSDoc `@param` would make it typed; surge
+        // does not read JSDoc, so it keeps the untyped reading.)
+        optional: parameter.optional
+            || parameter.initializer.is_some()
+            || super::spans::lowering_javascript(),
         rest: false,
         is_parameter_property: parameter.accessibility.is_some() || parameter.readonly,
         is_readonly_parameter_property: parameter.readonly,

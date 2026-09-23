@@ -11,22 +11,35 @@ pub(crate) fn text_span_from_oxc_span(span: Span) -> TextSpan {
 
 thread_local! {
     static LOWERING_SOURCE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    static LOWERING_JAVASCRIPT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Makes `source_text` readable to the lowering for the duration of `f`. oxc
 /// records no span for an operator token, so the one diagnostic tsc anchors
-/// there has to find it in the text between the operands.
-pub(crate) fn with_lowering_source<R>(source_text: &str, f: impl FnOnce() -> R) -> R {
-    struct Restore(Option<String>);
+/// there has to find it in the text between the operands. `javascript` says
+/// the file is JavaScript, whose untyped signatures lower differently.
+pub(crate) fn with_lowering_source<R>(
+    source_text: &str,
+    javascript: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    struct Restore(Option<String>, bool);
     impl Drop for Restore {
         fn drop(&mut self) {
             LOWERING_SOURCE.with(|source| *source.borrow_mut() = self.0.take());
+            LOWERING_JAVASCRIPT.with(|flag| flag.set(self.1));
         }
     }
     let previous =
         LOWERING_SOURCE.with(|source| source.borrow_mut().replace(source_text.to_string()));
-    let _restore = Restore(previous);
+    let previous_javascript = LOWERING_JAVASCRIPT.with(|flag| flag.replace(javascript));
+    let _restore = Restore(previous, previous_javascript);
     f()
+}
+
+/// Whether the file being lowered is JavaScript.
+pub(crate) fn lowering_javascript() -> bool {
+    LOWERING_JAVASCRIPT.with(std::cell::Cell::get)
 }
 
 /// The span of the single-character `operator` written between `left_end` and
