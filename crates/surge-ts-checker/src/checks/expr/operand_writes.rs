@@ -8,7 +8,7 @@ use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{ParsedExpression, TextSpan as SyntaxTextSpan};
 use surge_ts_types::{Type, union_type};
 
-use crate::checks::function::property_write_is_readonly;
+use crate::checks::function::{ReadonlyElementWrite, property_write_is_readonly, readonly_element_write};
 use crate::context::{CheckerContext, convert_span};
 use crate::infer::{InferredExpression, infer_expression};
 use crate::symbols::SymbolTable;
@@ -143,6 +143,20 @@ pub(crate) fn check_delete_operand(
         return;
     }
 
+    // A delete target is written through (`isDeleteTarget`): a `readonly`
+    // tuple element is TS2704 like any read-only property, and a numeric index
+    // into a `readonly` array lands on its index signature, TS2542 on the
+    // whole access (`errorIfWritingToReadonlyIndex`).
+    if let Some(write) = deleted_readonly_element(operand, symbols, ctx) {
+        let file_name = ctx.file_name.clone();
+        let diagnostic = match write {
+            ReadonlyElementWrite::Property(_) => Diagnostic::ts2704(file_name),
+            ReadonlyElementWrite::IndexSignature(name) => Diagnostic::ts2542(name, file_name),
+        };
+        ctx.push(diagnostic.with_span(convert_span(span)));
+        return;
+    }
+
     let Some((receiver, property_name)) = write_target(operand, symbols, ctx) else {
         return;
     };
@@ -174,6 +188,28 @@ pub(crate) fn check_delete_operand(
         let file_name = ctx.file_name.clone();
         ctx.push(Diagnostic::ts2790(file_name).with_span(convert_span(span)));
     }
+}
+
+fn deleted_readonly_element(
+    operand: &ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<ReadonlyElementWrite> {
+    let (receiver, index) = match operand {
+        ParsedExpression::ElementAccess { object, index, .. } => match infer_expression(object, symbols, ctx) {
+            InferredExpression::Known(receiver) => (receiver, index),
+            _ => return None,
+        },
+        ParsedExpression::IndexAccess { object_name, index, .. } => (symbols.get(object_name)?.ty.clone(), index),
+        _ => return None,
+    };
+    let InferredExpression::Known(index_type) = infer_expression(index, symbols, ctx) else {
+        return None;
+    };
+    if index_type.is_unknown() || !surge_ts_types::is_assignable_to(&index_type, &Type::Number) {
+        return None;
+    }
+    readonly_element_write(&receiver, &index_type)
 }
 
 /// The receiver type as *declared*, undoing flow narrowing along the access

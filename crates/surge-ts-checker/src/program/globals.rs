@@ -52,14 +52,16 @@ pub(crate) fn collect_global_function_signatures(
     let seeded_names = seed_script_values_for_signatures(parsed_files, global_symbols, ctx);
     // A class's member annotations resolve their `typeof` through the
     // context, not the signature scope, so the seed reaches them this way.
+    // Behind it sit the lib's globals, which a parameter initializer reads like
+    // any other value (`function f(m = Math)`).
     let saved_fallback = ctx.module_value_fallback.take();
-    if !seeded_names.is_empty() {
-        let mut seeded_values = SymbolTable::new();
-        for (name, symbol) in &seeded_names {
-            let _ = seeded_values.insert_shared(name.clone(), symbol.clone());
-        }
-        ctx.module_value_fallback = Some(Arc::new(seeded_values));
+    let mut seeded_values = SymbolTable::new();
+    for (name, symbol) in &seeded_names {
+        let _ = seeded_values.insert_shared(name.clone(), symbol.clone());
     }
+    ctx.module_value_fallback = Some(Arc::new(
+        seeded_values.with_parent_fallback(Arc::new(ctx.ambient_global_symbols.clone())),
+    ));
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
         if !is_script_source(parsed_file) {
             continue;
@@ -76,41 +78,74 @@ pub(crate) fn collect_global_function_signatures(
         );
     }
     ctx.module_value_fallback = saved_fallback;
-    // A variable's seed that collection rewrote in place (an expando member
-    // added to a `const f = function …`) is still the seed, which the check
-    // phase declares again. A class or namespace keeps what collection merged
-    // into it, as does a declaration collection registered under the name.
-    let variable_names: std::collections::HashSet<&str> = parsed_files
-        .iter()
-        .filter(|parsed_file| is_script_source(parsed_file))
-        .flat_map(|parsed_file| parsed_file.statements.iter())
-        .filter_map(|statement| match statement {
-            ParsedStatement::VariableDeclaration(declaration) => Some(declaration.name.as_str()),
-            _ => None,
-        })
-        .collect();
+    // Signature collection declares a script's functions and classes; any other
+    // seeded name is still only the seed, even once `apply_expando_members` has
+    // replaced it with the members written on it, and the check phase declares
+    // it itself — left behind, a `const` read as its own redeclaration (TS2451).
+    let declared = signature_declared_names(parsed_files);
     for (name, seeded) in seeded_names {
-        if global_symbols.get_own(&name).is_some_and(|symbol| {
-            std::ptr::eq(symbol, seeded.as_ref())
-                || (variable_names.contains(name.as_ref())
-                    && !matches!(symbol.kind, crate::symbols::SymbolKind::Function))
-        }) {
+        let is_seed = global_symbols
+            .get_own(&name)
+            .is_some_and(|symbol| std::ptr::eq(symbol, seeded.as_ref()));
+        if is_seed || !declared.contains(name.as_ref()) {
             global_symbols.remove(&name);
         }
     }
 }
 
-/// Each script file's own top-level values, for the other scripts to see:
-/// the binder declares every script's `var`/`let`/`const`/namespace in the
-/// one global table, so `let greeting` in `a.ts` is in scope in `b.ts`. Only
-/// a program with two or more scripts needs them.
+/// The names [`collect_function_signature_from_statement`] declares across the
+/// program's scripts.
+fn signature_declared_names(parsed_files: &[ParsedProgramFile]) -> std::collections::HashSet<&str> {
+    fn collect<'a>(statement: &'a ParsedStatement, names: &mut std::collections::HashSet<&'a str>) {
+        match statement {
+            ParsedStatement::FunctionDeclaration(function) => {
+                names.insert(function.name.as_str());
+            }
+            ParsedStatement::ClassDeclaration(class) => {
+                names.insert(class.name.as_str());
+            }
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => collect(declaration, names),
+                ParsedExportDeclaration::Default {
+                    declaration: ParsedDefaultExportDeclaration::Class(class),
+                    ..
+                } => {
+                    names.insert(class.name.as_str());
+                }
+                ParsedExportDeclaration::Default {
+                    declaration: ParsedDefaultExportDeclaration::Function(function),
+                    ..
+                } => {
+                    names.insert(function.name.as_str());
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    let mut names = std::collections::HashSet::new();
+    for parsed_file in parsed_files.iter().filter(|parsed_file| is_script_source(parsed_file)) {
+        for statement in &parsed_file.statements {
+            collect(statement, &mut names);
+        }
+    }
+    names
+}
+
+/// Each script file's own top-level values, for the other files to see: the
+/// binder declares every script's `var`/`let`/`const`/namespace in the one
+/// global table, so `let greeting` in `a.ts` is in scope in `b.ts` and in every
+/// module. Only a program where another script or a module reads them needs
+/// them.
 pub(crate) fn collect_script_values(
     parsed_files: &[ParsedProgramFile],
     global_symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Vec<Option<Arc<SymbolTable>>> {
     let mut values = vec![None; parsed_files.len()];
-    if parsed_files.iter().filter(|parsed_file| is_script_source(parsed_file)).count() < 2 {
+    let scripts = parsed_files.iter().filter(|parsed_file| is_script_source(parsed_file)).count();
+    let read_elsewhere = scripts >= 2 || parsed_files.iter().any(|parsed_file| parsed_file.is_module);
+    if scripts == 0 || !read_elsewhere {
         return values;
     }
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
@@ -217,6 +252,97 @@ fn merge_namespace_value(
     Type::Object(crate::metrics::alloc_object_type(properties, None))
 }
 
+/// The scripts' values as a module sees them. tsc merges every script's locals
+/// into the one global table (`initializeChecker`), which a module's name
+/// lookup reaches once its own scope misses. A lib global of the same name is
+/// declared first, so the ambient table keeps answering for it, as it does in
+/// a script.
+pub(crate) fn module_script_globals(
+    global_symbols: &SymbolTable,
+    script_values: &[Option<Arc<SymbolTable>>],
+    ambient_global_symbols: &SymbolTable,
+) -> Option<Arc<SymbolTable>> {
+    let mut globals = SymbolTable::new();
+    let tables = std::iter::once(global_symbols).chain(script_values.iter().flatten().map(Arc::as_ref));
+    for table in tables {
+        for (name, symbol) in table.iter_handles() {
+            if ambient_global_symbols.get(name).is_none() && globals.get_own(name).is_none() {
+                let _ = globals.insert_handle(
+                    name.clone(),
+                    crate::symbols::clone_symbol_info_handle(symbol),
+                );
+            }
+        }
+    }
+    let empty = globals.iter_handles().next().is_none();
+    (!empty).then(|| Arc::new(globals))
+}
+
+/// The names only a global augmentation declares — a `declare global { … }`,
+/// or a `global { … }` block inside `declare module "x"`. tsc merges the
+/// augmentations into the globals after every script file's own declarations
+/// (`initializeChecker`), so a name a script file also declares at its top
+/// level keeps that declaration first: the one whose container
+/// `checkExportSpecifier` asks about.
+pub(crate) fn global_augmentation_only_names(
+    parsed_files: &[ParsedProgramFile],
+) -> surge_ts_types::fx::FxHashSet<Arc<str>> {
+    fn declared_names<'a>(statements: &'a [ParsedStatement], names: &mut std::collections::HashSet<&'a str>) {
+        for statement in statements {
+            match crate::modules::peel_exported_statement(statement) {
+                ParsedStatement::VariableDeclaration(variable) => {
+                    names.insert(variable.name.as_str());
+                }
+                ParsedStatement::FunctionDeclaration(function) => {
+                    names.insert(function.name.as_str());
+                }
+                ParsedStatement::ClassDeclaration(class) => {
+                    names.insert(class.name.as_str());
+                }
+                ParsedStatement::InterfaceDeclaration(interface) => {
+                    names.insert(interface.name.as_str());
+                }
+                ParsedStatement::TypeAliasDeclaration(alias) => {
+                    names.insert(alias.name.as_str());
+                }
+                ParsedStatement::NamespaceDeclaration(namespace) => {
+                    names.insert(namespace.name.as_str());
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut script_top_level = std::collections::HashSet::new();
+    let mut augmented = std::collections::HashSet::new();
+    for parsed_file in parsed_files {
+        for statement in &parsed_file.statements {
+            match statement {
+                ParsedStatement::DeclareModuleDeclaration(module) if module.module_specifier == "global" => {
+                    declared_names(&module.statements, &mut augmented);
+                }
+                ParsedStatement::DeclareModuleDeclaration(module) => {
+                    for nested in &module.statements {
+                        if let ParsedStatement::DeclareModuleDeclaration(inner) = nested
+                            && inner.module_specifier == "global"
+                        {
+                            declared_names(&inner.statements, &mut augmented);
+                        }
+                    }
+                }
+                _ if !parsed_file.is_module => {
+                    declared_names(std::slice::from_ref(statement), &mut script_top_level);
+                }
+                _ => {}
+            }
+        }
+    }
+    augmented
+        .into_iter()
+        .filter(|name| !script_top_level.contains(name))
+        .map(Arc::from)
+        .collect()
+}
+
 fn is_script_source(parsed_file: &ParsedProgramFile) -> bool {
     parsed_file.file_kind != FileKind::GeneratedDeclaration
         && !parsed_file.is_module
@@ -224,11 +350,11 @@ fn is_script_source(parsed_file: &ParsedProgramFile) -> bool {
 }
 
 /// A script's top-level `var`s are globals the binder declares before any
-/// signature is resolved, so `function f(x: typeof a)` and
-/// `function f(x = a)` read `a` wherever it is written. Signature collection
-/// runs before the check phase declares them; seed their values for it, as
-/// module analysis does for a module's locals. The seed is removed afterwards
-/// so the check phase declares each variable itself.
+/// signature is resolved, so `function f(x: typeof a)` and `function f(x = a)`
+/// read `a` wherever it is written. Signature collection runs before the check
+/// phase declares them; seed their values for it, as module analysis does for
+/// a module's locals. The seed is removed afterwards so the check phase
+/// declares each variable itself.
 fn seed_script_values_for_signatures(
     parsed_files: &[ParsedProgramFile],
     global_symbols: &mut SymbolTable,
@@ -268,6 +394,8 @@ pub(crate) fn collect_function_signatures_from_statements(
         count_function_declarations(statement, &mut declaration_counts);
     }
     let outer_collecting_signatures = std::mem::replace(&mut ctx.collecting_signatures, true);
+    let outer_fallback =
+        hoist_function_declarations(statements, file_index, symbols, &declaration_counts, ctx);
     for (statement_index, statement) in statements.iter().enumerate() {
         collect_function_signature_from_statement(
             statement,
@@ -279,11 +407,111 @@ pub(crate) fn collect_function_signatures_from_statements(
             &declaration_counts,
         );
     }
+    if let Some(outer_fallback) = outer_fallback {
+        ctx.module_value_fallback = outer_fallback;
+    }
     // Expando members are hoisted with the function they are written on, so a
     // function declared earlier in the file can already read them.
     crate::modules::exports::apply_expando_members(statements, symbols, ctx);
     crate::modules::exports::apply_namespace_members_to_declarations(statements, symbols);
     ctx.collecting_signatures = outer_collecting_signatures;
+}
+
+fn declared_function(statement: &ParsedStatement) -> Option<&surge_ts_syntax::ParsedFunctionDeclaration> {
+    match statement {
+        ParsedStatement::FunctionDeclaration(function) => Some(function),
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => declared_function(declaration),
+            ParsedExportDeclaration::Default {
+                declaration: ParsedDefaultExportDeclaration::Function(function),
+                ..
+            } => Some(function),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// tsc's binder declares every function of a scope before any signature is
+/// resolved, so a signature may read its own function or one declared after it
+/// (`function f(n: typeof f)`, `function f(o = defaults())`). Signatures are
+/// collected in source order, so when one reads ahead like that, a first pass
+/// over the declarations — each of them standing in as the degradation
+/// sentinel meanwhile — gives every function the signature the second,
+/// reporting pass reads it by until its own turn comes. Returns the fallback to
+/// restore once the pass is over.
+fn hoist_function_declarations(
+    statements: &[ParsedStatement],
+    file_index: usize,
+    symbols: &SymbolTable,
+    declaration_counts: &HashMap<String, usize>,
+    ctx: &mut CheckerContext,
+) -> Option<Option<Arc<SymbolTable>>> {
+    let functions: Vec<&surge_ts_syntax::ParsedFunctionDeclaration> =
+        statements.iter().filter_map(declared_function).collect();
+    let local_types: Vec<(&str, Vec<&surge_ts_syntax::ParsedType>)> = statements
+        .iter()
+        .filter_map(|statement| match crate::modules::peel_exported_statement(statement) {
+            ParsedStatement::TypeAliasDeclaration(alias) => Some((alias.name.as_str(), vec![&alias.ty])),
+            ParsedStatement::InterfaceDeclaration(interface) => Some((
+                interface.name.as_str(),
+                check_function::interface_written_types(interface),
+            )),
+            _ => None,
+        })
+        .collect();
+    if !check_function::signatures_read_ahead(&functions, &local_types) {
+        return None;
+    }
+    let outer_fallback = ctx.module_value_fallback.clone();
+    let layered = |table: SymbolTable| {
+        Arc::new(match &outer_fallback {
+            Some(outer) => table.with_parent_fallback(outer.clone()),
+            None => table,
+        })
+    };
+    let mut sentinels = SymbolTable::new();
+    for function in &functions {
+        let _ = sentinels.insert(
+            function.name.clone(),
+            crate::symbols::SymbolInfo {
+                ty: surge_ts_types::Type::Unknown,
+                kind: crate::symbols::SymbolKind::Function,
+                function_signature: None,
+            },
+        );
+    }
+    ctx.module_value_fallback = Some(layered(sentinels));
+    let mut first_pass = symbols.clone();
+    let mut discarded = HashMap::new();
+    let diagnostics_before = ctx.diagnostics().len();
+    let function_statements: Vec<usize> = statements
+        .iter()
+        .enumerate()
+        .filter(|(_, statement)| declared_function(statement).is_some())
+        .map(|(statement_index, _)| statement_index)
+        .collect();
+    for position in check_function::signature_collection_order(&functions, &local_types) {
+        let statement_index = function_statements[position];
+        collect_function_signature_from_statement(
+            &statements[statement_index],
+            file_index,
+            statement_index,
+            &mut first_pass,
+            &mut discarded,
+            ctx,
+            declaration_counts,
+        );
+    }
+    ctx.truncate_diagnostics(diagnostics_before);
+    let mut hoisted = SymbolTable::new();
+    for function in &functions {
+        if let Some(symbol) = first_pass.get_handle(&function.name) {
+            let _ = hoisted.insert_handle(function.name.clone(), symbol);
+        }
+    }
+    ctx.module_value_fallback = Some(layered(hoisted));
+    Some(outer_fallback)
 }
 
 fn count_function_declarations(

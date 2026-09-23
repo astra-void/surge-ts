@@ -165,7 +165,7 @@ mod tests {
                 )
             })
             .collect();
-        let mut scanner = ModuleSpecifierScanner::new();
+        let mut scanner = ModuleSpecifierScanner::new(Default::default());
         resolve_path_mappings(inputs, &sources, &mut scanner, paths, base_url, root_dir)
     }
 

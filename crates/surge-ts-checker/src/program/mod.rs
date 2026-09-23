@@ -17,7 +17,7 @@ use crate::modules::{ModuleExportTable, ModuleImportBindings, resolve_module_exp
 use crate::paths::canonicalize_if_exists_string;
 use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
 
-mod ambient;
+pub(crate) mod ambient;
 pub(crate) mod binding;
 mod check_files;
 mod classes;
@@ -39,7 +39,9 @@ mod unused_locals;
 pub(crate) use ambient::*;
 pub(crate) use binding::*;
 use check_files::*;
-pub(crate) use check_files::{emit_grammar_diagnostics, unclaimed_parser_errors};
+pub(crate) use check_files::{
+    emit_deferred_grammar_diagnostics, emit_grammar_diagnostics, unclaimed_parser_errors,
+};
 pub(crate) use classes::*;
 pub(crate) use diagnostics::*;
 pub(crate) use file_classify::*;
@@ -91,9 +93,8 @@ pub(crate) struct ParsedProgramFile {
     pub(crate) module_reads: Vec<String>,
     /// See [`surge_ts_syntax::ParsedSource::definite_writes`].
     pub(crate) definite_writes: Vec<String>,
-    /// Byte ranges of the lines an `@ts-expect-error`/`@ts-ignore` directive
-    /// suppresses (see [`surge_ts_syntax::ParsedSource::suppressed_ranges`]).
-    pub(crate) suppressed_ranges: Vec<surge_ts_syntax::TextSpan>,
+    /// See [`surge_ts_syntax::ParsedSource::comment_directives`].
+    pub(crate) comment_directives: Vec<surge_ts_syntax::CommentDirective>,
     /// Grammar findings from the parser's AST walk (see
     /// [`surge_ts_syntax::ParsedSource::grammar_diagnostics`]), turned into
     /// diagnostics at the start of the file's check.
@@ -132,6 +133,8 @@ struct ProgramCheckSharedState {
     /// Each script's own top-level values, indexed by file; see
     /// [`globals::collect_script_values`].
     script_values: Vec<Option<Arc<SymbolTable>>>,
+    /// See [`globals::module_script_globals`].
+    module_script_globals: Option<Arc<SymbolTable>>,
     function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
     module_analyses: Vec<Option<ModuleAnalysis>>,
     module_import_bindings: Vec<Option<ModuleImportBindings>>,
@@ -308,6 +311,8 @@ fn check_program_with_stats_and_jobs_inner(
         mut parsed_files,
         mut ctx,
     } = start_program_run(files, prescanned, options, jobs, &store);
+    namespaces::report_cross_file_namespace_merges(&mut parsed_files);
+    ctx.constructor_local_properties = constructor_local_properties_by_file(&parsed_files, &ctx.options);
     let syntax_errors = diagnostics::program_has_syntax_errors(&parsed_files);
     let globals = collect_program_globals(&parsed_files, &mut ctx, &timings, program_start);
     let preliminary = run_preliminary_pass(
@@ -519,6 +524,7 @@ fn collect_program_globals(
     let ambient_collection_start = Instant::now();
     emit_parser_diagnostics(&parsed_files, ctx);
     ctx.begin_resolution_stage();
+    ctx.global_augmentation_only_names = Arc::new(global_augmentation_only_names(&parsed_files));
     // Three ordered steps, and the order is load-bearing in both directions.
     //
     // Ambient global *types* merge first so the ambient declaration is the merge
@@ -1066,11 +1072,15 @@ fn finalize_module_bindings(
     });
     let module_scope_map = module_scope_by_file_map(&parsed_files, &module_resolution_scopes, &ctx);
     ctx.set_module_scope_by_file(module_scope_map);
-    ctx.jsx_intrinsic_elements_declarer =
-        locate_jsx_intrinsic_elements_declarer(&parsed_files, &module_export_tables);
+    ctx.jsx_namespace_modules = Arc::new(crate::checks::jsx::collect_jsx_namespace_modules(
+        &parsed_files,
+        &module_export_tables,
+        &module_resolution_scopes,
+        ctx,
+    ));
     // The resolved (re-export-expanded) export tables were only consumed by
-    // import binding and the JSX locator; the check phase reads the analyses'
-    // local export tables through `shared_state`.
+    // import binding and the JSX namespace modules; the check phase reads the
+    // analyses' local export tables through `shared_state`.
     drop(module_export_tables);
     let (script_members, script_block_scoped) =
         script_global_object_members(&parsed_files, &global_symbols, &script_values);
@@ -1106,10 +1116,13 @@ fn finalize_module_bindings(
     drop(module_import_bindings);
     drop(preliminary_module_import_bindings);
     crate::metrics::release_free_memory();
+    let module_script_globals =
+        module_script_globals(&global_symbols, &script_values, &ctx.ambient_global_symbols);
     let shared_state = ProgramCheckSharedState {
         script_type_declarations,
         global_symbols,
         script_values,
+        module_script_globals,
         function_signatures,
         module_analyses,
         module_import_bindings: merged_module_import_bindings,
@@ -1327,6 +1340,7 @@ fn run_check_phase(
         ctx.stats.suppressed_rust_only_diagnostics_total +=
             result.stats.suppressed_rust_only_diagnostics_total;
     }
+    diagnostics::drop_suppressed_program_diagnostics(&mut ctx.diagnostics, parsed_files);
 }
 
 fn finish_program_run(
@@ -1529,26 +1543,6 @@ fn namespace_object_module_path(ty: &surge_ts_types::Type) -> Option<&str> {
         .as_deref()?
         .strip_prefix("typeof import(\"")?
         .strip_suffix("\")")
-}
-
-fn locate_jsx_intrinsic_elements_declarer(
-    parsed_files: &[ParsedProgramFile],
-    module_export_tables: &[Option<crate::modules::ModuleExportTable>],
-) -> Option<(Arc<TypeDeclarationTable>, String)> {
-    const CANDIDATE_KEYS: [&str; 2] = ["JSX.IntrinsicElements", "React.JSX.IntrinsicElements"];
-
-    for key in CANDIDATE_KEYS {
-        for (parsed_file, table) in parsed_files.iter().zip(module_export_tables) {
-            if !parsed_file.file_kind.is_declaration() {
-                continue;
-            }
-            let Some(table) = table else { continue };
-            if table.type_declarations.get(key).is_some() {
-                return Some((table.type_declarations.clone(), key.to_string()));
-            }
-        }
-    }
-    None
 }
 
 fn clone_type_declaration_table(

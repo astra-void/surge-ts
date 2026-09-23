@@ -13,7 +13,8 @@ use oxc_span::{GetSpan, Span};
 use crate::{
     ParsedArrowFunction, ParsedArrowFunctionBody, ParsedBinaryOperator, ParsedCall,
     ParsedCallArgument, ParsedExpression, ParsedJsxAttribute, ParsedJsxAttributeValueKind,
-    ParsedJsxChild, ParsedLogicalOperator, ParsedObjectProperty, ParsedThisBinding,
+    ParsedJsxChild, ParsedJsxClosingElement, ParsedJsxTag, ParsedLogicalOperator,
+    ParsedObjectProperty, ParsedThisBinding,
     ParsedUnaryOperator, TextSpan,
 };
 
@@ -283,21 +284,89 @@ fn parse_jsx_element(element: &JSXElement<'_>) -> ParsedExpression {
         .iter()
         .filter_map(parse_jsx_attribute_item)
         .collect();
-    let children = element.children.iter().map(parse_jsx_child).collect();
+    let (children, child_spans) = parse_jsx_children(&element.children);
+    let (type_arguments, type_arguments_span) = match opening.type_arguments.as_deref() {
+        Some(type_arguments) => (
+            parse_type_arguments(type_arguments).unwrap_or_default(),
+            Some(text_span_from_oxc_span(type_arguments.span)),
+        ),
+        None => (Vec::new(), None),
+    };
+    let closing = element
+        .closing_element
+        .as_deref()
+        .map(|closing| ParsedJsxClosingElement {
+            span: Some(text_span_from_oxc_span(closing.span)),
+            expression: jsx_tag_expression(&closing.name),
+        });
 
     ParsedExpression::JsxElement {
         tag_name,
-        tag_name_span,
         component_name,
         component_span,
         attributes,
         children,
-        span: Some(text_span_from_oxc_span(element.span)),
+        tag: Box::new(ParsedJsxTag {
+            name_span: tag_name_span,
+            span: Some(text_span_from_oxc_span(element.span)),
+            expression: jsx_tag_expression(&opening.name),
+            type_arguments,
+            type_arguments_span,
+            child_spans,
+            closing,
+        }),
+    }
+}
+
+/// tsc's `isJsxIntrinsicTagName` decides what a tag is: an identifier with an
+/// intrinsic name or a namespaced name names an intrinsic element, anything
+/// else (`Button`, `UI.Button`, `this`, `this.tag`) is read as a value. oxc
+/// draws the same line between `Identifier` and `IdentifierReference`.
+fn jsx_tag_expression(name: &JSXElementName<'_>) -> Option<ParsedExpression> {
+    match name {
+        JSXElementName::Identifier(_) | JSXElementName::NamespacedName(_) => None,
+        JSXElementName::IdentifierReference(identifier) => Some(ParsedExpression::Identifier {
+            name: identifier.name.to_string(),
+            span: Some(text_span_from_oxc_span(identifier.span)),
+        }),
+        JSXElementName::ThisExpression(this) => Some(ParsedExpression::This {
+            span: Some(text_span_from_oxc_span(this.span)),
+        }),
+        JSXElementName::MemberExpression(member) => Some(jsx_member_tag_expression(member)),
+    }
+}
+
+fn jsx_member_tag_expression(member: &JSXMemberExpression<'_>) -> ParsedExpression {
+    let (object, object_span) = match &member.object {
+        JSXMemberExpressionObject::IdentifierReference(identifier) => (
+            ParsedExpression::Identifier {
+                name: identifier.name.to_string(),
+                span: Some(text_span_from_oxc_span(identifier.span)),
+            },
+            identifier.span,
+        ),
+        JSXMemberExpressionObject::MemberExpression(inner) => {
+            (jsx_member_tag_expression(inner), inner.span)
+        }
+        JSXMemberExpressionObject::ThisExpression(this) => (
+            ParsedExpression::This {
+                span: Some(text_span_from_oxc_span(this.span)),
+            },
+            this.span,
+        ),
+    };
+    ParsedExpression::PropertyAccess {
+        object: Box::new(object),
+        object_span: Some(text_span_from_oxc_span(object_span)),
+        property_name: member.property.name.to_string(),
+        property_span: Some(text_span_from_oxc_span(member.property.span)),
+        is_bracketed: false,
+        binding_element: false,
     }
 }
 
 fn parse_jsx_fragment(fragment: &JSXFragment<'_>) -> ParsedExpression {
-    let children = fragment.children.iter().map(parse_jsx_child).collect();
+    let (children, _) = parse_jsx_children(&fragment.children);
 
     ParsedExpression::JsxFragment {
         children,
@@ -472,6 +541,44 @@ fn parse_jsx_container_expression(
         // Empty container `{}`: nothing to check.
         None => (None, Some(text_span_from_oxc_span(container.span))),
     }
+}
+
+fn parse_jsx_children(children: &[JSXChild<'_>]) -> (Vec<ParsedJsxChild>, Vec<Option<TextSpan>>) {
+    children
+        .iter()
+        .filter(|child| !is_trivia_jsx_text(child))
+        .map(|child| (parse_jsx_child(child), Some(text_span_from_oxc_span(child.span()))))
+        .unzip()
+}
+
+/// tsc's `JsxText.ContainsOnlyTriviaWhiteSpaces`: whitespace that spans a line
+/// break is layout, not a child, so the checker never sees it.
+fn is_trivia_jsx_text(child: &JSXChild<'_>) -> bool {
+    let JSXChild::Text(text) = child else {
+        return false;
+    };
+    let raw = text.raw.as_ref().map_or(text.value.as_str(), |raw| raw.as_str());
+    let is_line_break = |c: char| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}');
+    let is_single_line_white_space = |c: char| {
+        matches!(
+            c,
+            ' ' | '\t'
+                | '\u{b}'
+                | '\u{c}'
+                | '\u{a0}'
+                | '\u{85}'
+                | '\u{1680}'
+                | '\u{2000}'..='\u{200b}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
+        )
+    };
+    raw.chars().any(is_line_break)
+        && raw
+            .chars()
+            .all(|c| is_line_break(c) || is_single_line_white_space(c))
 }
 
 fn parse_jsx_child(child: &JSXChild<'_>) -> ParsedJsxChild {
@@ -1013,6 +1120,7 @@ fn parse_arrow_function_expression(
 
     Some(ParsedArrowFunction {
         this_binding: ParsedThisBinding::Inherited,
+        name: None,
         type_parameters: parse_type_parameters(arrow_expression.type_parameters.as_deref()),
         parameters,
         return_type,
@@ -1177,18 +1285,33 @@ pub(crate) fn parse_unary_expression(
     })
 }
 
+/// The member name a non-computed accessor declares. A get/set pair shares one
+/// symbol when the names agree as property names — `get 'a'()` with `set a(v)`,
+/// `get 0x20()` with `set 3.2e1(v)` — so a quoted or numeric name is the text
+/// of its value, as it is for a written property.
+fn accessor_key_name(key: &PropertyKey<'_>) -> Option<(String, Span)> {
+    match key {
+        PropertyKey::StaticIdentifier(key) => Some((key.name.to_string(), key.span)),
+        PropertyKey::StringLiteral(literal) => Some((literal.value.to_string(), literal.span)),
+        PropertyKey::NumericLiteral(literal) => Some((
+            super::number_text::js_number_to_string(literal.value),
+            literal.span,
+        )),
+        _ => None,
+    }
+}
+
 pub(crate) fn parse_object_properties(
     object_expression: &ObjectExpression<'_>,
 ) -> Vec<ParsedObjectProperty> {
-    let getter_names: Vec<&str> = object_expression
+    let getter_names: Vec<String> = object_expression
         .properties
         .iter()
         .filter_map(|property_kind| match property_kind {
-            ObjectPropertyKind::ObjectProperty(property) if property.kind == PropertyKind::Get => {
-                match &property.key {
-                    PropertyKey::StaticIdentifier(key) => Some(key.name.as_str()),
-                    _ => None,
-                }
+            ObjectPropertyKind::ObjectProperty(property)
+                if property.kind == PropertyKind::Get && !property.computed =>
+            {
+                accessor_key_name(&property.key).map(|(name, _)| name)
             }
             _ => None,
         })
@@ -1211,6 +1334,7 @@ pub(crate) fn parse_object_properties(
                         is_method: false,
                         is_spread: true,
                         is_accessor: false,
+                        is_getter: false,
                         is_shorthand: false,
                         computed_key: None,
                         paired_setter: None,
@@ -1225,40 +1349,36 @@ pub(crate) fn parse_object_properties(
             // body is still checked.
             if property.computed && property.kind != PropertyKind::Init {
                 let name = super::types::computed_key_name(&property.key)?;
-                let mut accessor =
-                    parse_object_method_shorthand_named(name, property.key.span(), property)?;
-                accessor.is_method = false;
-                accessor.is_accessor = true;
-                return Some(accessor);
+                return parse_object_accessor(name, property.key.span(), property);
             }
 
             // `get value() { … }` / `set value(v) { … }` declare the property
             // just as a written one does; only their *value* type differs from
             // the accessor function. A setter is dropped when the same literal
-            // also declares a getter, whose type wins.
+            // also declares a getter, which carries it as its pair.
             if matches!(property.kind, PropertyKind::Get | PropertyKind::Set) {
-                let PropertyKey::StaticIdentifier(key) = &property.key else {
-                    return None;
-                };
-                if property.kind == PropertyKind::Set && getter_names.contains(&key.name.as_str()) {
+                let (name, key_span) = accessor_key_name(&property.key)?;
+                if property.kind == PropertyKind::Set && getter_names.contains(&name) {
                     return None;
                 }
-                let mut accessor = parse_object_accessor(key, property)?;
+                let mut accessor = parse_object_accessor(name, key_span, property)?;
                 if property.kind == PropertyKind::Get {
-                    accessor.paired_setter = object_expression.properties.iter().find_map(|other| {
+                    let paired_setter = object_expression.properties.iter().find_map(|other| {
                         let ObjectPropertyKind::ObjectProperty(other) = other else {
                             return None;
                         };
-                        let PropertyKey::StaticIdentifier(other_key) = &other.key else {
+                        if other.kind != PropertyKind::Set || other.computed {
                             return None;
-                        };
+                        }
                         let Expression::FunctionExpression(function) = &other.value else {
                             return None;
                         };
-                        (other.kind == PropertyKind::Set && other_key.name == key.name).then(|| {
+                        let (other_name, _) = accessor_key_name(&other.key)?;
+                        (other_name == accessor.name).then(|| {
                             Box::new(function_as_arrow(function, ParsedThisBinding::Own))
                         })
                     });
+                    accessor.paired_setter = paired_setter;
                 }
                 return Some(accessor);
             }
@@ -1312,6 +1432,7 @@ pub(crate) fn parse_object_properties(
                             is_method: false,
                             is_spread: true,
                             is_accessor: false,
+                            is_getter: false,
                             is_shorthand: false,
                             computed_key: computed_key(),
                             paired_setter: None,
@@ -1338,6 +1459,7 @@ pub(crate) fn parse_object_properties(
                 is_method: false,
                 is_spread: false,
                 is_accessor: false,
+                is_getter: false,
                 is_shorthand: property.shorthand,
                 computed_key: computed_key(),
                 paired_setter: None,
@@ -1351,25 +1473,20 @@ pub(crate) fn parse_object_properties(
 /// The checker reads the arrow's return type (getter) or parameter type (setter)
 /// as the property's type.
 fn parse_object_accessor(
-    key: &oxc_ast::ast::IdentifierName<'_>,
+    name: String,
+    key_span: Span,
     property: &oxc_ast::ast::ObjectProperty<'_>,
 ) -> Option<ParsedObjectProperty> {
-    let mut parsed = parse_object_method_shorthand(key, property)?;
+    let mut parsed = parse_object_method_shorthand_named(name, key_span, property)?;
     parsed.is_method = false;
     parsed.is_accessor = true;
+    parsed.is_getter = property.kind == PropertyKind::Get;
     Some(parsed)
 }
 
 /// Lowers object literal method shorthand (`{ foo(arg): R { ... } }`) into a property whose
 /// value is an arrow function, so it reuses the existing arrow-function checking path while
 /// honoring the declared parameter and return types.
-fn parse_object_method_shorthand(
-    key: &oxc_ast::ast::IdentifierName<'_>,
-    property: &oxc_ast::ast::ObjectProperty<'_>,
-) -> Option<ParsedObjectProperty> {
-    parse_object_method_shorthand_named(key.name.to_string(), key.span, property)
-}
-
 fn parse_object_method_shorthand_named(
     name: String,
     key_span: oxc_span::Span,
@@ -1390,6 +1507,7 @@ fn parse_object_method_shorthand_named(
         is_method: true,
         is_spread: false,
         is_accessor: false,
+        is_getter: false,
         is_shorthand: false,
         computed_key: None,
         paired_setter: None,
@@ -1447,6 +1565,7 @@ pub(crate) fn parse_array_expression(
     Some(ParsedExpression::ArrayLiteral {
         elements,
         span: Some(text_span_from_oxc_span(array_expression.span())),
+        tuple_context: false,
     })
 }
 
@@ -1475,6 +1594,7 @@ fn function_as_arrow(
 
     ParsedArrowFunction {
         this_binding,
+        name: None,
         type_parameters: parse_type_parameters(function.type_parameters.as_deref()),
         parameters,
         return_type: function
@@ -1516,7 +1636,10 @@ pub(crate) fn parse_function_expression(
     } else {
         ParsedThisBinding::ImplicitAny
     };
-    function_as_arrow(function, this_binding)
+    ParsedArrowFunction {
+        name: function.id.as_ref().map(|id| id.name.to_string()),
+        ..function_as_arrow(function, this_binding)
+    }
 }
 
 pub(crate) fn parse_update_expression(
@@ -1540,6 +1663,14 @@ pub(crate) fn parse_update_expression(
             parse_computed_member_expression(member)?,
             member.span,
         ),
+        // The parser keeps an operand tsc rejects (TS2357/TS2777) in a non-null
+        // wrapper spanning exactly that operand; tsc still checks it as an
+        // arithmetic operand.
+        SimpleAssignmentTarget::TSNonNullExpression(recovered)
+            if recovered.span == recovered.expression.span() =>
+        {
+            (parse_expression(&recovered.expression).0, recovered.span)
+        }
         _ => return None,
     };
 
@@ -1630,6 +1761,11 @@ fn parse_chain_expression(chain_expression: &ChainExpression<'_>) -> Option<Pars
 pub(super) fn parse_computed_member_expression(
     member_expression: &ComputedMemberExpression<'_>,
 ) -> Option<ParsedExpression> {
+    // `o[]` (TS1011): the parser's placeholder argument is empty, and the access
+    // has no key to check.
+    if member_expression.expression.span().is_empty() {
+        return None;
+    }
     // String-literal bracket access (`obj["key"]`, `obj?.["key"]`) lowers to the
     // same (optional) property-access nodes as dot access so it reuses identical
     // property-lookup, optional-widening, and missing-property behavior.

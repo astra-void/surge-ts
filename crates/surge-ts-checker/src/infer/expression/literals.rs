@@ -157,7 +157,10 @@ pub(crate) fn infer_object_literal(
                                     index_slot: false,
                                 }
                             }
-                            _ => source_property.clone(),
+                            // `getSpreadSymbol`: outside a const context a
+                            // spread member is writable whatever it was on the
+                            // source.
+                            _ => source_property.clone().with_readonly(false),
                         };
                         merged_properties.insert(name.clone(), merged);
                     }
@@ -177,9 +180,11 @@ pub(crate) fn infer_object_literal(
             continue;
         }
 
+        let readonly = is_get_only_accessor(property, properties);
         merged_properties.insert(
             property.name.as_str().into(),
-            ObjectProperty::required(infer_object_property_type(property, symbols, ctx)),
+            ObjectProperty::required(infer_object_property_type(property, symbols, ctx))
+                .with_readonly(readonly),
         );
     }
 
@@ -328,9 +333,13 @@ pub(crate) fn infer_const_expression(
 
 pub(crate) fn infer_array_literal(
     elements: &[ParsedArrayElement],
+    tuple_context: bool,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    if tuple_context && elements.iter().all(|element| !element.spread) {
+        return infer_tuple_literal(elements, symbols, ctx);
+    }
     // `[]` is `never[]`, or `undefined[]` when `undefined` is in every type's
     // domain (the implicit element type tsc widens to `any`).
     if elements.is_empty() {
@@ -399,6 +408,30 @@ pub(crate) fn infer_array_literal(
     InferredExpression::Known(Type::Array(Box::new(element_type)))
 }
 
+/// tsc's `checkArrayLiteral` in a tuple context: a tuple of the elements'
+/// types, each literal widened (`checkExpressionForMutableLocation`) since the
+/// context a destructuring pattern gives an element is never a literal type.
+fn infer_tuple_literal(
+    elements: &[ParsedArrayElement],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let mut element_types = Vec::with_capacity(elements.len());
+    for element in elements {
+        match infer_expression(&element.expression, symbols, ctx) {
+            InferredExpression::Known(ty) if ty.is_unknown() => return InferredExpression::Unknown,
+            InferredExpression::Known(ty) if is_fresh_literal_expression(&element.expression) => {
+                element_types.push(crate::checks::expr::widen_type(&ty));
+            }
+            InferredExpression::Known(ty) => element_types.push(ty),
+            InferredExpression::UnresolvedIdentifier { .. }
+            | InferredExpression::MissingProperty { .. }
+            | InferredExpression::Unknown => return InferredExpression::Unknown,
+        }
+    }
+    InferredExpression::Known(Type::Tuple(element_types))
+}
+
 fn is_fresh_literal_expression(expression: &ParsedExpression) -> bool {
     matches!(
         expression,
@@ -446,22 +479,91 @@ fn infer_object_property_type(
     if (property.is_method || property.is_accessor)
         && let ParsedExpression::ArrowFunction(arrow) = &property.value
     {
+        let checked = if property.is_getter {
+            getter_with_return_annotation(arrow, property)
+        } else {
+            arrow.as_ref().clone()
+        };
         let function_type = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
-            check_arrow_function_expression(arrow.as_ref().clone(), symbols, ctx)
+            check_arrow_function_expression(checked, symbols, ctx)
         });
-        check_paired_setter(property, arrow, symbols, ctx);
+        // `getTypeOfAccessors`: the getter's annotation, else the setter's, else
+        // what the getter's body returns — all of which the getter's own
+        // return type now is. A lone setter's property is its parameter's type.
+        if property.is_getter {
+            check_setter_of_getter(property, arrow, function_type.return_type(), symbols, ctx);
+            return function_type.return_type().clone();
+        }
         if property.is_accessor {
-            // A getter takes no parameters and yields its return type; a setter
-            // takes one and yields that parameter's type.
-            return match function_type.parameters().first() {
-                Some(parameter) => parameter.clone(),
-                None => function_type.return_type().clone(),
-            };
+            return function_type.parameters().first().cloned().unwrap_or(Type::Any);
         }
         return Type::Function(function_type);
     }
 
     infer_object_property_value(&property.value, symbols, ctx)
+}
+
+/// tsc's `isReadonlySymbol` for a literal member: an accessor with a getter and
+/// no setter of the same name.
+fn is_get_only_accessor(property: &ParsedObjectProperty, properties: &[ParsedObjectProperty]) -> bool {
+    property.is_getter
+        && property.paired_setter.is_none()
+        && !properties.iter().any(|other| {
+            other.is_accessor && !other.is_getter && other.name == property.name
+        })
+}
+
+/// tsc's `getReturnTypeFromAnnotation` for a get accessor: without an
+/// annotation of its own it takes its setter's parameter annotation, which then
+/// types its `return` statements too.
+fn getter_with_return_annotation(
+    getter: &surge_ts_syntax::ParsedArrowFunction,
+    property: &ParsedObjectProperty,
+) -> surge_ts_syntax::ParsedArrowFunction {
+    let mut getter = getter.clone();
+    if getter.return_type.is_none() {
+        getter.return_type = property
+            .paired_setter
+            .as_deref()
+            .and_then(|setter| setter.parameters.first())
+            .and_then(|parameter| parameter.declared_type.clone());
+    }
+    getter
+}
+
+/// A setter's parameter written without a type is typed by the getter's
+/// return type, annotated or inferred (`getTypeForVariableLikeDeclaration`:
+/// "use the type of the get accessor if one is present").
+fn check_setter_of_getter(
+    property: &ParsedObjectProperty,
+    getter: &surge_ts_syntax::ParsedArrowFunction,
+    getter_return_type: &Type,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let Some(setter) = property.paired_setter.as_deref() else {
+        return;
+    };
+    let untyped_value = setter
+        .parameters
+        .first()
+        .is_some_and(|parameter| parameter.declared_type.is_none());
+    if !untyped_value || getter.return_type.is_some() {
+        check_paired_setter(property, getter, symbols, ctx);
+        return;
+    }
+    let value_signature = surge_ts_types::FunctionType::new(
+        vec![getter_return_type.clone()],
+        Type::Void,
+        false,
+        1,
+    );
+    let _ = crate::checks::function::check_arrow_function_expression_with_expected_type(
+        setter.clone(),
+        Some(&value_signature),
+        symbols,
+        ctx,
+    );
 }
 
 /// A getter's `set` partner is checked for its body alone. Its parameter,

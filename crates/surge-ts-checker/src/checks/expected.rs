@@ -579,7 +579,7 @@ fn evaluate_expression_with_expected_type_inner(
         return evaluate_array_literal_in_context(elements, expected_type, fallback_span, symbols, ctx);
     }
 
-    if let (Type::Tuple(expected_elements), ParsedExpression::ArrayLiteral { elements, span }) =
+    if let (Type::Tuple(expected_elements), ParsedExpression::ArrayLiteral { elements, span, .. }) =
         (expected_type, expression)
     {
         return evaluate_tuple_literal_with_expected_type(
@@ -598,7 +598,7 @@ fn evaluate_expression_with_expected_type_inner(
     // is what lets `[1, "a", "b"]` satisfy `[number, ...string[]]` when
     // `(number | string)[]` does not. A spread element has no single slot and
     // goes to the generic path.
-    if let (Type::OpenTuple(open), ParsedExpression::ArrayLiteral { elements, span }) =
+    if let (Type::OpenTuple(open), ParsedExpression::ArrayLiteral { elements, span, .. }) =
         (expected_type, expression)
         && elements.iter().all(|element| !element.spread)
     {
@@ -612,7 +612,7 @@ fn evaluate_expression_with_expected_type_inner(
         );
     }
 
-    if let (Type::Array(expected_element_type), ParsedExpression::ArrayLiteral { elements, span }) =
+    if let (Type::Array(expected_element_type), ParsedExpression::ArrayLiteral { elements, span, .. }) =
         (expected_type, expression)
     {
         return evaluate_array_literal_with_expected_type(

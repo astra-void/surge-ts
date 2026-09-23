@@ -72,6 +72,30 @@
     "support": "emitted"
   },
   {
+    "code": "TS1362",
+    "category": "Error",
+    "message": "'{0}' cannot be used as a value because it was exported using 'export type'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1063",
+    "category": "Error",
+    "message": "An export assignment cannot be used in a namespace.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1319",
+    "category": "Error",
+    "message": "A default export can only be used in an ECMAScript-style module.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2302",
     "category": "Error",
     "message": "Static members cannot reference class type parameters.",
@@ -168,14 +192,6 @@
     "support": "emitted"
   },
   {
-    "code": "TS2446",
-    "category": "Error",
-    "message": "Property '{0}' is protected and only accessible through an instance of class '{1}'. This is an instance of class '{2}'.",
-    "source": "typescript",
-    "arity": 3,
-    "support": "emitted"
-  },
-  {
     "code": "TS2440",
     "category": "Error",
     "message": "Import declaration conflicts with local declaration of '{0}'.",
@@ -205,7 +221,7 @@
     "message": "File '{0}' is not a module.",
     "source": "typescript",
     "arity": 1,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2307",
@@ -237,6 +253,14 @@
     "message": "Generic type '{0}' requires {1} type argument(s).",
     "source": "typescript",
     "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2707",
+    "category": "Error",
+    "message": "Generic type '{0}' requires between {1} and {2} type arguments.",
+    "source": "typescript",
+    "arity": 3,
     "support": "emitted"
   },
   {
@@ -397,7 +421,7 @@
     "message": "This expression is not constructable.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2352",
@@ -576,6 +600,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2537",
+    "category": "Error",
+    "message": "Type '{0}' has no matching index signature for type '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2538",
     "category": "Error",
     "message": "Type '{0}' cannot be used as an index type.",
@@ -597,6 +629,14 @@
     "message": "Property '{0}' does not exist on type '{1}'. Did you mean '{2}'?",
     "source": "typescript",
     "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2812",
+    "category": "Error",
+    "message": "Property '{0}' does not exist on type '{1}'. Try changing the 'lib' compiler option to include 'dom'.",
+    "source": "typescript",
+    "arity": 2,
     "support": "emitted"
   },
   {
@@ -704,19 +744,27 @@
     "support": "emitted"
   },
   {
-    "code": "TS1005",
+    "code": "TS2746",
     "category": "Error",
-    "message": "'{0}' expected.",
+    "message": "This JSX tag's '{0}' prop expects a single child of type '{1}', but multiple children were provided.",
     "source": "typescript",
-    "arity": 1,
+    "arity": 2,
     "support": "emitted"
   },
   {
-    "code": "TS1034",
+    "code": "TS2747",
     "category": "Error",
-    "message": "'super' must be followed by an argument list or member access.",
+    "message": "'{0}' components don't accept text as child elements. Text in JSX has the type 'string', but the expected type of '{1}' is '{2}'.",
     "source": "typescript",
-    "arity": 0,
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2875",
+    "category": "Error",
+    "message": "This JSX tag requires the module path '{0}' to exist, but none could be found. Make sure you have types for the appropriate package installed.",
+    "source": "typescript",
+    "arity": 1,
     "support": "emitted"
   },
   {
@@ -888,6 +936,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS7022",
+    "category": "Error",
+    "message": "'{0}' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS4111",
     "category": "Error",
     "message": "Property '{0}' comes from an index signature, so it must be accessed with ['{0}'].",
@@ -923,22 +979,6 @@
     "code": "TS6142",
     "category": "Error",
     "message": "Module '{0}' was resolved to '{1}', but '--jsx' is not set.",
-    "source": "typescript",
-    "arity": 2,
-    "support": "emitted"
-  },
-  {
-    "code": "TS2846",
-    "category": "Error",
-    "message": "A declaration file cannot be imported without 'import type'. Did you mean to import an implementation file '{0}' instead?",
-    "source": "typescript",
-    "arity": 1,
-    "support": "emitted"
-  },
-  {
-    "code": "TS6263",
-    "category": "Error",
-    "message": "Module '{0}' was resolved to '{1}', but '--allowArbitraryExtensions' is not set.",
     "source": "typescript",
     "arity": 2,
     "support": "emitted"
@@ -1045,7 +1085,7 @@
     "message": "Parameter has a name but no type. Did you mean '{0}: {1}'?",
     "source": "typescript",
     "arity": 2,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS7052",
@@ -1125,7 +1165,7 @@
     "message": "A mapped type may not declare properties or methods.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1117",
@@ -1267,14 +1307,6 @@
     "code": "TS1039",
     "category": "Error",
     "message": "Initializers are not allowed in ambient contexts.",
-    "source": "typescript",
-    "arity": 0,
-    "support": "emitted"
-  },
-  {
-    "code": "TS1254",
-    "category": "Error",
-    "message": "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference.",
     "source": "typescript",
     "arity": 0,
     "support": "emitted"
@@ -1741,7 +1773,7 @@
     "message": "A 'set' accessor cannot have an optional parameter.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1061",
@@ -1829,7 +1861,7 @@
     "message": "Computed property names are not allowed in enums.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1172",
@@ -2053,7 +2085,7 @@
     "message": "A rest element cannot have a property name.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2681",
@@ -2077,7 +2109,7 @@
     "message": "'get' and 'set' accessors cannot declare 'this' parameters.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS5085",
@@ -2269,6 +2301,22 @@
     "message": "Cannot find name '{0}'. Did you mean the instance member 'this.{0}'?",
     "source": "typescript",
     "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2301",
+    "category": "Error",
+    "message": "Initializer of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2844",
+    "category": "Error",
+    "message": "Type of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor.",
+    "source": "typescript",
+    "arity": 2,
     "support": "emitted"
   },
   {
@@ -3120,78 +3168,6 @@
     "support": "emitted"
   },
   {
-    "code": "TS1231",
-    "category": "Error",
-    "message": "An export assignment must be at the top level of a file or module declaration.",
-    "source": "typescript",
-    "arity": 0,
-    "support": "emitted"
-  },
-  {
-    "code": "TS1232",
-    "category": "Error",
-    "message": "An import declaration can only be used at the top level of a namespace or module.",
-    "source": "typescript",
-    "arity": 0,
-    "support": "emitted"
-  },
-  {
-    "code": "TS1233",
-    "category": "Error",
-    "message": "An export declaration can only be used at the top level of a namespace or module.",
-    "source": "typescript",
-    "arity": 0,
-    "support": "emitted"
-  },
-  {
-    "code": "TS1234",
-    "category": "Error",
-    "message": "An ambient module declaration is only allowed at the top level in a file.",
-    "source": "typescript",
-    "arity": 0,
-    "support": "emitted"
-  },
-  {
-    "code": "TS1235",
-    "category": "Error",
-    "message": "A namespace declaration is only allowed at the top level of a namespace or module.",
-    "source": "typescript",
-    "arity": 0,
-    "support": "emitted"
-  },
-  {
-    "code": "TS1258",
-    "category": "Error",
-    "message": "A default export must be at the top level of a file or module declaration.",
-    "source": "typescript",
-    "arity": 0,
-    "support": "emitted"
-  },
-  {
-    "code": "TS17019",
-    "category": "Error",
-    "message": "'{0}' at the end of a type is not valid TypeScript syntax. Did you mean to write '{1}'?",
-    "source": "typescript",
-    "arity": 2,
-    "support": "emitted"
-  },
-  {
-    "code": "TS17020",
-    "category": "Error",
-    "message": "'{0}' at the start of a type is not valid TypeScript syntax. Did you mean to write '{1}'?",
-    "source": "typescript",
-    "arity": 2,
-    "support": "emitted"
-  },
-  {
-    "code": "TS1110",
-    "category": "Error",
-    "message": "Type expected.",
-    "source": "typescript",
-    "arity": 0,
-    "support": "emitted"
-  },
-  {
     "code": "TS2699",
     "category": "Error",
     "message": "Static property '{0}' conflicts with built-in property 'Function.{0}' of constructor function '{1}'.",
@@ -3365,6 +3341,926 @@
     "message": "Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '{0}'?",
     "source": "typescript",
     "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1044",
+    "category": "Error",
+    "message": "'{0}' modifier cannot appear on a module or namespace element.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1040",
+    "category": "Error",
+    "message": "'{0}' modifier cannot be used in an ambient context.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1042",
+    "category": "Error",
+    "message": "'{0}' modifier cannot be used here.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1243",
+    "category": "Error",
+    "message": "'{0}' modifier cannot be used with '{1}' modifier.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1277",
+    "category": "Error",
+    "message": "'{0}' modifier can only appear on a type parameter of a function, method or class",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1191",
+    "category": "Error",
+    "message": "An import declaration cannot have modifiers.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1231",
+    "category": "Error",
+    "message": "An export assignment must be at the top level of a file or module declaration.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1232",
+    "category": "Error",
+    "message": "An import declaration can only be used at the top level of a namespace or module.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1233",
+    "category": "Error",
+    "message": "An export declaration can only be used at the top level of a namespace or module.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1234",
+    "category": "Error",
+    "message": "An ambient module declaration is only allowed at the top level in a file.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1235",
+    "category": "Error",
+    "message": "A namespace declaration is only allowed at the top level of a namespace or module.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1258",
+    "category": "Error",
+    "message": "A default export must be at the top level of a file or module declaration.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2435",
+    "category": "Error",
+    "message": "Ambient modules cannot be nested in other modules or namespaces.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1540",
+    "category": "Error",
+    "message": "A 'namespace' declaration should not be declared using the 'module' keyword. Please use the 'namespace' keyword instead.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2669",
+    "category": "Error",
+    "message": "Augmentations for the global scope can only be directly nested in external modules or ambient module declarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2670",
+    "category": "Error",
+    "message": "Augmentations for the global scope should have 'declare' modifier unless they appear in already ambient context.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2666",
+    "category": "Error",
+    "message": "Exports and export assignments are not permitted in module augmentations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2667",
+    "category": "Error",
+    "message": "Imports are not permitted in module augmentations. Consider moving them to the enclosing external module.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2668",
+    "category": "Error",
+    "message": "'export' modifier cannot be applied to ambient modules and module augmentations since they are always visible.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1046",
+    "category": "Error",
+    "message": "Top-level declarations in .d.ts files must start with either a 'declare' or 'export' modifier.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1346",
+    "category": "Error",
+    "message": "This parameter is not allowed with 'use strict' directive.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1347",
+    "category": "Error",
+    "message": "'use strict' directive cannot be used with non-simple parameter list.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1162",
+    "category": "Error",
+    "message": "An object member cannot be declared optional.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2848",
+    "category": "Error",
+    "message": "The right-hand side of an 'instanceof' expression must not be an instantiation expression.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18016",
+    "category": "Error",
+    "message": "Private identifiers are not allowed outside class bodies.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1034",
+    "category": "Error",
+    "message": "'super' must be followed by an argument list or member access.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1275",
+    "category": "Error",
+    "message": "'accessor' modifier can only appear on a property declaration.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1228",
+    "category": "Error",
+    "message": "A type predicate is only allowed in return type position for functions and methods.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2815",
+    "category": "Error",
+    "message": "'arguments' cannot be referenced in property initializers or class static initialization blocks.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2737",
+    "category": "Error",
+    "message": "BigInt literals are not available when targeting lower than ES2020.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1433",
+    "category": "Error",
+    "message": "Neither decorators nor modifiers may be applied to 'this' parameters.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1196",
+    "category": "Error",
+    "message": "Catch clause variable type annotation must be 'any' or 'unknown' if specified.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2463",
+    "category": "Error",
+    "message": "A binding pattern parameter cannot be optional in an implementation signature.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2491",
+    "category": "Error",
+    "message": "The left-hand side of a 'for...in' statement cannot be a destructuring pattern.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2406",
+    "category": "Error",
+    "message": "The left-hand side of a 'for...in' statement must be a variable or a property access.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2780",
+    "category": "Error",
+    "message": "The left-hand side of a 'for...in' statement may not be an optional property access.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2781",
+    "category": "Error",
+    "message": "The left-hand side of a 'for...of' statement may not be an optional property access.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2778",
+    "category": "Error",
+    "message": "The target of an object rest assignment may not be an optional property access.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2408",
+    "category": "Error",
+    "message": "Setters cannot return a value.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18041",
+    "category": "Error",
+    "message": "A 'return' statement cannot be used inside a class static block.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17005",
+    "category": "Error",
+    "message": "A constructor cannot contain a 'super' call when its class extends 'null'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1053",
+    "category": "Error",
+    "message": "A 'set' accessor cannot have rest parameter.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1052",
+    "category": "Error",
+    "message": "A 'set' accessor parameter cannot have an initializer.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1054",
+    "category": "Error",
+    "message": "A 'get' accessor cannot have parameters.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1267",
+    "category": "Error",
+    "message": "Property '{0}' cannot have an initializer because it is marked abstract.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1242",
+    "category": "Error",
+    "message": "'abstract' modifier can only appear on a class, method, or property declaration.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18006",
+    "category": "Error",
+    "message": "Classes may not have a field named 'constructor'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2680",
+    "category": "Error",
+    "message": "A '{0}' parameter must be the first parameter.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1358",
+    "category": "Error",
+    "message": "Tagged template expressions are not permitted in an optional chain.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1317",
+    "category": "Error",
+    "message": "A parameter property cannot be declared using a rest parameter.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2467",
+    "category": "Error",
+    "message": "A computed property name cannot reference a type parameter from its containing type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1225",
+    "category": "Error",
+    "message": "Cannot find parameter '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1230",
+    "category": "Error",
+    "message": "A type predicate cannot reference element '{0}' in a binding pattern.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2415",
+    "category": "Error",
+    "message": "Class '{0}' incorrectly extends base class '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2417",
+    "category": "Error",
+    "message": "Class static side '{0}' incorrectly extends base class static side '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2507",
+    "category": "Error",
+    "message": "Type '{0}' is not a constructor function type.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2863",
+    "category": "Error",
+    "message": "A class cannot extend a primitive type like '{0}'. Classes can only extend constructable values.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2864",
+    "category": "Error",
+    "message": "A class cannot implement a primitive type like '{0}'. It can only implement other named object types.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2446",
+    "category": "Error",
+    "message": "Property '{0}' is protected and only accessible through an instance of class '{1}'. This is an instance of class '{2}'.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18013",
+    "category": "Error",
+    "message": "Property '{0}' is not accessible outside class '{1}' because it has a private identifier.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS2673",
+    "category": "Error",
+    "message": "Constructor of class '{0}' is private and only accessible within the class declaration.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2674",
+    "category": "Error",
+    "message": "Constructor of class '{0}' is protected and only accessible within the class declaration.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2675",
+    "category": "Error",
+    "message": "Cannot extend a class '{0}'. Class constructor is marked as private.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS4105",
+    "category": "Error",
+    "message": "Private or protected member '{0}' cannot be accessed on a type parameter.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2376",
+    "category": "Error",
+    "message": "A 'super' call must be the first statement in the constructor to refer to 'super' or 'this' when a derived class contains initialized properties, parameter properties, or private identifiers.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2401",
+    "category": "Error",
+    "message": "A 'super' call must be a root-level statement within a constructor of a derived class that contains initialized properties, parameter properties, or private identifiers.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2803",
+    "category": "Error",
+    "message": "Cannot assign to private method '{0}'. Private methods are not writable.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2806",
+    "category": "Error",
+    "message": "Private accessor was defined without a getter.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2725",
+    "category": "Error",
+    "message": "Class name cannot be 'Object' when targeting ES5 and above with module {0}.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2397",
+    "category": "Error",
+    "message": "Declaration name conflicts with built-in global identifier '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1216",
+    "category": "Error",
+    "message": "Identifier expected. '__esModule' is reserved as an exported marker when transforming ECMAScript modules.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2438",
+    "category": "Error",
+    "message": "Import name cannot be '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2441",
+    "category": "Error",
+    "message": "Duplicate identifier '{0}'. Compiler reserves name '{1}' in top level scope of a module.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2818",
+    "category": "Error",
+    "message": "Duplicate identifier '{0}'. Compiler reserves name '{1}' when emitting 'super' references in static initializers.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2578",
+    "category": "Error",
+    "message": "Unused '@ts-expect-error' directive.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS2664",
+    "category": "Error",
+    "message": "Invalid module name in augmentation, module '{0}' cannot be found.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2671",
+    "category": "Error",
+    "message": "Cannot augment module '{0}' because it resolves to a non-module entity.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2436",
+    "category": "Error",
+    "message": "Ambient module declaration cannot specify relative module name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2432",
+    "category": "Error",
+    "message": "In an enum with multiple declarations, only one declaration can omit an initializer for its first enum element.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2477",
+    "category": "Error",
+    "message": "'const' enum member initializer was evaluated to a non-finite value.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2478",
+    "category": "Error",
+    "message": "'const' enum member initializer was evaluated to disallowed value 'NaN'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2476",
+    "category": "Error",
+    "message": "A const enum member can only be accessed using a string literal.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2475",
+    "category": "Error",
+    "message": "'const' enums can only be used in property or index access expressions or the right hand side of an import declaration or export assignment or type query.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2748",
+    "category": "Error",
+    "message": "Cannot access ambient const enums when '{0}' is enabled.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS17004",
+    "category": "Error",
+    "message": "Cannot use JSX unless the '--jsx' flag is provided.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS7027",
+    "category": "Error",
+    "message": "Unreachable code detected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2687",
+    "category": "Error",
+    "message": "All declarations of '{0}' must have identical modifiers.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2814",
+    "category": "Error",
+    "message": "Function with bodies can only merge with classes that are ambient.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2813",
+    "category": "Error",
+    "message": "Class declaration cannot implement overload list for '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2434",
+    "category": "Error",
+    "message": "A namespace declaration cannot be located prior to a class or function with which it is merged.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2433",
+    "category": "Error",
+    "message": "A namespace declaration cannot be in a different file from a class or function with which it is merged.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2652",
+    "category": "Error",
+    "message": "Merged declaration '{0}' cannot include a default export declaration. Consider adding a separate 'export default {0}' declaration instead.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2481",
+    "category": "Error",
+    "message": "Cannot initialize outer scoped variable '{0}' in the same scope as block scoped declaration '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2744",
+    "category": "Error",
+    "message": "Type parameter defaults can only reference previously declared type parameters.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2700",
+    "category": "Error",
+    "message": "Rest types may only be created from object types.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2574",
+    "category": "Error",
+    "message": "A rest element type must be an array type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2495",
+    "category": "Error",
+    "message": "Type '{0}' is not an array type or a string type.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6234",
+    "category": "Error",
+    "message": "This expression is not callable because it is a 'get' accessor. Did you mean to use it without '()'?",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS2690",
+    "category": "Error",
+    "message": "'{0}' only refers to a type, but is being used as a value here. Did you mean to use '{1} in {0}'?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2560",
+    "category": "Error",
+    "message": "Value of type '{0}' has no properties in common with type '{1}'. Did you mean to call it?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS7032",
+    "category": "Error",
+    "message": "Property '{0}' implicitly has type 'any', because its set accessor lacks a parameter type annotation.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS7041",
+    "category": "Error",
+    "message": "The containing arrow function captures the global value of 'this'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS7028",
+    "category": "Error",
+    "message": "Unused label.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2677",
+    "category": "Error",
+    "message": "A type predicate's type must be assignable to its parameter's type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2405",
+    "category": "Error",
+    "message": "The left-hand side of a 'for...in' statement must be of type 'string' or 'any'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1011",
+    "category": "Error",
+    "message": "An element access expression should take an argument.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1221",
+    "category": "Error",
+    "message": "Generators are not allowed in an ambient context.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2487",
+    "category": "Error",
+    "message": "The left-hand side of a 'for...of' statement must be a variable or a property access.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1005",
+    "category": "Error",
+    "message": "'{0}' expected.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2846",
+    "category": "Error",
+    "message": "A declaration file cannot be imported without 'import type'. Did you mean to import an implementation file '{0}' instead?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6263",
+    "category": "Error",
+    "message": "Module '{0}' was resolved to '{1}', but '--allowArbitraryExtensions' is not set.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1254",
+    "category": "Error",
+    "message": "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17019",
+    "category": "Error",
+    "message": "'{0}' at the end of a type is not valid TypeScript syntax. Did you mean to write '{1}'?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17020",
+    "category": "Error",
+    "message": "'{0}' at the start of a type is not valid TypeScript syntax. Did you mean to write '{1}'?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1110",
+    "category": "Error",
+    "message": "Type expected.",
+    "source": "typescript",
+    "arity": 0,
     "support": "emitted"
   }
 ]

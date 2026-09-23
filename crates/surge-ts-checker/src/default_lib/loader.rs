@@ -7,7 +7,7 @@ use super::physical::{
     DefaultLibIoStats, default_full_lib_seed_for_target, find_typescript_lib_dir,
     resolve_default_libs_from_source,
 };
-use super::provider::{DirectoryLibSource, EmbeddedLibSource, LibSource};
+use super::provider::{DirectoryLibSource, EmbeddedLibSource, LibSource, ReplacingLibSource};
 
 /// Which declarations the standard library is loaded from.
 ///
@@ -42,6 +42,8 @@ pub struct DefaultLibRequest<'a> {
     pub target_basename: &'a str,
     /// Where the declarations come from.
     pub source: LibSourceChoice,
+    /// Under `libReplacement`, the file replacing a normalized lib name.
+    pub lib_replacement: Option<&'a dyn Fn(&str) -> Option<PathBuf>>,
 }
 
 #[derive(Debug, Default)]
@@ -108,6 +110,17 @@ pub fn load_default_lib_inputs(request: DefaultLibRequest<'_>) -> DefaultLibLoad
     let active: &dyn LibSource = match &source {
         Some(directory) => directory,
         None => &embedded,
+    };
+    let replacing;
+    let active: &dyn LibSource = match request.lib_replacement {
+        Some(replacement) => {
+            replacing = ReplacingLibSource {
+                inner: active,
+                replacement,
+            };
+            &replacing
+        }
+        None => active,
     };
 
     let resolution = resolve_default_libs_from_source(

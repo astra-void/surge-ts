@@ -284,10 +284,11 @@ pub(crate) struct CheckerContext {
     pub(crate) suppressed_argument_mismatch_span: Option<DiagnosticTextSpan>,
     /// Spans the grammar pass has already answered for, with the codes tsc
     /// does not also report there: a renamed binding in a bodyless signature
-    /// (TS2842) is not an implicit `any` (TS7031), and a parameter initializer
-    /// naming its own or a later parameter (TS2372/TS2373) resolves the name —
-    /// surge's scope lacks the later parameter, which is not a TS2304.
+    /// (TS2842) is not an implicit `any` (TS7031).
     pub(crate) grammar_answered_spans: Vec<(DiagnosticTextSpan, &'static [u32])>,
+    /// Grammar findings held until the file's type declarations are installed
+    /// (`emit_deferred_grammar_diagnostics`).
+    pub(crate) deferred_grammar_findings: Vec<surge_ts_syntax::ParsedGrammarDiagnostic>,
     /// Parameters already bound while a signature's annotations are being
     /// mapped, so a later annotation's `typeof <earlier parameter>` resolves the
     /// way tsc's parameter scope does. Empty outside signature mapping.
@@ -416,6 +417,9 @@ pub(crate) struct CheckerContext {
     /// Global `let`/`const` names: bindings in the global scope that are not
     /// properties of the global object.
     pub(crate) block_scoped_globals: Arc<FxHashSet<Arc<str>>>,
+    /// Names only a global augmentation declares. See
+    /// [`crate::program::global_augmentation_only_names`].
+    pub(crate) global_augmentation_only_names: Arc<FxHashSet<Arc<str>>>,
     /// The subset of [`Self::umd_global_names`] the file under check actually
     /// reaches through the global scope: the file is a module and nothing local
     /// or imported shadows the name. Empty for script files, for files that
@@ -432,6 +436,11 @@ pub(crate) struct CheckerContext {
     /// TS1361 — including the implicit factory reference every JSX tag makes
     /// under `jsx: react`.
     pub(crate) file_type_only_import_names: FxHashSet<Arc<str>>,
+    /// Local names the file under check imports through an export whose alias
+    /// chain passes through a type-only declaration (`export type { A }`
+    /// upstream of a plain `import { A }`), with that declaration's kind.
+    /// Owned like `file_type_only_import_names`.
+    pub(crate) file_type_only_alias_names: FxHashMap<Arc<str>, crate::modules::TypeOnlyAliasKind>,
     /// Every name the current file's imports bind, for TS2632. Owned by the
     /// file that set it, like `file_type_only_import_names`.
     pub(crate) file_import_names: FxHashSet<Arc<str>>,
@@ -484,14 +493,17 @@ pub(crate) struct CheckerContext {
     /// analysis rounds' collection calls; see `modules::exports::values::
     /// thin_prelim_enabled` for the soundness argument.
     pub(crate) thin_superseded_value_collection: bool,
-    /// The export-table type declarations of the module that exports the
-    /// program's JSX intrinsic-elements interface, plus its key in that table
-    /// (`JSX.IntrinsicElements`), located once after module binding. Under the
-    /// automatic runtime (`jsx: react-jsx`) the JSX checker resolves intrinsic
-    /// tags through this table when no `JSX`/`React.JSX` binding is visible from
-    /// the consuming file — tsc reaches the namespace through the runtime module
-    /// import it synthesizes.
-    pub(crate) jsx_intrinsic_elements_declarer: Option<(Arc<TypeDeclarationTable>, String)>,
+    /// The modules JSX namespaces are read from that no lexical scope exposes
+    /// (each file's implicit `jsx-runtime` import, each UMD global), located
+    /// once after module binding.
+    pub(crate) jsx_namespace_modules: Arc<crate::checks::jsx::JsxNamespaceModules>,
+    /// The current file's JSX pragmas ([`surge_ts_syntax::ParsedSource::jsx_factory_uses`]).
+    /// Per-file: reset by [`Self::begin_file_check`].
+    pub(crate) jsx_factory_uses: surge_ts_syntax::JsxFactoryUses,
+    /// The JSX namespace resolved for the current file (tsc's
+    /// `getJsxNamespaceAt`), keyed by the file it was resolved for. Per-file:
+    /// reset by [`Self::begin_file_check`].
+    pub(crate) jsx_namespace: Option<(Arc<str>, crate::checks::jsx::JsxNamespace)>,
     pub(crate) type_parameter_scopes: Vec<HashMap<String, Type>>,
     /// The current file's definite-assignment targets
     /// ([`surge_ts_syntax::ParsedSource::definite_writes`]).
@@ -657,6 +669,16 @@ pub(crate) struct CheckerContext {
     /// parameters — shadows them), and their names.
     pub(crate) static_member_type_parameters:
         Option<(Option<surge_ts_syntax::TextSpan>, usize, Vec<String>)>,
+    /// Each source file's properties whose class constructor declares locals
+    /// (see [`crate::program::ConstructorLocalProperty`]), keyed by file name.
+    pub(crate) constructor_local_properties:
+        Arc<FxHashMap<Arc<str>, Arc<[crate::program::ConstructorLocalProperty]>>>,
+    /// While a property initializer is checked: the binding each of its
+    /// constructor's locals resolves to *outside* the property, so a read that
+    /// lands on it (rather than on a binding the initializer itself made) is
+    /// the read tsc's name resolver refuses.
+    pub(crate) constructor_local_outer_bindings:
+        Vec<(Arc<str>, Option<crate::symbols::SymbolInfoHandle>)>,
     /// The scope enclosing a nested `function` declaration whose body is
     /// about to be checked. It already chains to the module and the ambient
     /// globals, so it replaces the usual module-over-ambient body root.
@@ -747,6 +769,7 @@ impl CheckerContext {
             diagnostics: Vec::new(),
             suppressed_argument_mismatch_span: None,
             grammar_answered_spans: Vec::new(),
+            deferred_grammar_findings: Vec::new(),
             signature_parameter_bindings: Vec::new(),
             diagnostic_keys: HashSet::default(),
             diagnostic_keys_len: 0,
@@ -781,6 +804,7 @@ impl CheckerContext {
             umd_global_names: Arc::new(FxHashSet::default()),
             namespace_registry: Arc::default(),
             block_scoped_globals: Arc::default(),
+            global_augmentation_only_names: Arc::default(),
             file_umd_global_names: FxHashSet::default(),
             file_umd_global_names_owner: None,
             merge_script_interfaces_with_globals: false,
@@ -788,6 +812,7 @@ impl CheckerContext {
             inherited_never_initialized: Vec::new(),
             never_initialized_constraint_exempt: HashSet::new(),
             file_type_only_import_names: FxHashSet::default(),
+            file_type_only_alias_names: FxHashMap::default(),
             file_import_names: FxHashSet::default(),
             file_namespace_import_names: FxHashSet::default(),
             checked_function_declaration_names: FxHashSet::default(),
@@ -799,7 +824,9 @@ impl CheckerContext {
             thin_superseded_value_collection: false,
             lazy_library_value_annotations: false,
             skip_annotated_function_bodies: false,
-            jsx_intrinsic_elements_declarer: None,
+            jsx_namespace_modules: Default::default(),
+            jsx_factory_uses: Default::default(),
+            jsx_namespace: None,
             type_parameter_scopes: Vec::new(),
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
@@ -835,6 +862,8 @@ impl CheckerContext {
             enclosing_class_members: Vec::new(),
             never_returning_calls: FxHashSet::default(),
             static_member_type_parameters: None,
+            constructor_local_properties: Arc::default(),
+            constructor_local_outer_bindings: Vec::new(),
             nested_function_scope: None,
             parenthesized_expressions: Arc::from([]),
             evolving_array_operation_target: None,
@@ -912,6 +941,7 @@ impl CheckerContext {
             diagnostics: Vec::new(),
             suppressed_argument_mismatch_span: None,
             grammar_answered_spans: Vec::new(),
+            deferred_grammar_findings: Vec::new(),
             signature_parameter_bindings: Vec::new(),
             diagnostic_keys: HashSet::default(),
             diagnostic_keys_len: 0,
@@ -954,6 +984,7 @@ impl CheckerContext {
             umd_global_names: Arc::new(FxHashSet::default()),
             namespace_registry: Arc::default(),
             block_scoped_globals: Arc::default(),
+            global_augmentation_only_names: Arc::default(),
             file_umd_global_names: FxHashSet::default(),
             file_umd_global_names_owner: None,
             merge_script_interfaces_with_globals: false,
@@ -961,6 +992,7 @@ impl CheckerContext {
             inherited_never_initialized: Vec::new(),
             never_initialized_constraint_exempt: HashSet::new(),
             file_type_only_import_names: FxHashSet::default(),
+            file_type_only_alias_names: FxHashMap::default(),
             file_import_names: FxHashSet::default(),
             file_namespace_import_names: FxHashSet::default(),
             checked_function_declaration_names: FxHashSet::default(),
@@ -972,7 +1004,9 @@ impl CheckerContext {
             thin_superseded_value_collection: false,
             lazy_library_value_annotations: false,
             skip_annotated_function_bodies: false,
-            jsx_intrinsic_elements_declarer: data.jsx_intrinsic_elements_declarer.clone(),
+            jsx_namespace_modules: data.jsx_namespace_modules.clone(),
+            jsx_factory_uses: Default::default(),
+            jsx_namespace: None,
             type_parameter_scopes: data.type_parameter_scopes.clone(),
             type_parameter_constraint_scopes: data.type_parameter_constraint_scopes.clone(),
             timings: data.timings.clone(),
@@ -1008,6 +1042,8 @@ impl CheckerContext {
             enclosing_class_members: Vec::new(),
             never_returning_calls: FxHashSet::default(),
             static_member_type_parameters: None,
+            constructor_local_properties: Arc::default(),
+            constructor_local_outer_bindings: Vec::new(),
             nested_function_scope: None,
             parenthesized_expressions: Arc::from([]),
             evolving_array_operation_target: None,
@@ -1384,8 +1420,25 @@ impl CheckerContext {
             && match self.lookup_type_declaration(name) {
                 None => true,
                 Some(TypeDeclarationInfo::Interface(info)) => info.is_class_instance,
-                Some(TypeDeclarationInfo::Alias(_)) => false,
+                // An enum is lowered to an alias of its name, and has a value.
+                Some(TypeDeclarationInfo::Alias(alias)) => alias.enum_name.is_some(),
             }
+    }
+
+    /// tsc's `getTypeOnlyAliasDeclarationEx` for a value use of `name`: the
+    /// kind of type-only declaration its import passes through, the file's own
+    /// `import type` first.
+    pub(crate) fn type_only_value_reference(
+        &self,
+        name: &str,
+    ) -> Option<crate::modules::TypeOnlyAliasKind> {
+        if self.is_type_only_import_value_reference(name) {
+            return Some(crate::modules::TypeOnlyAliasKind::Import);
+        }
+        if self.file_type_only_import_names_owner.as_deref() != Some(self.file_name.as_str()) {
+            return None;
+        }
+        self.file_type_only_alias_names.get(name).copied()
     }
 
     /// `Some(instantiated)` when `name` is a namespace visible here, looking
@@ -1397,6 +1450,27 @@ impl CheckerContext {
             .rev()
             .find_map(|prefix| registry.lookup(&self.file_name, &format!("{prefix}.{name}")))
             .or_else(|| registry.lookup(&self.file_name, name))
+            .or_else(|| self.import_alias_namespace_meaning(name))
+    }
+
+    /// An import alias whose target has a namespace meaning (`import N =
+    /// require("./m")` over `export = N`): the members the import binds are keyed
+    /// `N.<member>` in the file's import layers. An enum's members are keyed the
+    /// same way, but an enum is not a namespace. Instantiated when the alias
+    /// binds a value too.
+    fn import_alias_namespace_meaning(&self, name: &str) -> Option<bool> {
+        if !self.is_import_binding(name) {
+            return None;
+        }
+        let heads_member = self.type_declaration_scope.as_ref()?.layers().iter().any(|layer| {
+            layer.iter().any(|(key, declaration)| {
+                key.strip_prefix(name)
+                    .is_some_and(|rest| rest.starts_with('.'))
+                    && !matches!(declaration, TypeDeclarationInfo::Alias(alias)
+                        if alias.enum_name.is_some())
+            })
+        });
+        heads_member.then(|| self.symbols.get(name).is_some())
     }
 
     /// The namespace `name` names here, looking through the namespaces whose
@@ -1459,6 +1533,14 @@ impl CheckerContext {
         for name in names {
             self.file_type_only_import_names.insert(Arc::from(name));
         }
+    }
+
+    pub(crate) fn set_file_type_only_alias_names(
+        &mut self,
+        names: impl IntoIterator<Item = (Arc<str>, crate::modules::TypeOnlyAliasKind)>,
+    ) {
+        self.file_type_only_alias_names.clear();
+        self.file_type_only_alias_names.extend(names);
     }
 
     pub(crate) fn set_file_umd_global_names(
@@ -1525,9 +1607,11 @@ impl CheckerContext {
         self.file_umd_global_names.clear();
         self.file_umd_global_names_owner = None;
         self.file_type_only_import_names.clear();
+        self.file_type_only_alias_names.clear();
         self.file_type_only_import_names_owner = None;
         self.checked_function_declaration_names.clear();
         self.grammar_answered_spans.clear();
+        self.deferred_grammar_findings.clear();
         self.definite_writes = Arc::default();
         self.inherited_never_initialized.clear();
         self.never_initialized_constraint_exempt.clear();
@@ -1547,6 +1631,8 @@ impl CheckerContext {
         self.never_returning_calls.clear();
         self.nested_function_scope = None;
         self.parenthesized_expressions = Default::default();
+        self.jsx_factory_uses = Default::default();
+        self.jsx_namespace = None;
         self.evolving_array_operation_target = None;
         self.auto_arrays_declared = false;
         self.let_assignments = Default::default();
@@ -1722,6 +1808,13 @@ impl CheckerContext {
     }
 
     fn lookup_type_declaration_exact(&self, name: &str) -> Option<&TypeDeclarationInfo> {
+        if let Some(declaration) = self
+            .type_declaration_scope
+            .as_ref()
+            .and_then(|scope| scope.lexical_get(name))
+        {
+            return Some(declaration);
+        }
         if !self.lookup_ignores_local_table()
             && let Some(declaration) = self.type_declarations.get(name)
         {
@@ -1836,6 +1929,13 @@ impl CheckerContext {
         &self,
         name: &str,
     ) -> Option<crate::symbols::TypeDeclarationHandle> {
+        if let Some(handle) = self
+            .type_declaration_scope
+            .as_ref()
+            .and_then(|scope| scope.lexical_get_handle(name))
+        {
+            return Some(handle);
+        }
         if !self.lookup_ignores_local_table()
             && let Some(handle) = self.type_declarations.get_handle(name)
         {

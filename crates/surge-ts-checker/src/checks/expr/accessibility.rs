@@ -17,41 +17,44 @@ use super::diagnostic_with_syntax_span;
 
 /// A class declaration's identity: its file and the offset of its name. Names
 /// alone are not enough — an import can rename a class, and two files can
-/// declare the same one.
-pub(crate) type ClassIdentity = (Arc<str>, usize);
+/// declare the same one — so the name rides along for messages only.
+#[derive(Clone, Debug)]
+pub(crate) struct ClassIdentity {
+    file: Arc<str>,
+    start: usize,
+    pub(crate) name: String,
+}
+
+impl PartialEq for ClassIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.file == other.file && self.start == other.start
+    }
+}
 
 /// Inheritance chains are short; the bound only guards a malformed cycle.
 const MAX_HERITAGE_DEPTH: usize = 32;
 
 fn identity(info: &InterfaceInfo) -> Option<ClassIdentity> {
-    Some((info.file_name.clone(), info.name_span?.start))
+    Some(ClassIdentity {
+        file: info.file_name.clone(),
+        start: info.name_span?.start,
+        name: display_name(info),
+    })
 }
 
 fn display_name(info: &InterfaceInfo) -> String {
-    info.declared_name.as_deref().unwrap_or(&info.name).to_string()
-}
-
-/// A class and every class it extends.
-fn class_lineage(class: &InterfaceInfo, ctx: &CheckerContext) -> Vec<ClassIdentity> {
-    let mut lineage: Vec<ClassIdentity> = identity(class).into_iter().collect();
-    let mut current = class.clone();
-    for _ in 0..MAX_HERITAGE_DEPTH {
-        let Some(base) = base_interface(&current, ctx) else {
-            break;
-        };
-        lineage.extend(identity(&base));
-        current = base;
-    }
-    lineage
+    info.declared_name
+        .as_deref()
+        .unwrap_or(&info.name)
+        .to_string()
 }
 
 /// The class named by the `this` parameter of the function being checked
-/// (tsc's `getEnclosingClassFromThisParameter`), which reaches the protected
-/// instance members of the classes it extends.
+/// (tsc's `getEnclosingClassFromThisParameter`), with the classes it extends,
+/// which it reaches the protected instance members of.
 #[derive(Clone)]
 pub(crate) struct ThisParameterClass {
     lineage: Vec<ClassIdentity>,
-    name: String,
 }
 
 thread_local! {
@@ -101,11 +104,10 @@ pub(crate) fn this_parameter_class(
     let class = instance_class(&ty, ctx)?;
     Some(ThisParameterClass {
         lineage: class_lineage(&class, ctx),
-        name: display_name(&class),
     })
 }
 
-fn base_interface(info: &InterfaceInfo, ctx: &CheckerContext) -> Option<InterfaceInfo> {
+pub(crate) fn base_interface(info: &InterfaceInfo, ctx: &CheckerContext) -> Option<InterfaceInfo> {
     let base = info.body.extends.first()?;
     // The declaration's own scope answers first, but it carries only the layer
     // it was bound in: a base imported into the subclass's file is not in it,
@@ -132,10 +134,15 @@ pub(crate) fn enclosing_class_lineage(
     let Some(span) = class.name_span else {
         return lineage;
     };
+    let own_identity = ClassIdentity {
+        file: ctx.file_name_arc(),
+        start: span.start,
+        name: class.name.clone(),
+    };
     let mut current = match ctx.lookup_type_declaration(&class.name) {
         Some(TypeDeclarationInfo::Interface(info)) => info.clone(),
         _ => {
-            lineage.push((ctx.file_name_arc(), span.start));
+            lineage.push(own_identity);
             return lineage;
         }
     };
@@ -144,8 +151,8 @@ pub(crate) fn enclosing_class_lineage(
     // first fragment's name — the class's own span would never match it.
     lineage.push(
         identity(&current)
-            .filter(|(file, _)| **file == *ctx.file_name)
-            .unwrap_or_else(|| (ctx.file_name_arc(), span.start)),
+            .filter(|identity| *identity.file == *ctx.file_name)
+            .unwrap_or(own_identity),
     );
     for _ in 0..MAX_HERITAGE_DEPTH {
         let Some(base) = base_interface(&current, ctx) else {
@@ -162,7 +169,7 @@ pub(crate) fn enclosing_class_lineage(
 /// The class that declares `member` restricted, found by walking up from the
 /// receiver's class. A class along the way that declares the member without a
 /// modifier makes it public from there on.
-fn restricted_member_owner(
+pub(crate) fn restricted_member_owner(
     receiver_class: &InterfaceInfo,
     member: &str,
     is_static: bool,
@@ -312,8 +319,7 @@ pub(crate) fn check_member_accessibility(
             if matches!(object, ParsedExpression::Identifier { name, .. } if name == "super") {
                 return;
             }
-            let Some((enclosing, enclosing_name)) =
-                protected_access_class(&declaring_identity, is_static, ctx)
+            let Some(enclosing) = protected_access_class(&declaring_identity, is_static, ctx)
             else {
                 let diagnostic =
                     Diagnostic::ts2445(member, display_name(&declaring), ctx.file_name.clone());
@@ -323,7 +329,7 @@ pub(crate) fn check_member_accessibility(
             if is_static || class_lineage(&class, ctx).contains(&enclosing) {
                 return;
             }
-            Diagnostic::ts2446(member, enclosing_name, receiver_type.name(), ctx.file_name.clone())
+            Diagnostic::ts2446(member, &enclosing.name, receiver_type.name(), ctx.file_name.clone())
         }
     };
     ctx.push(diagnostic_with_syntax_span(diagnostic, member_span));
@@ -336,16 +342,14 @@ fn protected_access_class(
     declaring: &ClassIdentity,
     is_static: bool,
     ctx: &CheckerContext,
-) -> Option<(ClassIdentity, String)> {
+) -> Option<ClassIdentity> {
     if let Some(lineage) = ctx
         .enclosing_classes
         .iter()
         .rev()
         .find(|lineage| lineage.contains(declaring))
     {
-        let enclosing = lineage.first()?.clone();
-        let name = enclosing_class_name(&enclosing, ctx);
-        return Some((enclosing, name));
+        return lineage.first().cloned();
     }
     if is_static {
         return None;
@@ -353,19 +357,64 @@ fn protected_access_class(
     THIS_PARAMETER_CLASS.with(|current| {
         let current = current.borrow();
         let class = current.as_ref().filter(|class| class.lineage.contains(declaring))?;
-        Some((class.lineage.first()?.clone(), class.name.clone()))
+        class.lineage.first().cloned()
     })
 }
 
-fn enclosing_class_name(enclosing: &ClassIdentity, ctx: &CheckerContext) -> String {
-    let members = &ctx.enclosing_class_members;
-    members
+/// A class and every class it extends.
+fn class_lineage(class: &InterfaceInfo, ctx: &CheckerContext) -> Vec<ClassIdentity> {
+    let mut lineage = Vec::new();
+    let mut current = class.clone();
+    for _ in 0..MAX_HERITAGE_DEPTH {
+        if let Some(identity) = identity(&current) {
+            lineage.push(identity);
+        }
+        let Some(base) = base_interface(&current, ctx) else {
+            break;
+        };
+        current = base;
+    }
+    lineage
+}
+
+/// The declaring class and modifier of the constructor `new C()` or
+/// `class D extends C` would reach, when the current position may not: tsc's
+/// `getConstructorAccessibilityError`. A class without a constructor inherits
+/// its base's, so the walk goes up to the first class that writes one.
+/// `protected_allowed_from_subclass` is the `new` rule; `extends` only refuses
+/// a private constructor.
+pub(crate) fn constructor_accessibility_error(
+    class: &InterfaceInfo,
+    protected_allowed_from_subclass: bool,
+    ctx: &CheckerContext,
+) -> Option<(InterfaceInfo, ParsedMemberAccessibility)> {
+    let mut current = class.clone();
+    for _ in 0..MAX_HERITAGE_DEPTH {
+        if current.declares_constructor {
+            break;
+        }
+        current = base_interface(&current, ctx)?;
+    }
+    let accessibility = current.constructor_accessibility?;
+    let declaring_identity = identity(&current)?;
+    let within_class = ctx
+        .enclosing_classes
         .iter()
-        .rev()
-        .find_map(|class| {
-            let info = instance_class(&class.instance_type, ctx)?;
-            (identity(&info).as_ref() == Some(enclosing)).then(|| display_name(&info))
-        })
-        .or_else(|| members.last().map(|class| class.class_name.clone()))
-        .unwrap_or_default()
+        .any(|lineage| lineage.first() == Some(&declaring_identity));
+    if within_class {
+        return None;
+    }
+    match accessibility {
+        ParsedMemberAccessibility::Private => Some((current, accessibility)),
+        ParsedMemberAccessibility::Protected => {
+            if !protected_allowed_from_subclass {
+                return None;
+            }
+            let from_subclass = ctx
+                .enclosing_classes
+                .last()
+                .is_some_and(|lineage| lineage.contains(&declaring_identity));
+            (!from_subclass).then_some((current, accessibility))
+        }
+    }
 }

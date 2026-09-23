@@ -48,7 +48,7 @@ fn signature_context_cache_enabled() -> bool {
 /// the genuine `unknown` keyword stays eligible. References are keyed by
 /// (id, arguments) and never peeled, so their arguments are screened too.
 /// Budget exhaustion means "cannot prove safe" and makes the site ineligible.
-fn signature_cache_safe_argument(ty: &Type, depth: usize, budget: &mut usize) -> bool {
+pub(crate) fn signature_cache_safe_argument(ty: &Type, depth: usize, budget: &mut usize) -> bool {
     if depth >= 16 || *budget == 0 {
         return false;
     }
@@ -244,6 +244,19 @@ fn resolve_named_type_inner(
         if let Some(resolved) = resolve_value_heritage_base(&named_type, ctx) {
             return resolved;
         }
+        // `class C extends number`: the class check reports the primitive as a
+        // value (TS2863), and tsc says nothing more about the base.
+        if ctx.resolving_class_heritage
+            && matches!(
+                named_type.name.as_str(),
+                "any" | "string" | "number" | "boolean" | "never" | "unknown"
+            )
+        {
+            return ResolvedType {
+                ty: Type::Unknown,
+                had_error: true,
+            };
+        }
         // A qualified reference (`React.Foo`, `Prisma.Bar`) reports only on a
         // head nothing could resolve: surge does not model a namespace's full
         // member surface (`@types/*`, generated clients), so a miss past the
@@ -297,17 +310,21 @@ fn resolve_named_type_inner(
         TypeDeclarationInfo::Interface(interface) => !interface.body.type_parameters.is_empty(),
     };
 
-    // An import from a module that did not resolve is tsc's `unknownSymbol`,
-    // whose type is the error type whatever arguments it is written with.
-    let is_unresolved_import = matches!(
-        declaration,
-        TypeDeclarationInfo::Alias(alias) if matches!(alias.body.ty, ParsedType::ErrorType)
-    );
     if has_type_arguments && !is_generic_declaration {
-        if is_unresolved_import {
+        // `getTypeReferenceType`: a name bound to tsc's `unknownSymbol` (an
+        // import of a module that does not resolve) is the error type whatever
+        // its type arguments; only the arguments themselves are still checked.
+        if matches!(declaration, TypeDeclarationInfo::Alias(alias)
+            if matches!(alias.body.ty, ParsedType::ErrorType))
+        {
+            let mut had_error = false;
+            for argument in &named_type.type_arguments {
+                had_error |=
+                    resolve_parsed_type(argument.clone(), ctx, resolving, substitution).had_error;
+            }
             return ResolvedType {
                 ty: Type::ErrorType,
-                had_error: true,
+                had_error,
             };
         }
         let name = match declaration {
@@ -315,6 +332,17 @@ fn resolve_named_type_inner(
             TypeDeclarationInfo::Interface(interface) => &interface.name,
         };
         emit_type_is_not_generic(name, named_type.span, ctx);
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: true,
+        };
+    }
+
+    if let TypeDeclarationInfo::Interface(interface) = declaration
+        && is_generic_declaration
+        && !ctx.resolving_class_heritage
+        && report_interface_type_argument_count(interface, &named_type, ctx)
+    {
         return ResolvedType {
             ty: Type::Unknown,
             had_error: true,
@@ -371,6 +399,7 @@ fn resolve_named_type_inner(
                 interface,
                 handle.clone(),
                 named_type.type_arguments.clone(),
+                named_type.span,
                 ctx,
                 resolving,
                 substitution,
@@ -858,6 +887,7 @@ fn resolve_named_type_inner(
             interface,
             handle.clone(),
             named_type.type_arguments.clone(),
+            named_type.span,
             ctx,
             resolving,
             substitution,
@@ -1145,7 +1175,7 @@ fn wrap_named_object_reference(
     }
 }
 
-fn declaration_file_is_library_scoped(
+pub(crate) fn declaration_file_is_library_scoped(
     declaration: &TypeDeclarationInfo,
     ctx: &CheckerContext,
 ) -> bool {
@@ -1546,4 +1576,32 @@ mod signature_context_cache_tests {
             "placeholder tuples must not hit"
         );
     }
+}
+
+/// tsc's `getTypeFromClassOrInterfaceReference` arity check, at the reference
+/// and naming the declared type with its parameters (`Box<T, U>`).
+fn report_interface_type_argument_count(
+    interface: &crate::symbols::InterfaceInfo,
+    named_type: &ParsedNamedType,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let type_parameters = &interface.body.type_parameters;
+    let min = super::substitution::min_type_argument_count(type_parameters);
+    let count = named_type.type_arguments.len();
+    if count >= min && count <= type_parameters.len() {
+        return false;
+    }
+    let parameter_names: Vec<&str> = type_parameters
+        .iter()
+        .map(|parameter| parameter.name.as_str())
+        .collect();
+    let display = format!("{}<{}>", named_type.name, parameter_names.join(", "));
+    crate::infer::types::emit_generic_arity(
+        &display,
+        min,
+        type_parameters.len(),
+        named_type.span,
+        ctx,
+    );
+    true
 }

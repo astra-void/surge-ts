@@ -59,6 +59,11 @@ pub struct NormalizedCompilerOptions {
     pub no_unused_parameters: bool,
     /// `compilerOptions.allowUnreachableCode`, set only when written `true`.
     pub allow_unreachable_code: bool,
+    /// `compilerOptions.allowUnreachableCode` written `false`, which is the
+    /// only setting under which tsc reports unreachable code as an error.
+    pub report_unreachable_code: bool,
+    /// `compilerOptions.allowUnusedLabels` as written; `None` when unset.
+    pub allow_unused_labels: Option<bool>,
     pub target: ScriptTarget,
     pub module: ModuleKind,
     /// tsgo's `GetEmitModuleKind`: the written `module`, or the kind its
@@ -116,6 +121,9 @@ pub struct NormalizedCompilerOptions {
     /// `TS2732`. Defaults on for every resolver except `node16`, which is what
     /// tsc 7.0.2 does.
     pub resolve_json_module: bool,
+    /// `compilerOptions.libReplacement`: a default lib an installed
+    /// `@typescript/lib-*` package provides is read from that package.
+    pub lib_replacement: bool,
 }
 
 impl Default for NormalizedCompilerOptions {
@@ -139,6 +147,8 @@ impl Default for NormalizedCompilerOptions {
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,
+            report_unreachable_code: false,
+            allow_unused_labels: None,
             target: ScriptTarget::ES2024,
             module: ModuleKind::Preserve,
             emit_module: ModuleKind::ES2022,
@@ -164,6 +174,7 @@ impl Default for NormalizedCompilerOptions {
             type_roots: Vec::new(),
             types: None,
             resolve_json_module: true,
+            lib_replacement: false,
             resolve_package_json_exports: true,
             resolve_package_json_imports: true,
             custom_conditions: Vec::new(),

@@ -21,7 +21,7 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
                         ty: widen_type(&v.ty),
                         optional: v.optional,
                         method: v.method,
-                        readonly: false,
+                        readonly: v.readonly,
                         restriction: v.restriction.clone(),
                         index_slot: v.index_slot,
                     },
@@ -163,8 +163,9 @@ pub(crate) fn missing_property_diagnostic(
     property_name: &str,
     object_type: &Type,
     symbols: &SymbolTable,
-    file_name: String,
+    ctx: &CheckerContext,
 ) -> Diagnostic {
+    let file_name = ctx.file_name.clone();
     let object_type_name = object_type.name();
     if let Some(class_name) =
         static_member_owner_for_missing_instance_property(property_name, object_type, symbols)
@@ -184,7 +185,83 @@ pub(crate) fn missing_property_diagnostic(
     if let Some(suggestion) = property_spelling_suggestion(property_name, object_type) {
         return Diagnostic::ts2551(property_name, &object_type_name, suggestion, file_name);
     }
-    Diagnostic::ts2339(property_name, &object_type_name, file_name)
+    nonexistent_property_diagnostic(property_name, object_type, &object_type_name, ctx)
+}
+
+/// The last step of tsc's `reportNonexistentProperty`, when no suggestion
+/// applies: TS2812 for a receiver that looks like a DOM element without the DOM
+/// lib, TS2339 otherwise.
+pub(crate) fn nonexistent_property_diagnostic(
+    property_name: &str,
+    object_type: &Type,
+    object_type_name: &str,
+    ctx: &CheckerContext,
+) -> Diagnostic {
+    let file_name = ctx.file_name.clone();
+    if container_seems_to_be_empty_dom_element(object_type, ctx) {
+        Diagnostic::ts2812(property_name, object_type_name, file_name)
+    } else {
+        Diagnostic::ts2339(property_name, object_type_name, file_name)
+    }
+}
+
+/// tsc's `containerSeemsToBeEmptyDomElement`: `lib` does not list the DOM, the
+/// receiver is empty, and every constituent is declared as an `EventTarget`,
+/// `Node`, `Element` or `HTML…Element`.
+fn container_seems_to_be_empty_dom_element(object_type: &Type, ctx: &CheckerContext) -> bool {
+    !ctx.options.lib_lists_dom()
+        && every_contained_type(object_type, has_common_dom_type_name)
+        && is_empty_object_type(object_type)
+}
+
+/// tsc's `everyContainedType` over a union's members or the operands an
+/// intersection surface was merged from.
+fn every_contained_type(ty: &Type, predicate: fn(&Type) -> bool) -> bool {
+    if let Type::Union(union) = ty {
+        return union.types().iter().all(predicate);
+    }
+    match ty.peeled() {
+        Type::Object(object) if object.is_intersection => match &object.intersection_operands {
+            Some(operands) => operands.iter().all(predicate),
+            None => false,
+        },
+        _ => predicate(ty),
+    }
+}
+
+/// tsc's `hasCommonDomTypeName`, for the one kind of type whose symbol is a
+/// named declaration: the instance side of an interface or class.
+fn has_common_dom_type_name(ty: &Type) -> bool {
+    let Type::Reference(reference) = ty else {
+        return false;
+    };
+    if !matches!(ty.peeled(), Type::Object(object) if object.without_inferable_index) {
+        return false;
+    }
+    let Some(declared) = reference.id.rsplit('\0').next() else {
+        return false;
+    };
+    let name = declared.rsplit('.').next().unwrap_or(declared);
+    matches!(name, "EventTarget" | "Node" | "Element")
+        || name.starts_with("HTML") && name.ends_with("Element")
+}
+
+/// tsc's `isEmptyObjectType`: no member, signature or index signature (for a
+/// union, some member is so).
+fn is_empty_object_type(ty: &Type) -> bool {
+    if let Type::Union(union) = ty {
+        return union.types().iter().any(is_empty_object_type);
+    }
+    match ty.peeled() {
+        Type::Object(object) => {
+            object.properties.is_empty()
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none()
+                && object.call_signature.is_none()
+                && object.construct_signature.is_none()
+        }
+        _ => false,
+    }
 }
 
 /// `String.prototype` members in lib declaration order, which breaks ties
@@ -394,11 +471,12 @@ fn index_signature_method_suggestion(
 
 /// tsc's `getPropertyTypeForIndexType` for a literal key that neither a member
 /// nor an index signature answers: under `noImplicitAny` the whole element
-/// access is an implicit `any` (TS7053, or TS2576 for a static-member mixup,
-/// TS7052 when a `get` method was likely meant), and on an object literal
-/// written in place the key is a missing property (TS2339); without
-/// `noImplicitAny` the access silently reads `any`. A block-scoped global read
-/// through `globalThis` is a missing property whatever the setting.
+/// access is an implicit `any` (TS7053, TS2576 for a static-member mixup,
+/// TS7052 when a `get` method was likely meant, or TS7015 on the key when the
+/// receiver has only a number index), and on an object literal written in
+/// place the key is a missing property (TS2339); without `noImplicitAny` the
+/// access silently reads `any`. A block-scoped global read through
+/// `globalThis` is a missing property whatever the setting.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn report_missing_element(
     key: &str,
@@ -436,7 +514,17 @@ pub(crate) fn report_missing_element(
         ));
         return;
     }
-    if static_member_owner_for_missing_instance_property(key, object_type, symbols).is_none()
+    let static_owner = static_member_owner_for_missing_instance_property(key, object_type, symbols);
+    if static_owner.is_none()
+        && matches!(object_type.peeled(), Type::Object(object) if object.number_index_type.is_some())
+    {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts7015(file_name),
+            key_span.or(access_span),
+        ));
+        return;
+    }
+    if static_owner.is_none()
         && let Some(suggestion) = property_spelling_suggestion(key, object_type)
     {
         ctx.push(diagnostic_with_syntax_span(
@@ -445,8 +533,7 @@ pub(crate) fn report_missing_element(
         ));
         return;
     }
-    let diagnostic = match static_member_owner_for_missing_instance_property(key, object_type, symbols)
-    {
+    let diagnostic = match static_owner {
         Some(class_name) => {
             let written_key = match key_type {
                 Type::StringLiteral(_) => format!("\"{key}\""),
@@ -593,7 +680,12 @@ pub(crate) fn reported_relation_target(source: &Type, target: &Type) -> Type {
     let Type::Union(union) = target else {
         return target.clone();
     };
-    if !definitely_non_nullable || union.types().len() > 3 {
+    // tsc's union holds `boolean` as `false | true`, so a nullable beside it
+    // never leaves a single member to name.
+    if !definitely_non_nullable
+        || union.types().len() > 3
+        || union.types().iter().any(|member| matches!(member, Type::Boolean))
+    {
         return target.clone();
     }
     let mut non_nullable = union

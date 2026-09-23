@@ -553,14 +553,24 @@ fn evaluate_expression_unsettled(
 
             super::update_result_type(&operand_result)
         }
-        ParsedExpression::ObjectRest { source, omitted } => {
-            match evaluate_expression(source, fallback_span, symbols, ctx) {
-                InferredExpression::Known(ty) => InferredExpression::Known(
-                    crate::checks::function::object_rest_type(&ty, omitted),
-                ),
-                other => other,
-            }
-        }
+        ParsedExpression::ObjectRest {
+            source,
+            omitted,
+            name_span,
+        } => match evaluate_expression(source, fallback_span, symbols, ctx) {
+            InferredExpression::Known(ty) => InferredExpression::Known(
+                if crate::checks::function::rest_source_validity(&ty) == Some(false) {
+                    ctx.push(crate::spans::diagnostic_with_syntax_span(
+                        Diagnostic::ts2700(ctx.file_name.clone()),
+                        name_span.or(fallback_span),
+                    ));
+                    Type::ErrorType
+                } else {
+                    crate::checks::function::object_rest_type(&ty, omitted)
+                },
+            ),
+            other => other,
+        },
         ParsedExpression::Sequence { expressions } => {
             let mut result = InferredExpression::Unknown;
             for (expression, span) in expressions {
@@ -732,20 +742,21 @@ fn evaluate_expression_unsettled(
         ),
         ParsedExpression::JsxElement {
             tag_name,
-            tag_name_span,
-            component_name,
-            component_span,
             attributes,
             children,
-            span,
+            tag,
+            ..
         } => {
-            crate::checks::jsx::check_jsx_factory_reference(*tag_name_span, fallback_span, ctx);
+            crate::checks::jsx::check_jsx_preconditions(tag.span, fallback_span, ctx);
+            crate::checks::jsx::check_jsx_factory_reference(
+                false,
+                tag.name_span,
+                fallback_span,
+                ctx,
+            );
             crate::checks::jsx::check_jsx_element(
                 tag_name,
-                *tag_name_span,
-                component_name.as_deref(),
-                *component_span,
-                *span,
+                tag,
                 attributes,
                 children,
                 fallback_span,
@@ -756,7 +767,8 @@ fn evaluate_expression_unsettled(
             infer_expression(expression, symbols, ctx)
         }
         ParsedExpression::JsxFragment { children, span } => {
-            crate::checks::jsx::check_jsx_factory_reference(*span, fallback_span, ctx);
+            crate::checks::jsx::check_jsx_preconditions(*span, fallback_span, ctx);
+            crate::checks::jsx::check_jsx_factory_reference(true, *span, fallback_span, ctx);
             for child in children {
                 evaluate_jsx_child(child, fallback_span, symbols, ctx);
             }
@@ -848,6 +860,37 @@ fn evaluate_expression_unsettled(
                 return InferredExpression::Known(read);
             }
             let inferred_expression = infer_expression(expression, symbols, ctx);
+            // tsc's name resolver runs `checkAndReportErrorForInvalidInitializer`
+            // for a property-initializer read of a constructor local whether or
+            // not the name also resolves further out, and answers no symbol. A
+            // binding the initializer made itself (an arrow's parameter) is
+            // found first and is not that read.
+            if let ParsedExpression::Identifier {
+                name,
+                span: Some(span),
+            } = expression
+                && matches!(inferred_expression, InferredExpression::Known(_))
+                && ctx
+                    .constructor_local_outer_bindings
+                    .iter()
+                    .any(|(local, outer)| {
+                        local.as_ref() == name.as_str()
+                            && match (outer, symbols.get_handle(name)) {
+                                (Some(outer), Some(found)) => std::sync::Arc::ptr_eq(outer, &found),
+                                (None, None) => true,
+                                _ => false,
+                            }
+                    })
+                && let Some(property) =
+                    crate::program::property_with_invalid_initializer(name, *span, ctx)
+            {
+                let diagnostic = property.invalid_reference_diagnostic(name, *span, ctx.file_name.clone());
+                ctx.push_utility_diagnostic_once(crate::spans::diagnostic_with_syntax_span(
+                    diagnostic,
+                    Some(*span),
+                ));
+                return InferredExpression::Known(Type::ErrorType);
+            }
             report_inferred_expression(
                 with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
                     inferred_expression.clone()
@@ -1177,7 +1220,82 @@ fn evaluate_conditional(
         ctx,
     );
 
-    ops::evaluate_conditional_expression(condition_result, true_result, false_result)
+    let branch_types = [
+        (when_true.as_ref(), ops::inferred_type(&true_result).cloned()),
+        (when_false.as_ref(), ops::inferred_type(&false_result).cloned()),
+    ];
+    subtype_reduced_conditional(
+        ops::evaluate_conditional_expression(condition_result, true_result, false_result),
+        branch_types,
+    )
+}
+
+/// tsc's `checkConditionalExpression` unions the branch types with subtype
+/// reduction (`getUnionTypeEx(…, UnionReductionSubtype)`), so a branch whose
+/// type is a strict subtype of the other's is absorbed: `c ? () => {} : (x?:
+/// string) => {}` is `(x?: string) => void`.
+pub(crate) fn subtype_reduced_conditional(
+    result: InferredExpression,
+    branches: [(&ParsedExpression, Option<Type>); 2],
+) -> InferredExpression {
+    if !matches!(result, InferredExpression::Known(Type::Union(_))) {
+        return result;
+    }
+    let [(when_true, Some(true_type)), (when_false, Some(false_type))] = branches else {
+        return result;
+    };
+    InferredExpression::Known(surge_ts_types::subtype_reduced_union(vec![
+        (true_type, literal_shape(when_true)),
+        (false_type, literal_shape(when_false)),
+    ]))
+}
+
+/// Which part of an expression's type is an object literal's own, fresh type
+/// (tsc's `ObjectFlagsObjectLiteral`), which surge's types do not record. A
+/// literal that ends up inside a union or an array's element type, or behind a
+/// function's inferred return, cannot be lined up with the type and is opaque.
+pub(crate) fn literal_shape(expression: &ParsedExpression) -> surge_ts_types::LiteralShape {
+    use surge_ts_types::LiteralShape;
+    let regular = |shape: &LiteralShape| matches!(shape, LiteralShape::Regular);
+    match expression {
+        ParsedExpression::ObjectLiteral { properties, .. } => LiteralShape::Object(
+            properties
+                .iter()
+                .filter(|property| {
+                    !property.is_spread
+                        && !property.is_method
+                        && !property.is_accessor
+                        && property.computed_key.is_none()
+                        && property.unnamed_key_value.is_none()
+                })
+                .map(|property| (std::sync::Arc::from(property.name.as_str()), literal_shape(&property.value)))
+                .collect(),
+        ),
+        ParsedExpression::SatisfiesExpression { expression, .. }
+        | ParsedExpression::NonNullAssertion { expression, .. }
+        | ParsedExpression::Await { operand: expression, .. }
+        | ParsedExpression::Assignment { value: expression, .. } => literal_shape(expression),
+        ParsedExpression::Sequence { expressions } => expressions
+            .last()
+            .map_or(LiteralShape::Regular, |(expression, _)| literal_shape(expression)),
+        ParsedExpression::ConstAssertion { expression, .. } if !regular(&literal_shape(expression)) => {
+            LiteralShape::Opaque
+        }
+        ParsedExpression::ArrayLiteral { elements, .. }
+            if elements.iter().any(|element| !regular(&literal_shape(&element.expression))) =>
+        {
+            LiteralShape::Opaque
+        }
+        ParsedExpression::Conditional { when_true: left, when_false: right, .. }
+        | ParsedExpression::Logical { left, right, .. }
+        | ParsedExpression::NullishCoalescing { left, right, .. }
+            if !regular(&literal_shape(left)) || !regular(&literal_shape(right)) =>
+        {
+            LiteralShape::Opaque
+        }
+        ParsedExpression::ArrowFunction(function) if function.return_type.is_none() => LiteralShape::Opaque,
+        _ => LiteralShape::Regular,
+    }
 }
 
 fn evaluate_optional_property_access(
@@ -1247,7 +1365,7 @@ fn evaluate_optional_property_access(
                 property_name,
                 object_type,
                 symbols,
-                ctx.file_name.clone(),
+                ctx,
             )),
         };
         if let Some(diagnostic) = diagnostic {

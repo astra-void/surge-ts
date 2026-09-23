@@ -10,13 +10,16 @@ use crate::program::{
     record_flow_state_clone_count, record_flow_state_full_clone_avoided_count,
 };
 
+mod assigned;
 mod branch;
 mod expr;
 mod facts;
 mod guards;
 mod module_scope;
 mod never_initialized;
+mod unassigned_reads;
 
+pub(crate) use assigned::assigned_bindings;
 pub(crate) use branch::*;
 pub(crate) use expr::*;
 pub(crate) use facts::*;
@@ -25,9 +28,11 @@ pub(crate) use module_scope::{
     check_class_member_flow, check_module_definite_assignment, walk_class,
 };
 pub(crate) use never_initialized::{
-    begin_file as begin_never_initialized_file, enter_container, expression_container_flow,
-    is_plainly_defined,
+    begin_file as begin_never_initialized_file, enter_container, excludes_undefined,
+    expression_container_flow, is_plainly_defined,
 };
+pub(crate) use unassigned_reads::is_unassigned_read;
+use unassigned_reads::record_unassigned_read;
 
 /// Marks what `condition` proves defined on its `when` edge, for the code the
 /// edge leads to.
@@ -67,6 +72,86 @@ pub(crate) fn predicate_parameter(callee: &str, ctx: &CheckerContext) -> Option<
         .position(|name| name.as_deref() == Some(predicate.parameter_name.as_str()))
 }
 
+/// A block-scoped binding whose own declaration is being evaluated (see
+/// [`FunctionFlowState::initializing`]).
+#[derive(Debug, Clone)]
+pub(crate) struct InitializingBinding {
+    name: Arc<str>,
+    /// A read is also unassigned: the declared type does not assume the
+    /// binding initialized.
+    unassigned: bool,
+    /// Where the declaration names the binding, when nothing but the
+    /// initializer types it: a read then makes its type circular, which tsc's
+    /// `reportCircularityError` reports there (TS7022).
+    circular_at: Option<SyntaxTextSpan>,
+}
+
+impl InitializingBinding {
+    /// A `let`/`const` declaration: typed by its annotation when it has one
+    /// (`unassigned` when that type excludes `undefined`), by its initializer
+    /// otherwise. A binding a destructuring pattern declares keeps no trace of
+    /// the pattern's annotation, so it is never taken for circular.
+    pub(crate) fn declaration(
+        variable: &surge_ts_syntax::ParsedVariableDeclaration,
+        annotation_excludes_undefined: Option<bool>,
+    ) -> Self {
+        Self {
+            name: Arc::from(variable.name.as_str()),
+            unassigned: annotation_excludes_undefined.unwrap_or(false),
+            circular_at: (annotation_excludes_undefined.is_none() && !variable.from_binding_pattern)
+                .then_some(variable.name_span)
+                .flatten(),
+        }
+    }
+
+    fn for_head(name: &str, span: Option<SyntaxTextSpan>) -> Self {
+        Self {
+            name: Arc::from(name),
+            unassigned: false,
+            circular_at: span,
+        }
+    }
+}
+
+/// A `for…in`/`for…of` head's own bindings, which its declaration holds while
+/// the expression it iterates runs (tsc's
+/// `isImmediatelyUsedInInitializerOfBlockScopedVariable`). A head takes no
+/// annotation, so each is typed by that expression.
+pub(crate) fn for_head_initializing(
+    for_of_statement: &surge_ts_syntax::ParsedForOfStatement,
+) -> Vec<InitializingBinding> {
+    fn collect(binding: &surge_ts_syntax::ParsedBindingName, out: &mut Vec<InitializingBinding>) {
+        use surge_ts_syntax::ParsedBindingName;
+        match binding {
+            ParsedBindingName::Identifier { name, span } => {
+                out.push(InitializingBinding::for_head(name, *span));
+            }
+            ParsedBindingName::ObjectPattern(pattern) => {
+                for element in &pattern.elements {
+                    collect(&element.binding_name, out);
+                }
+                if let Some(rest) = &pattern.rest {
+                    collect(rest, out);
+                }
+            }
+            ParsedBindingName::ArrayPattern(pattern) => {
+                for element in pattern.elements.iter().flatten() {
+                    collect(element, out);
+                }
+                if let Some(rest) = &pattern.rest {
+                    collect(rest, out);
+                }
+            }
+            ParsedBindingName::Unsupported { .. } => {}
+        }
+    }
+    let mut bindings = Vec::new();
+    if for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::BlockScoped {
+        collect(&for_of_statement.binding_name, &mut bindings);
+    }
+    bindings
+}
+
 pub(crate) fn check_expression_flow(
     expression: &ParsedExpression,
     fallback_span: Option<SyntaxTextSpan>,
@@ -79,11 +164,9 @@ pub(crate) fn check_expression_flow(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FunctionBodyFlow {
-    pub(crate) contains_value_return: bool,
-    pub(crate) contains_return_with_value: bool,
-    /// tsc's `hasExplicitReturn`: some `return` statement, with or without a
-    /// value; a `throw` does not set it.
+    /// tsc's `hasExplicitReturn`: see [`ReturnFlowSummary::contains_return`].
     pub(crate) contains_return: bool,
+    pub(crate) contains_return_with_value: bool,
     pub(crate) guarantees_value_return: bool,
     pub(crate) guarantees_exit: bool,
 }
@@ -161,6 +244,24 @@ pub(crate) struct FunctionFlowState {
     /// `const enum`. Reading one before its declaration is tsc's TS2450, not a
     /// variable's TS2448 and TS2454 (`checkResolvedBlockScopedVariable`).
     enum_objects: HashMap<Arc<str>, bool>,
+    /// The block-scoped bindings whose own declaration is being evaluated — a
+    /// `let`/`const` initializer, a `for…in`/`for…of` head's expression. A read
+    /// of one there is a use before the declaration (tsc's
+    /// `isImmediatelyUsedInInitializerOfBlockScopedVariable`); TS2454 goes with
+    /// it only when the binding's declared type does not assume it initialized,
+    /// and an unannotated one is circular, so `any`.
+    initializing: Vec<InitializingBinding>,
+    /// The bindings the container assigns anywhere, nested functions included
+    /// (tsc's `isSymbolAssigned`); a parameter or `let` among them is not a
+    /// constant reference.
+    assigned_bindings: Arc<std::collections::HashSet<Arc<str>>>,
+}
+
+/// What [`FunctionFlowState::begin_initializer`] changed, for
+/// [`FunctionFlowState::end_initializer`] to take back.
+pub(crate) struct InitializerMark {
+    initializing: usize,
+    enabled: bool,
 }
 
 impl Clone for FunctionFlowState {
@@ -185,6 +286,8 @@ impl Clone for FunctionFlowState {
             guarded_defined: self.guarded_defined.clone(),
             unreachable_depth: self.unreachable_depth.clone(),
             enum_objects: self.enum_objects.clone(),
+            initializing: self.initializing.clone(),
+            assigned_bindings: Arc::clone(&self.assigned_bindings),
         }
     }
 }
@@ -236,16 +339,18 @@ impl Clone for FlowScope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FlowReadOutcome {
     Unresolved,
-    UseBeforeDeclaration,
+    UseBeforeDeclaration {
+        unassigned: bool,
+        circular_at: Option<SyntaxTextSpan>,
+    },
     Declared(AssignmentState),
 }
 
 pub(crate) fn analyze_function_body_flow(body: &[ParsedFunctionBodyStatement]) -> FunctionBodyFlow {
     let summary = summarize_function_body_flow(body);
     FunctionBodyFlow {
-        contains_value_return: summary.contains_value_return,
-        contains_return_with_value: summary.contains_return_with_value,
         contains_return: summary.contains_return,
+        contains_return_with_value: summary.contains_return_with_value,
         guarantees_value_return: summary.guarantees_value_return,
         guarantees_exit: summary.guarantees_exit,
     }
@@ -278,6 +383,8 @@ impl FunctionFlowState {
             guarded_defined: std::cell::RefCell::new(Vec::new()),
             unreachable_depth: std::cell::Cell::new(0),
             enum_objects: HashMap::new(),
+            initializing: Vec::new(),
+            assigned_bindings: Arc::default(),
         }
     }
 
@@ -304,6 +411,38 @@ impl FunctionFlowState {
     /// `const enum`.
     pub(crate) fn enum_object(&self, name: &str) -> Option<bool> {
         self.enum_objects.get(name).copied()
+    }
+
+    pub(crate) fn set_assigned_bindings(&mut self, names: std::collections::HashSet<Arc<str>>) {
+        self.assigned_bindings = Arc::new(names);
+    }
+
+    pub(crate) fn is_binding_assigned(&self, name: &str) -> bool {
+        self.assigned_bindings.contains(name)
+    }
+
+    /// Marks `names` as declared by the initializer walked next (see
+    /// [`FunctionFlowState::initializing`]). The walk runs even where nothing
+    /// else is tracked, so a state that tracks nothing is enabled until
+    /// [`Self::end_initializer`].
+    pub(crate) fn begin_initializer(
+        &mut self,
+        names: impl IntoIterator<Item = InitializingBinding>,
+    ) -> InitializerMark {
+        let mark = InitializerMark {
+            initializing: self.initializing.len(),
+            enabled: self.enabled,
+        };
+        self.initializing.extend(names);
+        self.enabled = true;
+        self.tracked_local_count += self.initializing.len() - mark.initializing;
+        mark
+    }
+
+    pub(crate) fn end_initializer(&mut self, mark: InitializerMark) {
+        self.tracked_local_count -= self.initializing.len() - mark.initializing;
+        self.initializing.truncate(mark.initializing);
+        self.enabled = mark.enabled;
     }
 
     /// Adds the locals a guard proves defined for the expression walked next;
@@ -660,6 +799,18 @@ impl FunctionFlowState {
             return FlowReadOutcome::Unresolved;
         }
 
+        if let Some(binding) = self
+            .initializing
+            .iter()
+            .rev()
+            .find(|binding| &*binding.name == name)
+        {
+            return FlowReadOutcome::UseBeforeDeclaration {
+                unassigned: binding.unassigned,
+                circular_at: binding.circular_at,
+            };
+        }
+
         let Some(current_scope) = self.scopes.last() else {
             return FlowReadOutcome::Unresolved;
         };
@@ -677,7 +828,10 @@ impl FunctionFlowState {
             .is_some_and(|declaration_index| statement_index < *declaration_index)
         {
             record_flow_read_lookup_count(lookup_steps);
-            return FlowReadOutcome::UseBeforeDeclaration;
+            return FlowReadOutcome::UseBeforeDeclaration {
+                unassigned: true,
+                circular_at: None,
+            };
         }
 
         for scope in self.scopes.iter().rev().skip(1) {
@@ -695,13 +849,15 @@ impl FunctionFlowState {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ReturnFlowSummary {
-    contains_value_return: bool,
-    /// A `return <expr>` appears on some path — unlike `contains_value_return`,
-    /// a `throw` does *not* set this. Distinguishes a function that genuinely
-    /// returns a value (subject to `noImplicitReturns`/TS7030) from one that only
-    /// throws (whose inferred return type is `void`).
-    contains_return_with_value: bool,
+    /// A `return` statement some flow reaches, with or without a value; a
+    /// `throw` is not one (tsc's `hasExplicitReturn`, which only
+    /// `bindReturnStatement` sets).
     contains_return: bool,
+    /// A `return <expr>` appears on some path, and a `throw` does *not* set
+    /// this. Distinguishes a function that genuinely returns a value (subject
+    /// to `noImplicitReturns`/TS7030) from one that only throws (whose inferred
+    /// return type is `void`).
+    contains_return_with_value: bool,
     contains_throw: bool,
     guarantees_value_return: bool,
     /// Every path through the body leaves the current straight-line flow without

@@ -45,6 +45,9 @@ pub(crate) struct TypeAliasInfo {
     pub(crate) enum_name: Option<Arc<str>>,
     /// Whether that enum was exported; tsc qualifies only an exported one.
     pub(crate) enum_exported: bool,
+    /// Whether that enum is a `const enum`, whose object only a string
+    /// literal may index (`isConstEnumObjectType`).
+    pub(crate) enum_is_const: bool,
     /// Memoized resolution-cache key (canonical file name + declared name).
     /// Built on first request — key construction canonicalizes the path and
     /// allocates, and resolution asks for it millions of times per run. Carried
@@ -78,6 +81,7 @@ impl TypeAliasInfo {
             }),
             enum_name: None,
             enum_exported: false,
+            enum_is_const: false,
             cached_resolution_key: std::sync::OnceLock::new(),
             cached_alias_id: std::sync::OnceLock::new(),
         }
@@ -85,9 +89,15 @@ impl TypeAliasInfo {
 
     /// Marks this alias as standing for an enum, so its resolution can carry the
     /// enum's nominal display.
-    pub(crate) fn with_enum_name(mut self, enum_name: Option<&str>, exported: bool) -> Self {
+    pub(crate) fn with_enum_name(
+        mut self,
+        enum_name: Option<&str>,
+        exported: bool,
+        is_const: bool,
+    ) -> Self {
         self.enum_name = enum_name.map(Arc::from);
         self.enum_exported = exported;
+        self.enum_is_const = is_const;
         self
     }
 }
@@ -104,6 +114,7 @@ impl Clone for TypeAliasInfo {
             body: self.body.clone(),
             enum_name: self.enum_name.clone(),
             enum_exported: self.enum_exported,
+            enum_is_const: self.enum_is_const,
             cached_resolution_key: self.cached_resolution_key.clone(),
             cached_alias_id: self.cached_alias_id.clone(),
         }
@@ -209,10 +220,20 @@ pub(crate) struct InterfaceInfo {
     /// Only the abstract-instantiation check reads it; nothing about the shape
     /// depends on it.
     pub(crate) is_abstract_class: bool,
+    /// The class body writes a constructor, and the modifier it carries. A
+    /// class without one inherits its base's construct signatures, modifier
+    /// included, which is what `new`/`extends` accessibility walks up to.
+    pub(crate) declares_constructor: bool,
+    pub(crate) constructor_accessibility: Option<surge_ts_syntax::ParsedMemberAccessibility>,
     /// Set when this is the instance side of a class. A class base is an
     /// expression, so its heritage names are reported by the class's own check
     /// rather than wherever the instance is first expanded.
     pub(crate) is_class_instance: bool,
+    /// For a namespace member, the symbol table tsc's binder declares it in
+    /// (`declareModuleMember`): the namespace's exports, which every block of
+    /// the namespace shares, or its own block's locals. Declarations merge
+    /// only within one table.
+    pub(crate) namespace_member_table: Option<Arc<str>>,
     pub(crate) body: Arc<InterfaceBody>,
     /// See [`TypeAliasInfo::cached_resolution_key`].
     pub(crate) cached_resolution_key: std::sync::OnceLock<crate::context::DeclarationResolutionKey>,
@@ -256,7 +277,10 @@ impl InterfaceInfo {
             name_span,
             resolution_scope,
             is_abstract_class: false,
+            declares_constructor: false,
+            constructor_accessibility: None,
             is_class_instance: false,
+            namespace_member_table: None,
             body: Arc::new(InterfaceBody {
                 type_parameters,
                 extends,
@@ -288,7 +312,10 @@ impl Clone for InterfaceInfo {
             name_span: self.name_span,
             resolution_scope: self.resolution_scope.clone(),
             is_abstract_class: self.is_abstract_class,
+            declares_constructor: self.declares_constructor,
+            constructor_accessibility: self.constructor_accessibility,
             is_class_instance: self.is_class_instance,
+            namespace_member_table: self.namespace_member_table.clone(),
             body: self.body.clone(),
             cached_resolution_key: self.cached_resolution_key.clone(),
             cached_alias_id: self.cached_alias_id.clone(),
@@ -374,11 +401,8 @@ pub(crate) fn merge_interface_infos(
     }
     let mut extends = existing.body.extends.clone();
     extends.extend(incoming.body.extends.iter().cloned());
-    let type_parameters = if existing.body.type_parameters.is_empty() {
-        incoming.body.type_parameters.clone()
-    } else {
-        existing.body.type_parameters.clone()
-    };
+    let mut type_parameters = existing.body.type_parameters.clone();
+    merge_type_parameters(&mut type_parameters, &incoming.body.type_parameters);
     let mut merged_info = InterfaceInfo::new(
         existing.name.clone(),
         existing.file_name.clone(),
@@ -446,6 +470,35 @@ pub(crate) fn merge_interface_infos(
             .collect();
     }
     merged_info
+}
+
+/// tsc's binder declares each declaration's type parameters in the merged
+/// symbol's members, so a name an earlier declaration declared is the same
+/// parameter and any other name is one more: the merged type's parameters are
+/// every name in order of first appearance
+/// (`appendLocalTypeParametersOfClassOrInterfaceOrTypeAlias`). A parameter is
+/// then read off all of its declarations: its constraint and its default are
+/// the first ones written (`getConstraintDeclaration`,
+/// `getResolvedTypeParameterDefault`), so `interface I<T>` merged with
+/// `interface I<T = number>` takes `I` with no argument, and a modifier on any
+/// declaration applies (`getTypeParameterModifiers`).
+fn merge_type_parameters(
+    merged: &mut Vec<ParsedTypeParameter>,
+    incoming: &[ParsedTypeParameter],
+) {
+    for parameter in incoming {
+        let Some(known) = merged.iter_mut().find(|known| known.name == parameter.name) else {
+            merged.push(parameter.clone());
+            continue;
+        };
+        if known.constraint.is_none() {
+            known.constraint = parameter.constraint.clone();
+        }
+        if known.default_type.is_none() {
+            known.default_type = parameter.default_type.clone();
+        }
+        known.is_const |= parameter.is_const;
+    }
 }
 
 /// Declaration-merge an interface contributed by a `declare module` block in
@@ -664,9 +717,7 @@ fn fold_interface_declaration(
         body.member_fragments.push(fragment.clone());
     }
     body.extends.extend(incoming.body.extends.iter().cloned());
-    if body.type_parameters.is_empty() {
-        body.type_parameters = incoming.body.type_parameters.clone();
-    }
+    merge_type_parameters(&mut body.type_parameters, &incoming.body.type_parameters);
     if body.number_index_type.is_none() {
         body.number_index_type = incoming.body.number_index_type.clone();
     }
@@ -713,6 +764,11 @@ pub(crate) struct TypeDeclarationScope {
     /// attached resolves every imported name in its body to `unknown`, so the
     /// attachment is replaceable: see `attach_type_resolution_scope`.
     preliminary: bool,
+    /// How many leading layers are lexically inside the file's own
+    /// declarations — a function body's local types, and the placeholders of
+    /// its enclosing type parameters — which a lookup reads before the file's
+    /// table, as tsc's `resolveName` walks the inner scopes first.
+    lexical_layers: usize,
 }
 
 impl TypeDeclarationScope {
@@ -720,7 +776,32 @@ impl TypeDeclarationScope {
         Self {
             layers,
             preliminary: false,
+            lexical_layers: 0,
         }
+    }
+
+    /// Marks the first `count` layers as lexical (see `lexical_layers`).
+    pub(crate) fn with_lexical_layers(mut self, count: usize) -> Self {
+        self.lexical_layers = count.min(self.layers.len());
+        self
+    }
+
+    pub(crate) fn lexical_layer_count(&self) -> usize {
+        self.lexical_layers
+    }
+
+    /// The declaration a lexical layer binds `name` to.
+    pub(crate) fn lexical_get(&self, name: &str) -> Option<&TypeDeclarationInfo> {
+        self.layers[..self.lexical_layers]
+            .iter()
+            .find_map(|layer| layer.get_without_lookup_record(name))
+    }
+
+    /// [`Self::lexical_get`] as a handle.
+    pub(crate) fn lexical_get_handle(&self, name: &str) -> Option<TypeDeclarationHandle> {
+        self.layers[..self.lexical_layers]
+            .iter()
+            .find_map(|layer| layer.get_handle(name))
     }
 
     /// Marks a scope as built before import binding.

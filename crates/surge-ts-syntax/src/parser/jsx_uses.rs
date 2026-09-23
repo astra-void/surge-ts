@@ -1,11 +1,18 @@
 //! What a file's JSX refers to without naming it: tsc's
 //! `markJsxAliasReferenced` resolves a factory at every element and fragment,
-//! chosen by the file's leading `@jsx`/`@jsxFrag` pragmas when it has them.
+//! chosen by the file's leading `@jsx`/`@jsxFrag` pragmas when it has them, and
+//! the automatic runtime imports the module its pragmas and options name.
 
-use oxc_ast::ast::{JSXFragment, JSXOpeningElement, Program};
+use oxc_ast::ast::{
+    ArrowFunctionExpression, Function, JSXElement, JSXFragment, JSXOpeningElement,
+    MethodDefinition, Program,
+};
 use oxc_ast_visit::{Visit, walk};
+use oxc_span::Span;
+use oxc_syntax::scope::ScopeFlags;
 
-use crate::JsxFactoryUses;
+use super::spans::text_span_from_oxc_span;
+use crate::{JsxFactoryUses, TextSpan};
 
 pub(crate) fn collect_jsx_factory_uses(program: &Program<'_>, source_text: &str) -> JsxFactoryUses {
     let mut presence = JsxPresence::default();
@@ -13,11 +20,10 @@ pub(crate) fn collect_jsx_factory_uses(program: &Program<'_>, source_text: &str)
     let mut uses = JsxFactoryUses {
         has_elements: presence.elements,
         has_fragments: presence.fragments,
+        first_tag: presence.first_tag.map(|(_, span)| span),
         ..JsxFactoryUses::default()
     };
-    if !uses.has_elements && !uses.has_fragments {
-        return uses;
-    }
+    // The runtime import pragmas apply to a JSX file with no JSX in it too.
     for comment in leading_block_comments(source_text) {
         collect_pragmas(comment, &mut uses);
     }
@@ -28,9 +34,32 @@ pub(crate) fn collect_jsx_factory_uses(program: &Program<'_>, source_text: &str)
 struct JsxPresence {
     elements: bool,
     fragments: bool,
+    /// The first tag tsc checks, with how many function expressions enclose
+    /// it: their bodies are checked after the code around them
+    /// (`checkNodeDeferred`), a nested one after its parent's.
+    first_tag: Option<(usize, TextSpan)>,
+    deferred_depth: usize,
+    /// A class method's function, which is checked with its class.
+    method_value: Option<Span>,
+}
+
+impl JsxPresence {
+    fn record_tag(&mut self, span: Span) {
+        if self
+            .first_tag
+            .is_none_or(|(depth, _)| self.deferred_depth < depth)
+        {
+            self.first_tag = Some((self.deferred_depth, text_span_from_oxc_span(span)));
+        }
+    }
 }
 
 impl<'a> Visit<'a> for JsxPresence {
+    fn visit_jsx_element(&mut self, element: &JSXElement<'a>) {
+        self.record_tag(element.span);
+        walk::walk_jsx_element(self, element);
+    }
+
     fn visit_jsx_opening_element(&mut self, element: &JSXOpeningElement<'a>) {
         self.elements = true;
         walk::walk_jsx_opening_element(self, element);
@@ -38,7 +67,26 @@ impl<'a> Visit<'a> for JsxPresence {
 
     fn visit_jsx_fragment(&mut self, fragment: &JSXFragment<'a>) {
         self.fragments = true;
+        self.record_tag(fragment.opening_fragment.span);
         walk::walk_jsx_fragment(self, fragment);
+    }
+
+    fn visit_arrow_function_expression(&mut self, arrow: &ArrowFunctionExpression<'a>) {
+        self.deferred_depth += 1;
+        walk::walk_arrow_function_expression(self, arrow);
+        self.deferred_depth -= 1;
+    }
+
+    fn visit_method_definition(&mut self, method: &MethodDefinition<'a>) {
+        self.method_value = Some(method.value.span);
+        walk::walk_method_definition(self, method);
+    }
+
+    fn visit_function(&mut self, function: &Function<'a>, flags: ScopeFlags) {
+        let deferred = function.is_expression() && self.method_value != Some(function.span);
+        self.deferred_depth += usize::from(deferred);
+        walk::walk_function(self, function, flags);
+        self.deferred_depth -= usize::from(deferred);
     }
 }
 
@@ -106,13 +154,65 @@ fn collect_pragmas(comment: &str, uses: &mut JsxFactoryUses) {
             match name.as_str() {
                 "jsx" => uses.factory_pragma = entity_root(argument),
                 "jsxfrag" => uses.fragment_pragma = entity_root(argument),
-                "jsximportsource" => uses.import_source_pragma = true,
+                "jsximportsource" => uses.import_source_pragma = Some(argument.to_string()),
                 "jsxruntime" => uses.runtime_pragma = Some(argument.to_string()),
                 _ => {}
             }
         }
         pos = line_end;
     }
+}
+
+/// The compiler options that decide a JSX file's implicit runtime import.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JsxRuntimeOptions {
+    /// `jsx: react-jsx` or `react-jsxdev`.
+    pub automatic: bool,
+    /// `jsx: react-jsxdev`.
+    pub development: bool,
+    /// `jsxImportSource`.
+    pub import_source: Option<String>,
+}
+
+/// tsc's `GetJSXRuntimeImport(GetJSXImplicitImportBase(options, file))`: the
+/// module a JavaScript or `.tsx` file imports the automatic JSX runtime from —
+/// `<jsxImportSource or "react">/jsx-runtime` (`jsx-dev-runtime` under
+/// `react-jsxdev`) when the options or the file's pragmas select that runtime.
+pub fn jsx_runtime_import(
+    file_name: &str,
+    uses: &JsxFactoryUses,
+    options: &JsxRuntimeOptions,
+) -> Option<String> {
+    let extension = file_name.rsplit_once('.').map(|(_, extension)| extension)?;
+    if !matches!(extension, "tsx" | "js" | "jsx" | "mjs" | "cjs") {
+        return None;
+    }
+    let runtime = uses.runtime_pragma.as_deref();
+    if runtime == Some("classic") {
+        return None;
+    }
+    let import_source = options
+        .import_source
+        .as_deref()
+        .filter(|source| !source.is_empty());
+    let automatic = options.automatic
+        || import_source.is_some()
+        || uses.import_source_pragma.is_some()
+        || runtime == Some("automatic");
+    if !automatic {
+        return None;
+    }
+    let base = uses
+        .import_source_pragma
+        .as_deref()
+        .or(import_source)
+        .unwrap_or("react");
+    let module = if options.development {
+        "jsx-dev-runtime"
+    } else {
+        "jsx-runtime"
+    };
+    Some(format!("{base}/{module}"))
 }
 
 /// The first identifier of an entity name (`h`, `React.createElement`), as

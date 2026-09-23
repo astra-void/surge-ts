@@ -13,6 +13,15 @@ pub(crate) struct BoundTypeArguments {
     pub(crate) had_error: bool,
 }
 
+/// tsc's `getMinTypeArgumentCount`: a reference must write every type argument
+/// up to the last type parameter with no default.
+pub(crate) fn min_type_argument_count(type_parameters: &[ParsedTypeParameter]) -> usize {
+    type_parameters
+        .iter()
+        .rposition(|parameter| parameter.default_type.is_none())
+        .map_or(0, |index| index + 1)
+}
+
 pub(crate) fn bind_type_arguments(
     type_parameters: &[ParsedTypeParameter],
     type_arguments: Vec<ParsedType>,
@@ -40,8 +49,15 @@ pub(crate) fn bind_type_arguments(
         });
     }
 
+    let min_type_argument_count = min_type_argument_count(type_parameters);
     if type_arguments.len() > type_parameters.len() {
-        emit_generic_arity(name, type_parameters.len(), name_span, ctx);
+        emit_generic_arity(
+            name,
+            min_type_argument_count,
+            type_parameters.len(),
+            name_span,
+            ctx,
+        );
         return None;
     }
 
@@ -89,7 +105,13 @@ pub(crate) fn bind_type_arguments(
         }
 
         let Some(default_type) = parameter.default_type.clone() else {
-            emit_generic_arity(name, type_parameters.len(), name_span, ctx);
+            emit_generic_arity(
+                name,
+                min_type_argument_count,
+                type_parameters.len(),
+                name_span,
+                ctx,
+            );
             return None;
         };
 

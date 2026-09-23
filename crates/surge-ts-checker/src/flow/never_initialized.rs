@@ -55,6 +55,7 @@ pub(crate) fn begin_file(
     } else {
         Vec::new()
     };
+    super::unassigned_reads::record_module_unassigned_reads(statements, ctx);
 }
 
 /// Enters a nested flow container: seeds `flow` with the inherited bindings its
@@ -84,6 +85,7 @@ pub(crate) fn enter_container(
     }
     let mut inherited = seed;
     collect_body_candidates(body, type_parameters, ctx, &mut inherited);
+    flow.set_assigned_bindings(super::assigned_bindings(body));
     std::mem::replace(&mut ctx.inherited_never_initialized, inherited)
 }
 

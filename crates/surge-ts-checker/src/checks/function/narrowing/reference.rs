@@ -495,12 +495,13 @@ pub(super) fn property_path_leaf_type(ty: &Type, path: &[String]) -> Option<Type
 /// The narrowed type of `base` under `guard` applied at `path`, or `None` when
 /// nothing changes. An empty `path` guards the binding itself.
 pub(super) fn narrowed_reference_type(ty: &Type, path: &[String], guard: ReferenceGuard<'_>) -> Option<Type> {
-    let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-        if path.is_empty() {
-            guard.narrow_leaf(ty, false).map(|(narrowed, _)| narrowed)
-        } else {
-            narrow_property_path(ty, path, guard)
-        }
+    let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || match guard {
+        ReferenceGuard::Nullish {
+            keep_matching,
+            test,
+        } if path.is_empty() => narrow_binding_by_nullish(ty, keep_matching, test),
+        _ if path.is_empty() => guard.narrow_leaf(ty, false).map(|(narrowed, _)| narrowed),
+        _ => narrow_property_path(ty, path, guard),
     })?;
     (narrowed != *ty).then_some(narrowed)
 }
@@ -659,6 +660,90 @@ fn optional_chain_receiver(chain: &ParsedExpression) -> Option<&ParsedExpression
         | ParsedExpression::PropertyCall { object, .. } => optional_chain_receiver(object),
         _ => None,
     }
+}
+
+/// The type of a compared operand that is itself a reference (`y`, `o.p`),
+/// read off the type `root_type` gives its root — what tsc's
+/// `getTypeOfExpression` answers for it at the comparison.
+pub(super) fn reference_operand_type(
+    expression: &ParsedExpression,
+    root_type: &dyn Fn(&str) -> Option<Type>,
+) -> Option<Type> {
+    let (base, path) = reference_path(expression)?;
+    let ty = root_type(&base)?;
+    if path.is_empty() {
+        Some(ty)
+    } else {
+        property_path_leaf_type(&ty, &path)
+    }
+}
+
+/// tsc's `narrowTypeByEquality` for the binding `name` of type `ty`, when it is
+/// an operand of an equality test whose compared value is a reference rather
+/// than a literal the literal narrowers spell. `isMatchingReference` tries the
+/// left operand first, so a binding compared with itself reads the right one.
+pub(super) fn narrow_binding_by_reference_equality(
+    condition: &ParsedExpression,
+    name: &str,
+    ty: &Type,
+    branch_is_true: bool,
+    root_type: &dyn Fn(&str) -> Option<Type>,
+) -> Option<Type> {
+    let test = parse_equality_test(condition)?;
+    let value = test.operand_pairs().into_iter().find_map(|(subject, value)| {
+        matches!(reference_path(subject), Some((base, path)) if path.is_empty() && base == name)
+            .then_some(value)
+    })?;
+    let value_type = reference_operand_type(value, root_type)?;
+    let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+        narrow_type_by_equality(
+            ty,
+            &value_type,
+            test.double_equals,
+            test.assume_true(branch_is_true),
+        )
+    });
+    (narrowed != *ty).then_some(narrowed)
+}
+
+/// [`narrow_binding_by_reference_equality`] for every binding the test
+/// compares (`y === z` narrows both), each read before either narrows.
+pub(super) fn reference_equality_narrowings(
+    condition: &ParsedExpression,
+    branch_is_true: bool,
+    current: &dyn Fn(&str) -> Option<SymbolInfo>,
+    root_type: &dyn Fn(&str) -> Option<Type>,
+) -> Vec<(String, SymbolInfo, Type)> {
+    let Some(test) = parse_equality_test(condition) else {
+        return Vec::new();
+    };
+    let mut narrowings: Vec<(String, SymbolInfo, Type)> = Vec::new();
+    for (subject, _) in test.operand_pairs() {
+        let Some((name, path)) = reference_path(subject) else {
+            continue;
+        };
+        if !path.is_empty() || narrowings.iter().any(|(narrowed, ..)| *narrowed == name) {
+            continue;
+        }
+        let Some(symbol) = current(&name) else {
+            continue;
+        };
+        if is_unnarrowable_binding(&symbol, &path) {
+            continue;
+        }
+        let Some(narrowed) = narrow_binding_by_reference_equality(
+            condition,
+            &name,
+            &symbol.ty,
+            branch_is_true,
+            root_type,
+        ) else {
+            continue;
+        };
+        let declared = symbol.ty.clone();
+        narrowings.push((name, SymbolInfo { ty: narrowed, ..symbol }, declared));
+    }
+    narrowings
 }
 
 /// The type of an operand a guard compares with, as far as the symbol table

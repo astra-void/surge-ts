@@ -29,6 +29,7 @@ pub(crate) fn normalize_compiler_options(
     let mut explicit_strict_property_initialization = None;
     let mut explicit_use_unknown_in_catch_variables = None;
     let mut explicit_resolve_json_module = None;
+    let mut explicit_module_resolution = None;
 
     for (key, value) in compiler_options {
         match key.as_str() {
@@ -119,9 +120,14 @@ pub(crate) fn normalize_compiler_options(
                         .unwrap_or(normalized.no_unused_parameters);
             }
             "allowUnreachableCode" => {
-                normalized.allow_unreachable_code =
-                    parse_bool_option(key, value, config_dir, diagnostics)
-                        .unwrap_or(normalized.allow_unreachable_code);
+                if let Some(allow) = parse_bool_option(key, value, config_dir, diagnostics) {
+                    normalized.allow_unreachable_code = allow;
+                    normalized.report_unreachable_code = !allow;
+                }
+            }
+            "allowUnusedLabels" => {
+                normalized.allow_unused_labels = parse_bool_option(key, value, config_dir, diagnostics)
+                    .or(normalized.allow_unused_labels);
             }
             "target" => {
                 normalized.target = parse_target_option(value, config_dir, diagnostics);
@@ -135,7 +141,7 @@ pub(crate) fn normalize_compiler_options(
                     parse_bool_option(key, value, config_dir, diagnostics);
             }
             "moduleResolution" => {
-                normalized.module_resolution =
+                explicit_module_resolution =
                     parse_module_resolution_option(value, config_dir, diagnostics);
             }
             "jsx" => {
@@ -230,6 +236,10 @@ pub(crate) fn normalize_compiler_options(
                 normalized.custom_conditions =
                     parse_string_list_option(value, diagnostics, config_dir);
             }
+            "libReplacement" => {
+                normalized.lib_replacement = parse_bool_option(key, value, config_dir, diagnostics)
+                    .unwrap_or(normalized.lib_replacement);
+            }
             other => match find_tsconfig_option(other) {
                 Some(definition) => match definition.support {
                     TsConfigOptionSupport::KnownNoop => {
@@ -272,13 +282,22 @@ pub(crate) fn normalize_compiler_options(
         explicit_strict_property_initialization.unwrap_or(normalized.strict);
     normalized.use_unknown_in_catch_variables =
         explicit_use_unknown_in_catch_variables.unwrap_or(normalized.strict);
-    // tsc turns `.json` resolution on by default for every resolver it still
-    // accepts except `node16`, and the flag is read after the whole option map
-    // so `moduleResolution` has already landed whatever order they appear in.
-    normalized.resolve_json_module = explicit_resolve_json_module.unwrap_or(!matches!(
-        normalized.module_resolution,
-        ModuleResolutionKind::Node16
-    ));
+    // tsgo's `GetModuleResolutionKind`: an unwritten (or legacy) resolver
+    // follows the emit module kind.
+    normalized.module_resolution =
+        explicit_module_resolution.unwrap_or(match normalized.emit_module {
+            ModuleKind::Node16 | ModuleKind::Node18 | ModuleKind::Node20 => {
+                ModuleResolutionKind::Node16
+            }
+            ModuleKind::NodeNext => ModuleResolutionKind::NodeNext,
+            _ => ModuleResolutionKind::Bundler,
+        });
+    // tsgo's `GetResolveJsonModule`, read after the whole option map so the
+    // resolver and module kind have landed whatever order they appear in.
+    normalized.resolve_json_module = explicit_resolve_json_module.unwrap_or(
+        matches!(normalized.emit_module, ModuleKind::Node20 | ModuleKind::NodeNext)
+            || normalized.module_resolution == ModuleResolutionKind::Bundler,
+    );
     if normalized.es_module_interop {
         normalized.allow_synthetic_default_imports = true;
     }
@@ -398,28 +417,30 @@ fn parse_module_resolution_option(
     value: &Value,
     file_name: &Path,
     diagnostics: &mut Vec<ConfigDiagnostic>,
-) -> ModuleResolutionKind {
+) -> Option<ModuleResolutionKind> {
     let Some(raw) = value.as_str() else {
         diagnostics.push(ConfigDiagnostic {
             code: ConfigDiagnosticCode::InvalidCompilerOptionValue,
             message: "`moduleResolution` must be a string".to_string(),
             file_name: file_name.to_path_buf(),
         });
-        return ModuleResolutionKind::Bundler;
+        return None;
     };
 
     match raw.to_ascii_lowercase().as_str() {
-        "node16" => ModuleResolutionKind::Node16,
-        "node20" => ModuleResolutionKind::Node20,
-        "nodenext" => ModuleResolutionKind::NodeNext,
-        "bundler" => ModuleResolutionKind::Bundler,
+        "node16" => Some(ModuleResolutionKind::Node16),
+        "node20" => Some(ModuleResolutionKind::Node20),
+        "nodenext" => Some(ModuleResolutionKind::NodeNext),
+        "bundler" => Some(ModuleResolutionKind::Bundler),
         "classic" | "node" | "node10" => {
             diagnostics.push(ConfigDiagnostic {
                 code: ConfigDiagnosticCode::UnsupportedLegacyCompilerOptionValue,
-                message: format!("legacy moduleResolution `{raw}` is not supported; using bundler"),
+                message: format!(
+                    "legacy moduleResolution `{raw}` is not supported; the module kind decides"
+                ),
                 file_name: file_name.to_path_buf(),
             });
-            ModuleResolutionKind::Bundler
+            None
         }
         other => {
             diagnostics.push(ConfigDiagnostic {
@@ -427,7 +448,7 @@ fn parse_module_resolution_option(
                 message: format!("unsupported moduleResolution `{other}`"),
                 file_name: file_name.to_path_buf(),
             });
-            ModuleResolutionKind::Bundler
+            None
         }
     }
 }

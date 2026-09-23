@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use surge_ts_checker::SourceFileInput;
 use surge_ts_checker::lowlevel::resolution_candidates::{
-    mapped_target_candidates, relative_import_candidates,
+    directory_index_candidates, mapped_target_candidates, relative_import_candidates,
+    relative_specifier_names_directory,
 };
 use surge_ts_config::PathMapping;
 use surge_ts_config::{
@@ -226,7 +227,11 @@ fn resolve_relative_candidate(
     let normalized_specifier = normalize_path_string(specifier);
     let joined = normalize_path_string(&importer_dir.join(&normalized_specifier).to_string_lossy());
 
-    let candidate_paths = relative_import_candidates(&joined, &normalized_specifier)?;
+    let candidate_paths = if relative_specifier_names_directory(specifier) {
+        directory_index_candidates(&joined)
+    } else {
+        relative_import_candidates(&joined, &normalized_specifier)?
+    };
 
     for candidate in candidate_paths {
         let candidate = PathBuf::from(candidate);

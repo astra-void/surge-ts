@@ -52,9 +52,14 @@ fn unknown_type_name_diagnostic(name: &str, ctx: &CheckerContext) -> Diagnostic 
 
 /// Whether `name` resolves with a namespace meaning. surge binds every
 /// namespace as a value and publishes its members under qualified `ns.member`
-/// keys, so a name heading such a key — or a namespace import — is one.
+/// keys, so a name heading such a key — or a namespace import — is one. An
+/// import alias of a module keys its members in the scope's import layers
+/// (`import lib = require("lib")` inside a `declare module` block).
 fn is_namespace_like(name: &str, ctx: &CheckerContext) -> bool {
-    if ctx.is_namespace_import_binding(name) || ctx.namespace_meaning(name).is_some() {
+    if ctx.is_namespace_import_binding(name)
+        || ctx.namespace_meaning(name).is_some()
+        || is_module_alias(name, ctx)
+    {
         return true;
     }
     let heads_key = |candidate: &Arc<str>| {
@@ -63,9 +68,29 @@ fn is_namespace_like(name: &str, ctx: &CheckerContext) -> bool {
             .is_some_and(|rest| rest.starts_with('.'))
     };
     ctx.type_declarations.iter().any(|(key, _)| heads_key(key))
+        || ctx.type_declaration_scope.as_ref().is_some_and(|scope| {
+            scope
+                .layers()
+                .iter()
+                .any(|layer| layer.iter().any(|(key, _)| heads_key(key)))
+        })
         || ctx.ambient_global_type_declarations.iter().any(|(key, _)| heads_key(key))
         || ctx.symbols.iter().any(|(key, _)| heads_key(key))
         || ctx.ambient_global_symbols.iter().any(|(key, _)| heads_key(key))
+}
+
+/// An import alias of a module itself (`import m = require("./m")` over a
+/// module with no `export =`), which tsc's `resolveName(…, Module)` finds: the
+/// binding's value is the module's namespace object.
+fn is_module_alias(name: &str, ctx: &CheckerContext) -> bool {
+    ctx.is_import_binding(name)
+        && ctx.symbols.get(name).is_some_and(|symbol| {
+            matches!(&symbol.ty, surge_ts_types::Type::Object(object)
+                if object
+                    .alias_name
+                    .as_deref()
+                    .is_some_and(|alias| alias.starts_with("typeof import(\"")))
+        })
 }
 
 /// `checkAndReportErrorForUsingValueAsType`: the name is a value and not a
@@ -324,17 +349,27 @@ pub(crate) fn emit_type_is_not_generic(
     ctx.push_utility_diagnostic_once(diagnostic);
 }
 
+/// tsc's wrong-argument-count error on a generic type reference: TS2314 when
+/// every type parameter is required, TS2707 when some have defaults. It is
+/// reported on the reference; a lookup surge synthesized has none, and a
+/// report there would land on whatever declaration it named.
 pub(crate) fn emit_generic_arity(
     name: &str,
-    arity: usize,
+    min_type_argument_count: usize,
+    type_parameter_count: usize,
     name_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
 ) {
-    let mut diagnostic = Diagnostic::ts2314(name, arity, ctx.file_name.clone());
-    if let Some(span) = name_span {
-        diagnostic = diagnostic.with_span(convert_span(span));
-    }
-    ctx.push_utility_diagnostic_once(diagnostic);
+    let Some(span) = name_span else {
+        return;
+    };
+    let file_name = ctx.file_name.clone();
+    let diagnostic = if min_type_argument_count == type_parameter_count {
+        Diagnostic::ts2314(name, type_parameter_count, file_name)
+    } else {
+        Diagnostic::ts2707(name, min_type_argument_count, type_parameter_count, file_name)
+    };
+    ctx.push_utility_diagnostic_once(diagnostic.with_span(convert_span(span)));
 }
 
 /// `Foo<Bad>` where `Foo`'s parameter is constrained. Only reported when both the
@@ -348,18 +383,21 @@ pub(crate) fn emit_generic_arity(
 /// `Pick`'s own check in `utility.rs` already reports the written form. Two
 /// spellings of one constraint are two dedup keys, so the same violation was
 /// reported twice.
+///
+/// tsc checks the constraints of a type reference's written arguments
+/// (`checkTypeReferenceNode`); an instantiation surge synthesized has no
+/// reference, and tsc reports nothing for it.
 pub(crate) fn emit_type_argument_constraint(
     argument: &surge_ts_types::Type,
     constraint_name: &str,
     name_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
 ) {
-    let mut diagnostic =
-        Diagnostic::ts2344(&argument.name(), constraint_name, ctx.file_name.clone());
-    if let Some(span) = name_span {
-        diagnostic = diagnostic.with_span(convert_span(span));
-    }
-    ctx.push_utility_diagnostic_once(diagnostic);
+    let Some(span) = name_span else {
+        return;
+    };
+    let diagnostic = Diagnostic::ts2344(&argument.name(), constraint_name, ctx.file_name.clone());
+    ctx.push_utility_diagnostic_once(diagnostic.with_span(convert_span(span)));
 }
 
 pub(crate) fn emit_type_declaration_cycle(

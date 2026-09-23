@@ -106,10 +106,27 @@ pub struct TypeReference {
 /// array, while assignability and identity can still tell the two apart.
 pub const READONLY_REFERENCE_ID: &str = "\u{0}readonly";
 
+/// Nominal id of the synthetic reference that carries a written tuple's
+/// `minLength` where its element types cannot show it (see
+/// [`crate::written_tuple_type`]). The arguments are the tuple and that length
+/// as a number literal; resolving the reference yields the tuple.
+pub const WRITTEN_TUPLE_REFERENCE_ID: &str = "\u{0}tuple";
+
 impl TypeReference {
     /// Whether this is the synthetic `readonly T[]` / `readonly [A, B]` wrapper.
     pub fn is_readonly_array(&self) -> bool {
         &*self.id == READONLY_REFERENCE_ID
+    }
+
+    /// The elements and `minLength` of a written tuple wrapper.
+    pub fn written_tuple(&self) -> Option<(&[Type], usize)> {
+        if &*self.id != WRITTEN_TUPLE_REFERENCE_ID {
+            return None;
+        }
+        let [Type::Tuple(elements), Type::NumberLiteral(min_length)] = &*self.arguments else {
+            return None;
+        };
+        Some((elements.as_slice(), min_length.value.parse().ok()?))
     }
 
     /// A `unique symbol` declared by some `const` (see [`unique_symbol_type`]).

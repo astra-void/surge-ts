@@ -73,7 +73,7 @@ pub mod lowlevel {
         pub use crate::modules::candidates::{
             RelativeSpecifierShape, classify_relative_specifier, directory_index_candidates,
             extensionless_candidates, mapped_target_candidates, relative_import_candidates,
-            strip_extension,
+            relative_specifier_names_directory, resolution_mode_override_key, strip_extension,
         };
     }
 }

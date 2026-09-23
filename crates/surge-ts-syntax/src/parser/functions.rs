@@ -2,7 +2,7 @@ use oxc_ast::ast::{
     AssignmentTarget, BindingPattern, BindingProperty, BlockStatement,
     CatchClause, Declaration, DoWhileStatement, Expression, ExpressionStatement, ForInStatement, ForOfStatement,
     ForStatement, ForStatementInit, ForStatementLeft, FormalParameter, Function, IfStatement,
-    ObjectPattern, PropertyKey, Statement, SwitchCase, SwitchStatement, ThrowStatement,
+    ObjectPattern, Statement, SwitchCase, SwitchStatement, ThrowStatement,
     TryStatement, VariableDeclaration, WhileStatement,
 };
 use oxc_span::GetSpan;
@@ -983,11 +983,10 @@ fn parse_object_binding_pattern(object_pattern: &ObjectPattern<'_>) -> ParsedObj
 fn parse_object_binding_element(
     property: &BindingProperty<'_>,
 ) -> Option<ParsedObjectBindingElement> {
-    let property_name = match &property.key {
-        PropertyKey::StaticIdentifier(identifier) => identifier.name.to_string(),
-        // `{ "show": x }` and `{ ["show"]: x }` name the same property.
-        PropertyKey::StringLiteral(literal) => literal.value.to_string(),
-        _ => {
+    // `{ "show": x }` and `{ ["show"]: x }` name the same property.
+    let property_name = match super::binding_property_key(&property.key) {
+        Some((name, _)) => name,
+        None => {
             return Some(ParsedObjectBindingElement {
                 property_name: "<unsupported>".to_string(),
                 shorthand: false,

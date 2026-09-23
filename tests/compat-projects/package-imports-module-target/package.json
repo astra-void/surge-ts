@@ -1,0 +1,12 @@
+{
+  "name": "self",
+  "private": true,
+  "exports": { ".": "./src/entry.js" },
+  "imports": {
+    "#self": "self",
+    "#dep": "dep",
+    "#dep/*": "dep/*",
+    "#missing": "not-installed",
+    "#parent": "../outside.js"
+  }
+}

@@ -53,29 +53,61 @@ pub(crate) fn check_assignment_with_symbols(
         return false;
     };
 
-    let Some(target) = symbols.get(&assignment.target_name) else {
-        // `undefined` is not a variable to tsc (`checkIdentifier` finds its
-        // symbol and rejects the write) — TS2539.
-        if assignment.target_name == "undefined" {
-            let diagnostic = Diagnostic::ts2539("undefined", ctx.file_name.clone())
-                .with_span(convert_span(target_span));
-            ctx.push(diagnostic);
-            return false;
+    // The target resolves exactly as a read of the name does, module-scope
+    // fallback included: `var as1 = (as1 = 2)` writes the `var` it declares.
+    let target = match symbols.get_handle(&assignment.target_name) {
+        Some(handle)
+            if ctx
+                .ambient_global_symbols
+                .get_handle(&assignment.target_name)
+                .is_some_and(|global| std::sync::Arc::ptr_eq(&handle, &global)) =>
+        {
+            ctx.module_value_fallback
+                .as_ref()
+                .and_then(|fallback| fallback.get_own_shared(&assignment.target_name))
+                .or(Some(handle))
         }
-        if ctx.namespace_meaning(&assignment.target_name) == Some(true) {
-            let diagnostic = Diagnostic::ts2631(&assignment.target_name, ctx.file_name.clone())
-                .with_span(convert_span(target_span));
-            ctx.push(diagnostic);
-            return false;
+        Some(handle) => Some(handle),
+        None => None,
+    };
+    let target = match target {
+        Some(target) => target,
+        None => {
+            // `undefined` is not a variable to tsc (`checkIdentifier` finds its
+            // symbol and rejects the write) — TS2539.
+            if assignment.target_name == "undefined" {
+                let diagnostic = Diagnostic::ts2539("undefined", ctx.file_name.clone())
+                    .with_span(convert_span(target_span));
+                ctx.push(diagnostic);
+                return false;
+            }
+            // tsc rejects a write by the symbol's module meaning before it
+            // asks whether a variable is a constant, and the fallback binds a
+            // namespace's value as a plain `const`, so the meaning goes first.
+            if ctx.namespace_meaning(&assignment.target_name) == Some(true) {
+                let diagnostic = Diagnostic::ts2631(&assignment.target_name, ctx.file_name.clone())
+                    .with_span(convert_span(target_span));
+                ctx.push(diagnostic);
+                return false;
+            }
+            match ctx
+                .module_value_fallback
+                .as_ref()
+                .and_then(|fallback| fallback.get_handle(&assignment.target_name))
+            {
+                Some(target) => target,
+                None => {
+                    crate::checks::expr::report_unresolved_value_name(
+                        &assignment.target_name,
+                        Some(target_span),
+                        crate::checks::expr::UnresolvedNameSite::Reference,
+                        symbols,
+                        ctx,
+                    );
+                    return false;
+                }
+            }
         }
-        crate::checks::expr::report_unresolved_value_name(
-            &assignment.target_name,
-            Some(target_span),
-            crate::checks::expr::UnresolvedNameSite::Reference,
-            symbols,
-            ctx,
-        );
-        return false;
     };
 
     if !shadowed_locally && ctx.is_import_binding(&assignment.target_name) {
@@ -86,7 +118,7 @@ pub(crate) fn check_assignment_with_symbols(
     }
 
     if let Some(diagnostic) =
-        unwritable_binding_diagnostic(&assignment.target_name, target, ctx.file_name.clone())
+        unwritable_binding_diagnostic(&assignment.target_name, &target, ctx.file_name.clone())
     {
         ctx.push(diagnostic.with_span(convert_span(target_span)));
         return false;

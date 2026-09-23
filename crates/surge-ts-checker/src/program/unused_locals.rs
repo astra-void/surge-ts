@@ -16,8 +16,8 @@ use crate::context::{CheckerContext, convert_span};
 /// pragma's, else `jsxFactory`'s, else `reactNamespace`, else `React` — and a
 /// fragment the fragment factory's (`@jsxFrag`, else `jsxFragmentFactory`,
 /// else that default namespace, never the file's pragma) together with the
-/// file's factory. The automatic runtime imports its factory instead; surge's
-/// loader does not add that import, so it is taken to resolve.
+/// file's factory. The automatic runtime imports its factory from the runtime
+/// module instead.
 pub(crate) fn jsx_factory_reads(
     uses: &surge_ts_syntax::JsxFactoryUses,
     options: &crate::CheckerOptions,
@@ -30,7 +30,7 @@ pub(crate) fn jsx_factory_reads(
     let automatic = runtime != Some("classic")
         && (options.jsx_automatic_runtime
             || names.import_source.is_some()
-            || uses.import_source_pragma
+            || uses.import_source_pragma.is_some()
             || runtime == Some("automatic"));
     if automatic {
         return Vec::new();
@@ -250,6 +250,7 @@ fn import_local_bindings(kind: &ParsedImportKind) -> Vec<(&str, Option<TextSpan>
         | ParsedImportKind::Equals {
             local_name,
             name_span,
+            ..
         } => vec![(local_name.as_str(), *name_span)],
         ParsedImportKind::SideEffect
         | ParsedImportKind::Unsupported

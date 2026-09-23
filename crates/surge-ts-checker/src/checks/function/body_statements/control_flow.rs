@@ -1,7 +1,7 @@
-use surge_ts_diagnostics::{Diagnostic, DiagnosticCode};
+use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
     ParsedExpression, ParsedForOfStatement, ParsedIfStatement, ParsedSwitchStatement,
-    ParsedTryStatement, ParsedType, ParsedWhileStatement,
+    ParsedTryStatement, ParsedWhileStatement,
 };
 use surge_ts_types::{Type, TypeCopyReason, union_type, with_type_copy_reason};
 
@@ -79,7 +79,7 @@ pub(crate) fn check_function_if_statement(
         .contains_assignment()
         .then(|| if_statement.condition.with_assignments_as_reads());
     let narrowing_condition = narrowing_source.as_ref().unwrap_or(&if_statement.condition);
-    let alias_condition = resolved_alias_condition(narrowing_condition, flow_state);
+    let alias_condition = resolved_alias_condition(narrowing_condition, scopes, flow_state);
     let base_condition: &ParsedExpression =
         alias_condition.as_deref().unwrap_or(narrowing_condition);
     let rewritten_condition = rewrite_discriminant_aliases(base_condition, flow_state);
@@ -396,7 +396,7 @@ pub(crate) fn check_function_while_statement(
         .contains_assignment()
         .then(|| condition.with_assignments_as_reads());
     let narrowing_condition = narrowing_source.as_ref().unwrap_or(&condition);
-    let alias_condition = resolved_alias_condition(narrowing_condition, flow_state);
+    let alias_condition = resolved_alias_condition(narrowing_condition, scopes, flow_state);
     let base_condition: &ParsedExpression =
         alias_condition.as_deref().unwrap_or(narrowing_condition);
     let rewritten_condition = rewrite_discriminant_aliases(base_condition, flow_state);
@@ -465,18 +465,41 @@ pub(crate) fn check_function_for_of_statement(
     ctx: &mut CheckerContext,
 ) {
     let flow_active = flow_state.tracked_local_count() > 0;
-    let iterable_blocked = if flow_active {
-        check_expression_flow(
+    let head = crate::flow::for_head_initializing(&for_of_statement);
+    let iterable_blocked = if flow_active || !head.is_empty() {
+        let mark = flow_state.begin_initializer(head);
+        let blocked = check_expression_flow(
             &for_of_statement.iterable,
             for_of_statement.iterable_span,
             flow_state,
             statement_index,
             ctx,
-        )
+        );
+        flow_state.end_initializer(mark);
+        blocked
     } else {
         FlowCheck::Clear
     };
 
+    // A `let`/`const` head is declared by the statement, so the expression it
+    // iterates already sees it — only a deferred read can get past the
+    // temporal dead zone reported above, and its type is circular there.
+    // A `var` head is hoisted, so the expression reads the variable the head
+    // declares; unless an earlier declaration already typed it, its type
+    // depends on that expression (`getTypeForVariableLikeDeclaration`) and is
+    // circular there — `any` (`reportCircularityError`).
+    let head_var_circular = for_of_statement.binding_kind
+        == surge_ts_syntax::ParsedForBindingKind::Var
+        && matches!(
+            &for_of_statement.binding_name,
+            surge_ts_syntax::ParsedBindingName::Identifier { name, .. } if scopes.resolve(name).is_none()
+        );
+    let head_scoped = head_var_circular
+        || for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::BlockScoped;
+    if head_scoped {
+        scopes.push_child();
+        insert_binding_name(&for_of_statement.binding_name, Type::Any, scopes);
+    }
     let mut element_type = Type::Unknown;
     let mut numeric_property_names = false;
     if !iterable_blocked.is_blocked() {
@@ -500,6 +523,16 @@ pub(crate) fn check_function_for_of_statement(
                     for_of_statement.iterable_span,
                     ctx,
                 );
+                if for_of_statement.binding_kind
+                    == surge_ts_syntax::ParsedForBindingKind::ExistingBinding
+                    && let surge_ts_syntax::ParsedBindingName::Identifier {
+                        name,
+                        span: Some(span),
+                    } = &for_of_statement.binding_name
+                    && let Some(left_type) = visible_symbols.get(name).map(|symbol| symbol.ty.clone())
+                {
+                    check_for_in_left_operand(&left_type, iterable_type, *span, ctx);
+                }
             }
             // Over a type variable tsc binds the generic `Extract<keyof T,
             // string>` (`getIndexTypeOrString`), which a write through it
@@ -552,6 +585,9 @@ pub(crate) fn check_function_for_of_statement(
                 element_type = for_of_element_type(&iterable_type);
             }
         }
+    }
+    if head_scoped {
+        scopes.pop_child();
     }
 
     let assigned = loop_join_names(&for_of_statement.body);
@@ -682,6 +718,80 @@ fn check_for_in_right_operand(
         Diagnostic::ts2407(right_type.name(), ctx.file_name.clone()),
         span,
     ));
+}
+
+/// tsc's `checkForInStatement` left-hand rule (TS2405): `for (x in o)` over an
+/// existing binding needs `getIndexTypeOrString(o)` assignable to `x`.
+fn check_for_in_left_operand(
+    left_type: &Type,
+    right_type: &Type,
+    span: surge_ts_syntax::TextSpan,
+    ctx: &mut CheckerContext,
+) {
+    if left_type.is_unknown() {
+        return;
+    }
+    let Some(index_type) = index_type_or_string(right_type) else {
+        return;
+    };
+    if surge_ts_types::is_assignable_to(&index_type, left_type) {
+        return;
+    }
+    ctx.push(crate::spans::diagnostic_with_syntax_span(
+        Diagnostic::ts2405(ctx.file_name.clone()),
+        Some(span),
+    ));
+}
+
+/// tsc's `getIndexTypeOrString`: `Extract<keyof T, string>`, or `string` when
+/// that is `never`. A shape whose keys surge does not enumerate — an array, a
+/// callable, a type variable, a primitive, a string-indexed object — reads as
+/// `string`, which relates like the real key set to every target but a
+/// literal one. `None` for an operand surge could not resolve.
+fn index_type_or_string(right_type: &Type) -> Option<Type> {
+    // A numeric-looking key is a number literal in `keyof` when it was written
+    // as a number and a string literal when quoted; surge keeps no record of
+    // which, so such a shape is left unanswered.
+    fn string_keys(object: &surge_ts_types::ObjectType) -> Option<Vec<String>> {
+        let keys: Vec<String> = object
+            .properties
+            .keys()
+            .filter(|key| !key.starts_with('['))
+            .map(|key| key.to_string())
+            .collect();
+        (!keys.iter().any(|key| key.parse::<f64>().is_ok())).then_some(keys)
+    }
+    let right_type = surge_ts_types::remove_nullish(right_type).peeled();
+    let keys = match &right_type {
+        Type::Unknown | Type::ErrorType => return None,
+        Type::Object(object) if object.string_index_type.is_none() => string_keys(object)?,
+        // `keyof (A | B)` is the keys common to every member.
+        Type::Union(union) => {
+            let mut common: Option<Vec<String>> = None;
+            for member in union.types() {
+                let member_keys = match member.peeled() {
+                    Type::Unknown | Type::ErrorType => return None,
+                    Type::Object(object) if object.string_index_type.is_some() => continue,
+                    Type::Object(object) => string_keys(&object)?,
+                    _ => Vec::new(),
+                };
+                common = Some(match common {
+                    None => member_keys,
+                    Some(keys) => keys
+                        .into_iter()
+                        .filter(|key| member_keys.contains(key))
+                        .collect(),
+                });
+            }
+            common.unwrap_or_default()
+        }
+        _ => Vec::new(),
+    };
+    Some(if keys.is_empty() {
+        Type::String
+    } else {
+        surge_ts_types::union_type(keys.into_iter().map(Type::StringLiteral).collect())
+    })
 }
 
 /// tsc's `hasNumericPropertyNames`: the type's only index signature is the
@@ -864,18 +974,24 @@ pub(crate) fn check_function_switch_statement(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
-    // A template without substitutions is a string literal to tsc, as a case
-    // test too (`case \`number\`:` under `switch (typeof x)`).
+    // A template the constant evaluator spells out is a string literal to tsc
+    // (`checkTemplateExpression`), as a case test too: `case \`number\`:` under
+    // `switch (typeof x)`, `case \`${Kind.a}\`:` under a discriminant.
+    let case_symbols = visible_symbols(scopes);
     for case in &mut switch_statement.cases {
         if let Some(ParsedExpression::TemplateLiteral {
             expressions,
             quasis,
             ..
         }) = &case.test
-            && expressions.is_empty()
-            && let [Some(text)] = quasis.as_slice()
+            && let Type::StringLiteral(text) = crate::infer::expression::template_literal_type(
+                expressions,
+                quasis,
+                &case_symbols,
+                ctx,
+            )
         {
-            case.test = Some(ParsedExpression::StringLiteral(text.clone()));
+            case.test = Some(ParsedExpression::StringLiteral(text));
         }
     }
     if ctx.options.no_fallthrough_cases_in_switch {
@@ -1034,8 +1150,7 @@ pub(crate) fn check_function_switch_statement(
 
             scopes.push_child();
             if let Some((condition, branch_is_true)) = case_group_conditions[case_index].as_ref() {
-                narrow_discriminant_in_scope(condition, scopes, *branch_is_true, ctx);
-                narrow_tuple_destructure_siblings(condition, scopes, *branch_is_true);
+                narrow_switch_case(condition, *branch_is_true, scopes, flow_state, ctx);
             }
             flow_state.begin_branch_capture();
             check_function_body(
@@ -1059,8 +1174,7 @@ pub(crate) fn check_function_switch_statement(
         for (case_index, switch_case) in switch_statement.cases.into_iter().enumerate() {
             scopes.push_child();
             if let Some((condition, branch_is_true)) = case_group_conditions[case_index].as_ref() {
-                narrow_discriminant_in_scope(condition, scopes, *branch_is_true, ctx);
-                narrow_tuple_destructure_siblings(condition, scopes, *branch_is_true);
+                narrow_switch_case(condition, *branch_is_true, scopes, flow_state, ctx);
             }
             check_function_body(
                 switch_case.consequent,
@@ -1090,9 +1204,26 @@ pub(crate) fn check_function_switch_statement(
             scopes,
             ctx,
         );
-        narrow_discriminant_in_scope(condition, scopes, false, ctx);
-        narrow_tuple_destructure_siblings(condition, scopes, false);
+        narrow_switch_case(condition, false, scopes, flow_state, ctx);
     }
+}
+
+/// Narrows by a `switch`'s synthesized case condition. A discriminant alias
+/// (`const { kind } = obj; switch (kind)`) also narrows the object it was read
+/// from, as tsc's `getCandidateDiscriminantPropertyAccess` reads it as
+/// `obj.kind`.
+fn narrow_switch_case(
+    condition: &ParsedExpression,
+    branch_is_true: bool,
+    scopes: &mut ScopeStack,
+    flow_state: &FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    narrow_discriminant_in_scope(condition, scopes, branch_is_true, ctx);
+    if let Some(rewritten) = rewrite_discriminant_aliases(condition, flow_state) {
+        narrow_discriminant_in_scope(&rewritten, scopes, branch_is_true, ctx);
+    }
+    narrow_tuple_destructure_siblings(condition, scopes, branch_is_true);
 }
 
 /// tsc's `isExhaustiveSwitchStatement`, recorded only on positive evidence: a
@@ -1506,19 +1637,17 @@ pub(crate) fn check_function_throw_statement(
 /// it otherwise, and a rejected annotation types the variable as the error
 /// type rather than as what it names.
 fn catch_annotation_type(
-    declared: &ParsedType,
+    declared: &surge_ts_syntax::ParsedType,
     span: Option<surge_ts_syntax::TextSpan>,
     ctx: &mut CheckerContext,
 ) -> Type {
     let ty = map_parsed_type(declared.clone(), ctx);
-    if matches!(ty.peeled(), Type::Any | Type::GenuineUnknown) || ty.peeled().is_unmodelled() {
+    if matches!(ty.peeled(), Type::Any | Type::GenuineUnknown | Type::ErrorType)
+        || ty.peeled().is_unmodelled()
+    {
         return ty;
     }
-    let mut diagnostic = Diagnostic::new(
-        DiagnosticCode::TypeScript(1196),
-        "Catch clause variable type annotation must be 'any' or 'unknown' if specified.",
-        ctx.file_name.clone(),
-    );
+    let mut diagnostic = Diagnostic::ts1196(ctx.file_name.clone());
     if let Some(span) = span {
         diagnostic = diagnostic.with_span(convert_span(span));
     }

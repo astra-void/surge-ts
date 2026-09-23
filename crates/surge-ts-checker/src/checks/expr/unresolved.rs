@@ -55,13 +55,44 @@ pub(crate) fn report_unresolved_value_name(
     } else {
         site
     };
-    let diagnostic = unresolved_value_name_diagnostic(name, site, symbols, ctx);
+    let diagnostic = invalid_initializer_reference_diagnostic(name, span, site, symbols, ctx)
+        .unwrap_or_else(|| unresolved_value_name_diagnostic(name, site, symbols, ctx));
     ctx.push(diagnostic_with_syntax_span(diagnostic, span));
+}
+
+/// tsc's `checkAndReportErrorForInvalidInitializer`, which the name resolver
+/// runs ahead of `onFailedToResolveSymbol` for a reference inside a property
+/// whose constructor declares the name: a missing `this.`/`C.` prefix, and
+/// otherwise the reference the property cannot make.
+fn invalid_initializer_reference_diagnostic(
+    name: &str,
+    span: Option<SyntaxTextSpan>,
+    site: UnresolvedNameSite,
+    symbols: &SymbolTable,
+    ctx: &CheckerContext,
+) -> Option<Diagnostic> {
+    let span = span?;
+    let property = crate::program::property_with_invalid_initializer(name, span, ctx)?;
+    if site != UnresolvedNameSite::TypeQuery
+        && let Some(diagnostic) = missing_member_prefix_diagnostic(name, symbols, ctx)
+    {
+        return Some(diagnostic);
+    }
+    Some(property.invalid_reference_diagnostic(name, span, ctx.file_name.clone()))
 }
 
 /// The operand of `typeof name` that resolves to nothing. The callers have
 /// already settled the names tsc resolves (UMD globals, type-only classes).
-pub(crate) fn unresolved_type_query_diagnostic(name: &str, ctx: &CheckerContext) -> Diagnostic {
+pub(crate) fn unresolved_type_query_diagnostic(
+    name: &str,
+    span: Option<SyntaxTextSpan>,
+    ctx: &CheckerContext,
+) -> Diagnostic {
+    if let Some(span) = span
+        && let Some(property) = crate::program::property_with_invalid_initializer(name, span, ctx)
+    {
+        return property.invalid_reference_diagnostic(name, span, ctx.file_name.clone());
+    }
     let message = cannot_find_name_message(name, UnresolvedNameSite::TypeQuery, ctx);
     let file_name = ctx.file_name.clone();
     if ctx.namespace_meaning(name) == Some(false) {
@@ -136,7 +167,7 @@ fn missing_member_prefix_diagnostic(
         {
             continue;
         }
-        if class.static_type.get_property_access_type(name).is_some() {
+        if has_property_of_type(&class.static_type, name) {
             return Some(Diagnostic::ts2662(
                 name,
                 &class.class_name,
@@ -148,7 +179,7 @@ fn missing_member_prefix_diagnostic(
             && symbols
                 .get("this")
                 .is_some_and(|this| this.ty == class.instance_type)
-            && class.instance_type.get_property_access_type(name).is_some()
+            && has_property_of_type(&class.instance_type, name)
         {
             return Some(Diagnostic::ts2663(name, ctx.file_name.clone()));
         }
@@ -158,6 +189,35 @@ fn missing_member_prefix_diagnostic(
 
 fn is_degraded_class_type(ty: &Type) -> bool {
     matches!(ty, Type::Any | Type::ErrorType) || ty.is_unknown()
+}
+
+/// tsc's `getPropertyOfType`: a member the type declares or inherits, or one
+/// its apparent type adds — `Function`'s for a callable or constructable
+/// object, `Object`'s for every object — but never an index signature, which
+/// a property read also answers from.
+fn has_property_of_type(ty: &Type, name: &str) -> bool {
+    match ty.peeled() {
+        // Checker-injected openness stands in for members surge could not
+        // enumerate (an expression base), any of which may be this one.
+        Type::Object(object) if object.synthetic_open_index => {
+            ty.get_property_access_type(name).is_some()
+        }
+        Type::Object(object) => {
+            object
+                .get_property(name)
+                .is_some_and(|property| !property.index_slot)
+                || object
+                    .call_signature()
+                    .or_else(|| object.construct_signature())
+                    .is_some_and(|signature| {
+                        Type::Function(signature.clone())
+                            .get_property_access_type(name)
+                            .is_some()
+                    })
+                || surge_ts_types::object_prototype_member_type(name).is_some()
+        }
+        other => other.get_property_access_type(name).is_some(),
+    }
 }
 
 /// The message tsc's `getCannotFindNameDiagnosticForName` picks for `name`.
@@ -265,6 +325,15 @@ pub(crate) fn export_assignment_target_is_exempt(
     expression: &surge_ts_syntax::ParsedExpression,
     ctx: &CheckerContext,
 ) -> bool {
+    // `IsValidTypeOnlyAliasUseSite`: the bare identifier of an export
+    // assignment is not an expression node, so naming a type-only alias there
+    // is not a use of its value (TS1361/TS1362). Parenthesized, it is one.
+    if let surge_ts_syntax::ParsedExpression::Identifier { name, span } = expression
+        && span.is_none_or(|span| ctx.parenthesized_outer_span(span).is_none())
+        && ctx.type_only_value_reference(name).is_some()
+    {
+        return true;
+    }
     let mut root = expression;
     let name = loop {
         match root {
@@ -284,14 +353,14 @@ pub(crate) fn export_assignment_target_is_exempt(
         || ctx.lookup_type_declaration(name).is_some()
 }
 
-fn is_primitive_type_name(name: &str) -> bool {
+pub(crate) fn is_primitive_type_name(name: &str) -> bool {
     matches!(
         name,
         "any" | "string" | "number" | "boolean" | "never" | "unknown"
     )
 }
 
-fn is_es2015_or_later_constructor_name(name: &str) -> bool {
+pub(crate) fn is_es2015_or_later_constructor_name(name: &str) -> bool {
     matches!(
         name,
         "Promise" | "Symbol" | "Map" | "WeakMap" | "Set" | "WeakSet"

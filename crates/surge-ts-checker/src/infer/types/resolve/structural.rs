@@ -15,6 +15,7 @@ pub(crate) fn resolve_tuple_type(
 ) -> ResolvedType {
     let mut resolved_elements = Vec::new();
     let mut had_error = false;
+    let min_length = ParsedType::tuple_min_length(&elements);
 
     for element in elements {
         let resolved_element = resolve_parsed_type(element, ctx, resolving, substitution);
@@ -23,7 +24,7 @@ pub(crate) fn resolve_tuple_type(
     }
 
     ResolvedType {
-        ty: Type::Tuple(resolved_elements),
+        ty: surge_ts_types::written_tuple_type(resolved_elements, min_length),
         had_error,
     }
 }
@@ -57,7 +58,7 @@ impl surge_ts_types::ResolveReference for ReadonlyShape {
 pub(crate) fn readonly_reference(ty: Type) -> Type {
     match ty {
         Type::Reference(ref reference) if reference.is_readonly_array() => ty,
-        Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) => {
+        _ if matches!(ty, Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)) || surge_ts_types::is_written_tuple(&ty) => {
             let display = format!("readonly {}", ty.name());
             Type::Reference(surge_ts_types::TypeReference::new(
                 surge_ts_types::READONLY_REFERENCE_ID,
@@ -79,13 +80,28 @@ pub(crate) fn resolve_variadic_tuple_type(
     let mut resolved = Vec::with_capacity(elements.len());
     let mut had_error = false;
 
+    let mut rest_reported = false;
     for element in elements {
-        let (is_rest, written) = match element {
-            ParsedTupleElement::Fixed(written) => (false, written),
-            ParsedTupleElement::Rest(written) => (true, written),
+        let (is_rest, written, span) = match element {
+            ParsedTupleElement::Fixed(written) => (false, written, None),
+            ParsedTupleElement::Rest(written, span) => (true, written, span),
         };
         let resolved_element = resolve_parsed_type(written, ctx, resolving, substitution);
         had_error |= resolved_element.had_error;
+        // tsc's `checkTupleType`: a rest element's type must be array-like,
+        // reported for the first offender only (TS2574).
+        if is_rest
+            && !rest_reported
+            && let Some(span) = span
+            && !ctx.suppress_unknown_type_name()
+            && is_array_like_type(&resolved_element.ty) == Some(false)
+        {
+            rest_reported = true;
+            ctx.push_utility_diagnostic_once(
+                surge_ts_diagnostics::Diagnostic::ts2574(ctx.file_name.clone())
+                    .with_span(crate::context::convert_span(span)),
+            );
+        }
         resolved.push((is_rest, resolved_element.ty));
     }
 
@@ -98,6 +114,34 @@ pub(crate) fn resolve_variadic_tuple_type(
     ResolvedType {
         ty: open_tuple_from_operands(&resolved).unwrap_or(Type::Unknown),
         had_error,
+    }
+}
+
+/// tsc's `isArrayLikeType`: an array, or a non-nullable type assignable to
+/// `readonly any[]`. `None` for a type surge could not resolve.
+fn is_array_like_type(ty: &Type) -> Option<bool> {
+    if let Type::Reference(reference) = ty
+        && reference.is_readonly_array()
+    {
+        return Some(true);
+    }
+    match ty.peeled() {
+        Type::Unknown | Type::ErrorType => None,
+        Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) | Type::Any | Type::Never => Some(true),
+        Type::GenuineUnknown | Type::Null | Type::Undefined => Some(false),
+        Type::TypeParameter(parameter) => match surge_ts_types::type_variable::active_constraint(&parameter) {
+            Some(Some(constraint)) => is_array_like_type(&constraint),
+            Some(None) => Some(false),
+            None => None,
+        },
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .try_fold(true, |all, member| Some(all && is_array_like_type(member)?)),
+        other => Some(surge_ts_types::is_assignable_to(
+            &other,
+            &Type::Array(Box::new(Type::Any)),
+        )),
     }
 }
 
@@ -548,7 +592,23 @@ pub(crate) fn resolve_object_type(
         );
         had_error |= resolved.had_error;
         if let Type::Function(function_type) = resolved.ty {
-            resolved_object = resolved_object.with_call_signature(function_type);
+            // A type literal's call signatures are overloads as an interface's
+            // are: the fold answers consumers that want one signature, and the
+            // group is what a call resolves against.
+            let mut overloads = Vec::with_capacity(object_type.call_signature_overloads.len());
+            for overload in &object_type.call_signature_overloads {
+                let resolved = resolve_parsed_type(
+                    ParsedType::Function(std::sync::Arc::new(overload.clone())),
+                    ctx,
+                    resolving,
+                    substitution,
+                );
+                had_error |= resolved.had_error;
+                if let Type::Function(overload) = resolved.ty {
+                    overloads.push(overload);
+                }
+            }
+            resolved_object = resolved_object.with_call_signature(function_type.with_overloads(overloads));
         }
     }
     if let Some(construct_signature) = object_type.construct_signature.as_deref() {

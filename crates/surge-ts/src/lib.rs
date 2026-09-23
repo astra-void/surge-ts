@@ -25,6 +25,7 @@ mod package_declarations;
 mod package_resolution;
 mod path_mapping;
 mod probe;
+mod semver;
 mod specifier;
 mod specifier_scan;
 
@@ -285,6 +286,8 @@ impl Project {
                     .clone()
                     .unwrap_or_else(|| loaded.root_dir.clone()),
             ),
+            emit_module: loaded.compiler_options.emit_module,
+            resolve_json_module: loaded.compiler_options.resolve_json_module,
         };
 
         let type_package_resolution = package_declarations::resolve_type_packages(
@@ -302,7 +305,15 @@ impl Project {
             &loaded.compiler_options.type_roots,
         );
 
-        let mut specifier_scanner = specifier_scan::ModuleSpecifierScanner::new();
+        let mut specifier_scanner =
+            specifier_scan::ModuleSpecifierScanner::new(surge_ts_syntax::JsxRuntimeOptions {
+                automatic: matches!(
+                    loaded.compiler_options.jsx,
+                    Some(surge_ts_config::JsxMode::ReactJsx | surge_ts_config::JsxMode::ReactJsxDev)
+                ),
+                development: loaded.compiler_options.jsx == Some(surge_ts_config::JsxMode::ReactJsxDev),
+                import_source: loaded.compiler_options.jsx_import_source.clone(),
+            });
         let mut import_graph_state = import_graph::ImportGraphState::default();
         let mut javascript_modules = Vec::new();
 
@@ -335,15 +346,49 @@ impl Project {
             }
             // Package resolutions are importer-scoped; the flat map keeps the
             // first (BFS-order) resolution per specifier as the project-wide
-            // fallback for importer-agnostic consumers.
-            for (importer, specifier, resolved_file) in package_modules {
-                resolved_modules
-                    .entry(specifier.clone())
-                    .or_insert_with(|| resolved_file.clone());
-                resolved_modules_by_importer
-                    .entry(importer)
-                    .or_default()
-                    .insert(specifier, resolved_file);
+            // fallback for importer-agnostic consumers. An importer whose own
+            // resolution failed keeps that failure rather than the fallback.
+            // A usage whose syntax picks its mode (`import x = require()`, a
+            // `resolution-mode` attribute) also has a key of its own; the
+            // plain key holds the importer's own mode wherever it was used.
+            for resolution in package_modules {
+                use package_declarations::ImportUsage;
+                if !resolution.resolved_file.is_empty()
+                    && !matches!(resolution.usage, ImportUsage::ModeOverride(_))
+                {
+                    resolved_modules
+                        .entry(resolution.specifier.clone())
+                        .or_insert_with(|| resolution.resolved_file.clone());
+                }
+                let per_importer = resolved_modules_by_importer
+                    .entry(resolution.importer)
+                    .or_default();
+                match resolution.usage {
+                    ImportUsage::Declaration => {
+                        per_importer.insert(resolution.specifier, resolution.resolved_file);
+                    }
+                    ImportUsage::ImportEquals => {
+                        per_importer.insert(
+                            surge_ts_checker::lowlevel::resolution_candidates::resolution_mode_override_key(
+                                &resolution.specifier,
+                                surge_ts_syntax::ResolutionModeOverride::Require,
+                            ),
+                            resolution.resolved_file.clone(),
+                        );
+                        per_importer
+                            .entry(resolution.specifier)
+                            .or_insert(resolution.resolved_file);
+                    }
+                    ImportUsage::ModeOverride(mode) => {
+                        per_importer.insert(
+                            surge_ts_checker::lowlevel::resolution_candidates::resolution_mode_override_key(
+                                &resolution.specifier,
+                                mode,
+                            ),
+                            resolution.resolved_file,
+                        );
+                    }
+                }
             }
 
             let import_graph_start = Instant::now();
@@ -414,6 +459,20 @@ impl Project {
                 .saturating_sub(canonicalize_baseline.miss_io);
         }
 
+        for resolution in package_declarations::resolve_module_augmentation_specifiers(
+            &sources,
+            &loaded.root_dir,
+            &resolver_options,
+            &mut package_resolution_cache,
+            &specifier_scanner,
+        ) {
+            resolved_modules_by_importer
+                .entry(resolution.importer)
+                .or_default()
+                .entry(resolution.specifier)
+                .or_insert(resolution.resolved_file);
+        }
+
         // Path mapping reuses the scanner's cached per-file specifier lists,
         // so it must run against the pre-splice `sources` order the scanner
         // was indexed by (default libs contribute no external specifiers).
@@ -441,6 +500,30 @@ impl Project {
             referenced_lib_names(&inputs)
         };
         let default_lib_loading_start = Instant::now();
+        let lib_replacements = std::cell::RefCell::new((
+            std::collections::HashMap::<String, Option<PathBuf>>::new(),
+            &mut package_resolution_cache,
+        ));
+        let config_dir = loaded
+            .config_path
+            .parent()
+            .unwrap_or(&loaded.root_dir)
+            .to_path_buf();
+        let lib_replacement = |normalized_name: &str| -> Option<PathBuf> {
+            let mut state = lib_replacements.borrow_mut();
+            let (resolved, cache) = &mut *state;
+            resolved
+                .entry(normalized_name.to_string())
+                .or_insert_with(|| {
+                    package_declarations::resolve_lib_replacement(
+                        normalized_name,
+                        &config_dir,
+                        &resolver_options,
+                        cache,
+                    )
+                })
+                .clone()
+        };
         let default_lib_load = load_default_lib_inputs(DefaultLibRequest {
             no_lib: loaded.compiler_options.no_lib,
             lib_entries: loaded.compiler_options.lib.as_slice(),
@@ -448,7 +531,22 @@ impl Project {
             root_dir: &loaded.root_dir,
             target_basename: target_lib_basename(loaded.compiler_options.target),
             source: options.lib_source.clone(),
+            lib_replacement: loaded
+                .compiler_options
+                .lib_replacement
+                .then_some(&lib_replacement as &dyn Fn(&str) -> Option<PathBuf>),
         });
+        // A replacement is a `node_modules` declaration file, whose globals
+        // the checker publishes only for a package on its `types` list.
+        let lib_replacement_packages = lib_replacements
+            .into_inner()
+            .0
+            .into_iter()
+            .filter(|(_, replacement)| replacement.is_some())
+            .filter_map(|(normalized_name, _)| {
+                package_declarations::lib_replacement_package_name(&normalized_name)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         for unknown in &default_lib_load.unknown_libs {
             warnings.push(format!(
                 "unknown lib '{unknown}' in compilerOptions.lib; no matching lib*.d.ts file"
@@ -523,6 +621,11 @@ impl Project {
                 checker_types.push(name.clone());
             }
         }
+        for package in lib_replacement_packages {
+            if !checker_types.contains(&package) {
+                checker_types.push(package);
+            }
+        }
         if loaded
             .compiler_options
             .types
@@ -537,6 +640,14 @@ impl Project {
                 CheckerOptions::ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL.to_string(),
                 String::new(),
             );
+        }
+        if loaded
+            .compiler_options
+            .lib
+            .iter()
+            .any(|lib| lib.eq_ignore_ascii_case("dom"))
+        {
+            resolved_modules.insert(CheckerOptions::LIB_DOM_SENTINEL.to_string(), String::new());
         }
 
         surge_ts_checker::set_fast_process_exit(options.fast_process_exit);
@@ -556,6 +667,8 @@ impl Project {
             no_implicit_this: loaded.compiler_options.no_implicit_this,
             module_emit: checker_module_emit(loaded.compiler_options.emit_module),
             use_define_for_class_fields: loaded.compiler_options.use_define_for_class_fields,
+            target_es2022: loaded.compiler_options.target >= ScriptTarget::ES2022,
+            no_emit: loaded.compiler_options.no_emit,
             node_module_resolution,
             esm_module_files,
             strict_null_checks: loaded.compiler_options.strict_null_checks,
@@ -578,6 +691,8 @@ impl Project {
             no_unused_locals: loaded.compiler_options.no_unused_locals,
             no_unused_parameters: loaded.compiler_options.no_unused_parameters,
             allow_unreachable_code: loaded.compiler_options.allow_unreachable_code,
+            report_unreachable_code: loaded.compiler_options.report_unreachable_code,
+            allow_unused_labels: loaded.compiler_options.allow_unused_labels,
             no_lib: loaded.compiler_options.no_lib,
             skip_lib_check: loaded.compiler_options.skip_lib_check,
             stub_external_modules: options.stub_external_modules,
@@ -589,6 +704,7 @@ impl Project {
                 Some(surge_ts_config::JsxMode::ReactJsx | surge_ts_config::JsxMode::ReactJsxDev)
             ),
             jsx_classic_react: loaded.compiler_options.jsx == Some(surge_ts_config::JsxMode::React),
+            jsx_emit_none: loaded.compiler_options.jsx.is_none(),
             allow_umd_global_access: loaded.compiler_options.allow_umd_global_access,
             resolve_json_module: loaded.compiler_options.resolve_json_module,
             // tsc's `GetAllowJS`: `checkJs` implies `allowJs`.
@@ -599,6 +715,7 @@ impl Project {
                 fragment_factory: loaded.compiler_options.jsx_fragment_factory.clone(),
                 react_namespace: loaded.compiler_options.react_namespace.clone(),
                 import_source: loaded.compiler_options.jsx_import_source.clone(),
+                development: loaded.compiler_options.jsx == Some(surge_ts_config::JsxMode::ReactJsxDev),
             },
             diagnostic_profile: options.diagnostic_profile,
         };

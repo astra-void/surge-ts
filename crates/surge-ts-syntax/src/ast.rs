@@ -34,10 +34,10 @@ pub struct ParsedSource {
     /// Where each `let` tsc may type by control flow is assigned, sorted by
     /// the binding's name position (see [`LetAssignmentSummary`]).
     pub let_assignments: Vec<LetAssignmentSummary>,
-    /// Byte ranges of lines suppressed by an `@ts-expect-error`/`@ts-ignore`
-    /// directive on the preceding line. Diagnostics starting inside one are
-    /// dropped, matching tsc.
-    pub suppressed_ranges: Vec<TextSpan>,
+    /// The file's `@ts-expect-error`/`@ts-ignore` directives in source order.
+    /// Diagnostics starting on a directive's suppressed line are dropped, and
+    /// an `@ts-expect-error` that dropped nothing is TS2578, matching tsc.
+    pub comment_directives: Vec<CommentDirective>,
     /// Module specifiers written as `import("...")` — type-position import
     /// types and dynamic import expressions — deduplicated in source order.
     /// They belong to the module graph exactly like declaration specifiers do,
@@ -71,11 +71,15 @@ pub struct ParsedSource {
 pub struct JsxFactoryUses {
     pub has_elements: bool,
     pub has_fragments: bool,
+    /// The file's first element, or first fragment's opening tag, where tsc
+    /// reports a JSX runtime import that resolves to nothing.
+    pub first_tag: Option<TextSpan>,
     /// The first identifier of the `@jsx` factory.
     pub factory_pragma: Option<String>,
     /// The first identifier of the `@jsxFrag` factory.
     pub fragment_pragma: Option<String>,
-    pub import_source_pragma: bool,
+    /// The `@jsxImportSource` package.
+    pub import_source_pragma: Option<String>,
     pub runtime_pragma: Option<String>,
 }
 
@@ -157,6 +161,20 @@ pub enum ParsedGrammarDiagnosticKind {
     /// A type-level signature's parameter with neither annotation nor
     /// initializer — TS7006, under `noImplicitAny`.
     ImplicitAnySignatureParameter,
+    /// A call signature, method signature or function type's parameter with
+    /// neither annotation nor initializer, where tsc asks whether the name is
+    /// a type keyword or a type in scope (`(string) => void`) — TS7051 under
+    /// `noImplicitAny`, otherwise the plain implicit `any`. `name` holds the
+    /// written name, the `argN` tsc suggests, and `[]` for a rest parameter,
+    /// NUL-separated.
+    NamedSignatureParameterWithoutType,
+    /// A module-level type literal or interface member whose computed name is
+    /// a bare identifier that no top-level value in the file declares, which
+    /// tsc resolves as a value (`{ [Keys]: string }`). The checker answers it
+    /// once the file's types are installed: TS2693, or TS2690 when the member
+    /// is a type literal's only one. `name` holds the identifier and `1` when
+    /// the member is a type literal's only property, NUL-separated.
+    ComputedTypeMemberName,
     /// Two members of one class, interface, or object literal declaring the
     /// same name where neither is an overload of the other — TS2300.
     DuplicateMember,
@@ -242,10 +260,6 @@ pub enum ParsedGrammarDiagnosticKind {
     TsUnderLegacyDecorators(u32),
     /// A [`Self::Ts`] error that holds only without `experimentalDecorators`.
     TsUnderEsDecorators(u32),
-    /// Not an error: a name in a parameter initializer's deferred function
-    /// that resolves to a later parameter, which the checker's scope does not
-    /// hold while the initializer is checked.
-    LaterParameterReference,
 }
 
 /// A leading `/// <reference types="..." />` directive. Only the `types` form is
@@ -256,6 +270,16 @@ pub struct ReferenceTypeDirective {
     pub value: String,
     /// Byte span of the specifier inside its quotes, used for TS2688 locations.
     pub value_span: TextSpan,
+    /// A valid `resolution-mode` attribute.
+    pub resolution_mode: Option<ResolutionModeOverride>,
+}
+
+/// A `resolution-mode` value: the package face a reference resolves against
+/// in place of its file's own mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResolutionModeOverride {
+    Import,
+    Require,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -436,8 +460,10 @@ impl Eq for ParsedInferredMember {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedTupleElement {
     Fixed(ParsedType),
-    /// `...T` — spreads every element of another tuple or array type.
-    Rest(ParsedType),
+    /// `...T` — spreads every element of another tuple or array type. The
+    /// span is the written element, where a non-array operand is reported
+    /// (TS2574).
+    Rest(ParsedType, Option<TextSpan>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -446,6 +472,9 @@ pub struct ParsedPredicateType {
     pub parameter_name: String,
     /// `None` for a bare `asserts x` assertion with no type.
     pub ty: Option<ParsedType>,
+    /// Where `ty` is written, for a predicate type its parameter does not
+    /// admit (TS2677).
+    pub type_span: Option<TextSpan>,
     pub asserts: bool,
 }
 
@@ -593,6 +622,8 @@ pub struct ParsedIndexedAccessType {
     pub object_type: Box<ParsedType>,
     pub index_type: Box<ParsedType>,
     pub span: Option<TextSpan>,
+    /// Where tsc reports a key the object cannot be indexed by.
+    pub index_span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -869,8 +900,13 @@ pub struct ParsedClassDeclaration {
     pub type_parameters: Vec<ParsedTypeParameter>,
     /// Base classes named in an `extends` clause. A class has at most one, but
     /// this is modelled as a list so the instance side can reuse the interface
-    /// heritage-merge path. A non-identifier base (e.g. a mixin call) is dropped.
+    /// heritage-merge path. A base that is not a (dotted) name, e.g. a mixin
+    /// call, is named [`EXPRESSION_HERITAGE_BASE`].
     pub extends: Vec<ParsedNamedType>,
+    /// The `extends` expression behind an [`EXPRESSION_HERITAGE_BASE`] base,
+    /// whose type is the base constructor type (tsc's
+    /// `getBaseConstructorTypeOfClass`).
+    pub heritage_expression: Option<Box<ParsedExpression>>,
     /// Interfaces named in an `implements` clause. They contribute nothing to
     /// the instance type — the class has to declare the members itself, which
     /// is what makes an unimplemented one reportable.
@@ -1054,6 +1090,10 @@ pub struct ParsedClassMethod {
 pub struct ParsedClassConstructor {
     /// See [`ParsedFunctionDeclaration::body_reads`].
     pub body_reads: Vec<String>,
+    /// `private constructor()` / `protected constructor()`: `new` and
+    /// `extends` are allowed only within the class (or, for `protected`, a
+    /// class deriving from it).
+    pub accessibility: Option<ParsedMemberAccessibility>,
     pub parameters: Vec<ParsedFunctionParameter>,
     pub body: Vec<ParsedFunctionBodyStatement>,
     pub span: Option<TextSpan>,
@@ -1065,6 +1105,27 @@ pub struct ParsedImportDeclaration {
     pub module_specifier: String,
     pub module_specifier_span: Option<TextSpan>,
     pub span: Option<TextSpan>,
+    pub resolution_mode: Option<ParsedResolutionModeAttribute>,
+}
+
+/// A valid `resolution-mode` import attribute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParsedResolutionModeAttribute {
+    pub mode: ResolutionModeOverride,
+    /// The declaration is `import type`/`export type` as a whole, the only
+    /// form whose resolution the attribute selects (tsc's
+    /// `IsExclusivelyTypeOnlyImportOrExport`).
+    pub selects_resolution: bool,
+}
+
+impl ParsedResolutionModeAttribute {
+    /// The mode the declaration's specifier resolves in, when the attribute
+    /// decides it.
+    pub fn resolution_override(attribute: Option<Self>) -> Option<ResolutionModeOverride> {
+        attribute
+            .filter(|attribute| attribute.selects_resolution)
+            .map(|attribute| attribute.mode)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1100,6 +1161,8 @@ pub enum ParsedImportKind {
     Equals {
         local_name: String,
         name_span: Option<TextSpan>,
+        /// `import type local = require("specifier")`.
+        is_type_only: bool,
     },
     /// `import local = N.M` — an alias of an entity name. The parser already
     /// rewrote every reference to it; this records the alias for what names it
@@ -1133,6 +1196,7 @@ pub enum ParsedExportDeclaration {
         module_specifier: Option<String>,
         module_specifier_span: Option<TextSpan>,
         span: Option<TextSpan>,
+        resolution_mode: Option<ParsedResolutionModeAttribute>,
     },
     Default {
         declaration: ParsedDefaultExportDeclaration,
@@ -1146,6 +1210,7 @@ pub enum ParsedExportDeclaration {
         /// its values too would invent names the module does not have, masking
         /// the TS2304 a consumer should get.
         is_type_only: bool,
+        resolution_mode: Option<ParsedResolutionModeAttribute>,
     },
     Namespace {
         exported_name: String,
@@ -1165,19 +1230,22 @@ pub enum ParsedExportDeclaration {
         span: Option<TextSpan>,
     },
     /// `export = identifier` — declaration-lite CommonJS export assignment.
-    /// Only a bare identifier target is represented here; any other expression
-    /// target remains `Unsupported`.
+    /// Only a bare identifier target is represented here; any other target is
+    /// an `EqualsExpression`.
     Equals {
         exported_name: String,
         exported_name_span: Option<TextSpan>,
         span: Option<TextSpan>,
     },
-    /// `export = <expression>` with any target but a bare identifier. The
-    /// module's export shape stays unsupported; the expression is kept only to
-    /// be checked.
+    /// `export = <expression>` with any target but a bare identifier.
     EqualsExpression {
         expression: Box<ParsedExpression>,
         expression_span: Option<TextSpan>,
+        /// The dotted name when the target is an entity name (`export = A.B`,
+        /// tsc's `isEntityNameExpression`): the export is then an alias of every
+        /// meaning the entity has. `None` for any other expression, whose value
+        /// is all the module exports.
+        entity_name: Option<String>,
         span: Option<TextSpan>,
     },
     Unsupported {
@@ -1279,6 +1347,10 @@ pub enum ParsedExpression {
     ArrayLiteral {
         elements: Vec<ParsedArrayElement>,
         span: Option<TextSpan>,
+        /// Contextually typed by a tuple-like type the parser can see — the
+        /// type a destructuring pattern implies for its initializer — so tsc's
+        /// `checkArrayLiteral` types the literal as a tuple (`inTupleContext`).
+        tuple_context: bool,
     },
     /// A template literal (`` `a${x}b` ``).
     TemplateLiteral {
@@ -1470,7 +1542,6 @@ pub enum ParsedExpression {
         /// The tag name exactly as written, e.g. `div`, `Button`, `UI.Button`.
         /// Used for diagnostics/debugging only.
         tag_name: String,
-        tag_name_span: Option<TextSpan>,
         /// Set when the tag refers to a value that must resolve in scope: the head
         /// identifier of a component (`Button`) or member tag (`UI.Button`).
         /// `None` for intrinsic lowercase elements (`div`), which are not value
@@ -1479,7 +1550,8 @@ pub enum ParsedExpression {
         component_span: Option<TextSpan>,
         attributes: Vec<ParsedJsxAttribute>,
         children: Vec<ParsedJsxChild>,
-        span: Option<TextSpan>,
+        /// Boxed so the rarely-read tag details do not widen every expression.
+        tag: Box<ParsedJsxTag>,
     },
     /// A JSX fragment, `<>...</>`.
     JsxFragment {
@@ -1508,6 +1580,9 @@ pub enum ParsedExpression {
     ObjectRest {
         source: Box<ParsedExpression>,
         omitted: Vec<String>,
+        /// The rest binding's name, where a source that is not an object type
+        /// is reported (TS2700).
+        name_span: Option<TextSpan>,
     },
     /// The strings array a tagged template passes as its tag's first argument
     /// (`getEffectiveCallArguments`): a value of the global
@@ -1516,6 +1591,36 @@ pub enum ParsedExpression {
         span: Option<TextSpan>,
     },
     Unknown,
+}
+
+/// The parts of a JSX element tsc resolves besides its attributes and
+/// children.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedJsxTag {
+    pub name_span: Option<TextSpan>,
+    /// The whole element.
+    pub span: Option<TextSpan>,
+    /// The tag read as a value (tsc's `checkExpression(tagName)`): `Button`,
+    /// `UI.Button`, `this.tag`, `this`. `None` for an intrinsic tag
+    /// (`isJsxIntrinsicTagName`: a lowercase or hyphenated identifier, or a
+    /// namespaced name).
+    pub expression: Option<ParsedExpression>,
+    pub type_arguments: Vec<ParsedType>,
+    pub type_arguments_span: Option<TextSpan>,
+    /// Each child's own node, parallel to the element's children: a `{…}`
+    /// child is its container, where tsc reports a child that does not fit
+    /// the children prop.
+    pub child_spans: Vec<Option<TextSpan>>,
+    /// tsc resolves the closing tag again (`checkJsxElementDeferred`), so an
+    /// unknown tag is reported at both.
+    pub closing: Option<ParsedJsxClosingElement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedJsxClosingElement {
+    pub span: Option<TextSpan>,
+    /// See [`ParsedJsxTag::expression`].
+    pub expression: Option<ParsedExpression>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1585,12 +1690,15 @@ pub struct ParsedObjectProperty {
     /// accessor's *value* type — the getter's return type, or the setter's
     /// parameter type — not the accessor function itself.
     pub is_accessor: bool,
+    /// True for the `get` half of an accessor. A getter without a setter is a
+    /// read-only property (tsc's `isReadonlySymbol`).
+    pub is_getter: bool,
     /// The key expression of a computed name that is not itself a literal
     /// (`{ [key]: v }`). `name` holds its written path; the checker names the
     /// property by the key's literal type once it is known.
     pub computed_key: Option<Box<ParsedExpression>>,
-    /// On a getter, the `set` accessor of the same name: its body is checked,
-    /// but the getter decides the property's type.
+    /// On a getter, the `set` accessor of the same name. The property is typed
+    /// from the pair (`getTypeOfAccessors`) and the setter's body is checked.
     pub paired_setter: Option<Box<ParsedArrowFunction>>,
     /// The value of a computed member whose key no member name can model
     /// (`{ [f()]: v }`). Such a member is lowered to an empty spread that adds
@@ -1652,6 +1760,23 @@ pub enum ParsedUnaryOperator {
 pub struct TextSpan {
     pub start: usize,
     pub end: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommentDirectiveKind {
+    ExpectError,
+    Ignore,
+}
+
+/// tsc's `CommentDirective`: `span` is where tsc reports the directive (the
+/// whole `//` comment, or the last line of a block comment), `suppressed_line`
+/// the line whose diagnostics it drops — the next line that is neither blank
+/// nor a `//` comment, or `None` when no such line follows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentDirective {
+    pub kind: CommentDirectiveKind,
+    pub span: TextSpan,
+    pub suppressed_line: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1948,6 +2073,9 @@ pub struct ParsedArrowFunction {
     /// object-literal method both lower to this shape, and neither inherits
     /// `this` the way a real arrow does.
     pub this_binding: ParsedThisBinding,
+    /// A named `function` expression's own name, which is in scope in its own
+    /// signature and body only. A method's name is a property, never a binding.
+    pub name: Option<String>,
     /// See [`ParsedFunctionDeclaration::body_reads`].
     pub body_reads: Vec<String>,
     pub type_parameters: Vec<ParsedTypeParameter>,
@@ -2058,7 +2186,7 @@ impl ParsedType {
             ParsedType::VariadicTuple(elements) => {
                 for element in elements.iter() {
                     match element {
-                        ParsedTupleElement::Fixed(ty) | ParsedTupleElement::Rest(ty) => {
+                        ParsedTupleElement::Fixed(ty) | ParsedTupleElement::Rest(ty, _) => {
                             ty.for_each_named_type(visit);
                         }
                     }

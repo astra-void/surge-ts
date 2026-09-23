@@ -23,12 +23,16 @@ use oxc_syntax::operator::UnaryOperator;
 use super::spans::text_span_from_oxc_span;
 use crate::{ParenthesizedExpressionSpan, ParsedGrammarDiagnostic, ParsedGrammarDiagnosticKind as Kind};
 
+mod super_call;
+
 pub(crate) fn collect_grammar_diagnostics(
     program: &Program<'_>,
 ) -> (Vec<ParsedGrammarDiagnostic>, Vec<ParenthesizedExpressionSpan>) {
     let mut collector = GrammarCollector::default();
     collector.visit_program(program);
     super::grammar_context::collect_context_grammar_diagnostics(program, &mut collector.diagnostics);
+    super::reachability::collect_unreachable_code(program, &mut collector.diagnostics);
+    super::grammar_recovered::collect_recovered_grammar_diagnostics(program, &mut collector.diagnostics);
     let mut parenthesized = collector.parenthesized_expressions;
     parenthesized.sort_unstable_by_key(|span| (span.inner.start, span.inner.end));
     (collector.diagnostics, parenthesized)
@@ -57,6 +61,49 @@ struct GrammarCollector {
     /// Starts of the `(0, x.f)` sequences called indirectly; see
     /// [`GrammarCollector::note_indirect_call`].
     indirect_call_sequences: std::collections::HashSet<u32>,
+    /// Block and namespace nesting; a computed type member name is answered
+    /// only outside both, where the file's top-level scope is the one it reads.
+    nested_scope_depth: usize,
+    /// Every name the file binds, with where; a computed type member name any
+    /// of them could answer — a value, a type parameter — is left alone.
+    binding_names: Vec<(String, Span)>,
+    /// The names of type aliases and interfaces, the bindings that do not.
+    type_declaration_name_spans: std::collections::HashSet<(u32, u32)>,
+}
+
+/// One `get`/`set` accessor of a class, interface, type literal or object
+/// literal, as [`GrammarCollector::check_untyped_setters`] reads it.
+struct AccessorRecord {
+    key: String,
+    display: Option<String>,
+    is_static: bool,
+    is_getter: bool,
+    /// A getter's return annotation, or a setter's parameter annotation.
+    annotated: bool,
+    has_body: bool,
+    private: bool,
+    span: Span,
+}
+
+fn accessor_display_name(key: &PropertyKey<'_>, computed: bool) -> Option<String> {
+    if computed {
+        return None;
+    }
+    match key {
+        PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
+        PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
+        PropertyKey::StringLiteral(literal) => Some(format!("\"{}\"", literal.value)),
+        _ => None,
+    }
+}
+
+/// tsc's `getSetAccessorValueParameter` takes the first parameter whatever its
+/// kind, so `set x(...v: T[])` is annotated through its rest parameter.
+fn setter_parameter_annotated(parameters: &FormalParameters<'_>) -> bool {
+    match parameters.items.first() {
+        Some(parameter) => parameter.type_annotation.is_some(),
+        None => parameters.rest.as_ref().is_some_and(|rest| rest.type_annotation.is_some()),
+    }
 }
 
 /// What tsc's enum constant evaluation can say about an initializer without
@@ -139,6 +186,76 @@ fn enum_constant(
     }
 }
 
+/// The number a constant initializer evaluates to, where tsc's `evaluate`
+/// can be followed without name resolution: literals, arithmetic, and the
+/// numeric members declared before it in the same enum (bare or as
+/// `Enum.Member`). `None` for anything else, which is never reported.
+fn enum_numeric_value(
+    expression: &Expression<'_>,
+    members: &std::collections::HashMap<String, f64>,
+    enum_name: &str,
+) -> Option<f64> {
+    use oxc_syntax::operator::BinaryOperator;
+    match expression {
+        Expression::NumericLiteral(literal) => Some(literal.value),
+        Expression::ParenthesizedExpression(parenthesized) => {
+            enum_numeric_value(&parenthesized.expression, members, enum_name)
+        }
+        Expression::UnaryExpression(unary) => {
+            let value = enum_numeric_value(&unary.argument, members, enum_name)?;
+            match unary.operator {
+                UnaryOperator::UnaryPlus => Some(value),
+                UnaryOperator::UnaryNegation => Some(-value),
+                UnaryOperator::BitwiseNot => Some(f64::from(!to_int32(value))),
+                _ => None,
+            }
+        }
+        Expression::BinaryExpression(binary) => {
+            let left = enum_numeric_value(&binary.left, members, enum_name)?;
+            let right = enum_numeric_value(&binary.right, members, enum_name)?;
+            Some(match binary.operator {
+                BinaryOperator::Addition => left + right,
+                BinaryOperator::Subtraction => left - right,
+                BinaryOperator::Multiplication => left * right,
+                BinaryOperator::Division => left / right,
+                BinaryOperator::Remainder => left % right,
+                BinaryOperator::Exponential => left.powf(right),
+                BinaryOperator::ShiftLeft => f64::from(to_int32(left).wrapping_shl(to_uint32(right) & 31)),
+                BinaryOperator::ShiftRight => f64::from(to_int32(left) >> (to_uint32(right) & 31)),
+                BinaryOperator::ShiftRightZeroFill => {
+                    f64::from(to_uint32(left) >> (to_uint32(right) & 31))
+                }
+                BinaryOperator::BitwiseOR => f64::from(to_int32(left) | to_int32(right)),
+                BinaryOperator::BitwiseXOR => f64::from(to_int32(left) ^ to_int32(right)),
+                BinaryOperator::BitwiseAnd => f64::from(to_int32(left) & to_int32(right)),
+                _ => return None,
+            })
+        }
+        Expression::Identifier(identifier) => members.get(identifier.name.as_str()).copied(),
+        Expression::StaticMemberExpression(member) => match &member.object {
+            Expression::Identifier(object) if object.name == enum_name => {
+                members.get(member.property.name.as_str()).copied()
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// ECMAScript `ToInt32`/`ToUint32`.
+fn to_uint32(value: f64) -> u32 {
+    if !value.is_finite() {
+        return 0;
+    }
+    let truncated = value.trunc();
+    let modulo = truncated.rem_euclid(4_294_967_296.0);
+    modulo as u32
+}
+
+fn to_int32(value: f64) -> i32 {
+    to_uint32(value) as i32
+}
+
 impl GrammarCollector {
     /// tsc's `isIndirectCall`: `(0, x.f)(…)`, a tagged `(0, x.f)` or
     /// `(0, eval)(…)` discards the `0` to call without a `this`, so the
@@ -179,8 +296,11 @@ impl GrammarCollector {
             .contains(&(declaration.span.start, declaration.span.end))
             .then_some(&top_level_constants);
         let mut members = std::collections::HashMap::new();
+        let mut numeric_values: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
         let mut previous = EnumConstant::Number;
+        let mut next_auto_value = Some(0.0);
         for member in &declaration.body.members {
+            let mut numeric_value = None;
             let value = match &member.initializer {
                 Some(initializer) => {
                     let value = enum_constant(initializer, &members, top_level);
@@ -191,6 +311,17 @@ impl GrammarCollector {
                             self.push(Kind::AmbientEnumInitializerNotConstant, initializer.span(), None);
                         }
                     }
+                    if matches!(value, EnumConstant::Number | EnumConstant::Unknown) {
+                        numeric_value =
+                            enum_numeric_value(initializer, &numeric_values, declaration.id.name.as_str());
+                        if declaration.r#const
+                            && let Some(number) = numeric_value
+                            && !number.is_finite()
+                        {
+                            let code = if number.is_nan() { 2478 } else { 2477 };
+                            self.push(Kind::Ts(code), initializer.span(), None);
+                        }
+                    }
                     previous = value;
                     value
                 }
@@ -198,6 +329,7 @@ impl GrammarCollector {
                     if !ambient && matches!(previous, EnumConstant::String | EnumConstant::NonConstant) {
                         self.push(Kind::EnumMemberInitializerRequired, member.id.span(), None);
                     }
+                    numeric_value = next_auto_value;
                     if previous == EnumConstant::Unknown {
                         EnumConstant::Unknown
                     } else {
@@ -205,8 +337,12 @@ impl GrammarCollector {
                     }
                 }
             };
+            next_auto_value = numeric_value.map(|number| number + 1.0);
             if let Some(name) = property_key_name_of_enum_member(&member.id) {
-                members.insert(name, value);
+                members.insert(name.clone(), value);
+                if let Some(number) = numeric_value {
+                    numeric_values.insert(name, number);
+                }
             }
         }
         self.top_level_constants = top_level_constants;
@@ -339,40 +475,52 @@ impl GrammarCollector {
                 _ => None,
             })
             .collect();
-        let class_named = |name: &str| {
-            classes
-                .iter()
-                .copied()
-                .find(|class| class.id.as_ref().is_some_and(|id| id.name == name))
-        };
+        // First declaration wins for both lookups, as the linear `find`s did.
+        let mut class_slots: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for (slot, class) in classes.iter().enumerate() {
+            if let Some(id) = class.id.as_ref() {
+                class_slots.entry(id.name.as_str()).or_insert(slot);
+            }
+        }
         let base_of = |class: &Class<'_>| match &class.super_class {
             Some(Expression::Identifier(base)) if class.super_type_arguments.is_none() => {
-                class_named(base.name.as_str())
+                class_slots.get(base.name.as_str()).copied()
             }
             _ => None,
         };
+        let member_lists: Vec<Vec<(String, Member)>> =
+            classes.iter().map(|class| instance_members(class)).collect();
+        let member_maps: Vec<std::collections::HashMap<&str, &Member>> = member_lists
+            .iter()
+            .map(|members| {
+                let mut map = std::collections::HashMap::new();
+                for (name, member) in members {
+                    map.entry(name.as_str()).or_insert(member);
+                }
+                map
+            })
+            .collect();
 
-        for class in &classes {
+        for (slot, class) in classes.iter().enumerate() {
             let (Some(derived_name), Some(base)) = (class.id.as_ref(), base_of(class)) else {
                 continue;
             };
-            let Some(base_name) = base.id.as_ref() else {
+            let Some(base_name) = classes[base].id.as_ref() else {
                 continue;
             };
-            for (name, derived) in instance_members(class) {
+            for (name, derived) in &member_lists[slot] {
                 let mut ancestor = Some(base);
                 let mut found = None;
                 let mut depth = 0;
                 while let Some(current) = ancestor
                     && depth < 32
                 {
-                    if let Some((_, member)) =
-                        instance_members(current).into_iter().find(|(other, _)| *other == name)
-                    {
+                    if let Some(&member) = member_maps[current].get(name.as_str()) {
                         found = Some(member);
                         break;
                     }
-                    ancestor = base_of(current);
+                    ancestor = base_of(classes[current]);
                     depth += 1;
                 }
                 let Some(inherited) = found else {
@@ -988,6 +1136,53 @@ impl GrammarCollector {
         }
     }
 
+    /// tsc's `getTypeOfAccessors` when neither accessor of a name is typed: no
+    /// getter return annotation, no getter body to infer from and no setter
+    /// parameter annotation leave the property an implicit `any`, reported on
+    /// the setter (TS7032) unless it is private in an ambient context. Only
+    /// names whose `symbolToString` surge can spell are reported.
+    fn check_untyped_setters(&mut self, accessors: &[AccessorRecord], ambient: bool) {
+        for setter in accessors.iter().filter(|accessor| !accessor.is_getter) {
+            let Some(display) = setter.display.as_deref() else {
+                continue;
+            };
+            if setter.annotated || (setter.private && ambient) {
+                continue;
+            }
+            let getter = accessors.iter().find(|accessor| {
+                accessor.is_getter && accessor.key == setter.key && accessor.is_static == setter.is_static
+            });
+            if getter.is_some_and(|getter| getter.annotated || getter.has_body) {
+                continue;
+            }
+            // A private setter in a declaration file is ambient too, which
+            // only the checker knows.
+            let payload = if setter.private { format!("{display}\0private") } else { display.to_string() };
+            self.push(Kind::Ts(7032), setter.span, Some(&payload));
+        }
+    }
+
+    /// A member name `[Name]` in a module-level type literal or interface,
+    /// which tsc resolves as a value; see [`Kind::ComputedTypeMemberName`].
+    fn check_computed_type_member_names(&mut self, members: &[TSSignature<'_>], type_literal: bool) {
+        if !self.function_async.is_empty() || self.nested_scope_depth > 0 {
+            return;
+        }
+        for member in members {
+            let (key, mapped) = match member {
+                TSSignature::TSPropertySignature(property) if property.computed => {
+                    (&property.key, type_literal && members.len() == 1)
+                }
+                TSSignature::TSMethodSignature(method) if method.computed => (&method.key, false),
+                _ => continue,
+            };
+            if let PropertyKey::Identifier(identifier) = key {
+                let payload = format!("{}\0{}", identifier.name, u8::from(mapped));
+                self.push(Kind::ComputedTypeMemberName, identifier.span, Some(&payload));
+            }
+        }
+    }
+
     /// tsc's "A 'get' accessor must return a value" (TS2378): a body with no
     /// `return` at all whose end is reachable. Reachability is approximated by
     /// the body not ending in `throw`.
@@ -1135,13 +1330,19 @@ impl GrammarCollector {
     fn check_class_members(&mut self, class: &Class<'_>) {
         let ambient = self.is_ambient() || class.declare;
         let mut groups: Vec<MemberGroup> = Vec::new();
-        let mut constructors: Vec<(Span, bool)> = Vec::new();
+        let mut group_slots: std::collections::HashMap<(String, bool), usize> =
+            std::collections::HashMap::new();
+        let mut constructors: Vec<(Span, bool, bool)> = Vec::new();
 
         for element in &class.body.body {
             let (key, is_static, member) = match element {
                 ClassElement::MethodDefinition(method) => {
-                    if method.r#type == MethodDefinitionType::TSAbstractMethodDefinition
+                    let is_abstract =
+                        method.r#type == MethodDefinitionType::TSAbstractMethodDefinition;
+                    // `abstract constructor` is TS1242, where tsc stops.
+                    if is_abstract
                         && !class.r#abstract
+                        && method.kind != MethodDefinitionKind::Constructor
                     {
                         self.push(Kind::AbstractMethodOutsideAbstractClass, method.span, None);
                     }
@@ -1149,7 +1350,11 @@ impl GrammarCollector {
                         if method.value.body.is_none() {
                             self.check_signature_parameters(&method.value.params);
                         }
-                        constructors.push((method.key.span(), method.value.body.is_some()));
+                        constructors.push((
+                            method.key.span(),
+                            method.value.body.is_some(),
+                            is_abstract,
+                        ));
                         continue;
                     }
                     let member = match method.kind {
@@ -1199,16 +1404,15 @@ impl GrammarCollector {
             let Some(name) = property_key_name(key) else {
                 continue;
             };
-            match groups
-                .iter_mut()
-                .find(|group| group.name == name && group.is_static == is_static)
-            {
-                Some(group) => group.members.push((key.span(), member)),
-                None => groups.push(MemberGroup {
-                    name,
-                    is_static,
-                    members: vec![(key.span(), member)],
-                }),
+            match group_slots.get(&(name.clone(), is_static)) {
+                Some(&slot) => groups[slot].members.push((key.span(), member)),
+                None => {
+                    group_slots.insert((name.clone(), is_static), groups.len());
+                    groups.push(MemberGroup {
+                        name,
+                        members: vec![(key.span(), member)],
+                    });
+                }
             }
         }
 
@@ -1219,6 +1423,35 @@ impl GrammarCollector {
             self.check_method_overloads(class);
         }
         self.check_accessor_pairs(class);
+        let accessors: Vec<AccessorRecord> = class
+            .body
+            .body
+            .iter()
+            .filter_map(|element| match element {
+                ClassElement::MethodDefinition(method)
+                    if matches!(method.kind, MethodDefinitionKind::Get | MethodDefinitionKind::Set) =>
+                {
+                    let is_getter = method.kind == MethodDefinitionKind::Get;
+                    Some(AccessorRecord {
+                        key: property_key_name(&method.key)?,
+                        display: accessor_display_name(&method.key, method.computed),
+                        is_static: method.r#static,
+                        is_getter,
+                        annotated: if is_getter {
+                            method.value.return_type.is_some()
+                        } else {
+                            setter_parameter_annotated(&method.value.params)
+                        },
+                        has_body: method.value.body.is_some(),
+                        private: method.accessibility == Some(oxc_ast::ast::TSAccessibility::Private)
+                            || matches!(method.key, PropertyKey::PrivateIdentifier(_)),
+                        span: method.key.span(),
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        self.check_untyped_setters(&accessors, ambient);
 
         // A property with no annotation and no initializer has an implicit
         // `any` type *unless* the constructor assigns it: tsc infers the
@@ -1255,8 +1488,8 @@ impl GrammarCollector {
         if constructors.len() > 1 {
             let implementations: Vec<Span> = constructors
                 .iter()
-                .filter(|(_, has_body)| *has_body)
-                .map(|(span, _)| *span)
+                .filter(|(_, has_body, _)| *has_body)
+                .map(|(span, _, _)| *span)
                 .collect();
             if implementations.len() > 1 {
                 for span in implementations {
@@ -1264,14 +1497,21 @@ impl GrammarCollector {
                 }
             }
         }
+        // tsc exempts an `abstract` last overload from needing an implementation.
         if !ambient
             && !constructors.is_empty()
-            && !constructors.iter().any(|(_, has_body)| *has_body)
-            && let Some((span, _)) = constructors.last() {
+            && !constructors.iter().any(|(_, has_body, _)| *has_body)
+            && let Some((span, _, false)) = constructors.last() {
                 self.push(Kind::ConstructorImplementationMissing, *span, None);
             }
 
-        if !ambient && class.super_class.is_some() {
+        // A class extending `null` has no base constructor to call (TS17005
+        // when it does), so tsc does not require the call.
+        let extends_null = matches!(
+            class.super_class.as_ref().map(Expression::without_parentheses),
+            Some(Expression::NullLiteral(_))
+        );
+        if !ambient && class.super_class.is_some() && !extends_null {
             for element in &class.body.body {
                 let ClassElement::MethodDefinition(method) = element else {
                     continue;
@@ -1286,6 +1526,7 @@ impl GrammarCollector {
                     self.push(Kind::MissingSuperCall, method.key.span(), None);
                 } else {
                     self.report_this_before_super(body);
+                    self.check_super_call_placement(class, method.key.span(), &method.value.params, body);
                 }
             }
         }
@@ -1334,7 +1575,33 @@ impl GrammarCollector {
     /// An interface reports the duplicate half only: a bodyless method there is
     /// a signature, never a missing implementation.
     fn check_interface_members(&mut self, members: &[TSSignature<'_>]) {
+        let accessors: Vec<AccessorRecord> = members
+            .iter()
+            .filter_map(|member| match member {
+                TSSignature::TSMethodSignature(method) if method.kind != TSMethodSignatureKind::Method => {
+                    let is_getter = method.kind == TSMethodSignatureKind::Get;
+                    Some(AccessorRecord {
+                        key: property_key_name(&method.key)?,
+                        display: accessor_display_name(&method.key, method.computed),
+                        is_static: false,
+                        is_getter,
+                        annotated: if is_getter {
+                            method.return_type.is_some()
+                        } else {
+                            setter_parameter_annotated(&method.params)
+                        },
+                        has_body: false,
+                        private: false,
+                        span: method.key.span(),
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        self.check_untyped_setters(&accessors, false);
         let mut groups: Vec<MemberGroup> = Vec::new();
+        let mut group_slots: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
 
         for member in members {
             let (key, kind) = match member {
@@ -1350,13 +1617,15 @@ impl GrammarCollector {
             let Some(name) = property_key_name(key) else {
                 continue;
             };
-            match groups.iter_mut().find(|group| group.name == name) {
-                Some(group) => group.members.push((key.span(), kind)),
-                None => groups.push(MemberGroup {
-                    name,
-                    is_static: false,
-                    members: vec![(key.span(), kind)],
-                }),
+            match group_slots.get(&name) {
+                Some(&slot) => groups[slot].members.push((key.span(), kind)),
+                None => {
+                    group_slots.insert(name.clone(), groups.len());
+                    groups.push(MemberGroup {
+                        name,
+                        members: vec![(key.span(), kind)],
+                    });
+                }
             }
         }
 
@@ -1578,18 +1847,45 @@ impl GrammarCollector {
 
     /// A type-level signature has no body to infer a parameter from, so an
     /// unannotated one is `any` unless an (erroneous) initializer types it.
-    fn check_implicit_any_signature_parameters(&mut self, parameters: &FormalParameters<'_>) {
-        for parameter in &parameters.items {
+    /// `may_name_type` is tsc's `reportImplicitAny` test for a call signature,
+    /// method signature or function type, whose bare parameter name may be a
+    /// forgotten type (`(string) => void`); the checker resolves the name.
+    fn check_implicit_any_signature_parameters(
+        &mut self,
+        parameters: &FormalParameters<'_>,
+        may_name_type: bool,
+    ) {
+        for (index, parameter) in parameters.items.iter().enumerate() {
             if parameter.type_annotation.is_some() || parameter.initializer.is_some() {
                 continue;
             }
-            if let oxc_ast::ast::BindingPattern::BindingIdentifier(binding) = &parameter.pattern {
+            let oxc_ast::ast::BindingPattern::BindingIdentifier(binding) = &parameter.pattern else {
+                continue;
+            };
+            if may_name_type {
+                self.push(
+                    Kind::NamedSignatureParameterWithoutType,
+                    binding.span,
+                    Some(&format!("{}\0arg{index}\0", binding.name)),
+                );
+            } else {
                 self.push(
                     Kind::ImplicitAnySignatureParameter,
                     binding.span,
                     Some(binding.name.as_str()),
                 );
             }
+        }
+        if may_name_type
+            && let Some(rest) = parameters.rest.as_deref()
+            && rest.type_annotation.is_none()
+            && let oxc_ast::ast::BindingPattern::BindingIdentifier(binding) = &rest.rest.argument
+        {
+            self.push(
+                Kind::NamedSignatureParameterWithoutType,
+                rest.span,
+                Some(&format!("{}\0arg{}\0[]", binding.name, parameters.items.len())),
+            );
         }
     }
 
@@ -1650,7 +1946,6 @@ impl OverloadSibling {
 
 struct MemberGroup {
     name: String,
-    is_static: bool,
     members: Vec<(Span, MemberKind)>,
 }
 
@@ -1935,7 +2230,49 @@ impl<'a> Visit<'a> for GrammarCollector {
         self.check_default_exports(&program.body);
         self.check_function_implementations(&program.body);
         oxc_ast_visit::walk::walk_program(self, program);
+        let bound: std::collections::HashSet<&str> = self
+            .binding_names
+            .iter()
+            .filter(|(_, span)| {
+                !self
+                    .type_declaration_name_spans
+                    .contains(&(span.start, span.end))
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let findings = std::mem::take(&mut self.diagnostics);
+        self.diagnostics = findings
+            .into_iter()
+            .filter(|finding| {
+                finding.kind != Kind::ComputedTypeMemberName
+                    || finding
+                        .name
+                        .as_deref()
+                        .and_then(|payload| payload.split('\0').next())
+                        .is_some_and(|name| !bound.contains(name))
+            })
+            .collect();
     }
+
+    fn visit_binding_identifier(&mut self, identifier: &oxc_ast::ast::BindingIdentifier<'a>) {
+        self.binding_names.push((identifier.name.to_string(), identifier.span));
+    }
+
+    fn visit_ts_type_alias_declaration(
+        &mut self,
+        declaration: &oxc_ast::ast::TSTypeAliasDeclaration<'a>,
+    ) {
+        self.type_declaration_name_spans
+            .insert((declaration.id.span.start, declaration.id.span.end));
+        oxc_ast_visit::walk::walk_ts_type_alias_declaration(self, declaration);
+    }
+
+    fn visit_block_statement(&mut self, block: &oxc_ast::ast::BlockStatement<'a>) {
+        self.nested_scope_depth += 1;
+        oxc_ast_visit::walk::walk_block_statement(self, block);
+        self.nested_scope_depth -= 1;
+    }
+
 
     fn visit_function_body(&mut self, body: &FunctionBody<'a>) {
         self.check_function_implementations(&body.statements);
@@ -1998,13 +2335,16 @@ impl<'a> Visit<'a> for GrammarCollector {
     // ambient: a bodyless declaration there is a declaration, not a missing
     // implementation.
     fn visit_ts_global_declaration(&mut self, declaration: &TSGlobalDeclaration<'a>) {
+        self.nested_scope_depth += 1;
         self.ambient_depth += 1;
         oxc_ast_visit::walk::walk_ts_global_declaration(self, declaration);
         self.ambient_depth -= 1;
+        self.nested_scope_depth -= 1;
     }
 
     fn visit_ts_module_declaration(&mut self, declaration: &TSModuleDeclaration<'a>) {
         let ambient = declaration.declare || self.is_ambient();
+        self.nested_scope_depth += 1;
         if ambient {
             self.ambient_depth += 1;
         }
@@ -2019,6 +2359,7 @@ impl<'a> Visit<'a> for GrammarCollector {
         if ambient {
             self.ambient_depth -= 1;
         }
+        self.nested_scope_depth -= 1;
     }
 
     fn visit_class(&mut self, class: &Class<'a>) {
@@ -2031,12 +2372,16 @@ impl<'a> Visit<'a> for GrammarCollector {
         &mut self,
         declaration: &oxc_ast::ast::TSInterfaceDeclaration<'a>,
     ) {
+        self.type_declaration_name_spans
+            .insert((declaration.id.span.start, declaration.id.span.end));
         self.check_interface_members(&declaration.body.body);
+        self.check_computed_type_member_names(&declaration.body.body, false);
         oxc_ast_visit::walk::walk_ts_interface_declaration(self, declaration);
     }
 
     fn visit_ts_type_literal(&mut self, literal: &oxc_ast::ast::TSTypeLiteral<'a>) {
         self.check_interface_members(&literal.members);
+        self.check_computed_type_member_names(&literal.members, true);
         oxc_ast_visit::walk::walk_ts_type_literal(self, literal);
     }
 
@@ -2168,13 +2513,8 @@ impl<'a> Visit<'a> for GrammarCollector {
         if method.kind == MethodDefinitionKind::Get {
             self.check_getter_returns(method.key.span(), method.value.body.as_deref());
         }
-        if method.kind == MethodDefinitionKind::Set {
-            if method.value.return_type.is_some() {
-                self.push(Kind::SetAccessorReturnType, method.key.span(), None);
-            }
-            if method.value.params.items.len() != 1 || method.value.params.rest.is_some() {
-                self.push(Kind::SetAccessorParameterCount, method.key.span(), None);
-            }
+        if method.kind == MethodDefinitionKind::Set && method.value.return_type.is_some() {
+            self.push(Kind::SetAccessorReturnType, method.key.span(), None);
         }
         if method.kind == MethodDefinitionKind::Method
             && method.value.body.is_none()
@@ -2202,7 +2542,7 @@ impl<'a> Visit<'a> for GrammarCollector {
             self.push(Kind::ImplicitAnyCallReturn, signature.span, None);
         }
         self.check_signature_parameters(&signature.params);
-        self.check_implicit_any_signature_parameters(&signature.params);
+        self.check_implicit_any_signature_parameters(&signature.params, true);
         oxc_ast_visit::walk::walk_ts_call_signature_declaration(self, signature);
     }
 
@@ -2214,23 +2554,23 @@ impl<'a> Visit<'a> for GrammarCollector {
             self.push(Kind::ImplicitAnyConstructReturn, signature.span, None);
         }
         self.check_signature_parameters(&signature.params);
-        self.check_implicit_any_signature_parameters(&signature.params);
+        self.check_implicit_any_signature_parameters(&signature.params, false);
         oxc_ast_visit::walk::walk_ts_construct_signature_declaration(self, signature);
     }
 
     fn visit_ts_function_type(&mut self, function: &oxc_ast::ast::TSFunctionType<'a>) {
-        self.check_implicit_any_signature_parameters(&function.params);
+        self.check_implicit_any_signature_parameters(&function.params, true);
         oxc_ast_visit::walk::walk_ts_function_type(self, function);
     }
 
     fn visit_ts_constructor_type(&mut self, constructor: &oxc_ast::ast::TSConstructorType<'a>) {
-        self.check_implicit_any_signature_parameters(&constructor.params);
+        self.check_implicit_any_signature_parameters(&constructor.params, false);
         oxc_ast_visit::walk::walk_ts_constructor_type(self, constructor);
     }
 
     fn visit_ts_method_signature(&mut self, method: &TSMethodSignature<'a>) {
         self.check_signature_parameters(&method.params);
-        self.check_implicit_any_signature_parameters(&method.params);
+        self.check_implicit_any_signature_parameters(&method.params, true);
         if method.kind == TSMethodSignatureKind::Method
             && method.return_type.is_none()
             && !method.computed
@@ -2247,6 +2587,36 @@ impl<'a> Visit<'a> for GrammarCollector {
 
     fn visit_object_expression(&mut self, object: &ObjectExpression<'a>) {
         self.check_duplicate_properties(object);
+        let accessors: Vec<AccessorRecord> = object
+            .properties
+            .iter()
+            .filter_map(|property| match property {
+                ObjectPropertyKind::ObjectProperty(property)
+                    if matches!(property.kind, PropertyKind::Get | PropertyKind::Set) =>
+                {
+                    let Expression::FunctionExpression(function) = &property.value else {
+                        return None;
+                    };
+                    let is_getter = property.kind == PropertyKind::Get;
+                    Some(AccessorRecord {
+                        key: property_key_name(&property.key)?,
+                        display: accessor_display_name(&property.key, property.computed),
+                        is_static: false,
+                        is_getter,
+                        annotated: if is_getter {
+                            function.return_type.is_some()
+                        } else {
+                            setter_parameter_annotated(&function.params)
+                        },
+                        has_body: function.body.is_some(),
+                        private: false,
+                        span: property.key.span(),
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        self.check_untyped_setters(&accessors, false);
         for property in &object.properties {
             if let ObjectPropertyKind::ObjectProperty(property) = property
                 && property.kind == PropertyKind::Get
@@ -2290,6 +2660,8 @@ impl<'a> Visit<'a> for GrammarCollector {
 
 fn property_key_name_of_enum_member(name: &TSEnumMemberName<'_>) -> Option<String> {
     match name {
+        // The parser's nameless placeholder for a computed name (TS1164).
+        TSEnumMemberName::Identifier(identifier) if identifier.name.is_empty() => None,
         TSEnumMemberName::Identifier(identifier) => Some(identifier.name.to_string()),
         TSEnumMemberName::String(literal) => Some(literal.value.to_string()),
         _ => None,

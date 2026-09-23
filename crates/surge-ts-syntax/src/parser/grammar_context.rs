@@ -17,8 +17,13 @@ use oxc_ast::ast::{
 use oxc_ast_visit::Visit;
 use oxc_span::{GetSpan, Span};
 
+use super::grammar_modifiers::{self as modifiers, ModifierContext, NodeKind, Parent, TypeParameterOwner};
 use super::spans::text_span_from_oxc_span;
 use crate::{ParsedGrammarDiagnostic, ParsedGrammarDiagnosticKind as Kind};
+
+mod class_emit;
+mod members;
+mod reflect_collision;
 
 pub(crate) fn collect_context_grammar_diagnostics(
     program: &Program<'_>,
@@ -31,6 +36,7 @@ pub(crate) fn collect_context_grammar_diagnostics(
         external_module: is_external_module(program),
         ambient_depth: 0,
         with_bodies: Vec::new(),
+        const_enum_names: unshadowed_const_enum_names(program),
     };
     collector.visit_program(program);
     // tsc's `checkWithStatement` checks the object but never the body, so no
@@ -77,6 +83,58 @@ struct ContextCollector<'a, 'o> {
     ambient_depth: usize,
     /// The bodies of the file's `with` statements, which tsc never checks.
     with_bodies: Vec<Span>,
+    /// Top-level `const enum` names no other binding in the file reuses, so
+    /// an identifier reference to one is the const enum object and nothing
+    /// else — what tsc's `isConstEnumObjectType` sees on the expression.
+    const_enum_names: Vec<String>,
+}
+
+/// The top-level `const enum` names whose every binding in the file is such a
+/// declaration.
+fn unshadowed_const_enum_names(program: &Program<'_>) -> Vec<String> {
+    let enum_names: Vec<&str> = program
+        .body
+        .iter()
+        .filter_map(|statement| {
+            let declaration = match statement {
+                Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+                other => other.as_declaration(),
+            };
+            match declaration {
+                Some(oxc_ast::ast::Declaration::TSEnumDeclaration(declaration)) if declaration.r#const => {
+                    Some(declaration.id.name.as_str())
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    if enum_names.is_empty() {
+        return Vec::new();
+    }
+    let mut bindings = BindingNames::default();
+    bindings.visit_program(program);
+    let mut names: Vec<String> = Vec::new();
+    for name in &enum_names {
+        let bound = bindings.names.iter().filter(|bound| **bound == *name).count();
+        let declared = enum_names.iter().filter(|other| **other == *name).count();
+        if bound == declared {
+            names.push((*name).to_string());
+        }
+    }
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+#[derive(Default)]
+struct BindingNames<'a> {
+    names: Vec<&'a str>,
+}
+
+impl<'a> Visit<'a> for BindingNames<'a> {
+    fn visit_binding_identifier(&mut self, identifier: &oxc_ast::ast::BindingIdentifier<'a>) {
+        self.names.push(identifier.name.as_str());
+    }
 }
 
 fn is_ambient_marker(kind: &AstKind<'_>) -> bool {
@@ -146,7 +204,7 @@ enum SuperContainer {
 
 /// The end of the token starting at `start`: an identifier-like run, or one
 /// character.
-fn first_token_end(text: &str, start: usize) -> usize {
+pub(super) fn first_token_end(text: &str, start: usize) -> usize {
     let rest = &text[start..];
     let word = rest
         .char_indices()
@@ -372,6 +430,7 @@ impl<'a> ContextCollector<'a, '_> {
     fn check_this_expression(&mut self, span: Span) {
         let mut index = self.stack.len();
         let mut child_span = span;
+        let mut captured_by_arrow = false;
         while index > 0 {
             index -= 1;
             let kind = self.stack[index];
@@ -421,11 +480,81 @@ impl<'a> ContextCollector<'a, '_> {
                 | AstKind::TSMethodSignature(_)
                 | AstKind::TSCallSignatureDeclaration(_)
                 | AstKind::TSConstructSignatureDeclaration(_)
-                | AstKind::TSIndexSignature(_)
-                | AstKind::Program(_) => return,
+                | AstKind::TSIndexSignature(_) => return,
+                // `tryGetThisTypeAt` answers a script file's top level with
+                // `globalThis`, and an arrow that captured it is TS7041 under
+                // `noImplicitThis`; a module's top-level `this` is `undefined`.
+                AstKind::Program(_) => {
+                    if captured_by_arrow && !self.external_module {
+                        self.push(7041, span, &[]);
+                    }
+                    return;
+                }
+                AstKind::ArrowFunctionExpression(_) => captured_by_arrow = true,
                 _ => {}
             }
             child_span = kind.span();
+        }
+    }
+
+    /// tsc's `checkTypeParametersNotReferenced`: a type parameter's default may
+    /// name only the parameters declared before it — TS2744 on each reference
+    /// to itself or a later one. A nested signature, `infer` capture or mapped
+    /// type that redeclares the name hides the outer parameter.
+    fn check_type_parameter_defaults(
+        &mut self,
+        declaration: &oxc_ast::ast::TSTypeParameterDeclaration<'a>,
+    ) {
+        for (index, parameter) in declaration.params.iter().enumerate() {
+            let Some(default) = &parameter.default else {
+                continue;
+            };
+            let mut references = LaterTypeParameterReferences {
+                later: declaration.params[index..]
+                    .iter()
+                    .map(|later| later.name.name.as_str())
+                    .collect(),
+                shadowed: Vec::new(),
+                found: Vec::new(),
+            };
+            references.visit_ts_type(default);
+            for span in references.found {
+                self.push(2744, span, &[]);
+            }
+        }
+    }
+
+    /// tsc's `checkGrammarBindingElement`: a rest element with a property name
+    /// (`{ ...a: b }`) — TS2566 on the name. oxc keeps the element but drops
+    /// the `: b` it parsed as a type annotation, so the name is read from the
+    /// source text after the element.
+    fn check_rest_binding_property_name(&mut self, rest: &oxc_ast::ast::BindingRestElement<'a>) {
+        if !matches!(self.stack.last(), Some(AstKind::ObjectPattern(_))) {
+            return;
+        }
+        let text = self.source_text;
+        let after = rest.argument.span().end as usize;
+        let Some(colon) = text[after..]
+            .find(|ch: char| !ch.is_whitespace())
+            .map(|offset| after + offset)
+        else {
+            return;
+        };
+        if !text[colon..].starts_with(':') {
+            return;
+        }
+        let Some(start) = text[colon + 1..]
+            .find(|ch: char| !ch.is_whitespace())
+            .map(|offset| colon + 1 + offset)
+        else {
+            return;
+        };
+        let end = match text.as_bytes()[start] {
+            b'{' | b'[' => matching_bracket_end(text, start),
+            _ => first_token_end(text, start),
+        };
+        if end > start {
+            self.push(2566, Span::new(start as u32, end as u32), &[]);
         }
     }
 
@@ -711,19 +840,42 @@ impl<'a> ContextCollector<'a, '_> {
     }
 
     /// tsc's `checkExportsOnMergedDeclarations` for the declarations that
-    /// merge (interfaces, namespaces, classes, enums): exported and local
-    /// declarations of one name sharing a declaration space — TS2395 on each.
+    /// merge (interfaces, namespaces, classes, enums, and a named default
+    /// export of one): a default-exported declaration sharing a space with
+    /// any other is TS2652; exported and local declarations sharing one are
+    /// TS2395. Each declaration reports at most one, TS2652 first.
     fn check_merged_export_visibility(&mut self, statements: &[Statement<'_>]) {
         const TYPE: u8 = 1;
         const VALUE: u8 = 2;
         const NAMESPACE: u8 = 4;
-        let mut declarations: Vec<(&str, Span, bool, u8)> = Vec::new();
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Visibility {
+            Local,
+            Exported,
+            Default,
+        }
+        let mut declarations: Vec<(&str, Span, Visibility, u8)> = Vec::new();
         for statement in statements {
-            let (declaration, exported) = match statement {
-                Statement::ExportNamedDeclaration(export) => (export.declaration.as_ref(), true),
-                other => (other.as_declaration(), false),
-            };
             use oxc_ast::ast::Declaration as D;
+            let (declaration, visibility) = match statement {
+                Statement::ExportNamedDeclaration(export) => (export.declaration.as_ref(), Visibility::Exported),
+                Statement::ExportDefaultDeclaration(export) => {
+                    let entry = match &export.declaration {
+                        oxc_ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(d) => {
+                            d.id.as_ref().map(|id| (id.name.as_str(), id.span, TYPE | VALUE))
+                        }
+                        oxc_ast::ast::ExportDefaultDeclarationKind::TSInterfaceDeclaration(d) => {
+                            Some((d.id.name.as_str(), d.id.span, TYPE))
+                        }
+                        _ => None,
+                    };
+                    if let Some((name, span, spaces)) = entry {
+                        declarations.push((name, span, Visibility::Default, spaces));
+                    }
+                    continue;
+                }
+                other => (other.as_declaration(), Visibility::Local),
+            };
             let entry = match declaration {
                 Some(D::TSInterfaceDeclaration(d)) => Some((d.id.name.as_str(), d.id.span, TYPE)),
                 Some(D::ClassDeclaration(d)) => d.id.as_ref().map(|id| (id.name.as_str(), id.span, TYPE | VALUE)),
@@ -738,22 +890,144 @@ impl<'a> ContextCollector<'a, '_> {
                 _ => None,
             };
             if let Some((name, span, spaces)) = entry {
-                declarations.push((name, span, exported, spaces));
+                declarations.push((name, span, visibility, spaces));
             }
         }
         for (name, span, _, spaces) in &declarations {
-            let (mut exported_spaces, mut local_spaces) = (0u8, 0u8);
-            for (other, _, exported, other_spaces) in &declarations {
+            let (mut exported_spaces, mut local_spaces, mut default_spaces) = (0u8, 0u8, 0u8);
+            for (other, _, visibility, other_spaces) in &declarations {
                 if other == name {
-                    if *exported {
-                        exported_spaces |= other_spaces;
-                    } else {
-                        local_spaces |= other_spaces;
+                    match visibility {
+                        Visibility::Local => local_spaces |= other_spaces,
+                        Visibility::Exported => exported_spaces |= other_spaces,
+                        Visibility::Default => default_spaces |= other_spaces,
                     }
                 }
             }
-            if spaces & exported_spaces & local_spaces != 0 {
+            if spaces & default_spaces & (exported_spaces | local_spaces) != 0 {
+                self.push(2652, *span, &[name]);
+            } else if spaces & exported_spaces & local_spaces != 0 {
                 self.push(2395, *span, &[name]);
+            }
+        }
+    }
+
+    /// tsc's `checkConstEnumAccess`: the const enum object may only be the
+    /// object of a property or element access, the right side of an import
+    /// or export assignment, a `typeof` query, or an export specifier —
+    /// TS2475 anywhere else. A type-position name is not an expression and is
+    /// never checked.
+    fn check_const_enum_reference(&mut self, identifier: &oxc_ast::ast::IdentifierReference<'_>) {
+        if !self.const_enum_names.iter().any(|name| name == identifier.name.as_str()) {
+            return;
+        }
+        let allowed = match self.stack.last() {
+            Some(AstKind::StaticMemberExpression(member)) => member.object.span() == identifier.span,
+            Some(AstKind::ComputedMemberExpression(member)) => member.object.span() == identifier.span,
+            Some(
+                AstKind::ExportDefaultDeclaration(_)
+                | AstKind::TSExportAssignment(_)
+                | AstKind::TSImportEqualsDeclaration(_)
+                | AstKind::ExportSpecifier(_)
+                | AstKind::TSTypeQuery(_)
+                | AstKind::TSTypeReference(_)
+                | AstKind::TSQualifiedName(_)
+                | AstKind::TSClassImplements(_),
+            ) => true,
+            _ => false,
+        };
+        if !allowed {
+            self.push(2475, identifier.span, &[]);
+        }
+    }
+
+    /// tsc's `checkElementAccessExpression` on a const enum object: the index
+    /// must be a string literal or an untemplated template — TS2476 at it.
+    fn check_const_enum_element_access(&mut self, member: &oxc_ast::ast::ComputedMemberExpression<'_>) {
+        let oxc_ast::ast::Expression::Identifier(object) = &member.object else {
+            return;
+        };
+        if !self.const_enum_names.iter().any(|name| name == object.name.as_str()) {
+            return;
+        }
+        let is_string_literal_like = match &member.expression {
+            oxc_ast::ast::Expression::StringLiteral(_) => true,
+            oxc_ast::ast::Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+            _ => false,
+        };
+        if !is_string_literal_like {
+            self.push(2476, member.expression.span(), &[]);
+        }
+    }
+
+    fn check_merged_declarations(&mut self, statements: &[Statement<'_>]) {
+        super::grammar_merges::check_merged_declarations(
+            statements,
+            self.ambient_depth > 0,
+            self.source_text,
+            self.out,
+        );
+    }
+
+    /// tsc's `checkModuleDeclaration`: an ambient module at the top of a
+    /// script file may not use a relative name — TS2436. In a module file the
+    /// same declaration is an augmentation, which the checker resolves.
+    fn check_relative_ambient_module_name(&mut self, module: &oxc_ast::ast::TSModuleDeclaration<'_>) {
+        let oxc_ast::ast::TSModuleDeclarationName::StringLiteral(name) = &module.id else {
+            return;
+        };
+        if self.external_module || !matches!(self.stack.last(), Some(AstKind::Program(_))) {
+            return;
+        }
+        if is_external_module_name_relative(name.value.as_str()) {
+            self.push(2436, name.span, &[]);
+        }
+    }
+
+    /// tsc's `checkVarDeclaredNamesNotShadowed`: a `var` hoists past the
+    /// block-scoped declaration of the same name in any enclosing scope short
+    /// of its own function, namespace, or file, which at run time is a
+    /// syntax error — TS2481 at the declarator. A block-scoped declaration in
+    /// the hoisting scope itself is the binder's redeclaration error instead.
+    fn check_var_declared_name_not_shadowed(&mut self, declarator: &oxc_ast::ast::VariableDeclarator<'_>) {
+        if declarator.kind != VariableDeclarationKind::Var {
+            return;
+        }
+        let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+            return;
+        };
+        let name = id.name.as_str();
+        for kind in self.stack.iter().rev() {
+            let shadowed = match kind {
+                AstKind::BlockStatement(block) => statements_declare_block_scoped(&block.body, name),
+                AstKind::SwitchStatement(statement) => statement
+                    .cases
+                    .iter()
+                    .any(|case| statements_declare_block_scoped(&case.consequent, name)),
+                AstKind::ForStatement(statement) => matches!(
+                    &statement.init,
+                    Some(oxc_ast::ast::ForStatementInit::VariableDeclaration(declaration))
+                        if variable_declaration_declares_block_scoped(declaration, name)
+                ),
+                AstKind::ForInStatement(statement) => matches!(
+                    &statement.left,
+                    oxc_ast::ast::ForStatementLeft::VariableDeclaration(declaration)
+                        if variable_declaration_declares_block_scoped(declaration, name)
+                ),
+                AstKind::ForOfStatement(statement) => matches!(
+                    &statement.left,
+                    oxc_ast::ast::ForStatementLeft::VariableDeclaration(declaration)
+                        if variable_declaration_declares_block_scoped(declaration, name)
+                ),
+                AstKind::FunctionBody(_)
+                | AstKind::StaticBlock(_)
+                | AstKind::TSModuleBlock(_)
+                | AstKind::Program(_) => return,
+                _ => false,
+            };
+            if shadowed {
+                self.push(2481, declarator.span, &[name, name]);
+                return;
             }
         }
     }
@@ -1082,15 +1356,6 @@ impl<'a> ContextCollector<'a, '_> {
                     self.push(2373, span, &[own.name.as_str(), &name]);
                 }
             }
-            for (name, span) in references.deferred {
-                if is_later(&name) {
-                    self.out.push(ParsedGrammarDiagnostic {
-                        kind: Kind::LaterParameterReference,
-                        span: text_span_from_oxc_span(span),
-                        name: None,
-                    });
-                }
-            }
         }
     }
 
@@ -1224,6 +1489,32 @@ impl<'a> ContextCollector<'a, '_> {
             if circular {
                 self.push(2313, *span, &[name]);
             }
+        }
+    }
+
+    /// tsc's `checkTypeParameter` on a mapped type's key: its constraint is in
+    /// the key's own scope, and resolving the key's base constraint cycles when
+    /// the constraint is the key, or a union or intersection with the key among
+    /// its members (`computeBaseConstraint`) — TS2313 on the constraint.
+    fn check_circular_mapped_key(&mut self, mapped: &oxc_ast::ast::TSMappedType<'_>) {
+        fn names_key(ty: &oxc_ast::ast::TSType<'_>, key: &str) -> bool {
+            use oxc_ast::ast::TSType as T;
+            match ty {
+                T::TSTypeReference(reference) if reference.type_arguments.is_none() => matches!(
+                    &reference.type_name,
+                    oxc_ast::ast::TSTypeName::IdentifierReference(name) if name.name == key
+                ),
+                T::TSUnionType(union) => union.types.iter().any(|member| names_key(member, key)),
+                T::TSIntersectionType(intersection) => {
+                    intersection.types.iter().any(|member| names_key(member, key))
+                }
+                T::TSParenthesizedType(parenthesized) => names_key(&parenthesized.type_annotation, key),
+                _ => false,
+            }
+        }
+        let key = mapped.key.name.as_str();
+        if names_key(&mapped.constraint, key) {
+            self.push(2313, mapped.constraint.span(), &[key]);
         }
     }
 
@@ -1437,7 +1728,7 @@ impl<'a> ContextCollector<'a, '_> {
                 module.id,
                 oxc_ast::ast::TSModuleDeclarationName::Identifier(_)
             )),
-            AstKind::TSGlobalDeclaration(_) => Some(true),
+            AstKind::TSGlobalDeclaration(_) => Some(false),
             _ => None,
         });
         if in_namespace == Some(true) {
@@ -1445,6 +1736,18 @@ impl<'a> ContextCollector<'a, '_> {
             return true;
         }
         false
+    }
+
+    /// tsc's `isContainedByNamespace`: the statement's container is a
+    /// non-ambient module declaration.
+    fn is_contained_by_namespace(&self) -> bool {
+        let mut ancestors = self.ancestors_as_tsc();
+        matches!(ancestors.next(), Some(AstKind::TSModuleBlock(_)))
+            && matches!(
+                ancestors.next(),
+                Some(AstKind::TSModuleDeclaration(module))
+                    if matches!(module.id, oxc_ast::ast::TSModuleDeclarationName::Identifier(_))
+            )
     }
 
     /// `assert { … }` in place of `with { … }` — TS2880 on the keyword.
@@ -1457,35 +1760,16 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
-    /// tsc's `checkGrammarModuleElementContext`: whether the node being
-    /// entered is a statement of a source file or a namespace body, or the
-    /// inner declaration of a dotted namespace (`namespace A.B`). Only there may
-    /// a module element appear, and `export` and `declare` with it.
+    /// Whether the node being entered is a statement of a source file or a
+    /// namespace body — where tsc's `checkGrammarModuleElementContext` allows
+    /// `export` and `declare`. Anywhere else they are TS1184.
     fn at_module_element_level(&self) -> bool {
         let mut ancestors = self.stack.iter().rev();
         let mut parent = ancestors.next();
-        if matches!(
-            parent,
-            Some(AstKind::ExportNamedDeclaration(_) | AstKind::ExportDefaultDeclaration(_))
-        ) {
+        if matches!(parent, Some(AstKind::ExportNamedDeclaration(_))) {
             parent = ancestors.next();
         }
-        matches!(
-            parent,
-            None | Some(AstKind::Program(_) | AstKind::TSModuleBlock(_) | AstKind::TSModuleDeclaration(_))
-        )
-    }
-
-    /// A module element out of place: `code` on its first token, the `export`
-    /// of an exported one (tsc's node owns its modifiers). tsc then skips the
-    /// element's other checks.
-    fn push_on_module_element(&mut self, code: u32, start: u32) {
-        let start = match self.stack.last() {
-            Some(AstKind::ExportNamedDeclaration(export)) => export.span.start,
-            _ => start,
-        };
-        let end = first_token_end(self.source_text, start as usize) as u32;
-        self.push(code, Span::new(start, end), &[]);
+        matches!(parent, None | Some(AstKind::Program(_) | AstKind::TSModuleBlock(_)))
     }
 
     /// tsc's `checkClassForStaticPropertyNameConflicts`: a static member named
@@ -1598,12 +1882,62 @@ impl<'a> ContextCollector<'a, '_> {
         if is_literal_name(expression) || is_entity_name_expression(expression) {
             return None;
         }
-        let key_start = key.span().start as usize;
-        let open = self.source_text[..key_start].rfind('[')?;
-        let close = self.source_text[key.span().end as usize..]
+        Some(self.member_name_span(key, true))
+    }
+
+    /// A member name as tsc's `getErrorSpanForNode` reports it: a computed
+    /// name includes its brackets, which oxc's key span leaves out.
+    fn member_name_span(&self, key: &oxc_ast::ast::PropertyKey<'_>, computed: bool) -> Span {
+        let key_span = key.span();
+        if !computed {
+            return key_span;
+        }
+        let open = self.source_text[..key_span.start as usize]
+            .rfind('[')
+            .map_or(key_span.start, |open| open as u32);
+        let close = self.source_text[key_span.end as usize..]
             .find(']')
-            .map_or(key.span().end, |offset| key.span().end + offset as u32 + 1);
-        Some(Span::new(open as u32, close))
+            .map_or(key_span.end, |offset| key_span.end + offset as u32 + 1);
+        Span::new(open, close)
+    }
+
+    /// tsc's `checkGrammarProperty`: a `[k in T]` property name is a mapped
+    /// type written among other members, reported on the parent's first
+    /// member (TS7061). Returns whether it was, since tsc then skips the
+    /// dynamic-name check.
+    fn check_mapped_type_member(&mut self, key: &oxc_ast::ast::PropertyKey<'_>) -> bool {
+        use oxc_ast::ast::{ClassElement, Expression, TSSignature};
+        let is_in_expression = match key.as_expression() {
+            Some(Expression::BinaryExpression(binary)) => {
+                binary.operator == oxc_syntax::operator::BinaryOperator::In
+            }
+            Some(Expression::PrivateInExpression(_)) => true,
+            _ => false,
+        };
+        if !is_in_expression {
+            return false;
+        }
+        let signature_span = |signature: &TSSignature<'_>| match signature {
+            TSSignature::TSPropertySignature(member) => self.member_name_span(&member.key, member.computed),
+            TSSignature::TSMethodSignature(member) => self.member_name_span(&member.key, member.computed),
+            other => other.span(),
+        };
+        let first_member = match self.stack.last() {
+            Some(AstKind::ClassBody(body)) => body.body.first().map(|element| match element {
+                ClassElement::MethodDefinition(member) => self.member_name_span(&member.key, member.computed),
+                ClassElement::PropertyDefinition(member) => self.member_name_span(&member.key, member.computed),
+                ClassElement::AccessorProperty(member) => self.member_name_span(&member.key, member.computed),
+                other => other.span(),
+            }),
+            Some(AstKind::TSInterfaceBody(body)) => body.body.first().map(signature_span),
+            Some(AstKind::TSTypeLiteral(literal)) => literal.members.first().map(signature_span),
+            _ => None,
+        };
+        let Some(span) = first_member else {
+            return false;
+        };
+        self.push(7061, span, &[]);
+        true
     }
 
     /// tsc's `checkGrammarBreakOrContinueStatement`.
@@ -1650,6 +1984,12 @@ impl<'a> ContextCollector<'a, '_> {
                     break;
                 }
             }
+        }
+        // The binder leaves a label no `break`/`continue` targets unreachable
+        // and `checkLabeledStatement` reports it — TS7028, an error only under
+        // an explicit `allowUnusedLabels: false`, which the checker gates.
+        if !label_is_referenced(&labeled.body, name) {
+            self.push(7028, labeled.label.span, &[]);
         }
         // The binder's `checkStrictModeLabeledStatement`.
         let is_declaration = matches!(
@@ -1984,8 +2324,154 @@ fn collect_binding_names<'n>(pattern: &'n BindingPattern<'_>, out: &mut Vec<(&'n
     }
 }
 
+/// The end of the bracketed run starting at `start`, or `start` when it never
+/// closes.
+fn matching_bracket_end(text: &str, start: usize) -> usize {
+    let mut depth = 0usize;
+    for (offset, byte) in text.as_bytes()[start..].iter().enumerate() {
+        match byte {
+            b'{' | b'[' | b'(' => depth += 1,
+            b'}' | b']' | b')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return start + offset + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    start
+}
+
+/// Whether a `break` or `continue` under `body` targets `name`, as the
+/// binder's active-label list sees it: a nested function or static block
+/// starts a fresh list, and a nested label of the same name takes the jumps
+/// under it.
+fn label_is_referenced(body: &Statement<'_>, name: &str) -> bool {
+    struct LabelReferences<'n> {
+        name: &'n str,
+        found: bool,
+    }
+
+    impl<'a> Visit<'a> for LabelReferences<'_> {
+        fn visit_break_statement(&mut self, statement: &oxc_ast::ast::BreakStatement<'a>) {
+            if statement.label.as_ref().is_some_and(|label| label.name == self.name) {
+                self.found = true;
+            }
+        }
+
+        fn visit_continue_statement(&mut self, statement: &oxc_ast::ast::ContinueStatement<'a>) {
+            if statement.label.as_ref().is_some_and(|label| label.name == self.name) {
+                self.found = true;
+            }
+        }
+
+        fn visit_labeled_statement(&mut self, labeled: &oxc_ast::ast::LabeledStatement<'a>) {
+            if labeled.label.name != self.name {
+                oxc_ast_visit::walk::walk_labeled_statement(self, labeled);
+            }
+        }
+
+        fn visit_function(&mut self, _: &oxc_ast::ast::Function<'a>, _: oxc_syntax::scope::ScopeFlags) {}
+
+        fn visit_arrow_function_expression(&mut self, _: &oxc_ast::ast::ArrowFunctionExpression<'a>) {}
+
+        fn visit_static_block(&mut self, _: &oxc_ast::ast::StaticBlock<'a>) {}
+    }
+
+    let mut references = LabelReferences { name, found: false };
+    references.visit_statement(body);
+    references.found
+}
+
+/// The type references in a type parameter's default that resolve to one of
+/// the parameters from `later` (the parameter itself and those after it).
+struct LaterTypeParameterReferences<'n> {
+    later: Vec<&'n str>,
+    /// Names redeclared by an enclosing nested scope, innermost last.
+    shadowed: Vec<&'n str>,
+    found: Vec<Span>,
+}
+
+impl<'a> LaterTypeParameterReferences<'a> {
+    fn scoped(&mut self, walk: impl FnOnce(&mut Self)) {
+        let depth = self.shadowed.len();
+        walk(self);
+        self.shadowed.truncate(depth);
+    }
+}
+
+impl<'a> Visit<'a> for LaterTypeParameterReferences<'a> {
+    fn visit_ts_type_reference(&mut self, reference: &oxc_ast::ast::TSTypeReference<'a>) {
+        if let oxc_ast::ast::TSTypeName::IdentifierReference(identifier) = &reference.type_name
+            && self.later.contains(&identifier.name.as_str())
+            && !self.shadowed.contains(&identifier.name.as_str())
+        {
+            self.found.push(reference.span);
+        }
+        oxc_ast_visit::walk::walk_ts_type_reference(self, reference);
+    }
+
+    // A signature's own parameters and an `infer` capture arrive here; the
+    // enclosing node bounds the scope.
+    fn visit_ts_type_parameter(&mut self, parameter: &oxc_ast::ast::TSTypeParameter<'a>) {
+        self.shadowed.push(parameter.name.name.as_str());
+        oxc_ast_visit::walk::walk_ts_type_parameter(self, parameter);
+    }
+
+    fn visit_ts_function_type(&mut self, function: &oxc_ast::ast::TSFunctionType<'a>) {
+        self.scoped(|this| oxc_ast_visit::walk::walk_ts_function_type(this, function));
+    }
+
+    fn visit_ts_constructor_type(&mut self, constructor: &oxc_ast::ast::TSConstructorType<'a>) {
+        self.scoped(|this| oxc_ast_visit::walk::walk_ts_constructor_type(this, constructor));
+    }
+
+    fn visit_ts_method_signature(&mut self, method: &oxc_ast::ast::TSMethodSignature<'a>) {
+        self.scoped(|this| oxc_ast_visit::walk::walk_ts_method_signature(this, method));
+    }
+
+    fn visit_ts_call_signature_declaration(
+        &mut self,
+        signature: &oxc_ast::ast::TSCallSignatureDeclaration<'a>,
+    ) {
+        self.scoped(|this| oxc_ast_visit::walk::walk_ts_call_signature_declaration(this, signature));
+    }
+
+    fn visit_ts_construct_signature_declaration(
+        &mut self,
+        signature: &oxc_ast::ast::TSConstructSignatureDeclaration<'a>,
+    ) {
+        self.scoped(|this| {
+            oxc_ast_visit::walk::walk_ts_construct_signature_declaration(this, signature);
+        });
+    }
+
+    // oxc keeps a mapped type's key as a plain binding rather than a type
+    // parameter.
+    fn visit_ts_mapped_type(&mut self, mapped: &oxc_ast::ast::TSMappedType<'a>) {
+        self.scoped(|this| {
+            this.shadowed.push(mapped.key.name.as_str());
+            oxc_ast_visit::walk::walk_ts_mapped_type(this, mapped);
+        });
+    }
+
+    // An `infer` capture is in scope for the `extends` clause and the true
+    // branch only.
+    fn visit_ts_conditional_type(&mut self, conditional: &oxc_ast::ast::TSConditionalType<'a>) {
+        self.scoped(|this| {
+            this.visit_ts_type(&conditional.check_type);
+            this.visit_ts_type(&conditional.extends_type);
+            this.visit_ts_type(&conditional.true_type);
+        });
+        self.visit_ts_type(&conditional.false_type);
+    }
+}
+
 impl<'a> Visit<'a> for ContextCollector<'a, '_> {
     fn enter_node(&mut self, kind: AstKind<'a>) {
+        self.check_declaration_position(&kind);
+        self.check_member_placement(&kind);
         match kind {
             AstKind::BreakStatement(statement) => {
                 self.check_jump(statement.span, statement.label.as_ref().map(|l| l.name.as_str()), false);
@@ -1999,6 +2485,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_with_statement(statement);
                 self.with_bodies.push(statement.body.span());
             }
+            AstKind::BindingRestElement(rest) => self.check_rest_binding_property_name(rest),
             AstKind::BindingIdentifier(identifier) => {
                 self.check_contextual_identifier(&identifier.name, identifier.span);
                 if self.is_strict_checked_binding() {
@@ -2007,7 +2494,9 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             }
             AstKind::IdentifierReference(identifier) => {
                 self.check_contextual_identifier(&identifier.name, identifier.span);
+                self.check_const_enum_reference(identifier);
             }
+            AstKind::ComputedMemberExpression(member) => self.check_const_enum_element_access(member),
             AstKind::LabelIdentifier(identifier) => {
                 self.check_contextual_identifier(&identifier.name, identifier.span);
             }
@@ -2015,11 +2504,22 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 if let AssignmentTarget::AssignmentTargetIdentifier(identifier) = &assignment.left {
                     self.check_eval_or_arguments(&identifier.name, identifier.span);
                 }
+                self.check_private_method_assignment(&assignment.left);
             }
             AstKind::UpdateExpression(update) => {
                 if let SimpleAssignmentTarget::AssignmentTargetIdentifier(identifier) = &update.argument {
                     self.check_eval_or_arguments(&identifier.name, identifier.span);
                 }
+                self.check_private_method_update(&update.argument);
+            }
+            AstKind::PrivateFieldExpression(access) => self.check_private_setter_read(access),
+            // Outside a module or ambient module, `declare global` is TS2669
+            // and contributes nothing to the globals.
+            AstKind::TSGlobalDeclaration(global)
+                if self.external_module
+                    || self.stack.iter().any(|kind| matches!(kind, AstKind::TSModuleDeclaration(_))) =>
+            {
+                self.check_global_augmentation_names(&global.body.body);
             }
             AstKind::MetaProperty(meta) => self.check_new_target(meta),
             AstKind::TSThisType(this_type) => self.check_this_type(this_type.span),
@@ -2033,19 +2533,26 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             AstKind::TSEnumDeclaration(declaration) => {
                 self.check_reserved_type_name(2431, &declaration.id);
             }
-            AstKind::Class(class) => check_class_name(self, class),
+            AstKind::Class(class) => {
+                check_class_name(self, class);
+                self.check_object_class_name(class);
+            }
             AstKind::CatchClause(clause) => self.check_catch_clause(clause),
             AstKind::VariableDeclarator(declarator) => {
                 self.check_let_name(declarator);
                 self.check_definite_assertion(declarator);
+                self.check_var_declared_name_not_shadowed(declarator);
             }
+            AstKind::TSModuleDeclaration(module) => self.check_relative_ambient_module_name(module),
             AstKind::PropertyDefinition(property) => {
                 if property.definite && property.value.is_some() {
                     self.push_at_exclamation(1263, property.key.span());
                 }
                 // tsc checks the name only once `checkGrammarModifiers` passes,
-                // so not under a decorator TS1206 rejects.
+                // so not under a decorator TS1206 rejects; a `[k in T]` name is
+                // a misplaced mapped type instead (TS7061).
                 if property.computed
+                    && !self.check_mapped_type_member(&property.key)
                     && let Some(span) = self.dynamic_property_name_span(&property.key)
                 {
                     let kind = if property.decorators.is_empty() {
@@ -2063,14 +2570,20 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     }
                 }
             }
+            AstKind::AccessorProperty(property) if property.computed => {
+                self.check_mapped_type_member(&property.key);
+            }
             AstKind::TSPropertySignature(signature) if signature.computed => {
-                let code = match self.stack.last() {
-                    Some(AstKind::TSInterfaceBody(_)) => 1169,
-                    _ => 1170,
-                };
-                self.check_dynamic_property_name(code, &signature.key);
+                if !self.check_mapped_type_member(&signature.key) {
+                    let code = match self.stack.last() {
+                        Some(AstKind::TSInterfaceBody(_)) => 1169,
+                        _ => 1170,
+                    };
+                    self.check_dynamic_property_name(code, &signature.key);
+                }
             }
             AstKind::VariableDeclaration(declaration) => {
+                self.check_es_module_marker(declaration);
                 self.check_single_statement_declaration(declaration);
                 if declaration.declare && !self.at_module_element_level() {
                     let start = declaration.span.start;
@@ -2084,8 +2597,12 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     self.check_for_await(statement);
                 }
                 self.check_for_in_or_of_declaration(&statement.left, false);
+                self.check_private_method_for_target(&statement.left);
             }
-            AstKind::ForInStatement(statement) => self.check_for_in_or_of_declaration(&statement.left, true),
+            AstKind::ForInStatement(statement) => {
+                self.check_for_in_or_of_declaration(&statement.left, true);
+                self.check_private_method_for_target(&statement.left);
+            }
             AstKind::FormalParameterRest(rest) => self.check_rest_parameter_type(rest),
             AstKind::BindingProperty(property) => self.check_renamed_binding_in_signature(property),
             AstKind::FormalParameters(parameters) => self.check_parameter_initializer_references(parameters),
@@ -2115,7 +2632,11 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     }
                 }
             }
-            AstKind::TSTypeParameterDeclaration(declaration) => self.check_circular_constraints(declaration),
+            AstKind::TSTypeParameterDeclaration(declaration) => {
+                self.check_circular_constraints(declaration);
+                self.check_type_parameter_defaults(declaration);
+            }
+            AstKind::TSMappedType(mapped) => self.check_circular_mapped_key(mapped),
             AstKind::Decorator(decorator) => self.check_decorator_target(decorator),
             AstKind::JSDocNonNullableType(node) => {
                 self.check_jsdoc_nullability("!", node.postfix, node.span, &node.type_annotation);
@@ -2123,30 +2644,37 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             AstKind::JSDocNullableType(node) => {
                 self.check_jsdoc_nullability("?", node.postfix, node.span, &node.type_annotation);
             }
-            AstKind::TSImportEqualsDeclaration(declaration) if !self.at_module_element_level() => {
-                self.push_on_module_element(1232, declaration.span.start);
-            }
             AstKind::TSImportEqualsDeclaration(declaration) => {
-                // Gated on `module` by the checker: ES2015..ESNext cannot emit it.
-                // Inside a namespace it is TS1147 instead, and tsc stops there
-                // (`checkExternalImportOrExportDeclaration`).
-                if !self.check_import_require_in_namespace(declaration)
-                    && !matches!(self.stack.last(), Some(AstKind::TSModuleBlock(_)))
-                    && matches!(
-                    declaration.module_reference,
-                    oxc_ast::ast::TSModuleReference::ExternalModuleReference(_)
-                ) && declaration.import_kind.is_value()
-                    && self.ambient_depth == 0
-                {
-                    self.push(1202, declaration.span, &[]);
+                // tsc's `checkGrammarModuleElementContext` bails first.
+                if !self.at_module_element_level() {
+                    let span = self.first_token(self.statement_start(declaration.span.start));
+                    self.push(1232, span, &[]);
+                } else {
+                    let require_in_namespace = self.check_import_require_in_namespace(declaration);
+                    self.check_import_alias_name(declaration);
+                    // Gated on `module` by the checker: ES2015..ESNext cannot emit it.
+                    // Inside a namespace it is TS1147 instead, and tsc stops there
+                    // (`checkExternalImportOrExportDeclaration`).
+                    if !require_in_namespace
+                        && !matches!(self.stack.last(), Some(AstKind::TSModuleBlock(_)))
+                        && matches!(
+                            declaration.module_reference,
+                            oxc_ast::ast::TSModuleReference::ExternalModuleReference(_)
+                        )
+                        && declaration.import_kind.is_value()
+                        && self.ambient_depth == 0
+                    {
+                        self.push(1202, declaration.span, &[]);
+                    }
                 }
             }
-            AstKind::TSExportAssignment(assignment) if !self.at_module_element_level() => {
-                self.push_on_module_element(1231, assignment.span.start);
-            }
             AstKind::TSExportAssignment(assignment) => {
-                // Gated on `module` and the file's emit format by the checker.
-                if self.ambient_depth == 0 {
+                if !self.at_module_element_level() {
+                    self.push(1231, self.first_token(assignment.span.start), &[]);
+                } else if self.is_contained_by_namespace() {
+                    // tsc reports TS1063 here and stops; that code is not emitted.
+                } else if self.ambient_depth == 0 {
+                    // Gated on `module` and the file's emit format by the checker.
                     self.push(1203, assignment.span, &[]);
                 }
             }
@@ -2154,60 +2682,43 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_reserved_type_name(2368, &parameter.name);
                 self.check_variance_modifier_owner(parameter);
             }
-            AstKind::ImportDeclaration(declaration) if !self.at_module_element_level() => {
-                self.push_on_module_element(1232, declaration.span.start);
-            }
             AstKind::ImportDeclaration(declaration) => {
-                if let Some(clause) = &declaration.with_clause {
+                if !self.at_module_element_level() {
+                    self.push(1232, self.first_token(declaration.span.start), &[]);
+                } else if let Some(clause) = &declaration.with_clause {
                     self.check_import_assertion(clause);
-                }
-            }
-            AstKind::ExportNamedDeclaration(declaration) if !self.at_module_element_level() => {
-                let start = declaration.span.start;
-                match &declaration.declaration {
-                    // These report their own context error on this `export`.
-                    Some(
-                        oxc_ast::ast::Declaration::TSModuleDeclaration(_)
-                        | oxc_ast::ast::Declaration::TSGlobalDeclaration(_)
-                        | oxc_ast::ast::Declaration::TSImportEqualsDeclaration(_),
-                    ) => {}
-                    Some(_) => self.push(1184, Span::new(start, start + 6), &[]),
-                    None => self.push(1233, Span::new(start, start + 6), &[]),
                 }
             }
             AstKind::ExportNamedDeclaration(declaration) => {
-                if let Some(clause) = &declaration.with_clause {
+                if !self.at_module_element_level() {
+                    // A wrapped declaration's `export` is a misplaced modifier;
+                    // an export list is a misplaced export declaration. A
+                    // namespace, global augmentation or import alias reports
+                    // its own context error on this `export` instead.
+                    let code = match &declaration.declaration {
+                        Some(
+                            oxc_ast::ast::Declaration::TSModuleDeclaration(_)
+                            | oxc_ast::ast::Declaration::TSGlobalDeclaration(_)
+                            | oxc_ast::ast::Declaration::TSImportEqualsDeclaration(_),
+                        ) => None,
+                        Some(_) => Some(1184),
+                        None => Some(1233),
+                    };
+                    if let Some(code) = code {
+                        let start = declaration.span.start;
+                        self.push(code, Span::new(start, start + 6), &[]);
+                    }
+                } else if let Some(clause) = &declaration.with_clause {
                     self.check_import_assertion(clause);
                 }
-            }
-            AstKind::ExportAllDeclaration(declaration) if !self.at_module_element_level() => {
-                self.push_on_module_element(1233, declaration.span.start);
             }
             AstKind::ExportAllDeclaration(declaration) => {
-                if let Some(clause) = &declaration.with_clause {
+                if !self.at_module_element_level() {
+                    let start = declaration.span.start;
+                    self.push(1233, Span::new(start, start + 6), &[]);
+                } else if let Some(clause) = &declaration.with_clause {
                     self.check_import_assertion(clause);
                 }
-            }
-            // `export default <expression>` is tsc's export assignment; the
-            // `export` of a default-exported declaration is a modifier.
-            AstKind::ExportDefaultDeclaration(declaration) if !self.at_module_element_level() => {
-                let code = match &declaration.declaration {
-                    oxc_ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(_)
-                    | oxc_ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(_)
-                    | oxc_ast::ast::ExportDefaultDeclarationKind::TSInterfaceDeclaration(_) => 1184,
-                    _ => 1258,
-                };
-                self.push_on_module_element(code, declaration.span.start);
-            }
-            AstKind::TSModuleDeclaration(module) if !self.at_module_element_level() => {
-                let code = match module.id {
-                    oxc_ast::ast::TSModuleDeclarationName::StringLiteral(_) => 1234,
-                    oxc_ast::ast::TSModuleDeclarationName::Identifier(_) => 1235,
-                };
-                self.push_on_module_element(code, module.span.start);
-            }
-            AstKind::TSGlobalDeclaration(global) if !self.at_module_element_level() => {
-                self.push_on_module_element(1234, global.span.start);
             }
             AstKind::ClassBody(body) => {
                 self.check_private_name_staticness(body);
@@ -2228,11 +2739,13 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_self_referencing_annotations(&block.body);
                 self.check_type_parameter_lists_identical(&block.body);
                 self.check_merged_export_visibility(&block.body);
+                self.check_merged_declarations(&block.body);
             }
             AstKind::BlockStatement(block) => {
                 self.check_statements_in_ambient_context(&block.body);
                 self.check_enum_merges(&block.body);
                 self.check_self_referencing_annotations(&block.body);
+                self.check_merged_declarations(&block.body);
             }
             AstKind::Program(program) => {
                 self.check_enum_merges(&program.body);
@@ -2242,10 +2755,14 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     self.check_merged_export_visibility(&program.body);
                     self.check_export_assignment_conflicts(program);
                 }
+                self.check_top_level_names(program);
+                self.check_reflect_collisions(program);
+                self.check_merged_declarations(&program.body);
             }
             AstKind::FunctionBody(body) => {
                 self.check_enum_merges(&body.statements);
                 self.check_self_referencing_annotations(&body.statements);
+                self.check_merged_declarations(&body.statements);
             }
             _ => {}
         }
@@ -2271,6 +2788,484 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             oxc_ast_visit::walk::walk_module_export_name(self, name);
         }
     }
+}
+
+/// The modifier codes this pass reports from tsc's `checkGrammarModifiers`
+/// port; the rest of its table is oxc's or another check's to report.
+const OWNED_MODIFIER_CODES: &[u32] = &[1040, 1042, 1044, 1243, 1277, 1319];
+
+/// Declaration-position and modifier grammar: tsc's
+/// `checkGrammarModuleElementContext`, `checkModuleDeclaration`,
+/// `checkGrammarModifiers`, `checkModuleAugmentationElement`, and the
+/// `super`/`instanceof` type-argument rules.
+impl<'a> ContextCollector<'a, '_> {
+    fn check_declaration_position(&mut self, kind: &AstKind<'a>) {
+        match kind {
+            AstKind::Function(function) => {
+                if matches!(
+                    function.r#type,
+                    oxc_ast::ast::FunctionType::FunctionDeclaration
+                        | oxc_ast::ast::FunctionType::TSDeclareFunction
+                ) {
+                    self.check_statement_modifiers(NodeKind::FunctionDeclaration, function.span);
+                }
+                if let Some(body) = &function.body {
+                    self.check_use_strict_parameters(&function.params, body);
+                }
+            }
+            AstKind::ArrowFunctionExpression(arrow) if !arrow.expression => {
+                self.check_use_strict_parameters(&arrow.params, &arrow.body);
+            }
+            AstKind::Class(class) if class.r#type == oxc_ast::ast::ClassType::ClassDeclaration => {
+                self.check_statement_modifiers(NodeKind::ClassDeclaration, class.span);
+            }
+            AstKind::VariableDeclaration(declaration) => {
+                let parent = self.stack.iter().rev().find(|kind| {
+                    !matches!(kind, AstKind::ExportNamedDeclaration(_))
+                });
+                if !matches!(
+                    parent,
+                    Some(
+                        AstKind::ForStatement(_)
+                            | AstKind::ForInStatement(_)
+                            | AstKind::ForOfStatement(_)
+                    )
+                ) {
+                    self.check_statement_modifiers(NodeKind::VariableStatement, declaration.span);
+                }
+            }
+            AstKind::TSInterfaceDeclaration(declaration) => {
+                self.check_statement_modifiers(NodeKind::InterfaceDeclaration, declaration.span);
+            }
+            AstKind::TSTypeAliasDeclaration(declaration) => {
+                self.check_statement_modifiers(NodeKind::TypeAliasDeclaration, declaration.span);
+            }
+            AstKind::TSEnumDeclaration(declaration) => {
+                self.check_statement_modifiers(NodeKind::EnumDeclaration, declaration.span);
+            }
+            AstKind::TSModuleDeclaration(declaration) => self.check_module_declaration(declaration),
+            AstKind::TSGlobalDeclaration(declaration) => self.check_global_declaration(declaration),
+            AstKind::ExportDefaultDeclaration(declaration) => self.check_export_default(declaration),
+            AstKind::PropertyDefinition(property) => {
+                let start = decorators_end(&property.decorators, property.span.start);
+                self.check_class_member_modifiers(
+                    NodeKind::PropertyDeclaration,
+                    start,
+                    &property.key,
+                );
+            }
+            AstKind::AccessorProperty(property) => {
+                let start = decorators_end(&property.decorators, property.span.start);
+                self.check_class_member_modifiers(
+                    NodeKind::PropertyDeclaration,
+                    start,
+                    &property.key,
+                );
+            }
+            AstKind::MethodDefinition(method) => {
+                let node = match method.kind {
+                    MethodDefinitionKind::Constructor => NodeKind::Constructor,
+                    MethodDefinitionKind::Method => NodeKind::MethodDeclaration,
+                    MethodDefinitionKind::Get => NodeKind::GetAccessor,
+                    MethodDefinitionKind::Set => NodeKind::SetAccessor,
+                };
+                let start = decorators_end(&method.decorators, method.span.start);
+                self.check_class_member_modifiers(node, start, &method.key);
+            }
+            AstKind::ObjectProperty(property) => self.check_object_member_modifiers(property),
+            AstKind::TSTypeParameter(parameter) => self.check_type_parameter_modifiers(parameter),
+            AstKind::TSInstantiationExpression(expression) => {
+                if matches!(expression.expression, oxc_ast::ast::Expression::Super(_)) {
+                    self.push(2754, expression.type_arguments.span, &[]);
+                }
+            }
+            AstKind::CallExpression(call) => {
+                if let Some(type_arguments) = &call.type_arguments
+                    && matches!(call.callee, oxc_ast::ast::Expression::Super(_))
+                {
+                    self.push(2754, type_arguments.span, &[]);
+                }
+            }
+            AstKind::BinaryExpression(binary) => self.check_instanceof_instantiation(binary),
+            _ => {}
+        }
+    }
+
+    /// The ancestors as tsc sees them: an `export` wrapper is a modifier of
+    /// the declaration it wraps, not its parent.
+    fn ancestors_as_tsc(&self) -> impl Iterator<Item = AstKind<'a>> + '_ {
+        self.stack
+            .iter()
+            .rev()
+            .filter(|kind| !matches!(kind, AstKind::ExportNamedDeclaration(_)))
+            .copied()
+    }
+
+    /// The span tsc's `grammarErrorOnFirstToken` reports at.
+    fn first_token(&self, start: u32) -> Span {
+        Span::new(start, first_token_end(self.source_text, start as usize) as u32)
+    }
+
+    fn push_modifier_error(&mut self, error: Option<modifiers::ModifierError>) {
+        if let Some(error) = error
+            && OWNED_MODIFIER_CODES.contains(&error.code)
+        {
+            self.push(error.code, error.span, &error.args);
+        }
+    }
+
+    /// Modifiers on a statement-level declaration, read from the statement's
+    /// start (an `export` wrapper's, when there is one) up to its keyword.
+    fn check_statement_modifiers(&mut self, node: NodeKind, span: Span) {
+        let mut ancestors = self.stack.iter().rev();
+        let mut parent = ancestors.next();
+        let mut start = span.start;
+        match parent {
+            Some(AstKind::ExportNamedDeclaration(export)) => {
+                start = export.span.start;
+                parent = ancestors.next();
+            }
+            Some(AstKind::ExportDefaultDeclaration(export)) => {
+                start = export.span.start;
+                parent = ancestors.next();
+            }
+            _ => {}
+        }
+        let parent = match parent {
+            None | Some(AstKind::Program(_)) => Parent::SourceFile,
+            Some(AstKind::TSModuleBlock(_)) => Parent::ModuleBlock {
+                namespace: matches!(
+                    ancestors.next(),
+                    Some(AstKind::TSModuleDeclaration(module))
+                        if matches!(module.id, oxc_ast::ast::TSModuleDeclarationName::Identifier(_))
+                ),
+            },
+            _ => Parent::Other,
+        };
+        let Some(modifiers) = modifiers::scan_modifiers(
+            self.source_text,
+            start,
+            span.end,
+            node != NodeKind::VariableStatement,
+        ) else {
+            return;
+        };
+        let context = ModifierContext {
+            node,
+            parent,
+            parent_ambient: self.ambient_depth > 0,
+            name_is_private: false,
+            type_parameter_owner: TypeParameterOwner::Other,
+        };
+        self.push_modifier_error(modifiers::first_modifier_error(&modifiers, &context));
+    }
+
+    fn check_class_member_modifiers(
+        &mut self,
+        node: NodeKind,
+        start: u32,
+        key: &oxc_ast::ast::PropertyKey<'_>,
+    ) {
+        let Some(AstKind::Class(class)) = self.stack.iter().rev().nth(1) else {
+            return;
+        };
+        let Some(modifiers) =
+            modifiers::scan_modifiers(self.source_text, start, key.span().start, true)
+        else {
+            return;
+        };
+        let context = ModifierContext {
+            node,
+            parent: Parent::Class {
+                is_declaration: class.r#type == oxc_ast::ast::ClassType::ClassDeclaration,
+                is_abstract: class.r#abstract,
+            },
+            parent_ambient: self.ambient_depth > 0,
+            name_is_private: matches!(key, oxc_ast::ast::PropertyKey::PrivateIdentifier(_)),
+            type_parameter_owner: TypeParameterOwner::Other,
+        };
+        self.push_modifier_error(modifiers::first_modifier_error(&modifiers, &context));
+    }
+
+    fn check_type_parameter_modifiers(&mut self, parameter: &oxc_ast::ast::TSTypeParameter<'_>) {
+        let Some(modifiers) = modifiers::scan_modifiers(
+            self.source_text,
+            parameter.span.start,
+            parameter.name.span.start,
+            true,
+        ) else {
+            return;
+        };
+        let owner = match self.stack.iter().rev().nth(1) {
+            Some(
+                AstKind::Function(_)
+                | AstKind::ArrowFunctionExpression(_)
+                | AstKind::TSFunctionType(_)
+                | AstKind::TSConstructorType(_)
+                | AstKind::TSCallSignatureDeclaration(_)
+                | AstKind::TSConstructSignatureDeclaration(_)
+                | AstKind::TSMethodSignature(_),
+            ) => TypeParameterOwner::FunctionLike,
+            Some(AstKind::Class(_)) => TypeParameterOwner::Class,
+            Some(AstKind::TSInterfaceDeclaration(_)) => TypeParameterOwner::Interface,
+            Some(AstKind::TSTypeAliasDeclaration(_)) => TypeParameterOwner::TypeAlias,
+            _ => TypeParameterOwner::Other,
+        };
+        let context = ModifierContext {
+            node: NodeKind::TypeParameter,
+            parent: Parent::Other,
+            parent_ambient: self.ambient_depth > 0,
+            name_is_private: false,
+            type_parameter_owner: owner,
+        };
+        self.push_modifier_error(modifiers::first_modifier_error(&modifiers, &context));
+    }
+
+    /// tsc's `checkGrammarObjectLiteralExpression`: no modifier belongs on an
+    /// object literal member except `async` on a method — TS1042 each; and
+    /// `checkGrammarMethod`'s TS1184 on a method carrying anything else.
+    fn check_object_member_modifiers(&mut self, property: &oxc_ast::ast::ObjectProperty<'_>) {
+        let Some(modifiers) = modifiers::scan_modifiers(
+            self.source_text,
+            property.span.start,
+            property.key.span().start,
+            false,
+        ) else {
+            return;
+        };
+        for modifier in &modifiers {
+            if modifier.kind == modifiers::ModifierKind::Async && property.method {
+                continue;
+            }
+            self.push(1042, modifier.span, &[modifier.kind.text()]);
+        }
+        if property.method
+            && property.kind == PropertyKind::Init
+            && let Some(first) = modifiers.first()
+            && !(modifiers.len() == 1 && first.kind == modifiers::ModifierKind::Async)
+        {
+            self.push(1184, first.span, &[]);
+        }
+    }
+
+    /// Whether `kind` is what tsc calls an ambient module: a string-named
+    /// module declaration or a global augmentation.
+    fn is_ambient_module(kind: Option<AstKind<'a>>) -> bool {
+        match kind {
+            Some(AstKind::TSModuleDeclaration(module)) => {
+                matches!(module.id, oxc_ast::ast::TSModuleDeclarationName::StringLiteral(_))
+            }
+            Some(AstKind::TSGlobalDeclaration(_)) => true,
+            _ => false,
+        }
+    }
+
+    /// tsc's `IsExternalModuleAugmentation` for an ambient module being
+    /// entered: at the top level of an external module, or directly inside a
+    /// top-level ambient module of a script.
+    fn is_external_module_augmentation(&self) -> bool {
+        let mut ancestors = self.ancestors_as_tsc();
+        match ancestors.next() {
+            None | Some(AstKind::Program(_)) => self.external_module,
+            Some(AstKind::TSModuleBlock(_)) => {
+                let grandparent = ancestors.next();
+                Self::is_ambient_module(grandparent)
+                    && matches!(ancestors.next(), None | Some(AstKind::Program(_)))
+                    && !self.external_module
+            }
+            _ => false,
+        }
+    }
+
+    /// tsc's `checkModuleDeclaration` for a `module`/`namespace` declaration:
+    /// its position (TS1234/TS1235), modifiers, the `module` keyword on a
+    /// namespace (TS1540), and where an ambient module may sit (TS2435).
+    fn check_module_declaration(&mut self, declaration: &oxc_ast::ast::TSModuleDeclaration<'_>) {
+        let (name_span, is_string_name) = match &declaration.id {
+            oxc_ast::ast::TSModuleDeclarationName::Identifier(identifier) => (identifier.span, false),
+            oxc_ast::ast::TSModuleDeclarationName::StringLiteral(literal) => (literal.span, true),
+        };
+        if is_string_name {
+            self.check_ambient_module_export();
+        }
+        let parent = self.ancestors_as_tsc().next();
+        let in_context = matches!(
+            parent,
+            None | Some(AstKind::Program(_) | AstKind::TSModuleBlock(_) | AstKind::TSModuleDeclaration(_))
+        );
+        if !in_context {
+            let code = if is_string_name { 1234 } else { 1235 };
+            let span = self.first_token(self.statement_start(declaration.span.start));
+            self.push(code, span, &[]);
+            return;
+        }
+        self.check_statement_modifiers(NodeKind::ModuleDeclaration, declaration.span);
+        if !is_string_name && declaration.kind == oxc_ast::ast::TSModuleDeclarationKind::Module {
+            self.push(1540, name_span, &[]);
+        }
+        if is_string_name && !self.is_external_module_augmentation() {
+            let at_script_top_level =
+                matches!(parent, None | Some(AstKind::Program(_))) && !self.external_module;
+            if !at_script_top_level {
+                self.push(2435, name_span, &[]);
+            }
+        }
+    }
+
+    /// tsc's `checkModuleDeclaration` for `global { … }`: TS2670 without
+    /// `declare` outside an ambient context, its position (TS1234), and
+    /// TS2669 anywhere it does not augment an external module. An
+    /// augmentation's body may not import or export (TS2666/TS2667).
+    fn check_global_declaration(&mut self, declaration: &oxc_ast::ast::TSGlobalDeclaration<'_>) {
+        self.check_ambient_module_export();
+        if !declaration.declare && self.ambient_depth == 0 {
+            self.push(2670, declaration.global_span, &[]);
+        }
+        let parent = self.ancestors_as_tsc().next();
+        if !matches!(parent, None | Some(AstKind::Program(_) | AstKind::TSModuleBlock(_))) {
+            let span = self.first_token(self.statement_start(declaration.span.start));
+            self.push(1234, span, &[]);
+            return;
+        }
+        if self.is_external_module_augmentation() {
+            self.check_augmentation_elements(&declaration.body.body);
+        } else {
+            self.push(2669, declaration.global_span, &[]);
+        }
+    }
+
+    /// The binder's TS2668: `export` on an ambient module or augmentation.
+    fn check_ambient_module_export(&mut self) {
+        if let Some(AstKind::ExportNamedDeclaration(export)) = self.stack.last() {
+            let span = self.first_token(export.span.start);
+            self.push(2668, span, &[]);
+        }
+    }
+
+    /// The start of the statement a declaration belongs to: its `export`
+    /// wrapper's, when there is one.
+    fn statement_start(&self, start: u32) -> u32 {
+        match self.stack.last() {
+            Some(AstKind::ExportNamedDeclaration(export)) => export.span.start,
+            _ => start,
+        }
+    }
+
+    /// tsc's `checkModuleAugmentationElement`.
+    fn check_augmentation_elements(&mut self, statements: &[Statement<'_>]) {
+        for statement in statements {
+            let code = match statement {
+                Statement::ExportNamedDeclaration(export) if export.declaration.is_none() => 2666,
+                Statement::ExportAllDeclaration(_) | Statement::TSExportAssignment(_) => 2666,
+                Statement::ExportDefaultDeclaration(export)
+                    if !matches!(
+                        export.declaration,
+                        oxc_ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(_)
+                            | oxc_ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(_)
+                            | oxc_ast::ast::ExportDefaultDeclarationKind::TSInterfaceDeclaration(_)
+                    ) =>
+                {
+                    2666
+                }
+                Statement::ImportDeclaration(_) => 2667,
+                Statement::TSImportEqualsDeclaration(import)
+                    if matches!(
+                        import.module_reference,
+                        oxc_ast::ast::TSModuleReference::ExternalModuleReference(_)
+                    ) =>
+                {
+                    2667
+                }
+                _ => continue,
+            };
+            let span = self.first_token(statement.span().start);
+            self.push(code, span, &[]);
+        }
+    }
+
+    /// tsc's `checkExportAssignment` for `export default <expression>`, and
+    /// `checkGrammarModifiers` for a default-exported declaration: not
+    /// inside a function or block (TS1258 / TS1184). The checker reports an
+    /// export assignment inside a namespace (TS1319) itself, as tsc does.
+    fn check_export_default(&mut self, declaration: &oxc_ast::ast::ExportDefaultDeclaration<'_>) {
+        let is_declaration = matches!(
+            declaration.declaration,
+            oxc_ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(_)
+                | oxc_ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(_)
+                | oxc_ast::ast::ExportDefaultDeclarationKind::TSInterfaceDeclaration(_)
+        );
+        let mut ancestors = self.stack.iter().rev();
+        let parent = ancestors.next();
+        if !matches!(parent, None | Some(AstKind::Program(_) | AstKind::TSModuleBlock(_))) {
+            let code = if is_declaration { 1184 } else { 1258 };
+            let span = self.first_token(declaration.span.start);
+            self.push(code, span, &[]);
+            return;
+        }
+    }
+
+    /// tsc's `checkExpressionWithTypeArguments`: an instantiation expression
+    /// as the right operand of `instanceof` — TS2848.
+    fn check_instanceof_instantiation(&mut self, binary: &oxc_ast::ast::BinaryExpression<'_>) {
+        if binary.operator != oxc_syntax::operator::BinaryOperator::Instanceof {
+            return;
+        }
+        let mut right = &binary.right;
+        while let oxc_ast::ast::Expression::ParenthesizedExpression(inner) = right {
+            right = &inner.expression;
+        }
+        if let oxc_ast::ast::Expression::TSInstantiationExpression(instantiation) = right {
+            self.push(2848, instantiation.span, &[]);
+        }
+    }
+
+    /// tsc's `checkGrammarForUseStrictSimpleParameterList`: a `"use strict"`
+    /// prologue in a function whose parameter list is not simple — TS1346
+    /// on each such parameter and TS1347 on the directive. tsc skips this
+    /// below target ES2016, which this pass does not see.
+    fn check_use_strict_parameters(
+        &mut self,
+        parameters: &oxc_ast::ast::FormalParameters<'_>,
+        body: &oxc_ast::ast::FunctionBody<'_>,
+    ) {
+        let Some(directive) = body.directives.iter().find(|directive| {
+            let span = directive.expression.span;
+            matches!(
+                self.source_text.get(span.start as usize..span.end as usize),
+                Some("\"use strict\"" | "'use strict'")
+            )
+        }) else {
+            return;
+        };
+        let mut non_simple: Vec<Span> = parameters
+            .items
+            .iter()
+            .filter(|parameter| {
+                parameter.initializer.is_some()
+                    || !matches!(parameter.pattern, BindingPattern::BindingIdentifier(_))
+            })
+            .map(|parameter| parameter.span)
+            .collect();
+        if let Some(rest) = &parameters.rest {
+            non_simple.push(rest.span);
+        }
+        if non_simple.is_empty() {
+            return;
+        }
+        for span in non_simple {
+            self.push(1346, span, &[]);
+        }
+        self.push(1347, directive.span, &[]);
+    }
+}
+
+fn decorators_end(decorators: &[oxc_ast::ast::Decorator<'_>], start: u32) -> u32 {
+    decorators
+        .iter()
+        .map(|decorator| decorator.span.end)
+        .max()
+        .unwrap_or(start)
+        .max(start)
 }
 
 fn check_class_name(collector: &mut ContextCollector<'_, '_>, class: &Class<'_>) {
@@ -2376,22 +3371,16 @@ fn statement_declares_value(statement: &Statement<'_>, name: &str) -> bool {
 /// The value names an expression reads as it runs. A nested function, arrow,
 /// or class body runs later (tsc's `withinDeferredContext`), and a type
 /// annotation reads no values.
-/// The deferred reads are kept apart: they resolve (a later parameter is in
-/// scope by the time a nested function runs) but are not errors.
 #[derive(Default)]
 struct EagerReferences {
     found: Vec<(String, Span)>,
-    deferred: Vec<(String, Span)>,
     deferred_depth: usize,
 }
 
 impl<'a> Visit<'a> for EagerReferences {
     fn visit_identifier_reference(&mut self, identifier: &oxc_ast::ast::IdentifierReference<'a>) {
-        let entry = (identifier.name.to_string(), identifier.span);
-        if self.deferred_depth > 0 {
-            self.deferred.push(entry);
-        } else {
-            self.found.push(entry);
+        if self.deferred_depth == 0 {
+            self.found.push((identifier.name.to_string(), identifier.span));
         }
     }
     fn visit_function(&mut self, function: &oxc_ast::ast::Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
@@ -2523,4 +3512,44 @@ fn is_entity_name_expression(expression: &oxc_ast::ast::Expression<'_>) -> bool 
         E::StaticMemberExpression(member) => is_entity_name_expression(&member.object),
         _ => false,
     }
+}
+
+fn statements_declare_block_scoped(statements: &[Statement<'_>], name: &str) -> bool {
+    statements.iter().any(|statement| {
+        let declaration = match statement {
+            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            other => other.as_declaration(),
+        };
+        matches!(
+            declaration,
+            Some(oxc_ast::ast::Declaration::VariableDeclaration(declaration))
+                if variable_declaration_declares_block_scoped(declaration, name)
+        )
+    })
+}
+
+fn variable_declaration_declares_block_scoped(
+    declaration: &oxc_ast::ast::VariableDeclaration<'_>,
+    name: &str,
+) -> bool {
+    declaration.kind != VariableDeclarationKind::Var
+        && declaration.declarations.iter().any(|declarator| {
+            declarator
+                .id
+                .get_binding_identifiers()
+                .iter()
+                .any(|identifier| identifier.name == name)
+        })
+}
+
+/// tsc's `IsExternalModuleNameRelative`: `./`, `../`, or a rooted path.
+fn is_external_module_name_relative(name: &str) -> bool {
+    let relative = name == "." || name == ".." || name.starts_with("./") || name.starts_with("../")
+        || name.starts_with(".\\") || name.starts_with("..\\");
+    let rooted = name.starts_with('/')
+        || name.starts_with('\\')
+        || (name.len() >= 2
+            && name.as_bytes()[0].is_ascii_alphabetic()
+            && name.as_bytes()[1] == b':');
+    relative || rooted
 }

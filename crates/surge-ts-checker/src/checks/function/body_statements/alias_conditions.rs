@@ -248,25 +248,37 @@ pub(super) fn rewrite_discriminant_aliases(
 /// The condition an `if` really tests: an identifier bound to a boolean `const`
 /// guard stands for the expression it was initialized from, also when it is one
 /// operand of the condition's `&&`/`||`/`!` structure (`isRefetch && mode ===
-/// 'reset'` narrows through `isRefetch`).
+/// 'reset'` narrows through `isRefetch`). An alias within the inlined
+/// condition is inlined in turn, up to tsc's five levels, and each inlined
+/// condition keeps only the guards over constant references.
 pub(super) fn resolved_alias_condition(
     condition: &ParsedExpression,
+    scopes: &ScopeStack,
     flow_state: &FunctionFlowState,
 ) -> Option<std::sync::Arc<ParsedExpression>> {
-    match condition {
-        ParsedExpression::Identifier { name, .. } => flow_state.alias_guard_condition(name),
-        _ => expand_alias_conditions(condition, flow_state).map(std::sync::Arc::new),
-    }
+    expand_alias_conditions(condition, scopes, flow_state, 0).map(std::sync::Arc::new)
 }
 
-pub(super) fn expand_alias_conditions(
+fn expand_alias_conditions(
     condition: &ParsedExpression,
+    scopes: &ScopeStack,
     flow_state: &FunctionFlowState,
+    inline_level: usize,
 ) -> Option<ParsedExpression> {
     match condition {
-        ParsedExpression::Identifier { name, .. } => flow_state
-            .alias_guard_condition(name)
-            .map(|expression| (*expression).clone()),
+        ParsedExpression::Identifier { name, .. } => {
+            if inline_level >= crate::checks::function::ALIAS_INLINE_LIMIT {
+                return None;
+            }
+            let alias = flow_state.alias_guard_condition(name)?;
+            let inlined = expand_alias_conditions(&alias, scopes, flow_state, inline_level + 1)
+                .unwrap_or_else(|| (*alias).clone());
+            Some(crate::checks::function::retain_constant_reference_guards(
+                &inlined,
+                scopes.visible_symbols(),
+                &|name| flow_state.is_binding_assigned(name),
+            ))
+        }
         ParsedExpression::Logical {
             left,
             left_span,
@@ -275,8 +287,8 @@ pub(super) fn expand_alias_conditions(
             right,
             right_span,
         } => {
-            let expanded_left = expand_alias_conditions(left, flow_state);
-            let expanded_right = expand_alias_conditions(right, flow_state);
+            let expanded_left = expand_alias_conditions(left, scopes, flow_state, inline_level);
+            let expanded_right = expand_alias_conditions(right, scopes, flow_state, inline_level);
             if expanded_left.is_none() && expanded_right.is_none() {
                 return None;
             }
@@ -294,11 +306,13 @@ pub(super) fn expand_alias_conditions(
             operator_span,
             operand,
             operand_span,
-        } => expand_alias_conditions(operand, flow_state).map(|expanded| ParsedExpression::Unary {
-            operator: ParsedUnaryOperator::Not,
-            operator_span: *operator_span,
-            operand: Box::new(expanded),
-            operand_span: *operand_span,
+        } => expand_alias_conditions(operand, scopes, flow_state, inline_level).map(|expanded| {
+            ParsedExpression::Unary {
+                operator: ParsedUnaryOperator::Not,
+                operator_span: *operator_span,
+                operand: Box::new(expanded),
+                operand_span: *operand_span,
+            }
         }),
         _ => None,
     }

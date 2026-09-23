@@ -1,12 +1,13 @@
 use surge_ts_syntax::{ParsedExpression, ParsedLogicalOperator, ParsedUnaryOperator};
-use surge_ts_types::{Type, TypeCopyReason, with_type_copy_reason};
+use surge_ts_types::{Type, TypeCopyReason, union_type, with_type_copy_reason};
 
 use crate::context::CheckerContext;
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolTable};
 use super::guards::*;
 use super::{
     ReferenceGuard, narrow_predicate_reference_guards_in_scope, narrow_reference_in_scope,
-    narrow_value_guards_in_scope, narrowed_reference_type, reference_path,
+    narrow_value_guards_in_scope, narrowed_reference_type, reference_equality_narrowings,
+    reference_path,
 };
 
 /// Applies `typeof x === "tag"` / `typeof o.p === "tag"` narrowing in place to a
@@ -75,7 +76,7 @@ pub(super) fn resolve_constructor_instance_type(
 
 /// tsc's `getInstanceType`, for a right operand that is a value rather than a
 /// class name: the type of its `prototype` member unless that is `any`, else
-/// what its construct signature returns.
+/// the union of what its construct signatures return.
 fn instance_type_of_constructor_value(constructor: &Type) -> Option<Type> {
     let Type::Object(object) = constructor.peeled() else {
         return None;
@@ -86,10 +87,16 @@ fn instance_type_of_constructor_value(constructor: &Type) -> Option<Type> {
     {
         return Some(prototype.ty.clone());
     }
-    object
-        .construct_signature()
+    let mut signatures = Vec::new();
+    object.construct_signature()?.push_overload_members(&mut signatures);
+    let returns: Vec<Type> = signatures
+        .iter()
         .map(|signature| signature.return_type().clone())
-        .filter(usable)
+        .collect();
+    if !returns.iter().all(usable) {
+        return None;
+    }
+    Some(union_type(returns))
 }
 
 fn resolve_named_constructor_instance_type(
@@ -267,6 +274,50 @@ pub(super) fn narrow_literal_equality_in_scope(
     true
 }
 
+/// Applies `x === y` narrowing against a compared value no literal spells
+/// ([`reference_equality_narrowings`]) in place to a `ScopeStack`. Both
+/// operands' types are read before either narrows. Returns whether anything
+/// narrowed.
+pub(super) fn narrow_reference_equality_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) -> bool {
+    let narrowings = reference_equality_narrowings(
+        condition,
+        branch_is_true,
+        &|name| scopes.resolve(name).cloned(),
+        &|name| scopes.resolve(name).map(|symbol| symbol.ty.clone()),
+    );
+    let narrowed = !narrowings.is_empty();
+    for (name, symbol, declared) in narrowings {
+        let _ = scopes.insert_current_narrowed(name, symbol, declared);
+    }
+    narrowed
+}
+
+/// [`narrow_reference_equality_in_scope`] over a plain symbol table.
+pub(super) fn narrow_reference_equality_symbol_table(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    branch_is_true: bool,
+) -> Option<SymbolTable> {
+    let narrowings = reference_equality_narrowings(
+        condition,
+        branch_is_true,
+        &|name| symbols.get(name).cloned(),
+        &|name| symbols.get(name).map(|symbol| symbol.ty.clone()),
+    );
+    if narrowings.is_empty() {
+        return None;
+    }
+    let mut narrowed = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+    for (name, symbol, declared) in narrowings {
+        narrowed.insert_narrowed(name, symbol, declared);
+    }
+    Some(narrowed)
+}
+
 /// Applies `ArrayBuffer.isView(x)` / `ArrayBuffer.isView(o.p)` narrowing in place
 /// to a `ScopeStack`. Returns whether the condition was such a guard over a
 /// reference.
@@ -371,12 +422,16 @@ pub(super) fn narrow_to_instanceof_subclass(
     if !keep_matching || matches!(ty.peeled(), Type::Union(_)) {
         return None;
     }
-    // `unknown` narrows to the candidate itself (tsc's `narrowTypeByInstanceof`
-    // reads it as the widest subject there is).
-    if matches!(ty, Type::GenuineUnknown) {
+    // `unknown` and `any` narrow to the candidate itself (tsc's
+    // `getNarrowedType`), except that `any` stays `any` under `instanceof
+    // Object` and `instanceof Function` (`narrowTypeByInstanceof`).
+    if matches!(ty, Type::GenuineUnknown)
+        || matches!(ty, Type::Any)
+            && !instance.is_some_and(|instance| is_global_object_or_function(instance))
+    {
         return instance.filter(|instance| !instance.is_unknown()).cloned();
     }
-    // A subject that is already `any` or unresolved says nothing to narrow.
+    // A subject that is unresolved says nothing to narrow.
     if ty.is_unknown() || matches!(ty, Type::Any) {
         return None;
     }
@@ -387,6 +442,22 @@ pub(super) fn narrow_to_instanceof_subclass(
     // Narrow only along a real subtype edge; an unrelated constructor leaves the
     // subject alone rather than replacing it with something it never was.
     surge_ts_types::is_assignable_to(instance, ty).then(|| instance.clone())
+}
+
+/// Whether `instance` is the global `Object` or `Function` interface — the
+/// instance types `instanceof` does not narrow `any` to.
+fn is_global_object_or_function(instance: &Type) -> bool {
+    if surge_ts_types::is_global_function_interface(instance) {
+        return true;
+    }
+    let Type::Reference(reference) = instance else {
+        return false;
+    };
+    reference.id.split('\u{0}').next_back() == Some("Object")
+        && matches!(instance.peeled(), Type::Object(object)
+            if ["hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable"]
+                .iter()
+                .all(|member| object.properties.get(*member).is_some()))
 }
 
 /// Narrows `symbols` by a bare `x === "lit"` / `x !== 3` test.
@@ -450,10 +521,23 @@ pub(super) fn collect_equality_guard_subjects(
                         .map(|(name, _, _)| name),
                 },
             };
-            if let Some(name) = subject
-                && !names.iter().any(|existing| existing == name)
-            {
-                names.push(name.to_string());
+            if let Some(name) = subject {
+                if !names.iter().any(|existing| existing == name) {
+                    names.push(name.to_string());
+                }
+                return;
+            }
+            // `y === z`: both operands narrow, each by the other's type.
+            let Some(test) = parse_equality_test(condition) else {
+                return;
+            };
+            for (subject, value) in test.operand_pairs() {
+                if let ParsedExpression::Identifier { name, .. } = subject
+                    && reference_path(value).is_some()
+                    && !names.iter().any(|existing| existing == name)
+                {
+                    names.push(name.clone());
+                }
             }
         }
     }

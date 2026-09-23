@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "module": "preserve",
+    "target": "es2022",
+    "lib": ["es2022"],
+    "jsx": "react",
+    "esModuleInterop": true,
+    "types": []
+  },
+  "include": ["src/**/*"]
+}

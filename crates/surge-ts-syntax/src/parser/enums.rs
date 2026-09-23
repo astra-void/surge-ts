@@ -123,14 +123,7 @@ fn lower_enum_declaration(
         member_types.push(member_type);
     }
 
-    // tsc's `resolveAnonymousTypeMembers`: an enum with a numeric (or
-    // computed) member, or none at all, maps its values back to their names
-    // through `[x: number]: string` (`enumNumberIndexInfo`).
-    let reverse_mapping = (member_types.is_empty()
-        || member_types
-            .iter()
-            .any(|ty| matches!(ty, ParsedType::NumberLiteral(_) | ParsedType::Number)))
-    .then(|| Box::new(ParsedType::String));
+    let number_index_type = reverse_mapping_index_type(&properties);
     let enum_type = match member_types.len() {
         0 => ParsedType::Never,
         1 => member_types.pop().expect("one member type"),
@@ -163,7 +156,7 @@ fn lower_enum_declaration(
             declared_type: Some(ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
                 properties,
                 string_index_type: None,
-                number_index_type: reverse_mapping,
+                number_index_type,
                 call_signature: None,
             call_signature_overloads: Vec::new(),
                 construct_signature: None,
@@ -177,8 +170,22 @@ fn lower_enum_declaration(
     )
 }
 
+/// tsc's `enumNumberIndexInfo` (`resolveAnonymousTypeMembers`): the object of
+/// an enum with no members, or with any numeric member, carries the reverse
+/// mapping `readonly [n: number]: string`. A string-only enum has none, so
+/// `S[0]` stays an implicit `any`.
+fn reverse_mapping_index_type(properties: &[ParsedObjectTypeProperty]) -> Option<Box<ParsedType>> {
+    let numeric = properties.is_empty()
+        || properties
+            .iter()
+            .any(|property| matches!(property.ty, ParsedType::NumberLiteral(_) | ParsedType::Number));
+    numeric.then(|| Box::new(ParsedType::String))
+}
+
 fn enum_member_name(name: &TSEnumMemberName<'_>) -> Option<String> {
     match name {
+        // The parser's nameless placeholder for a computed name (TS1164).
+        TSEnumMemberName::Identifier(identifier) if identifier.name.is_empty() => None,
         TSEnumMemberName::Identifier(identifier) => Some(identifier.name.to_string()),
         TSEnumMemberName::String(literal) | TSEnumMemberName::ComputedString(literal) => {
             Some(literal.value.to_string())
@@ -282,6 +289,7 @@ pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStateme
                             object.properties.push(property);
                         }
                     }
+                    object.number_index_type = reverse_mapping_index_type(&object.properties);
                 }
             }
             ParsedStatement::TypeAliasDeclaration(alias) => {

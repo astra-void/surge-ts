@@ -27,6 +27,22 @@ pub enum ModuleEmitKind {
 }
 
 impl ModuleEmitKind {
+    /// The `module` option's name, as tsgo's `ModuleKind.String()` prints it.
+    pub(crate) fn option_name(self) -> &'static str {
+        match self {
+            Self::CommonJS => "CommonJS",
+            Self::ES2015 => "ES2015",
+            Self::ES2020 => "ES2020",
+            Self::ES2022 => "ES2022",
+            Self::ESNext => "ESNext",
+            Self::Node16 => "Node16",
+            Self::Node18 => "Node18",
+            Self::Node20 => "Node20",
+            Self::NodeNext => "NodeNext",
+            Self::Preserve => "Preserve",
+        }
+    }
+
     /// `ES2015 <= kind <= ESNext`.
     pub fn is_ecmascript(self) -> bool {
         matches!(self, Self::ES2015 | Self::ES2020 | Self::ES2022 | Self::ESNext)
@@ -83,6 +99,8 @@ pub struct JsxFactoryNames {
     pub fragment_factory: Option<String>,
     pub react_namespace: Option<String>,
     pub import_source: Option<String>,
+    /// `jsx: react-jsxdev`: the automatic runtime is `jsx-dev-runtime`.
+    pub development: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +112,13 @@ pub struct CheckerOptions {
     /// tsgo's `GetUseDefineForClassFields`; off, a static `name`/`length`
     /// member collides with the constructor function's own (TS2699).
     pub use_define_for_class_fields: bool,
+    /// `target` is ES2022 or later. Below it a static initializer's `super.x`
+    /// is emitted through `Reflect` (TS2818), and together with
+    /// `use_define_for_class_fields` it is tsgo's `GetEmitStandardClassFields`.
+    pub target_es2022: bool,
+    /// `noEmit`: tsgo drops the diagnostics it marks `SkippedOnNoEmit`, the
+    /// emit-time name collisions (TS2441, TS2818, TS1216).
+    pub no_emit: bool,
     /// `moduleResolution` is `node16` or `nodenext`, where an ESM import of a
     /// relative path must spell its extension (TS2834/TS2835).
     pub node_module_resolution: bool,
@@ -121,6 +146,13 @@ pub struct CheckerOptions {
     pub no_unused_parameters: bool,
     /// `allowUnreachableCode: true`; unset and `false` both leave it off.
     pub allow_unreachable_code: bool,
+    /// `allowUnreachableCode: false` written explicitly: tsc reports TS7027 as
+    /// an error only then, and as a suggestion (which surge does not emit)
+    /// when the option is unset.
+    pub report_unreachable_code: bool,
+    /// `allowUnusedLabels` as written: an unused label is an error only under
+    /// an explicit `false` (tsc reports a suggestion when it is unset).
+    pub allow_unused_labels: Option<bool>,
     pub stub_external_modules: bool,
     pub resolved_modules: FxHashMap<String, String>,
     /// Importer-scoped module resolutions: canonical importer file name →
@@ -149,6 +181,9 @@ pub struct CheckerOptions {
     /// `preserve` and `react-native` resolve it silently, and the automatic
     /// runtime never names it.
     pub jsx_classic_react: bool,
+    /// No `jsx` option at all: every JSX opening element or fragment is
+    /// TS17004.
+    pub jsx_emit_none: bool,
     /// `compilerOptions.allowUmdGlobalAccess`: suppresses TS2686 entirely.
     /// tsc downgrades the diagnostic to a suggestion, a channel surge does not
     /// emit on, so the option reads as full suppression here.
@@ -169,6 +204,8 @@ pub struct CheckerOptions {
 impl CheckerOptions {
     pub const ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL: &'static str =
         "\0allowSyntheticDefaultImports";
+    /// Present when `compilerOptions.lib` lists `dom`.
+    pub const LIB_DOM_SENTINEL: &'static str = "\0lib.dom.d.ts";
 
     /// Whether `compilerOptions.types` contained the `"*"` wildcard. Selects the
     /// node install-hint variant (TS2580 with a wildcard, TS2591 without),
@@ -177,14 +214,30 @@ impl CheckerOptions {
         self.types.iter().any(|name| name == "*")
     }
 
+    /// tsgo's `GetEmitStandardClassFields`: class fields are emitted as
+    /// [[Define]] semantics, which lifts the constructor-emit rules
+    /// (TS2301, TS2376, TS2401).
+    pub(crate) fn emit_standard_class_fields(&self) -> bool {
+        self.use_define_for_class_fields && self.target_es2022
+    }
+
     pub(crate) fn allow_synthetic_default_imports(&self) -> bool {
         self.resolved_modules
             .contains_key(Self::ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL)
     }
 
+    /// tsc's `slices.Contains(compilerOptions.Lib, "lib.dom.d.ts")`: the DOM
+    /// lib is written in `lib`. A DOM lib loaded as part of the target's
+    /// default set, or by `/// <reference lib>`, does not count.
+    pub(crate) fn lib_lists_dom(&self) -> bool {
+        self.resolved_modules.contains_key(Self::LIB_DOM_SENTINEL)
+    }
+
     /// Resolve `specifier` from `importer_file`, preferring the importer-scoped
     /// map. Falls back to the project-wide map so paths/baseUrl mappings and
-    /// flat-map callers keep working.
+    /// flat-map callers keep working. An empty importer-scoped entry is a
+    /// resolution the loader ran and lost, which no other importer's answer
+    /// may stand in for.
     pub(crate) fn resolved_module_for(
         &self,
         importer_file: &str,
@@ -192,7 +245,7 @@ impl CheckerOptions {
     ) -> Option<&String> {
         if let Some(per_importer) = self.resolved_modules_by_importer.get(importer_file) {
             if let Some(resolved) = per_importer.get(specifier) {
-                return Some(resolved);
+                return (!resolved.is_empty()).then_some(resolved);
             }
         }
         self.resolved_modules.get(specifier)
@@ -206,6 +259,8 @@ impl Default for CheckerOptions {
             no_implicit_this: false,
             module_emit: ModuleEmitKind::Preserve,
             use_define_for_class_fields: true,
+            target_es2022: true,
+            no_emit: false,
             node_module_resolution: false,
             esm_module_files: Default::default(),
             strict_null_checks: true,
@@ -222,6 +277,8 @@ impl Default for CheckerOptions {
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,
+            report_unreachable_code: false,
+            allow_unused_labels: None,
             stub_external_modules: false,
             resolved_modules: FxHashMap::default(),
             resolved_modules_by_importer: FxHashMap::default(),
@@ -230,6 +287,7 @@ impl Default for CheckerOptions {
             skip_lib_check: false,
             jsx_automatic_runtime: false,
             jsx_classic_react: false,
+            jsx_emit_none: false,
             allow_umd_global_access: false,
             resolve_json_module: true,
             allow_js: false,

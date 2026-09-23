@@ -32,7 +32,8 @@ struct Collector<'s> {
     /// Literals whose previous token is `-`, which the scanner folds into an
     /// octal's suggested spelling and span.
     after_minus: Vec<u32>,
-    /// `super`s followed by an argument list or member access.
+    /// `super`s followed by an argument list or member access. A `?.` is
+    /// neither to `parseSuperExpression`, which looks only at the next token.
     followed_super: Vec<u32>,
     errors: Vec<ParserError>,
 }
@@ -64,21 +65,27 @@ impl<'a> Visit<'a> for Collector<'_> {
     }
 
     fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
-        if let Expression::Super(object) = &member.object {
+        if let Expression::Super(object) = &member.object
+            && !member.optional
+        {
             self.followed_super.push(object.span.start);
         }
         walk::walk_static_member_expression(self, member);
     }
 
     fn visit_computed_member_expression(&mut self, member: &ComputedMemberExpression<'a>) {
-        if let Expression::Super(object) = &member.object {
+        if let Expression::Super(object) = &member.object
+            && !member.optional
+        {
             self.followed_super.push(object.span.start);
         }
         walk::walk_computed_member_expression(self, member);
     }
 
     fn visit_private_field_expression(&mut self, member: &PrivateFieldExpression<'a>) {
-        if let Expression::Super(object) = &member.object {
+        if let Expression::Super(object) = &member.object
+            && !member.optional
+        {
             self.followed_super.push(object.span.start);
         }
         walk::walk_private_field_expression(self, member);
@@ -95,7 +102,7 @@ impl<'a> Visit<'a> for Collector<'_> {
                 .char_indices()
                 .find(|(_, c)| !c.is_whitespace())
                 .map_or(self.source_text.len() - after, |(offset, _)| offset);
-        let end = (start + 1).min(self.source_text.len()).max(start);
+        let end = super::grammar_context::first_token_end(self.source_text, start);
         self.push(1034, "'super' must be followed by an argument list or member access.".to_string(), start, end);
     }
 
@@ -115,7 +122,9 @@ impl<'a> Visit<'a> for Collector<'_> {
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-        if let Expression::Super(callee) = &call.callee {
+        if let Expression::Super(callee) = &call.callee
+            && !call.optional
+        {
             self.followed_super.push(callee.span.start);
         }
         if matches!(call.callee, Expression::Super(_))
