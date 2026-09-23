@@ -1187,7 +1187,18 @@ fn awaited_type_at_depth(ty: &Type, depth: usize) -> Type {
         return ty.clone();
     }
 
-    if let Type::Union(union) = ty {
+    // tsc's `getAwaitedTypeNoAlias` awaits each member of a union — including
+    // one reached through an alias (`MaybePromise<T> = T | Promise<T>`), whose
+    // type in tsc simply is that union.
+    let union = match ty {
+        Type::Union(union) => Some(union.clone()),
+        Type::Reference(_) => match ty.peeled() {
+            Type::Union(union) => Some(union),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(union) = union {
         return union_type(
             union
                 .types()
