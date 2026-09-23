@@ -1024,35 +1024,31 @@ pub(crate) fn check_new_like(
         // A function type has a call signature and no construct signature (a
         // constructor type is an object carrying one), so tsc resolves the call
         // signature and types the `new` as `any`: TS7009 under `noImplicitAny`,
-        // otherwise TS2350 unless the function returns `void`.
-        Type::Function(function_type) => {
-            let _ = check_function_type_call(
+        // otherwise TS2350 unless the function returns `void`. A callable object
+        // with no construct signature (a function merged with a namespace) is
+        // resolved the same way (`resolveNewExpression`).
+        Type::Function(function_type) => new_with_call_signature(
+            &function_type,
+            callee_span,
+            call_span,
+            type_arguments,
+            arguments,
+            symbols,
+            ctx,
+        ),
+        Type::Object(object)
+            if object.construct_signature().is_none() && object.call_signature().is_some() =>
+        {
+            let function_type = object.call_signature().expect("call signature present").clone();
+            new_with_call_signature(
                 &function_type,
                 callee_span,
                 call_span,
                 type_arguments,
                 arguments,
-                None,
                 symbols,
                 ctx,
-            );
-            let diagnostic = if ctx.options.no_implicit_any {
-                Some(Diagnostic::ts7009(ctx.file_name.clone()))
-            } else if *function_type.return_type() != Type::Void
-                // A return type surge has not inferred may well be `void`.
-                && !function_type.return_type().is_unmodelled()
-            {
-                Some(Diagnostic::ts2350(ctx.file_name.clone()))
-            } else {
-                None
-            };
-            if let Some(diagnostic) = diagnostic {
-                ctx.push(diagnostic_with_syntax_span(
-                    diagnostic,
-                    call_span.or(callee_span),
-                ));
-            }
-            Some(Type::Any)
+            )
         }
         // A class value (static side) carries a construct signature. Check the
         // constructor arguments against it and yield the instance type.
@@ -1396,6 +1392,41 @@ fn infer_generic_class_type_arguments(
         symbols,
         ctx,
     ))
+}
+
+fn new_with_call_signature(
+    function_type: &surge_ts_types::FunctionType,
+    callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let _ = check_function_type_call(
+        function_type,
+        callee_span,
+        call_span,
+        type_arguments,
+        arguments,
+        None,
+        symbols,
+        ctx,
+    );
+    let diagnostic = if ctx.options.no_implicit_any {
+        Some(Diagnostic::ts7009(ctx.file_name.clone()))
+    } else if *function_type.return_type() != Type::Void
+        // A return type surge has not inferred may well be `void`.
+        && !function_type.return_type().is_unmodelled()
+    {
+        Some(Diagnostic::ts2350(ctx.file_name.clone()))
+    } else {
+        None
+    };
+    if let Some(diagnostic) = diagnostic {
+        ctx.push(diagnostic_with_syntax_span(diagnostic, call_span.or(callee_span)));
+    }
+    Some(Type::Any)
 }
 
 /// One of tsc's effective call arguments (`getEffectiveCallArguments`): a

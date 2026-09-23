@@ -1383,10 +1383,21 @@ pub(crate) fn register_function_signature(
     }
 
     if !symbol_exists || replace_existing {
+        // tsc keeps one symbol for a function and the namespace (or expando
+        // properties) merged with it: re-registering the declaration replaces
+        // only the call signature, never the members.
+        let ty = match symbols.get(&name).map(|existing| &existing.ty) {
+            Some(Type::Object(object))
+                if replace_existing && object.call_signature().is_some() && !object.properties.is_empty() =>
+            {
+                Type::Object(object.clone().with_call_signature(function_type))
+            }
+            _ => Type::Function(function_type),
+        };
         symbols.insert(
             name,
             SymbolInfo {
-                ty: Type::Function(function_type),
+                ty,
                 kind: SymbolKind::Function,
                 function_signature,
             },
