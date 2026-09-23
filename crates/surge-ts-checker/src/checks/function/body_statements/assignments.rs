@@ -396,6 +396,53 @@ fn element_write_target_type(receiver: &Type, index_type: &Type) -> Option<Type>
     }
 }
 
+/// A property written through a union receiver whose members declare it as an
+/// accessor: tsc's synthetic union property writes against the union of its
+/// constituents' write types (`createUnionOrIntersectionProperty`), a setter's
+/// parameter type where a member has one.
+fn union_accessor_write_type(
+    receiver: &Type,
+    property_name: &str,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Type::Union(union) = receiver else {
+        return None;
+    };
+    let mut has_accessor = false;
+    let mut targets = Vec::with_capacity(union.types().len());
+    for member in union.types() {
+        match accessor_write_type(member, property_name, ctx) {
+            Some(target) => {
+                has_accessor = true;
+                targets.push(target);
+            }
+            None => targets.push(member.get_property_access_type(property_name)?),
+        }
+    }
+    has_accessor.then(|| union_type(targets))
+}
+
+/// A literal key written through a union receiver: tsc's synthetic union
+/// property writes against the union of its constituents' write types, an
+/// accessor's setter type included (`createUnionOrIntersectionProperty`).
+fn union_receiver_write_target_type(
+    receiver: &Type,
+    index_type: &Type,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Type::Union(union) = receiver else {
+        return None;
+    };
+    let key = literal_index_key(index_type)?;
+    let mut targets = Vec::with_capacity(union.types().len());
+    for member in union.types() {
+        let target = accessor_write_type(member, &key, ctx)
+            .or_else(|| element_write_target_type(member, index_type))?;
+        targets.push(target);
+    }
+    Some(union_type(targets))
+}
+
 /// A key that is itself a union (`o[k]` with `k: "a" | "b"`) writes against the
 /// *intersection* of what each key names — tsc's
 /// `getIndexedAccessTypeOrUndefined` intersects the constituents' types under
@@ -542,6 +589,7 @@ fn check_element_assignment(
             literal_index_key(&index_type)
                 .and_then(|key| accessor_write_type(&receiver_type, &key, ctx))
         })
+        .or_else(|| union_receiver_write_target_type(&receiver_type, &index_type, ctx))
         .or_else(|| union_index_write_target_type(&receiver_type, &index_type, ctx))
         .or_else(|| {
             element_write_target_type(
@@ -932,7 +980,8 @@ fn check_member_assignment_itself(
     ) {
         return;
     }
-    let accessor_write_type = accessor_write_type(&receiver_for_declaration, property_name, ctx);
+    let accessor_write_type = accessor_write_type(&receiver_for_declaration, property_name, ctx)
+        .or_else(|| union_accessor_write_type(&receiver_for_declaration, property_name, ctx));
     let Some(target_type) = accessor_write_type.or_else(|| {
         declared_object_type
             .as_ref()

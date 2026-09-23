@@ -790,6 +790,7 @@ export const fixturePresets: Record<string, string> = {
   'ambient-initializer-constants': path.join(workspaceRoot, 'tests/compat-projects/ambient-initializer-constants/tsconfig.json'),
   'jsx-this-tag-value': path.join(workspaceRoot, 'tests/compat-projects/jsx-this-tag-value/tsconfig.json'),
   'readonly-array-assignment-code': path.join(workspaceRoot, 'tests/compat-projects/readonly-array-assignment-code/tsconfig.json'),
+  'union-accessor-element-write': path.join(workspaceRoot, 'tests/compat-projects/union-accessor-element-write/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
