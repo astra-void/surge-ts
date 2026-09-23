@@ -733,6 +733,7 @@ export const fixturePresets: Record<string, string> = {
   'umd-global-namespace-type-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/umd-global-namespace-type-reference-basic/tsconfig.json'),
   'export-equals-namespace-top-level-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/export-equals-namespace-top-level-scope-basic/tsconfig.json'),
   'lazy-export-nested-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/lazy-export-nested-reference-basic/tsconfig.json'),
+  'optional-chain-truthy-contained-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-truthy-contained-reference-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
