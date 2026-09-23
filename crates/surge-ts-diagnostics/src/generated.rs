@@ -1085,6 +1085,26 @@ pub const TS4111: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1121: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1121",
+    number: Some(1121),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Octal literals are not allowed. Use the syntax '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1489: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1489",
+    number: Some(1489),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Decimals with leading zeros are not allowed.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS6133: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS6133",
     number: Some(6133),
@@ -4124,6 +4144,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS7016,
     TS7019,
     TS4111,
+    TS1121,
+    TS1489,
     TS6133,
     TS6142,
     TS6198,
@@ -5474,6 +5496,20 @@ impl Diagnostic {
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1121(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1121,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1489(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1489, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

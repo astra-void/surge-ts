@@ -26,6 +26,7 @@ mod interfaces;
 mod json;
 mod reads;
 mod reference_directives;
+mod scanner_checks;
 mod spans;
 mod suppressions;
 mod types;

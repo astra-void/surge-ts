@@ -2650,3 +2650,15 @@ status = "emitted"
 oracle = [
   "untyped-javascript-module-basic",
 ]
+
+[TS1121]
+status = "emitted"
+oracle = [
+  "leading-zero-numeric-literal-basic",
+]
+
+[TS1489]
+status = "emitted"
+oracle = [
+  "leading-zero-numeric-literal-basic",
+]

@@ -865,6 +865,22 @@ message = "Property '{0}' comes from an index signature, so it must be accessed 
 arity = 1
 
 [[diagnostic]]
+code = "TS1121"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Octal literals are not allowed. Use the syntax '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS1489"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Decimals with leading zeros are not allowed."
+arity = 0
+
+[[diagnostic]]
 code = "TS6133"
 category = "Error"
 source = "typescript"
