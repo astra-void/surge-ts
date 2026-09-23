@@ -542,6 +542,18 @@ fn evaluate_expression_with_expected_type_inner(
         return evaluate_spread_tuple_literal(elements, expected_type, symbols, ctx);
     }
 
+    // An argument after a call's first failing one only types its elements —
+    // their callbacks' parameters — and relates none of them.
+    if _expected_diagnostic == ExpectedTypeDiagnostic::ContextOnly
+        && ctx.suppressed_argument_mismatch_span.is_some()
+        && matches!(expected_type, Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_))
+        && let ParsedExpression::ArrayLiteral { elements, .. } = expression
+        && !elements.is_empty()
+        && elements.iter().all(|element| !element.spread)
+    {
+        return evaluate_array_literal_in_context(elements, expected_type, fallback_span, symbols, ctx);
+    }
+
     if let (Type::Tuple(expected_elements), ParsedExpression::ArrayLiteral { elements, span }) =
         (expected_type, expression)
     {
@@ -1753,6 +1765,48 @@ fn is_contextual_callable(ty: &Type) -> bool {
         Type::Object(object) => object.call_signature().is_some(),
         _ => false,
     }
+}
+
+fn evaluate_array_literal_in_context(
+    elements: &[surge_ts_syntax::ParsedArrayElement],
+    expected_type: &Type,
+    fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let mut element_types = Vec::with_capacity(elements.len());
+    for (index, element) in elements.iter().enumerate() {
+        let slot = match expected_type {
+            Type::Array(element_type) => Some(element_type.as_ref()),
+            Type::Tuple(slots) => slots.get(index),
+            Type::OpenTuple(open) => open.leading.get(index).or(Some(open.rest.as_ref())),
+            _ => None,
+        };
+        let inferred = match slot {
+            Some(slot) => evaluate_expression_with_expected_type(
+                &element.expression,
+                element.span,
+                Some(slot),
+                ExpectedTypeDiagnostic::ContextOnly,
+                symbols,
+                ctx,
+            ),
+            None => crate::checks::expr::evaluate_expression(
+                &element.expression,
+                element.span.or(fallback_span),
+                symbols,
+                ctx,
+            ),
+        };
+        match inferred {
+            InferredExpression::Known(ty) => element_types.push(ty),
+            _ => return InferredExpression::Unknown,
+        }
+    }
+    InferredExpression::Known(match expected_type {
+        Type::Array(_) => Type::Array(Box::new(surge_ts_types::union_type(element_types))),
+        _ => Type::Tuple(element_types),
+    })
 }
 
 fn evaluate_array_literal_with_expected_type(

@@ -1906,8 +1906,13 @@ pub(crate) fn check_arrow_function_expression_anchored(
                         if matches!(body_type, Type::ErrorType) {
                             return_type = Type::ErrorType;
                         } else if !body_type.is_unknown() {
+                            // An argument after a call's first failing one is
+                            // related to nothing, its body included.
+                            let withheld_argument = context_only
+                                && ctx.suppressed_argument_mismatch_span.is_some();
                             if expected_type.is_some()
                                 && !is_async
+                                && !withheld_argument
                                 && parameters
                                     .iter()
                                     .all(|parameter| parameter.declared_type.is_none())

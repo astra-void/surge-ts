@@ -2462,7 +2462,11 @@ pub(crate) fn check_function_type_call(
             &argument.expression,
             argument.span,
             Some(&parameter_type),
-            ExpectedTypeDiagnostic::ArgumentNotAssignable,
+            if mismatch_reported {
+                ExpectedTypeDiagnostic::ContextOnly
+            } else {
+                ExpectedTypeDiagnostic::ArgumentNotAssignable
+            },
             symbols,
             ctx,
         );

@@ -818,6 +818,7 @@ export const fixturePresets: Record<string, string> = {
   'protected-access-this-parameter': path.join(workspaceRoot, 'tests/compat-projects/protected-access-this-parameter/tsconfig.json'),
   'protected-access-through-instance': path.join(workspaceRoot, 'tests/compat-projects/protected-access-through-instance/tsconfig.json'),
   'no-check-skips-type-checking': path.join(workspaceRoot, 'tests/compat-projects/no-check-skips-type-checking/tsconfig.json'),
+  'call-first-failing-argument': path.join(workspaceRoot, 'tests/compat-projects/call-first-failing-argument/tsconfig.json'),
   'parameter-nullish-initializer': path.join(workspaceRoot, 'tests/compat-projects/parameter-nullish-initializer/tsconfig.json'),
 };
 
