@@ -1009,6 +1009,7 @@ fn parse_arrow_function_expression(
 
     Some(ParsedArrowFunction {
         this_binding: ParsedThisBinding::Inherited,
+        name: None,
         type_parameters: parse_type_parameters(arrow_expression.type_parameters.as_deref()),
         parameters,
         return_type,
@@ -1481,6 +1482,7 @@ fn function_as_arrow(
 
     ParsedArrowFunction {
         this_binding,
+        name: None,
         type_parameters: parse_type_parameters(function.type_parameters.as_deref()),
         parameters,
         return_type: function
@@ -1522,7 +1524,10 @@ pub(crate) fn parse_function_expression(
     } else {
         ParsedThisBinding::ImplicitAny
     };
-    function_as_arrow(function, this_binding)
+    ParsedArrowFunction {
+        name: function.id.as_ref().map(|id| id.name.to_string()),
+        ..function_as_arrow(function, this_binding)
+    }
 }
 
 pub(crate) fn parse_update_expression(

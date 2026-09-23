@@ -1919,6 +1919,9 @@ pub struct ParsedArrowFunction {
     /// object-literal method both lower to this shape, and neither inherits
     /// `this` the way a real arrow does.
     pub this_binding: ParsedThisBinding,
+    /// A named `function` expression's own name, which is in scope in its own
+    /// signature and body only. A method's name is a property, never a binding.
+    pub name: Option<String>,
     /// See [`ParsedFunctionDeclaration::body_reads`].
     pub body_reads: Vec<String>,
     pub type_parameters: Vec<ParsedTypeParameter>,

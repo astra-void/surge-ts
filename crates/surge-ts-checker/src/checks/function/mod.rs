@@ -1598,6 +1598,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
     let ParsedArrowFunction {
         is_generator,
         this_binding,
+        name,
         type_parameters,
         parameters,
         return_type,
@@ -1644,7 +1645,25 @@ pub(crate) fn check_arrow_function_expression_anchored(
         // the arrow site, mirroring `check_variable_declaration_against_symbols`:
         // `(x: typeof localConst) => …` must see the enclosing function body's
         // locals, which live in the scope stack and never reach `ctx.symbols`.
-        let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+        // A named `function` expression's own name is in scope there too (tsc
+        // resolves it at the expression, past its parameters); its signature is
+        // what is being resolved, so the name stands at the sentinel meanwhile.
+        let signature_symbols = match &name {
+            Some(name) => {
+                let mut scope = SymbolTable::with_parent(std::sync::Arc::new(symbols.clone()));
+                let _ = scope.insert(
+                    name.as_str(),
+                    crate::symbols::SymbolInfo {
+                        ty: Type::Unknown,
+                        kind: crate::symbols::SymbolKind::Function,
+                        function_signature: None,
+                    },
+                );
+                scope
+            }
+            None => symbols.clone(),
+        };
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, signature_symbols);
         let function_type = map_function_signature(
             &parameters,
             return_type.as_ref(),
@@ -1715,6 +1734,24 @@ pub(crate) fn check_arrow_function_expression_anchored(
         let mut scopes =
             ScopeStack::from_root(symbols.clone_with_reason(TypeCopyReason::FunctionBodySetup));
         scopes.mark_function_boundary();
+        if let Some(name) = &name {
+            scopes.insert_current(
+                name.as_str(),
+                crate::symbols::SymbolInfo {
+                    ty: Type::Function(
+                        alloc_function_type(
+                            parameter_types.clone(),
+                            return_type.clone(),
+                            function_type.is_variadic(),
+                            function_type.required_parameter_count(),
+                        )
+                        .with_parameter_names(signature::written_binding_names(&parameters)),
+                    ),
+                    kind: crate::symbols::SymbolKind::Function,
+                    function_signature: None,
+                },
+            );
+        }
         scopes.push_function_scope();
         if !matches!(this_binding, surge_ts_syntax::ParsedThisBinding::Inherited) {
             bind_arguments_object(&mut scopes, ctx);

@@ -369,6 +369,7 @@ export const fixturePresets: Record<string, string> = {
   'function-name-in-own-signature': path.join(workspaceRoot, 'tests/compat-projects/function-name-in-own-signature/tsconfig.json'),
   'block-scoped-self-reference': path.join(workspaceRoot, 'tests/compat-projects/block-scoped-self-reference/tsconfig.json'),
   'assignment-target-resolution': path.join(workspaceRoot, 'tests/compat-projects/assignment-target-resolution/tsconfig.json'),
+  'named-function-expression-scope': path.join(workspaceRoot, 'tests/compat-projects/named-function-expression-scope/tsconfig.json'),
   'namespace-merged-member-value': path.join(workspaceRoot, 'tests/compat-projects/namespace-merged-member-value/tsconfig.json'),
   'export-equals-entity-meanings': path.join(workspaceRoot, 'tests/compat-projects/export-equals-entity-meanings/tsconfig.json'),
   'import-equals-module-namespace-as-type': path.join(workspaceRoot, 'tests/compat-projects/import-equals-module-namespace-as-type/tsconfig.json'),
