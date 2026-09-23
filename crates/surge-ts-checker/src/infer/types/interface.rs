@@ -262,10 +262,25 @@ pub(crate) fn had_error_trace_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("SURGE_TRACE_HAD_ERROR").is_some())
 }
 
+fn generic_interface_display_name(interface: &InterfaceInfo) -> String {
+    let name = interface.declared_name.as_deref().unwrap_or(&interface.name);
+    let parameters = &interface.body.type_parameters;
+    if parameters.is_empty() {
+        return name.to_string();
+    }
+    let parameters = parameters
+        .iter()
+        .map(|parameter| parameter.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{name}<{parameters}>")
+}
+
 pub(crate) fn resolve_interface(
     interface: &InterfaceInfo,
     handle: TypeDeclarationHandle,
     type_arguments: Vec<ParsedType>,
+    reference_span: Option<surge_ts_syntax::TextSpan>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
@@ -327,11 +342,14 @@ pub(crate) fn resolve_interface(
         ctx.namespace_member_resolution_depth += 1;
         ctx.namespace_member_prefix_stack.push(prefix);
     }
+    // `getTypeFromClassOrInterfaceReference` reports a wrong argument count on
+    // the reference, naming the generic type with its parameters (`C<T>`).
+    let generic_display_name = generic_interface_display_name(interface);
     let bound = bind_type_arguments(
         &interface.body.type_parameters,
         type_arguments,
-        &interface.name,
-        interface.name_span,
+        &generic_display_name,
+        reference_span.or(interface.name_span),
         ctx,
         resolving,
         substitution,

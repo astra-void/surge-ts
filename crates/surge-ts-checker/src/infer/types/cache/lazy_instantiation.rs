@@ -270,6 +270,7 @@ impl ResolveReference for LazyInstantiation {
                 interface,
                 self.decl.clone(),
                 self.type_arguments.clone(),
+                None,
                 &mut ctx,
                 &mut resolving,
                 &self.substitution,
