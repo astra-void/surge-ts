@@ -425,12 +425,35 @@ pub(super) fn resolve_package_entrypoint_in_directory(
                 return resolve_first_target_in_package(pkg_dir, &targets);
             }
         }
-
-        return resolve_legacy_entrypoint_in_directory(req, pkg_dir, json);
     }
 
-    // No `package.json`: legacy file probing only.
-    resolve_legacy_file_probe(req, pkg_dir)
+    // tsc's `loadModuleFromSpecificNodeModulesDirectory` loads the package root
+    // as a file (`node_modules/foo.d.ts`) before the directory, except for an
+    // ESM-mode import under node16/nodenext.
+    let esm_mode = opts.module_resolution != surge_ts_config::ModuleResolutionKind::Bundler
+        && importer_is_esm;
+    let root_file = if req.subpath.is_none() && !esm_mode {
+        resolve_declaration_or_runtime_candidate(pkg_dir)
+    } else {
+        None
+    };
+    if let Some(resolution) = &root_file
+        && resolution.kind == PackageEntrypointKind::Declaration
+    {
+        return root_file;
+    }
+
+    let directory = match &json {
+        Some(json) => resolve_legacy_entrypoint_in_directory(req, pkg_dir, json),
+        // No `package.json`: legacy file probing only.
+        None => resolve_legacy_file_probe(req, pkg_dir),
+    };
+    match directory {
+        Some(resolution) if resolution.kind == PackageEntrypointKind::Declaration => {
+            Some(resolution)
+        }
+        directory => root_file.or(directory),
+    }
 }
 
 /// Legacy (`node10`-style) entrypoint resolution for a package without a usable

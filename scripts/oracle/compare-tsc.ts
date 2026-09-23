@@ -774,6 +774,8 @@ export const fixturePresets: Record<string, string> = {
   'array-literal-spread-arguments': path.join(workspaceRoot, 'tests/compat-projects/array-literal-spread-arguments/tsconfig.json'),
   'plus-nullish-operands-loose': path.join(workspaceRoot, 'tests/compat-projects/plus-nullish-operands-loose/tsconfig.json'),
   'delete-operand-loose-null-checks': path.join(workspaceRoot, 'tests/compat-projects/delete-operand-loose-null-checks/tsconfig.json'),
+  'node-modules-root-file': path.join(workspaceRoot, 'tests/compat-projects/node-modules-root-file/tsconfig.json'),
+  'node-modules-root-file-esm': path.join(workspaceRoot, 'tests/compat-projects/node-modules-root-file-esm/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
