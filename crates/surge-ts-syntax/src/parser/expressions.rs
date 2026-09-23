@@ -13,7 +13,8 @@ use oxc_span::{GetSpan, Span};
 use crate::{
     ParsedArrowFunction, ParsedArrowFunctionBody, ParsedBinaryOperator, ParsedCall,
     ParsedCallArgument, ParsedExpression, ParsedJsxAttribute, ParsedJsxAttributeValueKind,
-    ParsedJsxChild, ParsedLogicalOperator, ParsedObjectProperty, ParsedThisBinding,
+    ParsedJsxChild, ParsedJsxClosingElement, ParsedJsxTag, ParsedLogicalOperator,
+    ParsedObjectProperty, ParsedThisBinding,
     ParsedUnaryOperator, TextSpan,
 };
 
@@ -283,15 +284,81 @@ fn parse_jsx_element(element: &JSXElement<'_>) -> ParsedExpression {
         .filter_map(parse_jsx_attribute_item)
         .collect();
     let children = element.children.iter().map(parse_jsx_child).collect();
+    let (type_arguments, type_arguments_span) = match opening.type_arguments.as_deref() {
+        Some(type_arguments) => (
+            parse_type_arguments(type_arguments).unwrap_or_default(),
+            Some(text_span_from_oxc_span(type_arguments.span)),
+        ),
+        None => (Vec::new(), None),
+    };
+    let closing = element
+        .closing_element
+        .as_deref()
+        .map(|closing| ParsedJsxClosingElement {
+            span: Some(text_span_from_oxc_span(closing.span)),
+            expression: jsx_tag_expression(&closing.name),
+        });
 
     ParsedExpression::JsxElement {
         tag_name,
-        tag_name_span,
         component_name,
         component_span,
         attributes,
         children,
-        span: Some(text_span_from_oxc_span(element.span)),
+        tag: Box::new(ParsedJsxTag {
+            name_span: tag_name_span,
+            span: Some(text_span_from_oxc_span(element.span)),
+            expression: jsx_tag_expression(&opening.name),
+            type_arguments,
+            type_arguments_span,
+            closing,
+        }),
+    }
+}
+
+/// tsc's `isJsxIntrinsicTagName` decides what a tag is: an identifier with an
+/// intrinsic name or a namespaced name names an intrinsic element, anything
+/// else (`Button`, `UI.Button`, `this`, `this.tag`) is read as a value. oxc
+/// draws the same line between `Identifier` and `IdentifierReference`.
+fn jsx_tag_expression(name: &JSXElementName<'_>) -> Option<ParsedExpression> {
+    match name {
+        JSXElementName::Identifier(_) | JSXElementName::NamespacedName(_) => None,
+        JSXElementName::IdentifierReference(identifier) => Some(ParsedExpression::Identifier {
+            name: identifier.name.to_string(),
+            span: Some(text_span_from_oxc_span(identifier.span)),
+        }),
+        JSXElementName::ThisExpression(this) => Some(ParsedExpression::This {
+            span: Some(text_span_from_oxc_span(this.span)),
+        }),
+        JSXElementName::MemberExpression(member) => Some(jsx_member_tag_expression(member)),
+    }
+}
+
+fn jsx_member_tag_expression(member: &JSXMemberExpression<'_>) -> ParsedExpression {
+    let (object, object_span) = match &member.object {
+        JSXMemberExpressionObject::IdentifierReference(identifier) => (
+            ParsedExpression::Identifier {
+                name: identifier.name.to_string(),
+                span: Some(text_span_from_oxc_span(identifier.span)),
+            },
+            identifier.span,
+        ),
+        JSXMemberExpressionObject::MemberExpression(inner) => {
+            (jsx_member_tag_expression(inner), inner.span)
+        }
+        JSXMemberExpressionObject::ThisExpression(this) => (
+            ParsedExpression::This {
+                span: Some(text_span_from_oxc_span(this.span)),
+            },
+            this.span,
+        ),
+    };
+    ParsedExpression::PropertyAccess {
+        object: Box::new(object),
+        object_span: Some(text_span_from_oxc_span(object_span)),
+        property_name: member.property.name.to_string(),
+        property_span: Some(text_span_from_oxc_span(member.property.span)),
+        is_bracketed: false,
     }
 }
 

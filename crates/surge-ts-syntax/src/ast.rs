@@ -1476,7 +1476,6 @@ pub enum ParsedExpression {
         /// The tag name exactly as written, e.g. `div`, `Button`, `UI.Button`.
         /// Used for diagnostics/debugging only.
         tag_name: String,
-        tag_name_span: Option<TextSpan>,
         /// Set when the tag refers to a value that must resolve in scope: the head
         /// identifier of a component (`Button`) or member tag (`UI.Button`).
         /// `None` for intrinsic lowercase elements (`div`), which are not value
@@ -1485,7 +1484,8 @@ pub enum ParsedExpression {
         component_span: Option<TextSpan>,
         attributes: Vec<ParsedJsxAttribute>,
         children: Vec<ParsedJsxChild>,
-        span: Option<TextSpan>,
+        /// Boxed so the rarely-read tag details do not widen every expression.
+        tag: Box<ParsedJsxTag>,
     },
     /// A JSX fragment, `<>...</>`.
     JsxFragment {
@@ -1522,6 +1522,32 @@ pub enum ParsedExpression {
         span: Option<TextSpan>,
     },
     Unknown,
+}
+
+/// The parts of a JSX element tsc resolves besides its attributes and
+/// children.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedJsxTag {
+    pub name_span: Option<TextSpan>,
+    /// The whole element.
+    pub span: Option<TextSpan>,
+    /// The tag read as a value (tsc's `checkExpression(tagName)`): `Button`,
+    /// `UI.Button`, `this.tag`, `this`. `None` for an intrinsic tag
+    /// (`isJsxIntrinsicTagName`: a lowercase or hyphenated identifier, or a
+    /// namespaced name).
+    pub expression: Option<ParsedExpression>,
+    pub type_arguments: Vec<ParsedType>,
+    pub type_arguments_span: Option<TextSpan>,
+    /// tsc resolves the closing tag again (`checkJsxElementDeferred`), so an
+    /// unknown tag is reported at both.
+    pub closing: Option<ParsedJsxClosingElement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedJsxClosingElement {
+    pub span: Option<TextSpan>,
+    /// See [`ParsedJsxTag::expression`].
+    pub expression: Option<ParsedExpression>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

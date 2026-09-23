@@ -283,6 +283,8 @@ export const fixturePresets: Record<string, string> = {
   'jsx-unresolved-no-cascade-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-unresolved-no-cascade-basic/tsconfig.json'),
   'jsx-runtime-module-namespace-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-runtime-module-namespace-basic/tsconfig.json'),
   'jsx-imported-alias-props-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-imported-alias-props-basic/tsconfig.json'),
+  'jsx-factory-namespace-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-factory-namespace-basic/tsconfig.json'),
+  'jsx-namespace-missing-intrinsics-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-namespace-missing-intrinsics-basic/tsconfig.json'),
   'auto-types-node-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-node-basic/tsconfig.json'),
   'auto-types-disabled-empty-types-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-disabled-empty-types-basic/tsconfig.json'),
   'auto-types-narrowed-types-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-narrowed-types-basic/tsconfig.json'),

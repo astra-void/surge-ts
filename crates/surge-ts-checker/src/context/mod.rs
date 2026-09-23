@@ -495,6 +495,13 @@ pub(crate) struct CheckerContext {
     /// the consuming file — tsc reaches the namespace through the runtime module
     /// import it synthesizes.
     pub(crate) jsx_intrinsic_elements_declarer: Option<(Arc<TypeDeclarationTable>, String)>,
+    /// The current file's JSX pragmas ([`surge_ts_syntax::ParsedSource::jsx_factory_uses`]).
+    /// Per-file: reset by [`Self::begin_file_check`].
+    pub(crate) jsx_factory_uses: surge_ts_syntax::JsxFactoryUses,
+    /// The JSX namespace resolved for the current file (tsc's
+    /// `getJsxNamespaceAt`), keyed by the file it was resolved for. Per-file:
+    /// reset by [`Self::begin_file_check`].
+    pub(crate) jsx_namespace: Option<(Arc<str>, crate::checks::jsx::JsxNamespace)>,
     pub(crate) type_parameter_scopes: Vec<HashMap<String, Type>>,
     /// The current file's definite-assignment targets
     /// ([`surge_ts_syntax::ParsedSource::definite_writes`]).
@@ -797,6 +804,8 @@ impl CheckerContext {
             lazy_library_value_annotations: false,
             skip_annotated_function_bodies: false,
             jsx_intrinsic_elements_declarer: None,
+            jsx_factory_uses: Default::default(),
+            jsx_namespace: None,
             type_parameter_scopes: Vec::new(),
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
@@ -969,6 +978,8 @@ impl CheckerContext {
             lazy_library_value_annotations: false,
             skip_annotated_function_bodies: false,
             jsx_intrinsic_elements_declarer: data.jsx_intrinsic_elements_declarer.clone(),
+            jsx_factory_uses: Default::default(),
+            jsx_namespace: None,
             type_parameter_scopes: data.type_parameter_scopes.clone(),
             type_parameter_constraint_scopes: data.type_parameter_constraint_scopes.clone(),
             timings: data.timings.clone(),
@@ -1586,6 +1597,8 @@ impl CheckerContext {
         self.never_returning_calls.clear();
         self.nested_function_scope = None;
         self.parenthesized_expressions = Default::default();
+        self.jsx_factory_uses = Default::default();
+        self.jsx_namespace = None;
         self.evolving_array_operation_target = None;
         self.auto_arrays_declared = false;
         self.let_assignments = Default::default();

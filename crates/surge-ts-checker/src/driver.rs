@@ -74,6 +74,7 @@ fn check_single_source(
     crate::program::emit_grammar_diagnostics(&parsed.grammar_diagnostics, &mut ctx);
     ctx.parenthesized_expressions = parsed.parenthesized_expressions.into();
     ctx.let_assignments = parsed.let_assignments.into();
+    ctx.jsx_factory_uses = parsed.jsx_factory_uses.clone();
     if !classify_file_kind(&file_name).is_declaration() {
         let properties =
             crate::program::file_constructor_local_properties(&parsed.statements, &ctx.options);

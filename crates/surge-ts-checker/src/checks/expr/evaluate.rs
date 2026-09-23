@@ -672,20 +672,20 @@ fn evaluate_expression_unsettled(
         ),
         ParsedExpression::JsxElement {
             tag_name,
-            tag_name_span,
-            component_name,
-            component_span,
             attributes,
             children,
-            span,
+            tag,
+            ..
         } => {
-            crate::checks::jsx::check_jsx_factory_reference(*tag_name_span, fallback_span, ctx);
+            crate::checks::jsx::check_jsx_factory_reference(
+                false,
+                tag.name_span,
+                fallback_span,
+                ctx,
+            );
             crate::checks::jsx::check_jsx_element(
                 tag_name,
-                *tag_name_span,
-                component_name.as_deref(),
-                *component_span,
-                *span,
+                tag,
                 attributes,
                 children,
                 fallback_span,
@@ -696,7 +696,7 @@ fn evaluate_expression_unsettled(
             infer_expression(expression, symbols, ctx)
         }
         ParsedExpression::JsxFragment { children, span } => {
-            crate::checks::jsx::check_jsx_factory_reference(*span, fallback_span, ctx);
+            crate::checks::jsx::check_jsx_factory_reference(true, *span, fallback_span, ctx);
             for child in children {
                 evaluate_jsx_child(child, fallback_span, symbols, ctx);
             }

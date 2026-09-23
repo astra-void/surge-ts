@@ -1089,6 +1089,7 @@ pub(super) fn check_program_file(
     emit_grammar_diagnostics(&parsed_file.grammar_diagnostics, ctx);
     ctx.parenthesized_expressions = parsed_file.parenthesized_expressions.clone();
     ctx.let_assignments = parsed_file.let_assignments.clone();
+    ctx.jsx_factory_uses = parsed_file.jsx_factory_uses.clone();
 
     if parsed_file.is_module {
         let Some(module_analysis) = shared_state.module_analyses[file_index].as_ref() else {

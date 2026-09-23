@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
     ParsedExpression, ParsedJsxAttribute, ParsedJsxAttributeValueKind, ParsedJsxChild,
-    ParsedNamedType, ParsedType, TextSpan as SyntaxTextSpan,
+    ParsedJsxTag, ParsedNamedType, ParsedType, TextSpan as SyntaxTextSpan,
 };
 use surge_ts_types::{
     FunctionType, ObjectProperty, ObjectType, PropertyMap, Type, is_assignable_to, union_type,
@@ -15,21 +16,83 @@ use crate::context::CheckerContext;
 use crate::infer::{InferredExpression, map_parsed_type};
 use crate::metrics::alloc_object_type;
 use crate::spans::diagnostic_with_syntax_span;
-use crate::symbols::SymbolTable;
+use crate::symbols::{SymbolTable, TypeDeclarationScope};
 
-/// The namespace tsc's classic JSX transform reads at every tag. `jsxFactory`
-/// and the `@jsx` pragma can rename it; neither is modelled here, so the
-/// default is the only factory this check knows.
-const JSX_FACTORY_NAMESPACE: &str = "React";
+/// Where a file's JSX looks up `IntrinsicElements`, `Element` and the other
+/// `JSX` members (tsc's `getJsxNamespaceAt`).
+#[derive(Clone, Debug)]
+pub(crate) enum JsxNamespace {
+    /// The members resolve as `<prefix>.<member>` from the file's own scope.
+    Qualified(Arc<str>),
+    /// The members resolve as `<prefix>.<member>` inside the scope of the
+    /// declaration file that declares them. The automatic runtime reaches its
+    /// namespace through the `jsx-runtime` import tsc synthesizes, which surge
+    /// does not load, so the declaring module is located instead.
+    Declared {
+        scope: Arc<TypeDeclarationScope>,
+        prefix: Arc<str>,
+    },
+    /// tsc resolves a namespace whose members surge cannot see from this file:
+    /// a UMD global factory namespace read from a module.
+    Unmodelled,
+    /// No JSX namespace at all: every member is tsc's error type.
+    Missing,
+}
 
-/// Reports the implicit factory reference a JSX tag makes. Under `jsx: react`
-/// tsc resolves the factory namespace as a value at every opening element,
-/// self-closing element, and opening fragment — reporting at the tag name, or
-/// at the `<` of a fragment — so a module that never imports `React` reports
-/// once per tag. `preserve` and `react-native` resolve it without error
-/// reporting and the automatic runtime never names it, which is why this is
-/// gated on the classic React mode alone.
+/// A member of the JSX namespace (tsc's `getJsxType`).
+enum JsxMember {
+    Found(Type),
+    /// tsc's error type: the namespace does not declare the member.
+    Missing,
+    Unmodelled,
+}
+
+/// tsc's `getJsxNamespace`: the root of the factory a tag compiles to — the
+/// file's `@jsx` pragma, else `jsxFactory`, else `reactNamespace`, else
+/// `React`. A fragment compiles to the fragment factory, so it reads `@jsxFrag`,
+/// else `jsxFragmentFactory`, and the default namespace (never the file's
+/// `@jsx` pragma) when neither is set.
+fn jsx_factory_namespace_name(fragment: bool, ctx: &CheckerContext) -> String {
+    let names = &ctx.options.jsx_factory_names;
+    let default_namespace = || match names.factory.as_deref().filter(|factory| !factory.is_empty()) {
+        Some(factory) => {
+            surge_ts_syntax::jsx_entity_root(factory).unwrap_or_else(|| "React".to_string())
+        }
+        None => names
+            .react_namespace
+            .clone()
+            .filter(|namespace| !namespace.is_empty())
+            .unwrap_or_else(|| "React".to_string()),
+    };
+    if fragment {
+        return ctx
+            .jsx_factory_uses
+            .fragment_pragma
+            .clone()
+            .or_else(|| {
+                names
+                    .fragment_factory
+                    .as_deref()
+                    .and_then(surge_ts_syntax::jsx_entity_root)
+            })
+            .unwrap_or_else(default_namespace);
+    }
+    ctx.jsx_factory_uses
+        .factory_pragma
+        .clone()
+        .unwrap_or_else(default_namespace)
+}
+
+/// Reports the implicit factory reference a JSX tag makes (tsc's
+/// `markJsxAliasReferenced`). Under `jsx: react` tsc resolves the factory
+/// namespace as a value at every opening element, self-closing element, and
+/// opening fragment — reporting at the tag name, or at the `<` of a fragment —
+/// so a module that never imports it reports once per tag. A fragment also
+/// resolves the file's element factory. `preserve` and `react-native` resolve
+/// it without error reporting and the automatic runtime never names it, which
+/// is why this is gated on the classic React mode alone.
 pub(crate) fn check_jsx_factory_reference(
+    fragment: bool,
     location_span: Option<SyntaxTextSpan>,
     fallback_span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
@@ -38,11 +101,173 @@ pub(crate) fn check_jsx_factory_reference(
         return;
     }
 
-    crate::checks::emit_value_position_reference_diagnostic(
-        JSX_FACTORY_NAMESPACE,
-        location_span.or(fallback_span),
-        ctx,
-    );
+    let span = location_span.or(fallback_span);
+    let namespace = jsx_factory_namespace_name(fragment, ctx);
+    // `jsxFragmentFactory: "null"` names no binding.
+    if !(fragment && namespace == "null") {
+        crate::checks::emit_value_position_reference_diagnostic(&namespace, span, ctx);
+    }
+    if fragment {
+        let element_namespace = jsx_factory_namespace_name(false, ctx);
+        if element_namespace != namespace {
+            crate::checks::emit_value_position_reference_diagnostic(&element_namespace, span, ctx);
+        }
+    }
+}
+
+/// tsc's `getJsxNamespaceAt`, resolved once per file.
+pub(crate) fn jsx_namespace(ctx: &mut CheckerContext) -> JsxNamespace {
+    if let Some((file_name, namespace)) = &ctx.jsx_namespace
+        && file_name.as_ref() == ctx.file_name.as_str()
+    {
+        return namespace.clone();
+    }
+    let namespace = resolve_jsx_namespace(ctx);
+    ctx.jsx_namespace = Some((Arc::from(ctx.file_name.as_str()), namespace.clone()));
+    namespace
+}
+
+/// The factory namespace's `JSX` when the factory resolves to a namespace
+/// that has one, else the global `JSX`.
+fn resolve_jsx_namespace(ctx: &CheckerContext) -> JsxNamespace {
+    if ctx.options.jsx_automatic_runtime {
+        return automatic_runtime_jsx_namespace(ctx);
+    }
+    let factory = jsx_factory_namespace_name(false, ctx);
+    let qualified = format!("{factory}.JSX");
+    if namespace_is_visible(&qualified, ctx) {
+        return JsxNamespace::Qualified(qualified.into());
+    }
+    if global_jsx_namespace_exists(ctx) {
+        return JsxNamespace::Qualified("JSX".into());
+    }
+    // A UMD global resolves as a namespace for tsc, but its members are not
+    // reachable from a module here, so whether it has a `JSX` is unknowable.
+    if ctx.is_umd_global_value_reference(&factory) {
+        return JsxNamespace::Unmodelled;
+    }
+    JsxNamespace::Missing
+}
+
+/// The namespace the automatic runtime's `jsx-runtime` module exports.
+/// surge does not load that module, so a visible `JSX` or `React.JSX` stands
+/// in for it, and otherwise the declaration file that declares the intrinsic
+/// elements.
+fn automatic_runtime_jsx_namespace(ctx: &CheckerContext) -> JsxNamespace {
+    for prefix in ["JSX", "React.JSX"] {
+        if ctx
+            .lookup_type_declaration(&format!("{prefix}.IntrinsicElements"))
+            .is_some()
+        {
+            return JsxNamespace::Qualified(prefix.into());
+        }
+    }
+    match &ctx.jsx_intrinsic_elements_declarer {
+        Some((table, key)) => JsxNamespace::Declared {
+            scope: Arc::new(TypeDeclarationScope::new(vec![table.clone()])),
+            prefix: key
+                .strip_suffix(".IntrinsicElements")
+                .unwrap_or(key)
+                .into(),
+        },
+        None => JsxNamespace::Missing,
+    }
+}
+
+/// The JSX member names tsc reads; one of them resolving is the cheap proof
+/// that a namespace exists before the declaration tables are scanned.
+const JSX_MEMBER_NAMES: [&str; 9] = [
+    "IntrinsicElements",
+    "Element",
+    "ElementClass",
+    "ElementAttributesProperty",
+    "ElementChildrenAttribute",
+    "IntrinsicAttributes",
+    "IntrinsicClassAttributes",
+    "LibraryManagedAttributes",
+    "ElementType",
+];
+
+/// Whether `name` resolves as a namespace from the current file: a namespace
+/// block surge registered, or a type declared beneath it in any table the
+/// file's type lookups consult (an import copies its module's members in under
+/// the local name).
+fn namespace_is_visible(name: &str, ctx: &CheckerContext) -> bool {
+    if ctx.namespace_info(name).is_some() {
+        return true;
+    }
+    if JSX_MEMBER_NAMES
+        .iter()
+        .any(|member| ctx.lookup_type_declaration(&format!("{name}.{member}")).is_some())
+    {
+        return true;
+    }
+    let heads = |key: &Arc<str>| {
+        key.strip_prefix(name)
+            .is_some_and(|rest| rest.starts_with('.'))
+    };
+    ctx.type_declarations.iter().any(|(key, _)| heads(key))
+        || ctx.type_declaration_scope.as_ref().is_some_and(|scope| {
+            scope
+                .layers()
+                .iter()
+                .any(|layer| layer.iter().any(|(key, _)| heads(key)))
+        })
+        || ctx
+            .ambient_global_type_declarations
+            .iter()
+            .any(|(key, _)| heads(key))
+}
+
+/// tsc's JSX global fallback (`getGlobalSymbol(JSX, Namespace)`): only a
+/// global `JSX` counts, never one a module declares for itself.
+fn global_jsx_namespace_exists(ctx: &CheckerContext) -> bool {
+    ctx.namespace_registry.is_global("JSX")
+        || JSX_MEMBER_NAMES.iter().any(|member| {
+            ctx.ambient_global_type_declarations
+                .get(&format!("JSX.{member}"))
+                .is_some()
+        })
+}
+
+/// tsc's `getJsxType`: the declared type of the JSX namespace's `member`.
+fn jsx_namespace_member(member: &str, ctx: &mut CheckerContext) -> JsxMember {
+    let (prefix, scope) = match jsx_namespace(ctx) {
+        JsxNamespace::Qualified(prefix) => (prefix, None),
+        JsxNamespace::Declared { scope, prefix } => (prefix, Some(scope)),
+        JsxNamespace::Unmodelled => return JsxMember::Unmodelled,
+        JsxNamespace::Missing => return JsxMember::Missing,
+    };
+    let name = format!("{prefix}.{member}");
+    let resolve = |ctx: &mut CheckerContext| {
+        if ctx.lookup_type_declaration(&name).is_none() {
+            return JsxMember::Missing;
+        }
+        JsxMember::Found(map_parsed_type(
+            ParsedType::Named(Arc::new(ParsedNamedType {
+                name: name.clone(),
+                span: None,
+                type_arguments: Vec::new(),
+            })),
+            ctx,
+        ))
+    };
+    match scope {
+        Some(scope) => crate::infer::with_type_declaration_scope(&Some(scope), ctx, resolve),
+        None => resolve(ctx),
+    }
+}
+
+/// What a tag's attributes are checked against.
+enum PropsResolution {
+    Props(Type),
+    /// tsc's error type or a non-component value: nothing to check against,
+    /// and no contextual type for a callback attribute — tsc reports its
+    /// parameters implicitly `any`.
+    Unchecked,
+    /// The props exist for tsc but surge could not model them, so an
+    /// implicit-any report inside the attributes would describe that gap.
+    Unmodelled,
 }
 
 /// Checks a JSX element: resolves the tag to an intrinsic element or function
@@ -51,29 +276,27 @@ pub(crate) fn check_jsx_factory_reference(
 /// child expressions are always evaluated for ordinary diagnostics (e.g. an
 /// unresolved name in `{expr}`), even when the tag itself does not resolve, so a
 /// missing component never cascades into a prop-checking storm.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn check_jsx_element(
     tag_name: &str,
-    tag_name_span: Option<SyntaxTextSpan>,
-    component_name: Option<&str>,
-    component_span: Option<SyntaxTextSpan>,
-    element_span: Option<SyntaxTextSpan>,
+    tag: &ParsedJsxTag,
     attributes: &[ParsedJsxAttribute],
     children: &[ParsedJsxChild],
     fallback_span: Option<SyntaxTextSpan>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
-    let props_type = resolve_props_type(
-        tag_name,
-        tag_name_span,
-        component_name,
-        component_span,
-        element_span,
-        fallback_span,
-        symbols,
-        ctx,
-    );
+    let tag_name_span = tag.name_span;
+    let resolution = match &tag.expression {
+        Some(expression) => {
+            resolve_component_props(expression, tag_name_span.or(fallback_span), symbols, ctx)
+        }
+        None => intrinsic_tag_props(tag_name, tag.span.or(fallback_span), ctx),
+    };
+    let (props_type, unmodelled) = match resolution {
+        PropsResolution::Props(props) => (Some(props), false),
+        PropsResolution::Unchecked => (None, false),
+        PropsResolution::Unmodelled => (None, true),
+    };
 
     let props_object = match props_type.as_ref().map(Type::peeled) {
         Some(Type::Object(object)) => Some(object),
@@ -89,8 +312,9 @@ pub(crate) fn check_jsx_element(
     // failing to reduce them to an object is surge's modelling gap rather than
     // the source's — `<form onSubmit={(event) => …}>` lost its handler's
     // contextual type that way and reported the parameter implicit-any.
-    let unmodelled_props = props_type.as_ref().is_some_and(Type::is_unknown)
-        || (component_name.is_none() && props_object.is_none());
+    let unmodelled_props = unmodelled
+        || props_type.as_ref().is_some_and(Type::is_unknown)
+        || (tag.expression.is_none() && props_object.is_none());
     if unmodelled_props {
         ctx.unmodelled_jsx_props_depth += 1;
     }
@@ -122,10 +346,22 @@ pub(crate) fn check_jsx_element(
             attributes,
             &spreads,
             children_provided,
-            tag_name_span.or(element_span),
+            tag_name_span.or(tag.span),
             fallback_span,
             ctx,
         );
+    }
+
+    if let Some(closing) = &tag.closing {
+        let span = closing.span.or(fallback_span);
+        match &closing.expression {
+            Some(expression) => {
+                let _ = evaluate_expression(expression, span, symbols, ctx);
+            }
+            None => {
+                let _ = intrinsic_tag_props(tag_name, span, ctx);
+            }
+        }
     }
 }
 
@@ -141,52 +377,30 @@ struct SpreadAttributes {
     opaque: bool,
 }
 
-/// Resolves the props/attributes type the element is checked against, or `None`
-/// when no check should run (unresolved component, a non-object/`any` component
-/// type, or an intrinsic element with no `JSX.IntrinsicElements` declaration).
-/// Emits TS2304 for an unresolved component and TS2339 for an unknown intrinsic
-/// tag, matching tsc.
-#[allow(clippy::too_many_arguments)]
-fn resolve_props_type(
-    tag_name: &str,
-    tag_name_span: Option<SyntaxTextSpan>,
-    component_name: Option<&str>,
-    component_span: Option<SyntaxTextSpan>,
-    element_span: Option<SyntaxTextSpan>,
-    fallback_span: Option<SyntaxTextSpan>,
+/// The props a value tag's attributes are checked against (tsc's
+/// `resolveJsxOpeningLikeElement` for a non-intrinsic tag). Evaluating the tag
+/// reports what an unresolved name or member reports anywhere else.
+fn resolve_component_props(
+    expression: &ParsedExpression,
+    span: Option<SyntaxTextSpan>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
-) -> Option<Type> {
-    match component_name {
-        Some(name) => {
-            let component_expr = build_component_value_expression(
-                name,
-                tag_name,
-                component_span.or(tag_name_span),
-                tag_name_span,
-            );
-            let inferred = evaluate_expression(
-                &component_expr,
-                component_span.or(fallback_span),
-                symbols,
-                ctx,
-            );
-            match inferred {
-                InferredExpression::Known(component_type) => component_props_type(&component_type)
-                    .or_else(|| component_is_unmodelled(&component_type).then_some(Type::Unknown)),
-                // A value surge could not type at all is its own gap: tsc has the
-                // component's props and types the callbacks from them. Answering
-                // the sentinel marks the props unmodelled.
-                InferredExpression::Unknown => Some(Type::Unknown),
-                // An unresolved name or member is tsc's error type. Its
-                // attributes get no contextual signature (`getContextualSignature`
-                // of `any` is undefined), so tsc *does* report a callback in them
-                // as implicit `any` — leave them unsuppressed.
-                InferredExpression::UnresolvedIdentifier { .. }
-                | InferredExpression::MissingProperty { .. } => None,
-            }
-        }
-        None => resolve_intrinsic_props_type(tag_name, element_span.or(fallback_span), ctx),
+) -> PropsResolution {
+    match evaluate_expression(expression, span, symbols, ctx) {
+        InferredExpression::Known(component_type) => match component_props_type(&component_type) {
+            Some(props) => PropsResolution::Props(props),
+            None if component_is_unmodelled(&component_type) => PropsResolution::Unmodelled,
+            None => PropsResolution::Unchecked,
+        },
+        // A value surge could not type at all is its own gap: tsc has the
+        // component's props and types the callbacks from them.
+        InferredExpression::Unknown => PropsResolution::Unmodelled,
+        // An unresolved name or member is tsc's error type. Its
+        // attributes get no contextual signature (`getContextualSignature`
+        // of `any` is undefined), so tsc *does* report a callback in them
+        // as implicit `any` — leave them unsuppressed.
+        InferredExpression::UnresolvedIdentifier { .. }
+        | InferredExpression::MissingProperty { .. } => PropsResolution::Unchecked,
     }
 }
 
@@ -230,138 +444,48 @@ fn component_props_type(component_type: &Type) -> Option<Type> {
     )
 }
 
-/// Looks up `<tag>` in `JSX.IntrinsicElements`. Returns the element's attribute
-/// type, or `None` when there is no `JSX.IntrinsicElements` (conservative
-/// fallback). Emits TS2339 for a tag absent from a declared `JSX.IntrinsicElements`.
-fn resolve_intrinsic_props_type(
+/// tsc's `getIntrinsicTagSymbol` and `getIntrinsicAttributesTypeFromJsxOpeningLikeElement`:
+/// the props `IntrinsicElements` declares for `tag_name`, reported at `node_span`
+/// as TS2339 when it declares none and as TS7026 when the JSX namespace has no
+/// `IntrinsicElements` at all.
+fn intrinsic_tag_props(
     tag_name: &str,
-    element_span: Option<SyntaxTextSpan>,
+    node_span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
-) -> Option<Type> {
-    // React 19 removed the global `JSX` namespace: the interface lives at
-    // `React.JSX.IntrinsicElements` (per tsc's fallback to the React namespace's
-    // `JSX` member), so a bare-key miss must retry the qualified name before
-    // concluding no intrinsic table exists.
-    const INTRINSIC_ELEMENTS_CANDIDATES: [&str; 2] =
-        ["JSX.IntrinsicElements", "React.JSX.IntrinsicElements"];
-
-    let in_scope = INTRINSIC_ELEMENTS_CANDIDATES
-        .into_iter()
-        .find(|name| ctx.lookup_type_declaration(name).is_some());
-
-    // Under the automatic runtime (`jsx: react-jsx`) tsc reaches the JSX
-    // namespace through the runtime module import it synthesizes, so intrinsic
-    // tags type-check in files with no `React` binding at all. Resolve through
-    // the declaring module's scope in that case; under `preserve`/classic modes
-    // the factory namespace must be visible, so the fallback stays off there.
-    let runtime_fallback = || {
-        if !ctx.options.jsx_automatic_runtime {
-            return None;
-        }
-        let (table, key) = ctx.jsx_intrinsic_elements_declarer.clone()?;
-        Some((
-            key,
-            std::sync::Arc::new(crate::symbols::TypeDeclarationScope::new(vec![table])),
-        ))
-    };
-
-    let (intrinsic_elements, declarer_scope) = match in_scope {
-        Some(name) => (name.to_string(), None),
-        None => match runtime_fallback() {
-            Some((key, scope)) => (key, Some(scope)),
-            None => {
-                report_missing_intrinsic_elements(element_span, ctx);
-                return None;
+) -> PropsResolution {
+    let intrinsic_elements = match jsx_namespace_member("IntrinsicElements", ctx) {
+        JsxMember::Found(intrinsic_elements) => intrinsic_elements,
+        JsxMember::Missing => {
+            if ctx.options.no_implicit_any {
+                ctx.push(diagnostic_with_syntax_span(
+                    Diagnostic::ts7026("IntrinsicElements", ctx.file_name.clone()),
+                    node_span,
+                ));
             }
-        },
+            return PropsResolution::Unchecked;
+        }
+        JsxMember::Unmodelled => return PropsResolution::Unmodelled,
     };
-
-    let named = ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
-        name: intrinsic_elements,
-        span: None,
-        type_arguments: Vec::new(),
-    }));
-    let intrinsic_type = match declarer_scope {
-        Some(scope) => crate::infer::with_type_declaration_scope(&Some(scope), ctx, |ctx| {
-            map_parsed_type(named, ctx)
-        }),
-        None => map_parsed_type(named, ctx),
-    }
-    .peeled();
-    let Type::Object(object) = &intrinsic_type else {
-        return None;
+    let Type::Object(object) = intrinsic_elements.peeled() else {
+        return PropsResolution::Unmodelled;
     };
 
     if let Some(property_type) = object.get_property_type(tag_name) {
-        return Some(property_type.clone());
+        return PropsResolution::Props(property_type.clone());
     }
-
-    if object.allows_string_index_access() {
-        return object.string_index_type.as_deref().cloned();
+    if object.synthetic_open_index {
+        // The index stands for members surge could not enumerate.
+        return PropsResolution::Unmodelled;
+    }
+    if let Some(index_type) = object.string_index_type.as_deref() {
+        return PropsResolution::Props(index_type.clone());
     }
 
     ctx.push(diagnostic_with_syntax_span(
         Diagnostic::ts2339(tag_name, "JSX.IntrinsicElements", ctx.file_name.clone()),
-        element_span,
+        node_span,
     ));
-    None
-}
-
-/// tsc's `getIntrinsicTagSymbol`: with no `JSX.IntrinsicElements` to check the
-/// tag against, the element is an implicit `any`.
-fn report_missing_intrinsic_elements(
-    element_span: Option<SyntaxTextSpan>,
-    ctx: &mut CheckerContext,
-) {
-    if !ctx.options.no_implicit_any {
-        return;
-    }
-    // Only when the program declares no intrinsic table at all. A table that
-    // exists but did not reach this file is surge's resolution gap — tsc
-    // reaches React's through the runtime module it synthesizes — and
-    // reporting it would describe that gap rather than the source.
-    if ctx.jsx_intrinsic_elements_declarer.is_some() {
-        return;
-    }
-    ctx.push(diagnostic_with_syntax_span(
-        Diagnostic::ts7026("IntrinsicElements", ctx.file_name.clone()),
-        element_span,
-    ));
-}
-
-/// Builds the value expression a component tag refers to: an identifier for
-/// `<Button />` or a property-access chain for `<UI.Button />`.
-fn build_component_value_expression(
-    head_name: &str,
-    tag_name: &str,
-    head_span: Option<SyntaxTextSpan>,
-    tag_name_span: Option<SyntaxTextSpan>,
-) -> ParsedExpression {
-    let mut expression = ParsedExpression::Identifier {
-        name: head_name.to_string(),
-        span: head_span,
-    };
-
-    let mut segments = tag_name.split('.');
-    let _head = segments.next();
-    let segments: Vec<&str> = segments.collect();
-    let last_index = segments.len().saturating_sub(1);
-    for (index, segment) in segments.iter().enumerate() {
-        let property_span = if index == last_index {
-            tag_name_span
-        } else {
-            None
-        };
-        expression = ParsedExpression::PropertyAccess {
-            object: Box::new(expression),
-            object_span: head_span,
-            property_name: (*segment).to_string(),
-            property_span,
-            is_bracketed: false,
-        };
-    }
-
-    expression
+    PropsResolution::Unchecked
 }
 
 /// Evaluates each attribute (so inner expression diagnostics are preserved) and,
