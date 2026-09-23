@@ -383,18 +383,21 @@ pub(crate) fn emit_generic_arity(
 /// `Pick`'s own check in `utility.rs` already reports the written form. Two
 /// spellings of one constraint are two dedup keys, so the same violation was
 /// reported twice.
+///
+/// tsc checks the constraints of a type reference's written arguments
+/// (`checkTypeReferenceNode`); an instantiation surge synthesized has no
+/// reference, and tsc reports nothing for it.
 pub(crate) fn emit_type_argument_constraint(
     argument: &surge_ts_types::Type,
     constraint_name: &str,
     name_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
 ) {
-    let mut diagnostic =
-        Diagnostic::ts2344(&argument.name(), constraint_name, ctx.file_name.clone());
-    if let Some(span) = name_span {
-        diagnostic = diagnostic.with_span(convert_span(span));
-    }
-    ctx.push_utility_diagnostic_once(diagnostic);
+    let Some(span) = name_span else {
+        return;
+    };
+    let diagnostic = Diagnostic::ts2344(&argument.name(), constraint_name, ctx.file_name.clone());
+    ctx.push_utility_diagnostic_once(diagnostic.with_span(convert_span(span)));
 }
 
 pub(crate) fn emit_type_declaration_cycle(
