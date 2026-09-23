@@ -172,6 +172,17 @@ pub fn resolution_mode_override_key(
     format!("{specifier}\0{mode}")
 }
 
+/// tsc's `normalizePathForCJSResolution`: a relative specifier ending in a
+/// separator, or whose last component is `.` or `..`, names a directory, and
+/// `nodeLoadModuleByRelativeName` skips the file lookups for it.
+pub fn relative_specifier_names_directory(specifier: &str) -> bool {
+    if specifier.ends_with(['/', '\\']) {
+        return true;
+    }
+    let last_segment = specifier.rsplit(['/', '\\']).next().unwrap_or(specifier);
+    last_segment == "." || last_segment == ".."
+}
+
 fn substitution_candidates_js(stem: &str) -> Vec<String> {
     vec![
         format!("{stem}.ts"),

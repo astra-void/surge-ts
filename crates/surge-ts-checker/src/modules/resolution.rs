@@ -165,12 +165,25 @@ pub(crate) fn resolve_relative_module_in_mode(
         return cached;
     }
 
-    let resolved = resolve_relative_module_uncached(
-        importer_file_name,
-        specifier,
-        program_files,
-        file_index_by_identity,
-    );
+    let resolved = if super::candidates::relative_specifier_names_directory(specifier) {
+        if esm {
+            None
+        } else {
+            resolve_relative_directory(
+                importer_file_name,
+                specifier,
+                program_files,
+                file_index_by_identity,
+            )
+        }
+    } else {
+        resolve_relative_module_uncached(
+            importer_file_name,
+            specifier,
+            program_files,
+            file_index_by_identity,
+        )
+    };
     RELATIVE_MODULE_CACHE.with(|cache| {
         cache.borrow_mut().insert(cache_key, resolved.clone());
     });
@@ -205,6 +218,32 @@ pub(crate) fn resolve_relative_module_uncached(
     }
 
     None
+}
+
+/// A specifier naming a directory (`.`, `..`, `./dir/`) resolves to the
+/// directory's index only.
+fn resolve_relative_directory(
+    importer_file_name: &str,
+    specifier: &str,
+    program_files: &[ParsedProgramFile],
+    file_index_by_identity: &surge_ts_types::fx::FxHashMap<Arc<str>, usize>,
+) -> Option<ModuleResolution> {
+    let importer_dir = module_directory(importer_file_name);
+    let directory = if importer_dir.is_empty() {
+        normalize_path_string(specifier)
+    } else {
+        normalize_path_string(&format!("{importer_dir}/{specifier}"))
+    };
+    super::candidates::directory_index_candidates(&directory)
+        .into_iter()
+        .find_map(|candidate| {
+            let resolved_file_index =
+                *file_index_by_identity.get(canonical_file_identity(&candidate).as_str())?;
+            Some(ModuleResolution {
+                resolved_file_index,
+                resolved_file_name: program_files[resolved_file_index].file_name.clone(),
+            })
+        })
 }
 
 #[allow(dead_code)]
