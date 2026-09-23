@@ -1062,15 +1062,17 @@ fn check_member_assignment_itself(
     let target_unresolved = crate::checks::assign::type_contains_unknown(&target_type);
     let checkpoint = ctx.diagnostics().len();
 
-    let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
-        &assignment.value,
-        assignment.value_span,
-        assignment.target_span,
-        Some(&target_type),
-        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
-        &visible_symbols,
-        ctx,
-    );
+    let inferred_value = crate::checks::expr::with_property_write_target(*property_span, || {
+        crate::checks::expected::evaluate_expression_with_expected_type_anchored(
+            &assignment.value,
+            assignment.value_span,
+            assignment.target_span,
+            Some(&target_type),
+            crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+            &visible_symbols,
+            ctx,
+        )
+    });
 
     if target_unresolved {
         ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
@@ -1183,6 +1185,22 @@ pub(crate) fn check_this_property_assignment(
         return;
     };
 
+    // The write goes through the setter's accessibility
+    // (`getDeclarationModifierFlagsFromSymbol` with `isWrite`).
+    let this_receiver = visible_symbols
+        .declared_type("this")
+        .cloned()
+        .unwrap_or_else(|| this_symbol.ty.clone());
+    crate::checks::expr::check_member_accessibility(
+        &ParsedExpression::This { span: None },
+        &this_receiver,
+        &assignment.property_name,
+        assignment.property_span,
+        true,
+        &visible_symbols,
+        ctx,
+    );
+
     let constructor_may_write = ctx
         .constructor_writable_members
         .as_ref()
@@ -1207,15 +1225,18 @@ pub(crate) fn check_this_property_assignment(
     // a whole-value mismatch is reported on `this.<property>`.
     let target_unresolved = crate::checks::assign::type_contains_unknown(&property_type);
     let checkpoint = ctx.diagnostics().len();
-    let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
-        &assignment.value,
-        assignment.value_span,
-        assignment.target_span,
-        Some(&property_type),
-        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
-        &visible_symbols,
-        ctx,
-    );
+    let inferred_value =
+        crate::checks::expr::with_property_write_target(assignment.property_span, || {
+            crate::checks::expected::evaluate_expression_with_expected_type_anchored(
+                &assignment.value,
+                assignment.value_span,
+                assignment.target_span,
+                Some(&property_type),
+                crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                &visible_symbols,
+                ctx,
+            )
+        });
     if target_unresolved {
         ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
     }

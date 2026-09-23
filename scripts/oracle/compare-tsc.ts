@@ -812,6 +812,7 @@ export const fixturePresets: Record<string, string> = {
   'optional-chain-element-call': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-element-call/tsconfig.json'),
   'destructuring-assignment-in-comma': path.join(workspaceRoot, 'tests/compat-projects/destructuring-assignment-in-comma/tsconfig.json'),
   'jsdoc-link-counts-as-use': path.join(workspaceRoot, 'tests/compat-projects/jsdoc-link-counts-as-use/tsconfig.json'),
+  'accessor-read-write-accessibility': path.join(workspaceRoot, 'tests/compat-projects/accessor-read-write-accessibility/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

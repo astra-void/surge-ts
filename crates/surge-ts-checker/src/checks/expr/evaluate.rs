@@ -1179,7 +1179,7 @@ fn evaluate_optional_property_access(
             receiver_type,
             property_name,
             *property_span,
-            false,
+            super::is_property_write_target(*property_span),
             symbols,
             ctx,
         );
@@ -1531,7 +1531,7 @@ fn evaluate_property_access(
             receiver_type,
             property_name,
             *property_span,
-            false,
+            super::is_property_write_target(*property_span),
             symbols,
             ctx,
         );

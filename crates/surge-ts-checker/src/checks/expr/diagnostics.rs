@@ -258,6 +258,31 @@ pub(crate) fn property_spelling_suggestion(name: &str, object_type: &Type) -> Op
 
 thread_local! {
     static ELEMENT_WRITE_TARGET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static PROPERTY_WRITE_TARGET: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Evaluates an assignment's value while `span`, the member it writes, is the
+/// write target: a compound assignment folds a read of that member into its
+/// value (`this.x += 1` reads `this.x + 1`), and tsc checks the member's
+/// accessibility as the write it is (`isAssignmentTarget`), through the
+/// setter only.
+pub(crate) fn with_property_write_target<R>(
+    span: Option<SyntaxTextSpan>,
+    evaluate: impl FnOnce() -> R,
+) -> R {
+    let previous = PROPERTY_WRITE_TARGET
+        .with(|target| target.replace(span.map(|span| (span.start, span.end))));
+    let result = evaluate();
+    PROPERTY_WRITE_TARGET.with(|target| target.set(previous));
+    result
+}
+
+/// Whether the member read at `span` is the write target of the assignment
+/// whose value is being evaluated.
+pub(crate) fn is_property_write_target(span: Option<SyntaxTextSpan>) -> bool {
+    span.is_some_and(|span| {
+        PROPERTY_WRITE_TARGET.with(|target| target.get() == Some((span.start, span.end)))
+    })
 }
 
 /// Evaluates an update operand, which tsc checks as an assignment target: the
