@@ -726,6 +726,7 @@ export const fixturePresets: Record<string, string> = {
   'dotted-namespace-value-member-basic': path.join(workspaceRoot, 'tests/compat-projects/dotted-namespace-value-member-basic/tsconfig.json'),
   'import-equals-entity-alias-basic': path.join(workspaceRoot, 'tests/compat-projects/import-equals-entity-alias-basic/tsconfig.json'),
   'definite-assignment-guard-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/definite-assignment-guard-narrowing-basic/tsconfig.json'),
+  'script-typeof-class-member-basic': path.join(workspaceRoot, 'tests/compat-projects/script-typeof-class-member-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

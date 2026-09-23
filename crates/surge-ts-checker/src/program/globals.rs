@@ -50,6 +50,16 @@ pub(crate) fn collect_global_function_signatures(
     ctx: &mut CheckerContext,
 ) {
     let seeded_names = seed_script_values_for_signatures(parsed_files, global_symbols, ctx);
+    // A class's member annotations resolve their `typeof` through the
+    // context, not the signature scope, so the seed reaches them this way.
+    let saved_fallback = ctx.module_value_fallback.take();
+    if !seeded_names.is_empty() {
+        let mut seeded_values = SymbolTable::new();
+        for (name, symbol) in &seeded_names {
+            let _ = seeded_values.insert_shared(name.clone(), symbol.clone());
+        }
+        ctx.module_value_fallback = Some(Arc::new(seeded_values));
+    }
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
         if !is_script_source(parsed_file) {
             continue;
@@ -65,6 +75,7 @@ pub(crate) fn collect_global_function_signatures(
             ctx,
         );
     }
+    ctx.module_value_fallback = saved_fallback;
     for (name, seeded) in seeded_names {
         if global_symbols
             .get_own(&name)
