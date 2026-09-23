@@ -588,10 +588,22 @@ fn object_binding_element_type(source: &Type, property_name: &str) -> Type {
                 None => Type::Any,
             }
         }
+        // `{ 0: first }` indexes the source by the literal `0`
+        // (`getLiteralTypeFromPropertyName`): a tuple's element, or an array's
+        // element through its number index.
+        Type::Tuple(_) | Type::Array(_) if is_array_index_name(property_name) => {
+            property_name
+                .parse()
+                .map_or(Type::Any, |index| array_binding_element_type(source, index))
+        }
         source => source
             .get_property_access_type(property_name)
             .unwrap_or(Type::Any),
     }
+}
+
+fn is_array_index_name(name: &str) -> bool {
+    !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit()) && (name == "0" || !name.starts_with('0'))
 }
 
 pub(crate) fn insert_object_binding_element_binding(

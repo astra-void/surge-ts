@@ -758,11 +758,7 @@ fn parse_object_pattern_declarations(
         let omitted: Option<Vec<String>> = object_pattern
             .properties
             .iter()
-            .map(|property| match &property.key {
-                PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
-                PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
-                _ => None,
-            })
+            .map(|property| binding_property_key(&property.key).map(|(name, _)| name))
             .collect();
         let initializer = match omitted {
             Some(omitted) => ParsedExpression::ObjectRest {
@@ -791,7 +787,7 @@ fn parse_object_binding_property_declarations(
     is_declare: bool,
     kind: ParsedVariableKind,
 ) -> Vec<ParsedStatement> {
-    let PropertyKey::StaticIdentifier(identifier) = &property.key else {
+    let Some((property_name, key_span)) = binding_property_key(&property.key) else {
         return Vec::new();
     };
 
@@ -801,38 +797,78 @@ fn parse_object_binding_property_declarations(
     // than a missing property.
     if matches!(property.value, BindingPattern::AssignmentPattern(_))
         && static_object_literal(&source_initializer).is_some_and(|properties| {
-            literal_lacks_property(properties, identifier.name.as_str())
+            literal_lacks_property(properties, &property_name)
         })
     {
         return parse_binding_pattern_declarations(
             &property.value,
             Some(ParsedExpression::UndefinedLiteral),
-            Some(text_span_from_oxc_span(identifier.span)),
+            Some(text_span_from_oxc_span(key_span)),
             is_declare,
             kind,
             None,
         );
     }
 
-    // Marked bracketed: this access is synthesized from a binding pattern, and
-    // tsc does not apply `noPropertyAccessFromIndexSignature` (TS4111) to
-    // destructuring — only to written dotted accesses.
-    let property_initializer = ParsedExpression::PropertyAccess {
-        object: Box::new(source_initializer),
-        object_span: source_initializer_span,
-        property_name: identifier.name.to_string(),
-        property_span: Some(text_span_from_oxc_span(identifier.span)),
-        is_bracketed: true,
+    // tsc indexes the source by the key's literal type
+    // (`getLiteralTypeFromPropertyName`); a numeric name stays an element access,
+    // as `obj["0"]` does, so a tuple or array source answers it.
+    let is_numeric_index = !property_name.is_empty() && property_name.bytes().all(|byte| byte.is_ascii_digit());
+    let property_initializer = if is_numeric_index {
+        let index = Box::new(match &property.key {
+            PropertyKey::NumericLiteral(_) => ParsedExpression::NumberLiteral(property_name),
+            _ => ParsedExpression::StringLiteral(property_name),
+        });
+        let index_span = Some(text_span_from_oxc_span(key_span));
+        match source_initializer {
+            ParsedExpression::Identifier { name, .. } => ParsedExpression::IndexAccess {
+                object_name: name,
+                object_span: source_initializer_span,
+                index,
+                index_span,
+            },
+            source => ParsedExpression::ElementAccess {
+                object: Box::new(source),
+                object_span: source_initializer_span,
+                index,
+                index_span,
+            },
+        }
+    } else {
+        // Marked bracketed: this access is synthesized from a binding pattern,
+        // and tsc does not apply `noPropertyAccessFromIndexSignature` (TS4111)
+        // to destructuring — only to written dotted accesses.
+        ParsedExpression::PropertyAccess {
+            object: Box::new(source_initializer),
+            object_span: source_initializer_span,
+            property_name,
+            property_span: Some(text_span_from_oxc_span(key_span)),
+            is_bracketed: true,
+        }
     };
 
     parse_binding_pattern_declarations(
         &property.value,
         Some(property_initializer),
-        Some(text_span_from_oxc_span(identifier.span)),
+        Some(text_span_from_oxc_span(key_span)),
         is_declare,
         kind,
         None,
     )
+}
+
+/// The property a non-computed binding property reads. A quoted or numeric key
+/// names the property its value spells, as it does in an object literal
+/// (`{ 0: first }` reads `"0"`).
+pub(crate) fn binding_property_key(key: &PropertyKey<'_>) -> Option<(String, oxc_span::Span)> {
+    match key {
+        PropertyKey::StaticIdentifier(identifier) => Some((identifier.name.to_string(), identifier.span)),
+        PropertyKey::StringLiteral(literal) => Some((literal.value.to_string(), literal.span)),
+        PropertyKey::NumericLiteral(literal) => {
+            Some((number_text::js_number_to_string(literal.value), literal.span))
+        }
+        _ => None,
+    }
 }
 
 /// The properties of the object literal `expression` statically evaluates to:
