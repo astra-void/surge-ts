@@ -1396,14 +1396,63 @@ impl<'a> ContextCollector<'a, '_> {
         if is_literal_name(expression) || is_entity_name_expression(expression) {
             return;
         }
-        let key_start = key.span().start as usize;
-        let Some(open) = self.source_text[..key_start].rfind('[') else {
-            return;
-        };
-        let close = self.source_text[key.span().end as usize..]
+        let span = self.member_name_span(key, true);
+        self.push(code, span, &[]);
+    }
+
+    /// A member name as tsc's `getErrorSpanForNode` reports it: a computed
+    /// name includes its brackets, which oxc's key span leaves out.
+    fn member_name_span(&self, key: &oxc_ast::ast::PropertyKey<'_>, computed: bool) -> Span {
+        let key_span = key.span();
+        if !computed {
+            return key_span;
+        }
+        let open = self.source_text[..key_span.start as usize]
+            .rfind('[')
+            .map_or(key_span.start, |open| open as u32);
+        let close = self.source_text[key_span.end as usize..]
             .find(']')
-            .map_or(key.span().end, |offset| key.span().end + offset as u32 + 1);
-        self.push(code, Span::new(open as u32, close), &[]);
+            .map_or(key_span.end, |offset| key_span.end + offset as u32 + 1);
+        Span::new(open, close)
+    }
+
+    /// tsc's `checkGrammarProperty`: a `[k in T]` property name is a mapped
+    /// type written among other members, reported on the parent's first
+    /// member (TS7061). Returns whether it was, since tsc then skips the
+    /// dynamic-name check.
+    fn check_mapped_type_member(&mut self, key: &oxc_ast::ast::PropertyKey<'_>) -> bool {
+        use oxc_ast::ast::{ClassElement, Expression, TSSignature};
+        let is_in_expression = match key.as_expression() {
+            Some(Expression::BinaryExpression(binary)) => {
+                binary.operator == oxc_syntax::operator::BinaryOperator::In
+            }
+            Some(Expression::PrivateInExpression(_)) => true,
+            _ => false,
+        };
+        if !is_in_expression {
+            return false;
+        }
+        let signature_span = |signature: &TSSignature<'_>| match signature {
+            TSSignature::TSPropertySignature(member) => self.member_name_span(&member.key, member.computed),
+            TSSignature::TSMethodSignature(member) => self.member_name_span(&member.key, member.computed),
+            other => other.span(),
+        };
+        let first_member = match self.stack.last() {
+            Some(AstKind::ClassBody(body)) => body.body.first().map(|element| match element {
+                ClassElement::MethodDefinition(member) => self.member_name_span(&member.key, member.computed),
+                ClassElement::PropertyDefinition(member) => self.member_name_span(&member.key, member.computed),
+                ClassElement::AccessorProperty(member) => self.member_name_span(&member.key, member.computed),
+                other => other.span(),
+            }),
+            Some(AstKind::TSInterfaceBody(body)) => body.body.first().map(signature_span),
+            Some(AstKind::TSTypeLiteral(literal)) => literal.members.first().map(signature_span),
+            _ => None,
+        };
+        let Some(span) = first_member else {
+            return false;
+        };
+        self.push(7061, span, &[]);
+        true
     }
 
     /// tsc's `checkGrammarBreakOrContinueStatement`.
@@ -1840,16 +1889,21 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 if property.definite && property.value.is_some() {
                     self.push_at_exclamation(1263, property.key.span());
                 }
-                if property.computed {
+                if property.computed && !self.check_mapped_type_member(&property.key) {
                     self.check_dynamic_property_name(1166, &property.key);
                 }
             }
+            AstKind::AccessorProperty(property) if property.computed => {
+                self.check_mapped_type_member(&property.key);
+            }
             AstKind::TSPropertySignature(signature) if signature.computed => {
-                let code = match self.stack.last() {
-                    Some(AstKind::TSInterfaceBody(_)) => 1169,
-                    _ => 1170,
-                };
-                self.check_dynamic_property_name(code, &signature.key);
+                if !self.check_mapped_type_member(&signature.key) {
+                    let code = match self.stack.last() {
+                        Some(AstKind::TSInterfaceBody(_)) => 1169,
+                        _ => 1170,
+                    };
+                    self.check_dynamic_property_name(code, &signature.key);
+                }
             }
             AstKind::VariableDeclaration(declaration) => {
                 self.check_single_statement_declaration(declaration);

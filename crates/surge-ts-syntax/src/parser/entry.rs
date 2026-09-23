@@ -104,8 +104,9 @@ fn classify_uncoded_parser_error(
 
 /// Where tsc anchors a failure oxc labels elsewhere: the name after a
 /// `const` class member modifier (TS1248), the `<` of an instantiation
-/// expression (TS1477), the second of the `u`/`v` flags (TS1502), and the
-/// first keyword of an ambient `using` or `await using` (TS1545/TS1546).
+/// expression (TS1477), the second of the `u`/`v` flags (TS1502), the
+/// bracketed computed name of an enum member (TS1164), and the first keyword
+/// of an ambient `using` or `await using` (TS1545/TS1546).
 fn tsc_anchor_for_parser_error(
     code: Option<u32>,
     span: crate::TextSpan,
@@ -128,6 +129,10 @@ fn tsc_anchor_for_parser_error(
             None => span,
         },
         Some(1502) if span.end > span.start => at(span.end - 1, 1),
+        Some(1164) => match text(0, span.start).rfind('[') {
+            Some(start) => crate::TextSpan { start, end: span.end + 1 },
+            None => span,
+        },
         Some(1545) => match text(0, span.start).rfind("using") {
             Some(start) => at(start, 5),
             None => span,

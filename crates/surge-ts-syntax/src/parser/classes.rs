@@ -1,7 +1,8 @@
 use oxc_ast::ast::{
-    Class, ClassElement, MethodDefinitionKind, MethodDefinitionType,
+    Class, ClassElement, Expression, MethodDefinitionKind, MethodDefinitionType,
     PropertyDefinitionType, PropertyKey,
 };
+use oxc_syntax::operator::BinaryOperator;
 
 use oxc_span::GetSpan;
 
@@ -95,13 +96,22 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
             .body
             .iter()
             .filter_map(|element| {
-                let (key, computed) = match element {
-                    ClassElement::MethodDefinition(member) => (&member.key, member.computed),
-                    ClassElement::PropertyDefinition(member) => (&member.key, member.computed),
-                    ClassElement::AccessorProperty(member) => (&member.key, member.computed),
+                let (key, computed, is_get_or_set) = match element {
+                    ClassElement::MethodDefinition(member) => (
+                        &member.key,
+                        member.computed,
+                        member.kind.is_accessor(),
+                    ),
+                    ClassElement::PropertyDefinition(member) => (&member.key, member.computed, false),
+                    ClassElement::AccessorProperty(member) => (&member.key, member.computed, false),
                     _ => return None,
                 };
                 let expression = key.as_expression().filter(|_| computed)?;
+                // tsc's `isInvalidComputedPropertyName`: a `[k in T]` name is a
+                // misplaced mapped type (TS7061) and its expression is never checked.
+                if !is_get_or_set && is_in_expression(expression) {
+                    return None;
+                }
                 let (parsed, _) = parse_expression(expression);
                 // The name's `[`, which the key's own span leaves out.
                 let span = key.span();
@@ -115,6 +125,14 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
             })
             .collect(),
     })
+}
+
+fn is_in_expression(expression: &Expression<'_>) -> bool {
+    match expression {
+        Expression::BinaryExpression(binary) => binary.operator == BinaryOperator::In,
+        Expression::PrivateInExpression(_) => true,
+        _ => false,
+    }
 }
 
 fn restricted_class_members(class: &Class<'_>) -> Vec<ParsedRestrictedMember> {
