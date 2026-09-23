@@ -398,6 +398,8 @@ export const fixturePresets: Record<string, string> = {
   'inference-object-literal-candidate-union': path.join(workspaceRoot, 'tests/compat-projects/inference-object-literal-candidate-union/tsconfig.json'),
   'inference-contravariant-parameter-candidates': path.join(workspaceRoot, 'tests/compat-projects/inference-contravariant-parameter-candidates/tsconfig.json'),
   'inference-fixed-parameter-widening': path.join(workspaceRoot, 'tests/compat-projects/inference-fixed-parameter-widening/tsconfig.json'),
+  'inference-rest-tuple-contextual-parameters': path.join(workspaceRoot, 'tests/compat-projects/inference-rest-tuple-contextual-parameters/tsconfig.json'),
+  'inference-callback-parameter-fixing': path.join(workspaceRoot, 'tests/compat-projects/inference-callback-parameter-fixing/tsconfig.json'),
   'instantiation-expression-basic': path.join(workspaceRoot, 'tests/compat-projects/instantiation-expression-basic/tsconfig.json'),
   'literal-equality-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/literal-equality-narrowing-basic/tsconfig.json'),
   'optional-chain-guard-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-guard-narrowing-basic/tsconfig.json'),

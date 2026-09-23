@@ -1778,6 +1778,7 @@ pub(crate) fn infer_type_argument_substitution(
         function_signature,
         &deferred_callbacks,
         outer_type_arguments,
+        expected_return_type,
         &mut substitution,
         symbols,
         ctx,
@@ -1860,6 +1861,7 @@ fn infer_from_context_sensitive_callbacks(
     function_signature: &FunctionSignatureInfo,
     deferred_callbacks: &[(&ParsedType, &surge_ts_syntax::ParsedArrowFunction)],
     outer_type_arguments: &[(String, Type)],
+    expected_return_type: Option<&Type>,
     substitution: &mut TypeParameterSubstitution,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
@@ -1868,11 +1870,18 @@ fn infer_from_context_sensitive_callbacks(
         return;
     }
 
+    let mut return_inferences: Option<TypeParameterSubstitution> = None;
     for (parameter_type, arrow) in deferred_callbacks {
         let Some(callback) = callback_parameter_annotation(parameter_type) else {
             continue;
         };
-        fix_contextual_parameter_type_arguments(function_signature, callback, arrow, substitution);
+        infer_from_annotated_parameters(function_signature, callback, arrow, substitution, ctx);
+        let mut fixing = TypeArgumentFixing {
+            function_signature,
+            expected_return_type,
+            return_inferences: &mut return_inferences,
+        };
+        fix_contextual_parameter_type_arguments(&mut fixing, callback, arrow, substitution, ctx);
         // The enclosing interface's own arguments (`T` of the `Box<string>` the
         // method was read off) are seeded here and here only: they type the
         // callback's parameters, but they are not this call's to infer, and the
@@ -1881,7 +1890,7 @@ fn infer_from_context_sensitive_callbacks(
             substitution.clone_with_reason(TypeCopyReason::CallResolution);
         seed_outer_type_arguments(&mut contextual_substitution, outer_type_arguments);
         let diagnostics_before = ctx.diagnostics().len();
-        let contextual_parameters = with_declaring_scope(function_signature, ctx, |ctx| {
+        let mut contextual_parameters = with_declaring_scope(function_signature, ctx, |ctx| {
             callback
                 .parameters
                 .iter()
@@ -1895,14 +1904,43 @@ fn infer_from_context_sensitive_callbacks(
                 })
                 .collect::<Vec<_>>()
         });
-        let sketch = Type::Function(
-            crate::infer::expression::infer_arrow_function_with_contextual_parameters(
-                arrow,
-                &contextual_parameters,
-                symbols,
-                ctx,
-            ),
+        // `getTypeAtPosition`: from a contextual rest parameter on, each
+        // parameter takes the rest type's element at its position; a rest
+        // parameter there takes the rest type itself.
+        let contextual_rest = callback
+            .parameters
+            .iter()
+            .filter(|parameter| !parameter.is_this)
+            .last()
+            .is_some_and(|parameter| parameter.rest);
+        if contextual_rest && let Some(rest) = contextual_parameters.pop() {
+            let rest_index = contextual_parameters.len();
+            for (index, parameter) in arrow.parameters.iter().enumerate().skip(rest_index) {
+                contextual_parameters.push(if parameter.rest && index == rest_index {
+                    rest.clone()
+                } else {
+                    rest_parameter_element_type(&rest, index - rest_index)
+                });
+            }
+        }
+        let sketch = crate::infer::expression::infer_arrow_function_with_contextual_parameters(
+            arrow,
+            &contextual_parameters,
+            symbols,
+            ctx,
         );
+        // The sketch lists a rest parameter as a plain one; its slot holds the
+        // rest type, so the signature it infers from is variadic.
+        let sketch = Type::Function(if arrow.parameters.last().is_some_and(|parameter| parameter.rest) {
+            alloc_function_type(
+                sketch.parameters().to_vec(),
+                sketch.return_type().clone(),
+                true,
+                sketch.required_parameter_count(),
+            )
+        } else {
+            sketch
+        });
         ctx.truncate_diagnostics(diagnostics_before);
         if crate::checks::expr::carries_leaked_type_parameter(&sketch, ctx) {
             continue;
@@ -1916,17 +1954,105 @@ fn infer_from_context_sensitive_callbacks(
     }
 }
 
+/// tsc's `inferFromAnnotatedParametersAndReturn`, which runs before a
+/// context-sensitive callback's own parameters are typed: each annotated
+/// parameter but a rest one infers to the contextual parameter type at its
+/// position, and an annotated return type to the contextual return type.
+fn infer_from_annotated_parameters(
+    function_signature: &FunctionSignatureInfo,
+    callback: &ParsedFunctionType,
+    arrow: &surge_ts_syntax::ParsedArrowFunction,
+    substitution: &mut TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+) {
+    let contextual: Vec<&surge_ts_syntax::ParsedFunctionTypeParameter> = callback
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.is_this)
+        .collect();
+    let fixed_count = arrow.parameters.len()
+        - usize::from(arrow.parameters.last().is_some_and(|parameter| parameter.rest));
+    let diagnostics_before = ctx.diagnostics().len();
+    let mut inferences: Vec<(ParsedType, Type)> = Vec::new();
+    for (index, parameter) in arrow.parameters.iter().enumerate().take(fixed_count) {
+        let Some(declared) = parameter.declared_type.as_ref() else {
+            continue;
+        };
+        let Some(target) = contextual_parameter_type_at(&contextual, index) else {
+            continue;
+        };
+        let source = crate::infer::map_parsed_type(declared.clone(), ctx);
+        let source = if parameter.optional {
+            surge_ts_types::union_type(vec![source, Type::Undefined])
+        } else {
+            source
+        };
+        inferences.push((target, source));
+    }
+    if let Some(declared_return) = arrow.return_type.as_ref() {
+        let source = crate::infer::map_parsed_type(declared_return.clone(), ctx);
+        inferences.push((callback.return_type.as_ref().clone(), source));
+    }
+    ctx.truncate_diagnostics(diagnostics_before);
+    with_declaring_scope(function_signature, ctx, |ctx| {
+        for (target, source) in &inferences {
+            if source.is_degraded() {
+                continue;
+            }
+            with_inference_root(target, || {
+                collect_inferred_type_argument(target, source, substitution, false, ctx, 0);
+            });
+        }
+    });
+}
+
+/// `getTypeAtPosition` over a written signature: the parameter at `index`,
+/// or an array rest parameter's element from its own position on. A rest
+/// typed by a type parameter reads an indexed access, which no inference is
+/// made to.
+fn contextual_parameter_type_at(
+    contextual: &[&surge_ts_syntax::ParsedFunctionTypeParameter],
+    index: usize,
+) -> Option<ParsedType> {
+    let (last, fixed) = contextual.split_last()?;
+    if !last.rest {
+        return contextual.get(index).map(|parameter| parameter.ty.clone());
+    }
+    if let Some(parameter) = fixed.get(index) {
+        return Some(parameter.ty.clone());
+    }
+    match &last.ty {
+        ParsedType::Array(element) => Some(element.as_ref().clone()),
+        ParsedType::Readonly(inner) => match inner.as_ref() {
+            ParsedType::Array(element) => Some(element.as_ref().clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// What fixing a type parameter needs beyond its candidates: where its default
+/// and constraint are written, and the contextual return type tsc infers from
+/// before any argument (`InferencePriority.ReturnType`).
+struct TypeArgumentFixing<'a, 'b> {
+    function_signature: &'a FunctionSignatureInfo,
+    expected_return_type: Option<&'a Type>,
+    return_inferences: &'b mut Option<TypeParameterSubstitution>,
+}
+
 /// tsc's fixing mapper: a callback parameter written without an annotation is
 /// typed from the contextual signature (`assignContextualParameterTypes`), and
 /// every type parameter its contextual type names is fixed at the inference
 /// made so far. A contextual rest parameter typed by a bare type parameter is
 /// instantiated without fixing it (`contextuallyCheckFunctionExpressionOrObjectLiteralMethod`).
 fn fix_contextual_parameter_type_arguments(
-    function_signature: &FunctionSignatureInfo,
+    fixing: &mut TypeArgumentFixing<'_, '_>,
     callback: &ParsedFunctionType,
     arrow: &surge_ts_syntax::ParsedArrowFunction,
     substitution: &mut TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
 ) {
+    let function_signature = fixing.function_signature;
     let contextual: Vec<&surge_ts_syntax::ParsedFunctionTypeParameter> = callback
         .parameters
         .iter()
@@ -1957,7 +2083,7 @@ fn fix_contextual_parameter_type_arguments(
         }
         for type_parameter in &function_signature.type_parameters {
             if parsed_type_mentions_name(&contextual_parameter.ty, &type_parameter.name) {
-                fix_type_argument(substitution, &type_parameter.name);
+                fix_type_argument(fixing, substitution, &type_parameter.name, ctx);
             }
         }
     }
@@ -1965,24 +2091,103 @@ fn fix_contextual_parameter_type_arguments(
 
 /// Fixes `name` at `getInferredType` of its candidates with `isFixed` set,
 /// which widens literal candidates (`widenLiteralTypes`) unless the parameter
-/// is a literal context or a candidate was inferred below the top level. A
-/// parameter with no candidate yet keeps its placeholder.
-fn fix_type_argument(substitution: &mut TypeParameterSubstitution, name: &str) {
+/// is a literal context or a candidate was inferred below the top level.
+/// Without a candidate it is fixed at what the contextual return type infers
+/// for it, else its default, else its constraint, else `unknown`.
+fn fix_type_argument(
+    fixing: &mut TypeArgumentFixing<'_, '_>,
+    substitution: &mut TypeParameterSubstitution,
+    name: &str,
+    ctx: &mut CheckerContext,
+) {
     if substitution.is_inference_fixed(name) {
         return;
     }
     let candidates = substitution.inference_candidates(name);
-    if candidates.is_empty() {
-        return;
-    }
-    let widen_literals = !substitution.keeps_literal(name)
-        && candidates
-            .iter()
-            .filter(|candidate| !candidate.contravariant)
-            .all(|candidate| candidate.top_level);
-    let fixed = inferred_type(candidates, widen_literals);
+    let fixed = if candidates.is_empty() {
+        match uninferred_type_argument(fixing, substitution, name, ctx) {
+            Some(fixed) => fixed,
+            None => return,
+        }
+    } else {
+        let widen_literals = !substitution.keeps_literal(name)
+            && candidates
+                .iter()
+                .filter(|candidate| !candidate.contravariant)
+                .all(|candidate| candidate.top_level);
+        inferred_type(candidates, widen_literals)
+    };
     substitution.set(name.to_string(), fixed, false);
     substitution.fix_inference(name);
+}
+
+/// `getInferredType` for a type parameter no candidate names yet. surge reads
+/// the contextual return type only through a generic-instantiation return
+/// annotation (`infer_type_arguments_from_expected_return_type`), so under a
+/// contextual type a parameter another return shape names — or an inferred
+/// return type may — is left unfixed rather than fixed without that
+/// inference.
+fn uninferred_type_argument(
+    fixing: &mut TypeArgumentFixing<'_, '_>,
+    substitution: &TypeParameterSubstitution,
+    name: &str,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let function_signature = fixing.function_signature;
+    if let Some(expected_return_type) = fixing.expected_return_type {
+        let return_inferences = fixing.return_inferences.get_or_insert_with(|| {
+            let mut from_return = substitution.clone_with_reason(TypeCopyReason::CallResolution);
+            if let Some(ParsedType::Named(declared_return_type)) =
+                function_signature.return_type.as_ref()
+                && !declared_return_type.type_arguments.is_empty()
+            {
+                with_declaring_scope(function_signature, ctx, |ctx| {
+                    infer_through_generic_reference(
+                        declared_return_type,
+                        expected_return_type,
+                        &mut from_return,
+                        false,
+                        ctx,
+                        0,
+                    );
+                });
+            }
+            from_return
+        });
+        if let Some(inferred) = return_inferences.get(name)
+            && !inferred.is_degraded()
+        {
+            return Some(inferred.clone());
+        }
+        if function_signature
+            .return_type
+            .as_ref()
+            .is_none_or(|return_type| parsed_type_mentions_name(return_type, name))
+        {
+            return None;
+        }
+    }
+    let type_parameter = function_signature
+        .type_parameters
+        .iter()
+        .find(|type_parameter| type_parameter.name == name)?;
+    // `getConstraintFromTypeParameter` reads `extends any` as `unknown`.
+    let written = type_parameter.default_type.clone().or_else(|| {
+        type_parameter
+            .constraint
+            .clone()
+            .filter(|constraint| !matches!(constraint, ParsedType::Any))
+    });
+    let Some(written) = written else {
+        return Some(Type::GenuineUnknown);
+    };
+    let snapshot = substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+    let diagnostics_before = ctx.diagnostics().len();
+    let resolved = with_declaring_scope(function_signature, ctx, |ctx| {
+        map_parsed_type_with_substitution(written, ctx, &snapshot)
+    });
+    ctx.truncate_diagnostics(diagnostics_before);
+    (!contains_unresolved_hole(&resolved)).then_some(resolved)
 }
 
 /// tsc infers the *widened* type from a literal expression — `behaviorSubject(1)`
@@ -2873,24 +3078,61 @@ fn rest_type_at_position(source: &FunctionType, position: usize) -> Option<Type>
         .then(|| parameters.len().checked_sub(1))
         .flatten();
     let fixed_end = rest_index.unwrap_or(parameters.len());
-    let leading: Vec<Type> = parameters.get(position..fixed_end).unwrap_or_default().to_vec();
-    if leading.iter().any(|parameter| matches!(parameter, Type::Any)) {
+    let written = parameters.get(position..fixed_end).unwrap_or_default();
+    if written.iter().any(|parameter| matches!(parameter, Type::Any)) {
         return None;
     }
+    // An optional parameter is an optional element (`[foo: string, bar?:
+    // number]`), which surge's tuples spell as the element or `undefined`, as
+    // they do a written `[string, number?]`.
+    let required = source.required_parameter_count();
+    let leading: Vec<Type> = written
+        .iter()
+        .enumerate()
+        .map(|(offset, parameter)| {
+            if position + offset >= required {
+                surge_ts_types::union_type(vec![parameter.clone(), Type::Undefined])
+            } else {
+                parameter.clone()
+            }
+        })
+        .collect();
     let Some(rest_index) = rest_index else {
         return Some(Type::Tuple(leading));
     };
-    let rest = &parameters[rest_index];
+    // A variadic slot holds either the whole rest type (a signature mapped
+    // from source, a tuple rest) or, as the resolver writes an array rest, its
+    // element.
+    let rest = match parameters[rest_index].peeled() {
+        shape @ (Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)) => shape,
+        element => Type::Array(Box::new(element)),
+    };
     if position >= rest_index {
-        return Some(rest.clone());
+        let skip = position - rest_index;
+        return Some(match rest {
+            Type::Tuple(elements) => Type::Tuple(elements.into_iter().skip(skip).collect()),
+            Type::OpenTuple(open) if skip <= open.leading.len() => {
+                Type::OpenTuple(surge_ts_types::OpenTupleType {
+                    leading: open.leading.into_iter().skip(skip).collect(),
+                    rest: open.rest,
+                    trailing: open.trailing,
+                })
+            }
+            other => other,
+        });
     }
-    Some(match rest.peeled() {
+    Some(match rest {
         Type::Array(element) => Type::OpenTuple(surge_ts_types::OpenTupleType {
             leading,
             rest: element,
             trailing: Vec::new(),
         }),
         Type::Tuple(elements) => Type::Tuple(leading.into_iter().chain(elements).collect()),
+        Type::OpenTuple(open) => Type::OpenTuple(surge_ts_types::OpenTupleType {
+            leading: leading.into_iter().chain(open.leading).collect(),
+            rest: open.rest,
+            trailing: open.trailing,
+        }),
         _ => return None,
     })
 }
