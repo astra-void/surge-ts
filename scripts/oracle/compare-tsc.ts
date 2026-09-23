@@ -716,6 +716,7 @@ export const fixturePresets: Record<string, string> = {
   'var-redeclaration-identity-basic': path.join(workspaceRoot, 'tests/compat-projects/var-redeclaration-identity-basic/tsconfig.json'),
   'tagged-template-generic-call-basic': path.join(workspaceRoot, 'tests/compat-projects/tagged-template-generic-call-basic/tsconfig.json'),
   'static-property-function-initializer-basic': path.join(workspaceRoot, 'tests/compat-projects/static-property-function-initializer-basic/tsconfig.json'),
+  'synthetic-default-import-value-basic': path.join(workspaceRoot, 'tests/compat-projects/synthetic-default-import-value-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

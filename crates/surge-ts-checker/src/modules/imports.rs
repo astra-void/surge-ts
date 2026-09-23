@@ -737,7 +737,14 @@ fn resolve_default_and_named_import(
                     default_scope.as_ref(),
                     resolved_index,
                 ));
-                bind_synthetic_default_import(local_name, local_symbol_exists, symbols);
+                bind_synthetic_default_import(
+                    local_name,
+                    &export_table,
+                    resolved_index,
+                    program_files,
+                    local_symbol_exists,
+                    symbols,
+                );
             } else if !should_bind_unknown_for_missing_export(
                 &export_table,
                 resolved_index,
@@ -984,9 +991,7 @@ fn resolve_default_import(
         // `export = X` has no `default` *value* export, but under
         // `esModuleInterop` a default import still names that target's type —
         // `import EventEmitter from "events"` then `extends EventEmitter<T>` has
-        // to resolve. Only the type side: binding the value here instead of the
-        // synthetic `any` exposes express's unresolved handler overloads and
-        // costs ten implicit-any false positives for the three it saves.
+        // to resolve.
         bind_default_type_import(&export_table, scope.as_ref(), local_name, type_declarations);
 
         if allows_synthetic_default_import(ctx, resolved_index, program_files) {
@@ -1000,7 +1005,14 @@ fn resolve_default_import(
                 scope.as_ref(),
                 resolved_index,
             ));
-            bind_synthetic_default_import(local_name, local_symbol_exists, symbols);
+            bind_synthetic_default_import(
+                local_name,
+                &export_table,
+                resolved_index,
+                program_files,
+                local_symbol_exists,
+                symbols,
+            );
             return;
         }
 
@@ -1150,23 +1162,43 @@ fn resolve_import_equals(
     );
 }
 
+/// A synthetic default import names what `getTargetOfModuleDefault` resolves it
+/// to through `resolveExternalModuleSymbol`: the `export =` target when the
+/// module has one (`import express from "express"`), otherwise the module
+/// object itself (`import http from "http"` is `typeof import("http")`).
 fn bind_synthetic_default_import(
     local_name: &str,
+    export_table: &ModuleExportTable,
+    resolved_index: Option<usize>,
+    program_files: &[ParsedProgramFile],
     local_symbol_exists: &dyn Fn(&str) -> bool,
     symbols: &mut SymbolTable,
 ) {
     if local_symbol_exists(local_name) {
         return;
     }
-
-    symbols.insert(
-        local_name.to_string(),
-        SymbolInfo {
-            ty: Type::Any,
+    let symbol = match export_table.export_assignment_symbol.as_deref() {
+        Some(assigned) => SymbolInfo {
+            ty: assigned.ty.clone(),
             kind: SymbolKind::Const,
-            function_signature: None,
+            function_signature: assigned.function_signature.clone(),
         },
-    );
+        None => {
+            let namespace_type = namespace_export_object_type(export_table);
+            SymbolInfo {
+                ty: match resolved_index.and_then(|index| program_files.get(index)) {
+                    Some(resolved_file) => tag_namespace_type_with_module_path(
+                        namespace_type,
+                        &resolved_file.file_name,
+                    ),
+                    None => namespace_type,
+                },
+                kind: SymbolKind::Const,
+                function_signature: None,
+            }
+        }
+    };
+    symbols.insert(local_name.to_string(), symbol);
 }
 
 thread_local! {
