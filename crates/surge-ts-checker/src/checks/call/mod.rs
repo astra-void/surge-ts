@@ -746,23 +746,64 @@ fn union_call_signature_members(union: &UnionType) -> Option<Vec<FunctionType>> 
 /// differ, which is what left `j(file.source)` uncallable once jscodeshift's
 /// namespace intersection distributed.
 fn combined_union_call_signature(members: &[FunctionType]) -> FunctionType {
+    // tsc's `tryGetTypeAtPosition`: a rest parameter answers every position
+    // from its own on with its element, so two rest parameters combine
+    // element-wise (`{ x } & { y }`), not as arrays.
+    let type_at_position = |member: &FunctionType, index: usize| -> Option<Type> {
+        let parameters = member.parameters();
+        if member.is_variadic() && index + 1 >= parameters.len() {
+            let rest = parameters.last()?;
+            return Some(match rest.peeled() {
+                Type::Array(element) => *element,
+                Type::Tuple(elements) => elements
+                    .get(index + 1 - parameters.len())
+                    .cloned()
+                    .unwrap_or(Type::Undefined),
+                _ => rest.clone(),
+            });
+        }
+        parameters.get(index).cloned()
+    };
+    let combine = |at_position: Vec<Type>| match at_position.len() {
+        1 => at_position.into_iter().next().expect("checked above"),
+        _ => crate::infer::types::merge_intersection_members(at_position),
+    };
     let parameter_count = members
         .iter()
         .map(|member| member.parameters().len())
         .max()
         .unwrap_or(0);
-    let parameters = (0..parameter_count)
+    let any_variadic = members.iter().any(FunctionType::is_variadic);
+    // The longest member's own rest is the combined rest; when only a shorter
+    // member has one, it becomes an extra trailing rest.
+    let longest_is_variadic = members
+        .iter()
+        .any(|member| member.parameters().len() == parameter_count && member.is_variadic());
+    let extra_rest = any_variadic && !longest_is_variadic;
+    let mut parameters = (0..parameter_count)
         .map(|index| {
-            let at_position: Vec<Type> = members
-                .iter()
-                .filter_map(|member| member.parameters().get(index).cloned())
-                .collect();
-            match at_position.len() {
-                1 => at_position.into_iter().next().expect("checked above"),
-                _ => crate::infer::types::merge_intersection_members(at_position),
+            let combined = combine(
+                members
+                    .iter()
+                    .filter_map(|member| type_at_position(member, index))
+                    .collect(),
+            );
+            if any_variadic && !extra_rest && index + 1 == parameter_count {
+                Type::Array(Box::new(combined))
+            } else {
+                combined
             }
         })
         .collect::<Vec<_>>();
+    if extra_rest {
+        parameters.push(Type::Array(Box::new(combine(
+            members
+                .iter()
+                .filter(|member| member.is_variadic())
+                .filter_map(|member| type_at_position(member, parameter_count))
+                .collect(),
+        ))));
+    }
     let required_parameter_count = members
         .iter()
         .map(FunctionType::required_parameter_count)

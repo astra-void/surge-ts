@@ -766,6 +766,7 @@ export const fixturePresets: Record<string, string> = {
   'catch-annotation-resolved-type': path.join(workspaceRoot, 'tests/compat-projects/catch-annotation-resolved-type/tsconfig.json'),
   'unresolved-import-type-arguments': path.join(workspaceRoot, 'tests/compat-projects/unresolved-import-type-arguments/tsconfig.json'),
   'bare-super-parse-error': path.join(workspaceRoot, 'tests/compat-projects/bare-super-parse-error/tsconfig.json'),
+  'union-rest-signature-call': path.join(workspaceRoot, 'tests/compat-projects/union-rest-signature-call/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
