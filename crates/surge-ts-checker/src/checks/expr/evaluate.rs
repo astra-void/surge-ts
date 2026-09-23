@@ -538,6 +538,7 @@ fn evaluate_expression_unsettled(
         ParsedExpression::Update {
             operand,
             operand_span,
+            rejected_target,
         } => {
             let operand_result = super::diagnostics::with_element_write_target(|| {
                 evaluate_expression(operand, operand_span.or(fallback_span), symbols, ctx)
@@ -546,6 +547,7 @@ fn evaluate_expression_unsettled(
             super::check_update_operand(
                 operand,
                 operand_span.or(fallback_span),
+                *rejected_target,
                 &operand_result,
                 symbols,
                 ctx,

@@ -1647,6 +1647,10 @@ pub(crate) fn parse_update_expression(
 ) -> Option<ParsedExpression> {
     // The operand is parsed into the same shape a *read* of it produces, so the
     // checker resolves the updated binding exactly as it resolves the read.
+    let rejected_target = matches!(
+        &update_expression.argument,
+        SimpleAssignmentTarget::TSNonNullExpression(recovered) if recovered.span == recovered.expression.span()
+    );
     let (operand, operand_span) = match &update_expression.argument {
         SimpleAssignmentTarget::AssignmentTargetIdentifier(identifier) => (
             ParsedExpression::Identifier {
@@ -1681,6 +1685,7 @@ pub(crate) fn parse_update_expression(
     Some(ParsedExpression::Update {
         operand: Box::new(operand),
         operand_span: Some(text_span_from_oxc_span(operand_span)),
+        rejected_target,
     })
 }
 

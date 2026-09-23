@@ -1376,6 +1376,11 @@ pub enum ParsedExpression {
     Update {
         operand: Box<ParsedExpression>,
         operand_span: Option<TextSpan>,
+        /// The operand is no reference (`++1`, `f()--`): oxc kept it past its
+        /// write-target error, which the checker answers as tsc does — TS2357
+        /// (TS2777 for an optional chain) once the operand passes the
+        /// arithmetic check.
+        rejected_target: bool,
     },
     /// `await x`. The operand is kept so the checker can unwrap the awaited
     /// type; erasing the `await` at parse time left every `await` expression

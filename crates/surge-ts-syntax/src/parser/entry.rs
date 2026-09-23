@@ -382,7 +382,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     let mut parser_errors: Vec<crate::ParserError> = parsed
         .errors
         .into_iter()
-        .map(|error| {
+        .filter_map(|error| {
             let code = error
                 .code
                 .scope
@@ -411,15 +411,20 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
                 .and_then(|span| source_text.get(span.start..span.end))
                 .map(str::to_string);
             let mut message = error.to_string();
+            // The checker reports an update expression's rejected operand once
+            // it passes the arithmetic check (`ParsedExpression::Update`).
+            if matches!(code, Some(2357 | 2777)) && message == "Cannot assign to this expression" {
+                return None;
+            }
             if message == FOR_AWAIT_IN_MESSAGE {
                 message = "'of' expected.".to_string();
+            } else if code == Some(1005) && message == "Cannot assign to this expression" {
+                message = "';' expected.".to_string();
             }
-            crate::ParserError { code, message, span, span_text }
+            Some(crate::ParserError { code, message, span, span_text })
         })
         .collect();
     parser_errors.extend(super::scanner_checks::collect_missing_parser_errors(
-            } else if code == Some(1005) && message == "Cannot assign to this expression" {
-                message = "';' expected.".to_string();
         &parsed.program,
         source_text,
     ));

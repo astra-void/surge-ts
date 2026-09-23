@@ -599,6 +599,7 @@ fixtures = [
 ]
 oracle = [
   "increment-operand-write-rules-basic",
+  "update-operand-arithmetic-first",
 ]
 
 [TS2362]
@@ -2703,6 +2704,7 @@ status = "emitted"
 oracle = [
   "invalid-write-target-basic",
   "invalid-write-target-recovery-basic",
+  "update-operand-arithmetic-first",
 ]
 
 [TS2779]
@@ -2717,6 +2719,7 @@ status = "emitted"
 oracle = [
   "invalid-write-target-basic",
   "invalid-write-target-recovery-basic",
+  "update-operand-arithmetic-first",
 ]
 
 [TS1014]
