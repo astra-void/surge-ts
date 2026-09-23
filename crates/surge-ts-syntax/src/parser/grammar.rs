@@ -54,6 +54,9 @@ struct GrammarCollector {
     /// Module-level enum declarations, which alone may consult
     /// `top_level_constants` (a nested one could see a shadowing binding).
     top_level_enums: std::collections::HashSet<(u32, u32)>,
+    /// Starts of the `(0, x.f)` sequences called indirectly; see
+    /// [`GrammarCollector::note_indirect_call`].
+    indirect_call_sequences: std::collections::HashSet<u32>,
 }
 
 /// What tsc's enum constant evaluation can say about an initializer without
@@ -137,6 +140,31 @@ fn enum_constant(
 }
 
 impl GrammarCollector {
+    /// tsc's `isIndirectCall`: `(0, x.f)(…)`, a tagged `(0, x.f)` or
+    /// `(0, eval)(…)` discards the `0` to call without a `this`, so the
+    /// unused-comma check leaves it alone.
+    fn note_indirect_call(&mut self, callee: &Expression<'_>) {
+        let Expression::ParenthesizedExpression(parenthesized) = callee else {
+            return;
+        };
+        let Expression::SequenceExpression(sequence) = &parenthesized.expression else {
+            return;
+        };
+        let [first, last] = &sequence.expressions[..] else {
+            return;
+        };
+        let zero = matches!(first, Expression::NumericLiteral(literal) if literal.raw.as_deref() == Some("0"));
+        let access = matches!(
+            last,
+            Expression::StaticMemberExpression(_)
+                | Expression::ComputedMemberExpression(_)
+                | Expression::PrivateFieldExpression(_)
+        ) || matches!(last, Expression::Identifier(identifier) if identifier.name == "eval");
+        if zero && access {
+            self.indirect_call_sequences.insert(sequence.span.start);
+        }
+    }
+
     /// tsc's `computeEnumMemberValues`: a member without an initializer takes
     /// the previous numeric value plus one, so it needs one after a string or
     /// computed member (TS1061), and a `const enum` initializer must be a
@@ -1835,8 +1863,10 @@ fn syntactic_nullishness(expression: &Expression<'_>) -> Option<bool> {
     }
 }
 
+/// tsc's `isSideEffectFree`, which looks through parentheses only: an `as`
+/// or `satisfies` operand counts as having effects.
 fn is_side_effect_free(expression: &Expression<'_>) -> bool {
-    match expression.get_inner_expression() {
+    match expression.without_parentheses() {
         Expression::Identifier(_)
         | Expression::StringLiteral(_)
         | Expression::RegExpLiteral(_)
@@ -1851,15 +1881,19 @@ fn is_side_effect_free(expression: &Expression<'_>) -> bool {
         | Expression::ArrowFunctionExpression(_)
         | Expression::ArrayExpression(_)
         | Expression::ObjectExpression(_)
-        | Expression::JSXElement(_)
-        | Expression::JSXFragment(_) => true,
+        | Expression::JSXElement(_) => true,
         Expression::ConditionalExpression(conditional) => {
             is_side_effect_free(&conditional.consequent)
                 && is_side_effect_free(&conditional.alternate)
         }
+        // tsc's binary expressions include the logical and comma operators.
         Expression::BinaryExpression(binary) => {
             is_side_effect_free(&binary.left) && is_side_effect_free(&binary.right)
         }
+        Expression::LogicalExpression(logical) => {
+            is_side_effect_free(&logical.left) && is_side_effect_free(&logical.right)
+        }
+        Expression::SequenceExpression(sequence) => sequence.expressions.iter().all(is_side_effect_free),
         Expression::UnaryExpression(unary) => matches!(
             unary.operator,
             UnaryOperator::LogicalNot
@@ -2050,14 +2084,28 @@ impl<'a> Visit<'a> for GrammarCollector {
         oxc_ast_visit::walk::walk_logical_expression(self, logical);
     }
 
+    fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
+        self.note_indirect_call(&call.callee);
+        oxc_ast_visit::walk::walk_call_expression(self, call);
+    }
+
+    fn visit_tagged_template_expression(
+        &mut self,
+        expression: &oxc_ast::ast::TaggedTemplateExpression<'a>,
+    ) {
+        self.note_indirect_call(&expression.tag);
+        oxc_ast_visit::walk::walk_tagged_template_expression(self, expression);
+    }
+
     fn visit_sequence_expression(&mut self, sequence: &oxc_ast::ast::SequenceExpression<'a>) {
         // Every operand but the last has its value discarded.
+        let indirect_call = self.indirect_call_sequences.contains(&sequence.span.start);
         for expression in sequence
             .expressions
             .iter()
             .take(sequence.expressions.len().saturating_sub(1))
         {
-            if is_side_effect_free(expression) {
+            if !indirect_call && is_side_effect_free(expression) {
                 self.push(Kind::UnusedCommaOperand, expression.span(), None);
             }
         }
