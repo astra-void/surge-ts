@@ -21,7 +21,7 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
                         ty: widen_type(&v.ty),
                         optional: v.optional,
                         method: v.method,
-                        readonly: false,
+                        readonly: v.readonly,
                         restriction: v.restriction.clone(),
                         index_slot: v.index_slot,
                     },

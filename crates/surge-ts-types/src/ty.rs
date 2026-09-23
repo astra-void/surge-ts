@@ -549,10 +549,11 @@ fn object_structural_name(object: &crate::ObjectType) -> String {
                                 None => vec![format!("{name}{optional}{}", function.member_name())],
                             };
                         }
+                        let modifier = if property.readonly { "readonly " } else { "" };
                         vec![if property.is_optional() {
-                            format!("{name}?: {}", optional_property_display(&property.ty))
+                            format!("{modifier}{name}?: {}", optional_property_display(&property.ty))
                         } else {
-                            format!("{name}: {}", property.ty.name())
+                            format!("{modifier}{name}: {}", property.ty.name())
                         }]
                     })
                     .collect::<Vec<_>>();

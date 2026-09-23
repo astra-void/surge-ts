@@ -1550,12 +1550,15 @@ pub struct ParsedObjectProperty {
     /// accessor's *value* type — the getter's return type, or the setter's
     /// parameter type — not the accessor function itself.
     pub is_accessor: bool,
+    /// True for the `get` half of an accessor. A getter without a setter is a
+    /// read-only property (tsc's `isReadonlySymbol`).
+    pub is_getter: bool,
     /// The key expression of a computed name that is not itself a literal
     /// (`{ [key]: v }`). `name` holds its written path; the checker names the
     /// property by the key's literal type once it is known.
     pub computed_key: Option<Box<ParsedExpression>>,
-    /// On a getter, the `set` accessor of the same name: its body is checked,
-    /// but the getter decides the property's type.
+    /// On a getter, the `set` accessor of the same name. The property is typed
+    /// from the pair (`getTypeOfAccessors`) and the setter's body is checked.
     pub paired_setter: Option<Box<ParsedArrowFunction>>,
     /// The value of a computed member whose key no member name can model
     /// (`{ [f()]: v }`). Such a member is lowered to an empty spread that adds

@@ -1173,18 +1173,33 @@ pub(crate) fn parse_unary_expression(
     })
 }
 
+/// The member name a non-computed accessor declares. A get/set pair shares one
+/// symbol when the names agree as property names — `get 'a'()` with `set a(v)`,
+/// `get 0x20()` with `set 3.2e1(v)` — so a quoted or numeric name is the text
+/// of its value, as it is for a written property.
+fn accessor_key_name(key: &PropertyKey<'_>) -> Option<(String, Span)> {
+    match key {
+        PropertyKey::StaticIdentifier(key) => Some((key.name.to_string(), key.span)),
+        PropertyKey::StringLiteral(literal) => Some((literal.value.to_string(), literal.span)),
+        PropertyKey::NumericLiteral(literal) => Some((
+            super::number_text::js_number_to_string(literal.value),
+            literal.span,
+        )),
+        _ => None,
+    }
+}
+
 pub(crate) fn parse_object_properties(
     object_expression: &ObjectExpression<'_>,
 ) -> Vec<ParsedObjectProperty> {
-    let getter_names: Vec<&str> = object_expression
+    let getter_names: Vec<String> = object_expression
         .properties
         .iter()
         .filter_map(|property_kind| match property_kind {
-            ObjectPropertyKind::ObjectProperty(property) if property.kind == PropertyKind::Get => {
-                match &property.key {
-                    PropertyKey::StaticIdentifier(key) => Some(key.name.as_str()),
-                    _ => None,
-                }
+            ObjectPropertyKind::ObjectProperty(property)
+                if property.kind == PropertyKind::Get && !property.computed =>
+            {
+                accessor_key_name(&property.key).map(|(name, _)| name)
             }
             _ => None,
         })
@@ -1207,6 +1222,7 @@ pub(crate) fn parse_object_properties(
                         is_method: false,
                         is_spread: true,
                         is_accessor: false,
+                        is_getter: false,
                         is_shorthand: false,
                         computed_key: None,
                         paired_setter: None,
@@ -1221,40 +1237,36 @@ pub(crate) fn parse_object_properties(
             // body is still checked.
             if property.computed && property.kind != PropertyKind::Init {
                 let name = super::types::computed_key_name(&property.key)?;
-                let mut accessor =
-                    parse_object_method_shorthand_named(name, property.key.span(), property)?;
-                accessor.is_method = false;
-                accessor.is_accessor = true;
-                return Some(accessor);
+                return parse_object_accessor(name, property.key.span(), property);
             }
 
             // `get value() { … }` / `set value(v) { … }` declare the property
             // just as a written one does; only their *value* type differs from
             // the accessor function. A setter is dropped when the same literal
-            // also declares a getter, whose type wins.
+            // also declares a getter, which carries it as its pair.
             if matches!(property.kind, PropertyKind::Get | PropertyKind::Set) {
-                let PropertyKey::StaticIdentifier(key) = &property.key else {
-                    return None;
-                };
-                if property.kind == PropertyKind::Set && getter_names.contains(&key.name.as_str()) {
+                let (name, key_span) = accessor_key_name(&property.key)?;
+                if property.kind == PropertyKind::Set && getter_names.contains(&name) {
                     return None;
                 }
-                let mut accessor = parse_object_accessor(key, property)?;
+                let mut accessor = parse_object_accessor(name, key_span, property)?;
                 if property.kind == PropertyKind::Get {
-                    accessor.paired_setter = object_expression.properties.iter().find_map(|other| {
+                    let paired_setter = object_expression.properties.iter().find_map(|other| {
                         let ObjectPropertyKind::ObjectProperty(other) = other else {
                             return None;
                         };
-                        let PropertyKey::StaticIdentifier(other_key) = &other.key else {
+                        if other.kind != PropertyKind::Set || other.computed {
                             return None;
-                        };
+                        }
                         let Expression::FunctionExpression(function) = &other.value else {
                             return None;
                         };
-                        (other.kind == PropertyKind::Set && other_key.name == key.name).then(|| {
+                        let (other_name, _) = accessor_key_name(&other.key)?;
+                        (other_name == accessor.name).then(|| {
                             Box::new(function_as_arrow(function, ParsedThisBinding::Own))
                         })
                     });
+                    accessor.paired_setter = paired_setter;
                 }
                 return Some(accessor);
             }
@@ -1308,6 +1320,7 @@ pub(crate) fn parse_object_properties(
                             is_method: false,
                             is_spread: true,
                             is_accessor: false,
+                            is_getter: false,
                             is_shorthand: false,
                             computed_key: computed_key(),
                             paired_setter: None,
@@ -1334,6 +1347,7 @@ pub(crate) fn parse_object_properties(
                 is_method: false,
                 is_spread: false,
                 is_accessor: false,
+                is_getter: false,
                 is_shorthand: property.shorthand,
                 computed_key: computed_key(),
                 paired_setter: None,
@@ -1347,25 +1361,20 @@ pub(crate) fn parse_object_properties(
 /// The checker reads the arrow's return type (getter) or parameter type (setter)
 /// as the property's type.
 fn parse_object_accessor(
-    key: &oxc_ast::ast::IdentifierName<'_>,
+    name: String,
+    key_span: Span,
     property: &oxc_ast::ast::ObjectProperty<'_>,
 ) -> Option<ParsedObjectProperty> {
-    let mut parsed = parse_object_method_shorthand(key, property)?;
+    let mut parsed = parse_object_method_shorthand_named(name, key_span, property)?;
     parsed.is_method = false;
     parsed.is_accessor = true;
+    parsed.is_getter = property.kind == PropertyKind::Get;
     Some(parsed)
 }
 
 /// Lowers object literal method shorthand (`{ foo(arg): R { ... } }`) into a property whose
 /// value is an arrow function, so it reuses the existing arrow-function checking path while
 /// honoring the declared parameter and return types.
-fn parse_object_method_shorthand(
-    key: &oxc_ast::ast::IdentifierName<'_>,
-    property: &oxc_ast::ast::ObjectProperty<'_>,
-) -> Option<ParsedObjectProperty> {
-    parse_object_method_shorthand_named(key.name.to_string(), key.span, property)
-}
-
 fn parse_object_method_shorthand_named(
     name: String,
     key_span: oxc_span::Span,
@@ -1386,6 +1395,7 @@ fn parse_object_method_shorthand_named(
         is_method: true,
         is_spread: false,
         is_accessor: false,
+        is_getter: false,
         is_shorthand: false,
         computed_key: None,
         paired_setter: None,
