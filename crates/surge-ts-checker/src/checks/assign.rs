@@ -68,34 +68,46 @@ pub(crate) fn check_assignment_with_symbols(
                 .or(Some(handle))
         }
         Some(handle) => Some(handle),
-        None => ctx
-            .module_value_fallback
-            .as_ref()
-            .and_then(|fallback| fallback.get_handle(&assignment.target_name)),
+        None => None,
     };
-    let Some(target) = target else {
-        // `undefined` is not a variable to tsc (`checkIdentifier` finds its
-        // symbol and rejects the write) — TS2539.
-        if assignment.target_name == "undefined" {
-            let diagnostic = Diagnostic::ts2539("undefined", ctx.file_name.clone())
-                .with_span(convert_span(target_span));
-            ctx.push(diagnostic);
-            return;
+    let target = match target {
+        Some(target) => target,
+        None => {
+            // `undefined` is not a variable to tsc (`checkIdentifier` finds its
+            // symbol and rejects the write) — TS2539.
+            if assignment.target_name == "undefined" {
+                let diagnostic = Diagnostic::ts2539("undefined", ctx.file_name.clone())
+                    .with_span(convert_span(target_span));
+                ctx.push(diagnostic);
+                return;
+            }
+            // tsc rejects a write by the symbol's module meaning before it
+            // asks whether a variable is a constant, and the fallback binds a
+            // namespace's value as a plain `const`, so the meaning goes first.
+            if ctx.namespace_meaning(&assignment.target_name) == Some(true) {
+                let diagnostic = Diagnostic::ts2631(&assignment.target_name, ctx.file_name.clone())
+                    .with_span(convert_span(target_span));
+                ctx.push(diagnostic);
+                return;
+            }
+            match ctx
+                .module_value_fallback
+                .as_ref()
+                .and_then(|fallback| fallback.get_handle(&assignment.target_name))
+            {
+                Some(target) => target,
+                None => {
+                    crate::checks::expr::report_unresolved_value_name(
+                        &assignment.target_name,
+                        Some(target_span),
+                        crate::checks::expr::UnresolvedNameSite::Reference,
+                        symbols,
+                        ctx,
+                    );
+                    return;
+                }
+            }
         }
-        if ctx.namespace_meaning(&assignment.target_name) == Some(true) {
-            let diagnostic = Diagnostic::ts2631(&assignment.target_name, ctx.file_name.clone())
-                .with_span(convert_span(target_span));
-            ctx.push(diagnostic);
-            return;
-        }
-        crate::checks::expr::report_unresolved_value_name(
-            &assignment.target_name,
-            Some(target_span),
-            crate::checks::expr::UnresolvedNameSite::Reference,
-            symbols,
-            ctx,
-        );
-        return;
     };
 
     if !shadowed_locally && ctx.is_import_binding(&assignment.target_name) {
