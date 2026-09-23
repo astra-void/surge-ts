@@ -30,6 +30,7 @@ pub(crate) fn collect_context_grammar_diagnostics(
         source_text: program.source_text,
         external_module: is_external_module(program),
         ambient_depth: 0,
+        const_enum_names: unshadowed_const_enum_names(program),
     };
     collector.visit_program(program);
 }
@@ -64,6 +65,58 @@ struct ContextCollector<'a, 'o> {
     external_module: bool,
     /// How many enclosing nodes carry tsc's `NodeFlagsAmbient`.
     ambient_depth: usize,
+    /// Top-level `const enum` names no other binding in the file reuses, so
+    /// an identifier reference to one is the const enum object and nothing
+    /// else — what tsc's `isConstEnumObjectType` sees on the expression.
+    const_enum_names: Vec<String>,
+}
+
+/// The top-level `const enum` names whose every binding in the file is such a
+/// declaration.
+fn unshadowed_const_enum_names(program: &Program<'_>) -> Vec<String> {
+    let enum_names: Vec<&str> = program
+        .body
+        .iter()
+        .filter_map(|statement| {
+            let declaration = match statement {
+                Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+                other => other.as_declaration(),
+            };
+            match declaration {
+                Some(oxc_ast::ast::Declaration::TSEnumDeclaration(declaration)) if declaration.r#const => {
+                    Some(declaration.id.name.as_str())
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    if enum_names.is_empty() {
+        return Vec::new();
+    }
+    let mut bindings = BindingNames::default();
+    bindings.visit_program(program);
+    let mut names: Vec<String> = Vec::new();
+    for name in &enum_names {
+        let bound = bindings.names.iter().filter(|bound| **bound == *name).count();
+        let declared = enum_names.iter().filter(|other| **other == *name).count();
+        if bound == declared {
+            names.push((*name).to_string());
+        }
+    }
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+#[derive(Default)]
+struct BindingNames<'a> {
+    names: Vec<&'a str>,
+}
+
+impl<'a> Visit<'a> for BindingNames<'a> {
+    fn visit_binding_identifier(&mut self, identifier: &oxc_ast::ast::BindingIdentifier<'a>) {
+        self.names.push(identifier.name.as_str());
+    }
 }
 
 fn is_ambient_marker(kind: &AstKind<'_>) -> bool {
@@ -712,6 +765,54 @@ impl<'a> ContextCollector<'a, '_> {
             if spaces & exported_spaces & local_spaces != 0 {
                 self.push(2395, *span, &[name]);
             }
+        }
+    }
+
+    /// tsc's `checkConstEnumAccess`: the const enum object may only be the
+    /// object of a property or element access, the right side of an import
+    /// or export assignment, a `typeof` query, or an export specifier —
+    /// TS2475 anywhere else. A type-position name is not an expression and is
+    /// never checked.
+    fn check_const_enum_reference(&mut self, identifier: &oxc_ast::ast::IdentifierReference<'_>) {
+        if !self.const_enum_names.iter().any(|name| name == identifier.name.as_str()) {
+            return;
+        }
+        let allowed = match self.stack.last() {
+            Some(AstKind::StaticMemberExpression(member)) => member.object.span() == identifier.span,
+            Some(AstKind::ComputedMemberExpression(member)) => member.object.span() == identifier.span,
+            Some(
+                AstKind::ExportDefaultDeclaration(_)
+                | AstKind::TSExportAssignment(_)
+                | AstKind::TSImportEqualsDeclaration(_)
+                | AstKind::ExportSpecifier(_)
+                | AstKind::TSTypeQuery(_)
+                | AstKind::TSTypeReference(_)
+                | AstKind::TSQualifiedName(_)
+                | AstKind::TSClassImplements(_),
+            ) => true,
+            _ => false,
+        };
+        if !allowed {
+            self.push(2475, identifier.span, &[]);
+        }
+    }
+
+    /// tsc's `checkElementAccessExpression` on a const enum object: the index
+    /// must be a string literal or an untemplated template — TS2476 at it.
+    fn check_const_enum_element_access(&mut self, member: &oxc_ast::ast::ComputedMemberExpression<'_>) {
+        let oxc_ast::ast::Expression::Identifier(object) = &member.object else {
+            return;
+        };
+        if !self.const_enum_names.iter().any(|name| name == object.name.as_str()) {
+            return;
+        }
+        let is_string_literal_like = match &member.expression {
+            oxc_ast::ast::Expression::StringLiteral(_) => true,
+            oxc_ast::ast::Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+            _ => false,
+        };
+        if !is_string_literal_like {
+            self.push(2476, member.expression.span(), &[]);
         }
     }
 
@@ -1805,7 +1906,9 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             }
             AstKind::IdentifierReference(identifier) => {
                 self.check_contextual_identifier(&identifier.name, identifier.span);
+                self.check_const_enum_reference(identifier);
             }
+            AstKind::ComputedMemberExpression(member) => self.check_const_enum_element_access(member),
             AstKind::LabelIdentifier(identifier) => {
                 self.check_contextual_identifier(&identifier.name, identifier.span);
             }
