@@ -2688,3 +2688,9 @@ status = "emitted"
 oracle = [
   "bare-super-parse-error",
 ]
+
+[TS1005]
+status = "emitted"
+oracle = [
+  "for-await-in-parse-error",
+]

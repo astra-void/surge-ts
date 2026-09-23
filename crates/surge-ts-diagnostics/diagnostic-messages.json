@@ -696,6 +696,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS1005",
+    "category": "Error",
+    "message": "'{0}' expected.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS1034",
     "category": "Error",
     "message": "'super' must be followed by an argument list or member access.",

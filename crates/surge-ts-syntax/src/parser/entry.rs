@@ -45,6 +45,8 @@ pub fn parse_source(source_text: &str, file_name: &str) -> ParsedSource {
     parse_source_in(&allocator, source_text, file_name)
 }
 
+const FOR_AWAIT_IN_MESSAGE: &str = "await can only be used in conjunction with `for...of` statements";
+
 /// Parse `source_text` into fully owned surge structures. Every borrow of
 /// `allocator` ends inside this function: the returned [`ParsedSource`] holds
 /// no references, pointers, or arena-backed strings, which is what makes
@@ -90,6 +92,18 @@ fn classify_uncoded_parser_error(
                 (true, true) => 2777,
             };
             Some((code, span))
+        }
+        // tsc's parser expects `of` where `for await (x in y)` has `in`.
+        FOR_AWAIT_IN_MESSAGE => {
+            let open = span.start + source_text.get(span.start..)?.find('(')?;
+            let bytes = source_text.as_bytes();
+            let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+            let start = (open + 1..source_text.len().saturating_sub(1)).find(|&at| {
+                &bytes[at..at + 2] == b"in"
+                    && !is_word(bytes[at - 1])
+                    && bytes.get(at + 2).is_none_or(|&next| !is_word(next))
+            })?;
+            Some((1005, crate::TextSpan { start, end: start + 2 }))
         }
         "A rest parameter must be last in a parameter list" => Some((1014, span)),
         // tsc reports the rest element at its name, past the `...`.
@@ -232,7 +246,11 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             let span_text = span
                 .and_then(|span| source_text.get(span.start..span.end))
                 .map(str::to_string);
-            crate::ParserError { code, message: error.to_string(), span, span_text }
+            let mut message = error.to_string();
+            if message == FOR_AWAIT_IN_MESSAGE {
+                message = "'of' expected.".to_string();
+            }
+            crate::ParserError { code, message, span, span_text }
         })
         .collect();
     parser_errors.extend(super::scanner_checks::collect_missing_parser_errors(

@@ -697,6 +697,14 @@ message = "This JSX tag's '{0}' prop expects type '{1}' which requires multiple 
 arity = 2
 
 [[diagnostic]]
+code = "TS1005"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' expected."
+arity = 1
+
+[[diagnostic]]
 code = "TS1034"
 category = "Error"
 source = "typescript"

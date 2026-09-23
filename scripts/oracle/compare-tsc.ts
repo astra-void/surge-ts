@@ -768,6 +768,7 @@ export const fixturePresets: Record<string, string> = {
   'bare-super-parse-error': path.join(workspaceRoot, 'tests/compat-projects/bare-super-parse-error/tsconfig.json'),
   'union-rest-signature-call': path.join(workspaceRoot, 'tests/compat-projects/union-rest-signature-call/tsconfig.json'),
   'tuple-union-indexed-access-type': path.join(workspaceRoot, 'tests/compat-projects/tuple-union-indexed-access-type/tsconfig.json'),
+  'for-await-in-parse-error': path.join(workspaceRoot, 'tests/compat-projects/for-await-in-parse-error/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
