@@ -503,6 +503,7 @@ fn collect_program_globals(
     let ambient_collection_start = Instant::now();
     emit_parser_diagnostics(&parsed_files, ctx);
     ctx.begin_resolution_stage();
+    ctx.global_augmentation_only_names = Arc::new(global_augmentation_only_names(&parsed_files));
     // Three ordered steps, and the order is load-bearing in both directions.
     //
     // Ambient global *types* merge first so the ambient declaration is the merge

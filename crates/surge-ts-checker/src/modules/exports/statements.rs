@@ -287,6 +287,36 @@ pub(crate) fn collect_exports_from_statement(
                         found = true;
                     }
 
+                    // A global only an augmentation declares is declared in that
+                    // block, not in a global source file, so the specifier is a
+                    // local export of it (`@types/node` re-exports its buffer
+                    // aliases from `node:buffer` this way).
+                    if !found && ctx.global_augmentation_only_names.contains(specifier.local_name.as_str()) {
+                        if let Some(handle) = ctx.lookup_type_declaration_handle(&specifier.local_name) {
+                            export_local_type_declaration(
+                                handle.get(),
+                                &specifier.exported_name,
+                                resolution_scope,
+                                type_declarations,
+                            );
+                        }
+                        if let Some(symbol) = ctx.ambient_global_symbols.get_shared(&specifier.local_name) {
+                            if specifier.exported_name == "default" {
+                                if default_symbol.is_none() {
+                                    *default_symbol = Some(symbol);
+                                }
+                            } else if symbols.get(&specifier.exported_name).is_none() {
+                                symbols.insert_shared(specifier.exported_name.clone(), symbol);
+                            }
+                            if specifier_is_type_only {
+                                type_only_exports
+                                    .entry(Arc::from(specifier.exported_name.as_str()))
+                                    .or_insert(TypeOnlyAliasKind::Export);
+                            }
+                        }
+                        found = true;
+                    }
+
                     if !found {
                         // tsc's `checkExportSpecifier`: a name that resolves to
                         // `undefined`, `globalThis`, or a global declaration is

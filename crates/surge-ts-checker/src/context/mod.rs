@@ -414,6 +414,9 @@ pub(crate) struct CheckerContext {
     /// Global `let`/`const` names: bindings in the global scope that are not
     /// properties of the global object.
     pub(crate) block_scoped_globals: Arc<FxHashSet<Arc<str>>>,
+    /// Names only a global augmentation declares. See
+    /// [`crate::program::global_augmentation_only_names`].
+    pub(crate) global_augmentation_only_names: Arc<FxHashSet<Arc<str>>>,
     /// The subset of [`Self::umd_global_names`] the file under check actually
     /// reaches through the global scope: the file is a module and nothing local
     /// or imported shadows the name. Empty for script files, for files that
@@ -784,6 +787,7 @@ impl CheckerContext {
             umd_global_names: Arc::new(FxHashSet::default()),
             namespace_registry: Arc::default(),
             block_scoped_globals: Arc::default(),
+            global_augmentation_only_names: Arc::default(),
             file_umd_global_names: FxHashSet::default(),
             file_umd_global_names_owner: None,
             merge_script_interfaces_with_globals: false,
@@ -958,6 +962,7 @@ impl CheckerContext {
             umd_global_names: Arc::new(FxHashSet::default()),
             namespace_registry: Arc::default(),
             block_scoped_globals: Arc::default(),
+            global_augmentation_only_names: Arc::default(),
             file_umd_global_names: FxHashSet::default(),
             file_umd_global_names_owner: None,
             merge_script_interfaces_with_globals: false,

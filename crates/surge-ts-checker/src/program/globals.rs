@@ -278,6 +278,71 @@ pub(crate) fn module_script_globals(
     (!empty).then(|| Arc::new(globals))
 }
 
+/// The names only a global augmentation declares — a `declare global { … }`,
+/// or a `global { … }` block inside `declare module "x"`. tsc merges the
+/// augmentations into the globals after every script file's own declarations
+/// (`initializeChecker`), so a name a script file also declares at its top
+/// level keeps that declaration first: the one whose container
+/// `checkExportSpecifier` asks about.
+pub(crate) fn global_augmentation_only_names(
+    parsed_files: &[ParsedProgramFile],
+) -> surge_ts_types::fx::FxHashSet<Arc<str>> {
+    fn declared_names<'a>(statements: &'a [ParsedStatement], names: &mut std::collections::HashSet<&'a str>) {
+        for statement in statements {
+            match crate::modules::peel_exported_statement(statement) {
+                ParsedStatement::VariableDeclaration(variable) => {
+                    names.insert(variable.name.as_str());
+                }
+                ParsedStatement::FunctionDeclaration(function) => {
+                    names.insert(function.name.as_str());
+                }
+                ParsedStatement::ClassDeclaration(class) => {
+                    names.insert(class.name.as_str());
+                }
+                ParsedStatement::InterfaceDeclaration(interface) => {
+                    names.insert(interface.name.as_str());
+                }
+                ParsedStatement::TypeAliasDeclaration(alias) => {
+                    names.insert(alias.name.as_str());
+                }
+                ParsedStatement::NamespaceDeclaration(namespace) => {
+                    names.insert(namespace.name.as_str());
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut script_top_level = std::collections::HashSet::new();
+    let mut augmented = std::collections::HashSet::new();
+    for parsed_file in parsed_files {
+        for statement in &parsed_file.statements {
+            match statement {
+                ParsedStatement::DeclareModuleDeclaration(module) if module.module_specifier == "global" => {
+                    declared_names(&module.statements, &mut augmented);
+                }
+                ParsedStatement::DeclareModuleDeclaration(module) => {
+                    for nested in &module.statements {
+                        if let ParsedStatement::DeclareModuleDeclaration(inner) = nested
+                            && inner.module_specifier == "global"
+                        {
+                            declared_names(&inner.statements, &mut augmented);
+                        }
+                    }
+                }
+                _ if !parsed_file.is_module => {
+                    declared_names(std::slice::from_ref(statement), &mut script_top_level);
+                }
+                _ => {}
+            }
+        }
+    }
+    augmented
+        .into_iter()
+        .filter(|name| !script_top_level.contains(name))
+        .map(Arc::from)
+        .collect()
+}
+
 fn is_script_source(parsed_file: &ParsedProgramFile) -> bool {
     parsed_file.file_kind != FileKind::GeneratedDeclaration
         && !parsed_file.is_module
