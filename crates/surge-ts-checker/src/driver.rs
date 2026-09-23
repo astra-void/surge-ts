@@ -560,6 +560,15 @@ fn lower_global_augmentation_values(
 }
 
 pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
+    sync_global_this_symbol_with_scripts(ctx, &[]);
+}
+
+/// Builds `typeof globalThis` from the ambient globals and `script_members`,
+/// the values the program's scripts put on the global object.
+pub(crate) fn sync_global_this_symbol_with_scripts(
+    ctx: &mut CheckerContext,
+    script_members: &[(String, surge_ts_types::Type)],
+) {
     use surge_ts_types::PropertyMap;
 
     let mut properties = PropertyMap::default();
@@ -574,6 +583,14 @@ pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
             name.clone(),
             surge_ts_types::ObjectProperty::required(symbol.ty.clone()),
         );
+    }
+    for (name, ty) in script_members {
+        if properties.get(name.as_str()).is_none() {
+            properties.insert(
+                name.as_str().into(),
+                surge_ts_types::ObjectProperty::required(ty.clone()),
+            );
+        }
     }
 
     // The global object is a nominal reference, not a bare structural object,

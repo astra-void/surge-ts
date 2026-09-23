@@ -13,7 +13,6 @@ pub(crate) use crate::metrics::*;
 
 use crate::context::{CheckerContext, CheckerOptions, CompatibilityStats, FileKind};
 use crate::default_lib::load_generated_default_lib_inputs;
-use crate::driver::sync_global_this_symbol;
 use crate::modules::{ModuleExportTable, ModuleImportBindings, resolve_module_export_tables};
 use crate::paths::canonicalize_if_exists_string;
 use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
@@ -920,6 +919,59 @@ fn bind_and_analyze_modules(
     }
 }
 
+/// What the program's scripts put on the global object (tsc's `globalThis`
+/// members skip the block-scoped globals): each `var`, function and
+/// instantiated namespace, with its type; and the `let`, `const`, class and
+/// enum names, which reading through `globalThis` reports as missing. A
+/// script `var` whose type is only inferred when its file is checked is a
+/// member all the same, typed as the unmodelled sentinel.
+fn script_global_object_members(
+    parsed_files: &[ParsedProgramFile],
+    global_symbols: &SymbolTable,
+    script_values: &[Option<Arc<SymbolTable>>],
+) -> (Vec<(String, surge_ts_types::Type)>, Vec<String>) {
+    let mut members = Vec::new();
+    let mut block_scoped = Vec::new();
+    for (file_index, file) in parsed_files.iter().enumerate() {
+        if file.is_module || file.file_kind != FileKind::RootSource {
+            continue;
+        }
+        for statement in &file.statements {
+            let (name, is_block_scoped) = match statement {
+                ParsedStatement::VariableDeclaration(variable) => (
+                    variable.name.as_str(),
+                    !matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Var),
+                ),
+                ParsedStatement::FunctionDeclaration(function) => (function.name.as_str(), false),
+                ParsedStatement::ClassDeclaration(class) => (class.name.as_str(), true),
+                ParsedStatement::NamespaceDeclaration(namespace) => (
+                    namespace.name.split('.').next().unwrap_or(&namespace.name),
+                    false,
+                ),
+                _ => continue,
+            };
+            if is_block_scoped {
+                block_scoped.push(name.to_string());
+                continue;
+            }
+            let known = global_symbols.get(name).or_else(|| {
+                script_values
+                    .get(file_index)
+                    .and_then(Option::as_ref)
+                    .and_then(|values| values.get(name))
+            });
+            match (known, statement) {
+                (Some(symbol), _) => members.push((name.to_string(), symbol.ty.clone())),
+                (None, ParsedStatement::VariableDeclaration(_)) => {
+                    members.push((name.to_string(), surge_ts_types::Type::Unknown));
+                }
+                _ => {}
+            }
+        }
+    }
+    (members, block_scoped)
+}
+
 fn finalize_module_bindings(
     parsed_files: &mut Vec<ParsedProgramFile>,
     ctx: &mut CheckerContext,
@@ -1020,7 +1072,15 @@ fn finalize_module_bindings(
     // import binding and the JSX locator; the check phase reads the analyses'
     // local export tables through `shared_state`.
     drop(module_export_tables);
-    sync_global_this_symbol(ctx);
+    let (script_members, script_block_scoped) =
+        script_global_object_members(&parsed_files, &global_symbols, &script_values);
+    if !script_block_scoped.is_empty() {
+        let block_scoped = Arc::make_mut(&mut ctx.block_scoped_globals);
+        for name in script_block_scoped {
+            block_scoped.insert(Arc::from(name));
+        }
+    }
+    crate::driver::sync_global_this_symbol_with_scripts(ctx, &script_members);
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_binding += module_binding_start.elapsed()
     });

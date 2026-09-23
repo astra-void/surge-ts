@@ -372,7 +372,8 @@ fn index_signature_method_suggestion(
 /// access is an implicit `any` (TS7053, or TS2576 for a static-member mixup,
 /// TS7052 when a `get` method was likely meant), and on an object literal
 /// written in place the key is a missing property (TS2339); without
-/// `noImplicitAny` the access silently reads `any`.
+/// `noImplicitAny` the access silently reads `any`. A block-scoped global read
+/// through `globalThis` is a missing property whatever the setting.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn report_missing_element(
     key: &str,
@@ -384,6 +385,17 @@ pub(crate) fn report_missing_element(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
+    if matches!(object_type, Type::Reference(reference)
+        if &*reference.id == crate::driver::GLOBAL_THIS_REFERENCE_ID)
+        && ctx.block_scoped_globals.contains(key)
+    {
+        let file_name = ctx.file_name.clone();
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2339(key, "typeof globalThis", file_name),
+            access_span,
+        ));
+        return;
+    }
     if !ctx.options.no_implicit_any {
         return;
     }
