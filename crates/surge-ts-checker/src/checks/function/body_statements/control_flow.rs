@@ -890,18 +890,24 @@ pub(crate) fn check_function_switch_statement(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
-    // A template without substitutions is a string literal to tsc, as a case
-    // test too (`case \`number\`:` under `switch (typeof x)`).
+    // A template the constant evaluator spells out is a string literal to tsc
+    // (`checkTemplateExpression`), as a case test too: `case \`number\`:` under
+    // `switch (typeof x)`, `case \`${Kind.a}\`:` under a discriminant.
+    let case_symbols = visible_symbols(scopes);
     for case in &mut switch_statement.cases {
         if let Some(ParsedExpression::TemplateLiteral {
             expressions,
             quasis,
             ..
         }) = &case.test
-            && expressions.is_empty()
-            && let [Some(text)] = quasis.as_slice()
+            && let Type::StringLiteral(text) = crate::infer::expression::template_literal_type(
+                expressions,
+                quasis,
+                &case_symbols,
+                ctx,
+            )
         {
-            case.test = Some(ParsedExpression::StringLiteral(text.clone()));
+            case.test = Some(ParsedExpression::StringLiteral(text));
         }
     }
     if ctx.options.no_fallthrough_cases_in_switch {

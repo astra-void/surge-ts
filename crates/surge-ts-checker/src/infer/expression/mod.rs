@@ -543,7 +543,7 @@ fn infer_expression_unsettled(
             for expression in expressions {
                 let _ = infer_expression(expression, symbols, ctx);
             }
-            InferredExpression::Known(template_literal_type(expressions, quasis))
+            InferredExpression::Known(template_literal_type(expressions, quasis, symbols, ctx))
         }
         ParsedExpression::TemplateStringsArray { .. } => {
             match ctx.lookup_type_declaration("TemplateStringsArray") {
@@ -603,10 +603,26 @@ fn is_known_non_unknown(result: &InferredExpression) -> bool {
 /// tsc's `checkTemplateExpression`: a template whose interpolations all
 /// evaluate to constants is the fresh string literal of its text; any other is
 /// `string` (a template-literal *type* needs a contextual type surge does not
-/// model separately from `string`). Only string and integer literals are
-/// evaluated here — the forms whose JavaScript string conversion is certain.
-fn template_literal_type(expressions: &[ParsedExpression], quasis: &[Option<String>]) -> Type {
-    fn constant_text(expression: &ParsedExpression) -> Option<String> {
+/// model separately from `string`). Of the numbers only integer literals are
+/// evaluated — the ones whose JavaScript string conversion is certain.
+pub(crate) fn template_literal_type(
+    expressions: &[ParsedExpression],
+    quasis: &[Option<String>],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Type {
+    // tsc's constant evaluator (`evaluateTemplateExpression`, `evaluateEntity`):
+    // a literal, a `const` holding one, an enum member, or a template of those.
+    fn constant_text(
+        expression: &ParsedExpression,
+        symbols: &SymbolTable,
+        ctx: &mut CheckerContext,
+    ) -> Option<String> {
+        let literal_text = |ty: &Type| match ty.peeled() {
+            Type::StringLiteral(value) => Some(value),
+            Type::NumberLiteral(number) => Some(number.value),
+            _ => None,
+        };
         match expression {
             ParsedExpression::StringLiteral(value) => Some(value.clone()),
             ParsedExpression::NumberLiteral(value)
@@ -616,6 +632,30 @@ fn template_literal_type(expressions: &[ParsedExpression], quasis: &[Option<Stri
             {
                 Some(value.clone())
             }
+            ParsedExpression::Identifier { name, .. } => {
+                let symbol = symbols.get(name)?;
+                matches!(symbol.kind, crate::symbols::SymbolKind::Const)
+                    .then(|| literal_text(&symbol.ty))
+                    .flatten()
+            }
+            ParsedExpression::PropertyAccess {
+                object,
+                property_name,
+                ..
+            } => literal_text(&access::enum_member_value_type(
+                object,
+                property_name,
+                symbols,
+                ctx,
+            )?),
+            ParsedExpression::TemplateLiteral {
+                expressions,
+                quasis,
+                ..
+            } => match template_literal_type(expressions, quasis, symbols, ctx) {
+                Type::StringLiteral(value) => Some(value),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -629,7 +669,7 @@ fn template_literal_type(expressions: &[ParsedExpression], quasis: &[Option<Stri
         };
         text.push_str(quasi);
         if let Some(expression) = expressions.get(index) {
-            match constant_text(expression) {
+            match constant_text(expression, symbols, ctx) {
                 Some(value) => text.push_str(&value),
                 None => return Type::String,
             }

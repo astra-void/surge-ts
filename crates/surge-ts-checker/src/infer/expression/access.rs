@@ -248,7 +248,7 @@ pub(crate) fn infer_tuple_index_access(
 /// bare value it holds, so it keeps the enum's nominal identity: `F.X` is not
 /// an `E` even when both are `0`. Only a member whose `E.A` alias resolves to
 /// an enum reference is answered here; anything else falls back to the object.
-fn enum_member_value_type(
+pub(crate) fn enum_member_value_type(
     object: &ParsedExpression,
     property_name: &str,
     symbols: &SymbolTable,
