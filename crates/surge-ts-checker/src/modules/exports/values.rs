@@ -1216,7 +1216,7 @@ fn collect_signature_type_names<'a>(
             }
         }
         ParsedType::TypeOf(_) => scan.has_type_query = true,
-        ParsedType::Infer(name) => scan.bound.push(name.as_str()),
+        ParsedType::Infer(infer) => scan.bound.push(infer.name.as_str()),
         ParsedType::Array(inner) | ParsedType::KeyOf(inner) => {
             collect_signature_type_names(inner, scan);
         }

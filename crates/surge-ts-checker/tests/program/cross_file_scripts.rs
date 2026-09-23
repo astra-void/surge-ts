@@ -264,6 +264,7 @@ fn program_api_no_lib_hides_generated_default_libs() {
             allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
+            allow_unreachable_code: false,
             no_lib: true,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
@@ -692,6 +693,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
+            allow_unreachable_code: false,
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
@@ -726,6 +728,7 @@ fn program_api_single_file_no_implicit_any_matches_check_source_with_options() {
             allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
+            allow_unreachable_code: false,
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
@@ -794,6 +797,7 @@ fn program_order_parser_before_type_prepass() {
             allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
+            allow_unreachable_code: false,
             no_lib: false,
             skip_lib_check: false,
             jsx_automatic_runtime: false,
@@ -952,4 +956,23 @@ fn program_exported_function_does_not_contribute_to_global_script() {
 
     assert_eq!(codes(&diagnostics), vec!["TS2304"]);
     assert_eq!(file_names(&diagnostics), vec!["b.ts"]);
+}
+
+#[test]
+fn script_function_signature_typeof_reads_a_later_script_variable() {
+    let diagnostics = program(&[
+        (
+            "a.ts",
+            "function f(x: typeof later): void;\nfunction f(x: any) { }\nf({ foo: \"\" });\nf({ foo: 1 });\nfunction g(x: typeof nowhere) { }",
+        ),
+        ("b.ts", "var later: { foo: string } = { foo: \"\" };"),
+    ]);
+    let mut found = codes(&diagnostics);
+    found.sort();
+    assert_eq!(found, vec!["TS2304", "TS2322"]);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code.to_string() == "TS2304" && diagnostic.message.contains("nowhere"))
+    );
 }

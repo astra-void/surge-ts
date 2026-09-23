@@ -123,6 +123,9 @@ struct ProgramCheckSharedState {
     /// the same merged global interfaces.
     script_type_declarations: TypeDeclarationTable,
     global_symbols: SymbolTable,
+    /// Each script's own top-level values, indexed by file; see
+    /// [`globals::collect_script_values`].
+    script_values: Vec<Option<Arc<SymbolTable>>>,
     function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
     module_analyses: Vec<Option<ModuleAnalysis>>,
     module_import_bindings: Vec<Option<ModuleImportBindings>>,
@@ -236,6 +239,7 @@ struct ProgramRun {
 
 struct GlobalCollection {
     global_symbols: SymbolTable,
+    script_values: Vec<Option<Arc<SymbolTable>>>,
     function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
     global_type_declarations: TypeDeclarationTable,
     type_declaration_collection_start: Instant,
@@ -535,6 +539,7 @@ fn collect_program_globals(
         ctx,
     );
     collect_global_variables(&parsed_files, &mut global_symbols, ctx);
+    let script_values = collect_script_values(&parsed_files, &global_symbols, ctx);
     record_rss_stage(
         timings.as_ref(),
         "global_collection",
@@ -542,6 +547,7 @@ fn collect_program_globals(
     );
     GlobalCollection {
         global_symbols,
+        script_values,
         function_signatures,
         global_type_declarations,
         type_declaration_collection_start,
@@ -899,6 +905,7 @@ fn finalize_module_bindings(
     } = binding;
     let GlobalCollection {
         global_symbols,
+        script_values,
         function_signatures,
         global_type_declarations,
         ..
@@ -1008,6 +1015,7 @@ fn finalize_module_bindings(
     let shared_state = ProgramCheckSharedState {
         script_type_declarations,
         global_symbols,
+        script_values,
         function_signatures,
         module_analyses,
         module_import_bindings: merged_module_import_bindings,

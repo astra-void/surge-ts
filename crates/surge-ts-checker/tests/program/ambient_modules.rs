@@ -755,3 +755,42 @@ fn ambient_module_namespace_class_export_assignment_is_importable() {
 
     assert!(diagnostics.is_empty(), "{:?}", codes(&diagnostics));
 }
+
+#[test]
+fn ambient_module_block_import_resolves_in_function_signature() {
+    // The imported block sits in a later file, so it is not registered yet
+    // when the importing block's signatures are first seen.
+    let diagnostics = program(&[
+        (
+            "types/fsp.d.ts",
+            "declare module \"m:fsp\" {\n    import { PathLike } from \"m:fs\";\n    function access(path: PathLike): void;\n}",
+        ),
+        (
+            "types/fs.d.ts",
+            "declare module \"m:fs\" {\n    type PathLike = string;\n}",
+        ),
+        (
+            "src/index.ts",
+            "import { access } from \"m:fsp\";\naccess(\"a\");\naccess(1);",
+        ),
+    ]);
+    assert_eq!(codes(&diagnostics), vec!["TS2345"]);
+    assert_eq!(diagnostics[0].file_name, "src/index.ts");
+}
+
+#[test]
+fn ambient_module_block_unresolved_signature_name_still_reports() {
+    let diagnostics = program(&[
+        (
+            "types/fsp.d.ts",
+            "declare module \"m:fsp\" {\n    import { PathLike } from \"m:fs\";\n    function access(path: PathLike): void;\n    function missing(path: NotDeclared): void;\n}",
+        ),
+        (
+            "types/fs.d.ts",
+            "declare module \"m:fs\" {\n    type PathLike = string;\n}",
+        ),
+        ("src/index.ts", "export {};"),
+    ]);
+    assert_eq!(codes(&diagnostics), vec!["TS2304"]);
+    assert!(diagnostics[0].message.contains("NotDeclared"));
+}

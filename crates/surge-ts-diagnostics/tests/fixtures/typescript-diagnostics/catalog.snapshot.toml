@@ -1113,6 +1113,22 @@ message = "Member '{0}' implicitly has an '{1}' type."
 arity = 2
 
 [[diagnostic]]
+code = "TS7013"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Construct signature, which lacks return-type annotation, implicitly has an 'any' return type."
+arity = 0
+
+[[diagnostic]]
+code = "TS7020"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Call signature, which lacks return-type annotation, implicitly has an 'any' return type."
+arity = 0
+
+[[diagnostic]]
 code = "TS7010"
 category = "Error"
 source = "typescript"

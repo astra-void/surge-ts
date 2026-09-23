@@ -177,6 +177,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
+            allow_unreachable_code: false,
         },
     );
 

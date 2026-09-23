@@ -974,7 +974,6 @@ fn contextual_template_literal_type(
     let ParsedExpression::TemplateLiteral {
         expressions,
         quasis,
-        is_tagged: false,
         ..
     } = expression
     else {

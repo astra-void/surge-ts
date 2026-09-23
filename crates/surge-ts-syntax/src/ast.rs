@@ -132,6 +132,14 @@ pub enum ParsedGrammarDiagnosticKind {
     /// A signature with neither a body nor a return type — TS7010, reported
     /// only under `noImplicitAny`.
     ImplicitAnyReturn,
+    /// A construct signature without a return type — TS7013, under
+    /// `noImplicitAny`.
+    ImplicitAnyConstructReturn,
+    /// A call signature without a return type — TS7020, under `noImplicitAny`.
+    ImplicitAnyCallReturn,
+    /// A type-level signature's parameter with neither annotation nor
+    /// initializer — TS7006, under `noImplicitAny`.
+    ImplicitAnySignatureParameter,
     /// Two members of one class, interface, or object literal declaring the
     /// same name where neither is an overload of the other — TS2300.
     DuplicateMember,
@@ -343,7 +351,7 @@ pub enum ParsedType {
     /// An `infer X` capture inside a conditional type's `extends` clause. Modelled
     /// so a conditional that uses it (e.g. React's `ComponentProps<T>`) survives
     /// parsing instead of degrading the whole conditional to `Unknown`.
-    Infer(String),
+    Infer(std::sync::Arc<ParsedInferType>),
     /// A type-predicate return annotation (`x is T`, `this is T`, `asserts x`,
     /// `asserts x is T`). Resolves to `boolean` in type position; the guard
     /// narrowing consumes the payload to narrow the tested argument.
@@ -441,7 +449,7 @@ impl Clone for ParsedType {
             Self::Mapped(payload) => Self::Mapped(payload.clone()),
             Self::Conditional(payload) => Self::Conditional(payload.clone()),
             Self::TemplateLiteral(payload) => Self::TemplateLiteral(payload.clone()),
-            Self::Infer(name) => Self::Infer(name.clone()),
+            Self::Infer(payload) => Self::Infer(payload.clone()),
             Self::Predicate(payload) => Self::Predicate(payload.clone()),
             Self::InferredMember(payload) => Self::InferredMember(payload.clone()),
             Self::UniqueSymbol(name) => Self::UniqueSymbol(name.clone()),
@@ -500,6 +508,13 @@ pub struct ParsedTemplateLiteralType {
     pub quasis: Vec<String>,
     pub interpolations: Vec<ParsedType>,
     pub span: Option<TextSpan>,
+}
+
+/// `infer X` or `infer X extends C`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedInferType {
+    pub name: String,
+    pub constraint: Option<ParsedType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -586,6 +601,24 @@ pub struct ParsedFunctionType {
     pub type_parameters: Vec<ParsedTypeParameter>,
 }
 
+/// One step from a destructured parameter's type to a name it binds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedBindingStep {
+    Property(String),
+    Index(usize),
+    ObjectRest,
+    ArrayRest,
+}
+
+/// A name a destructuring pattern binds, with the path that reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedBoundName {
+    pub name: String,
+    pub path: Vec<ParsedBindingStep>,
+    /// The last step carries a default, so the binding is never `undefined`.
+    pub has_default: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedFunctionTypeParameter {
     pub name: Option<String>,
@@ -598,6 +631,58 @@ pub struct ParsedFunctionTypeParameter {
     /// A `...rest: T[]` parameter. Its annotation is the array type; lowering
     /// stores the element type and marks the signature variadic.
     pub rest: bool,
+    /// The names a destructured parameter binds; empty for an identifier.
+    pub bound_names: Vec<ParsedBoundName>,
+}
+
+impl ParsedBindingName {
+    /// Every name this pattern binds, with the path from the bound value.
+    pub fn bound_names(&self) -> Vec<ParsedBoundName> {
+        fn collect(
+            binding: &ParsedBindingName,
+            path: &mut Vec<ParsedBindingStep>,
+            has_default: bool,
+            out: &mut Vec<ParsedBoundName>,
+        ) {
+            match binding {
+                ParsedBindingName::Identifier { name, .. } => out.push(ParsedBoundName {
+                    name: name.clone(),
+                    path: path.clone(),
+                    has_default,
+                }),
+                ParsedBindingName::ObjectPattern(pattern) => {
+                    for element in &pattern.elements {
+                        path.push(ParsedBindingStep::Property(element.property_name.clone()));
+                        collect(&element.binding_name, path, element.has_default, out);
+                        path.pop();
+                    }
+                    if let Some(rest) = &pattern.rest {
+                        path.push(ParsedBindingStep::ObjectRest);
+                        collect(rest, path, false, out);
+                        path.pop();
+                    }
+                }
+                ParsedBindingName::ArrayPattern(pattern) => {
+                    for (index, element) in pattern.elements.iter().enumerate() {
+                        if let Some(element) = element {
+                            path.push(ParsedBindingStep::Index(index));
+                            collect(element, path, false, out);
+                            path.pop();
+                        }
+                    }
+                    if let Some(rest) = &pattern.rest {
+                        path.push(ParsedBindingStep::ArrayRest);
+                        collect(rest, path, false, out);
+                        path.pop();
+                    }
+                }
+                ParsedBindingName::Unsupported { .. } => {}
+            }
+        }
+        let mut out = Vec::new();
+        collect(self, &mut Vec::new(), false, &mut out);
+        out
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1133,13 +1218,10 @@ pub enum ParsedExpression {
         expressions: Vec<ParsedExpression>,
         span: Option<TextSpan>,
         /// The cooked text around the interpolations (`None` for an invalid
-        /// escape), one more than `expressions` for an untagged template.
+        /// escape), one more than `expressions`.
         quasis: Vec<Option<String>>,
         /// Where each interpolation is written, in `expressions` order.
         expression_spans: Vec<Option<TextSpan>>,
-        /// A tagged template lowers here too, with the tag as the first
-        /// expression; its type is the tag call's, not a string.
-        is_tagged: bool,
     },
     Unary {
         operator: ParsedUnaryOperator,
@@ -1350,6 +1432,12 @@ pub enum ParsedExpression {
     ObjectRest {
         source: Box<ParsedExpression>,
         omitted: Vec<String>,
+    },
+    /// The strings array a tagged template passes as its tag's first argument
+    /// (`getEffectiveCallArguments`): a value of the global
+    /// `TemplateStringsArray`, spanning the template.
+    TemplateStringsArray {
+        span: Option<TextSpan>,
     },
     Unknown,
 }
@@ -2000,7 +2088,7 @@ impl ParsedType {
                         .map(ParsedType::estimated_heap_bytes)
                         .sum::<u64>()
             }
-            ParsedType::Infer(name) => name.capacity() as u64,
+            ParsedType::Infer(infer) => infer.name.capacity() as u64,
             _ => 0,
         }
     }
@@ -2167,6 +2255,7 @@ impl ParsedExpression {
             | ParsedExpression::Identifier { .. }
             | ParsedExpression::This { .. }
             | ParsedExpression::ArrowFunction(_)
+            | ParsedExpression::TemplateStringsArray { .. }
             | ParsedExpression::Unknown => {}
         }
     }

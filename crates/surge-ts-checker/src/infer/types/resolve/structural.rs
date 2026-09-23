@@ -220,11 +220,34 @@ pub(crate) fn resolve_function_type(
     let mut parameters = Vec::new();
     let mut had_error = false;
 
+    // A parameter's name is in scope for the parameters after it and for the
+    // return type: `(x: number) => typeof x`, `({ a: alias }: T) => typeof alias`.
+    let outer_parameter_bindings = ctx.signature_parameter_bindings.clone();
     for parameter in function_type.parameters.iter().cloned() {
         let is_this = parameter.is_this;
+        let name = parameter.name.clone();
+        let bound_names = parameter.bound_names.clone();
+        let is_rest = parameter.rest;
         let resolved_parameter =
             resolve_function_type_parameter(parameter, ctx, resolving, &local_substitution);
         had_error |= resolved_parameter.had_error;
+        if !is_this {
+            let bound_type = if is_rest {
+                Type::Array(Box::new(resolved_parameter.ty.clone()))
+            } else {
+                resolved_parameter.ty.clone()
+            };
+            if bound_names.is_empty() {
+                if let Some(name) = name {
+                    ctx.signature_parameter_bindings.push((name, bound_type));
+                }
+            } else {
+                for bound in &bound_names {
+                    let ty = crate::checks::function::bound_name_type(&bound_type, bound);
+                    ctx.signature_parameter_bindings.push((bound.name.clone(), ty));
+                }
+            }
+        }
         // The `this` parameter is resolved so an unresolved `this` type still
         // reports once (and propagates `had_error` to avoid a cascade), but it is
         // not a real call parameter, so it is excluded from arity and arguments.
@@ -240,6 +263,7 @@ pub(crate) fn resolve_function_type(
         resolving,
         &local_substitution,
     );
+    ctx.signature_parameter_bindings = outer_parameter_bindings;
     had_error |= return_type.had_error;
     let mut resolved_function = alloc_function_type(
         parameters,

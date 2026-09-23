@@ -515,6 +515,7 @@ fn run_single_file_mode(
             allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
+            allow_unreachable_code: false,
             no_lib,
             skip_lib_check: false,
             stub_external_modules,

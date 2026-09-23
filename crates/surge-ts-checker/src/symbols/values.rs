@@ -435,6 +435,11 @@ impl SymbolTable {
     /// same-named global suppress the module's own declaration, after which the
     /// module exports the global instead (`next/font`'s `Content` displacing
     /// radix's `declare const Content`).
+    /// [`Self::get_own`] as a shared handle.
+    pub(crate) fn get_own_handle(&self, name: &str) -> Option<SymbolInfoHandle> {
+        self.symbols.get(name).cloned()
+    }
+
     pub(crate) fn get_own(&self, name: &str) -> Option<&SymbolInfo> {
         record_type_name_lookup_string_count(1);
         self.symbols.get(name).map(|symbol| symbol.as_ref())

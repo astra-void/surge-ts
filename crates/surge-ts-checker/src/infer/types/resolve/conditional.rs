@@ -221,13 +221,23 @@ pub(crate) fn resolve_conditional_type(
             // this the true branch was unreachable and the false arm — `never` in
             // the `UnionToIntersection` spellings that use it — always won.
             let extends_is_top = matches!(resolved_extends.ty, Type::GenuineUnknown);
-            let branch = match try_tuple_infer_match(
+            let pattern_match = match try_template_infer_match(
                 &extends_pattern,
                 &member,
                 &member_substitution,
                 ctx,
                 resolving,
             ) {
+                TuplePatternMatch::Undecided => try_tuple_infer_match(
+                    &extends_pattern,
+                    &member,
+                    &member_substitution,
+                    ctx,
+                    resolving,
+                ),
+                decided => decided,
+            };
+            let branch = match pattern_match {
                 TuplePatternMatch::Matched(matched) => {
                     member_substitution = matched;
                     (*conditional.true_type).clone()
@@ -309,6 +319,22 @@ pub(crate) fn resolve_conditional_type(
             },
             had_error,
         };
+    }
+
+    match try_template_infer_match(
+        &extends_pattern,
+        &resolved_check.ty,
+        substitution,
+        ctx,
+        resolving,
+    ) {
+        TuplePatternMatch::Matched(matched) => {
+            return resolve_parsed_type(*conditional.true_type, ctx, resolving, &matched);
+        }
+        TuplePatternMatch::Rejected => {
+            return resolve_parsed_type(*conditional.false_type, ctx, resolving, substitution);
+        }
+        TuplePatternMatch::Undecided => {}
     }
 
     // A tuple pattern is decided by arity before the sentinel check below, because
@@ -422,8 +448,8 @@ fn bind_infer_captures(
     reference_positional: bool,
 ) {
     match extends {
-        ParsedType::Infer(name) => {
-            substitution.insert(name.clone(), check.clone());
+        ParsedType::Infer(infer) => {
+            substitution.insert(infer.name.clone(), check.clone());
         }
         // `[infer head, ...infer tail]` / `[infer a, infer b]` against a tuple:
         // line up the fixed slots positionally and hand the spread slot the
@@ -1151,6 +1177,153 @@ enum TuplePatternMatch {
     Rejected,
 }
 
+enum TemplateSlot {
+    Infer(std::sync::Arc<surge_ts_syntax::ParsedInferType>),
+    Fixed(Type),
+}
+
+/// Branch test for a conditional whose `extends` pattern is a template literal
+/// with `infer` placeholders, after tsc's `inferToTemplateLiteralType`: each
+/// capture takes what the check type's text leaves between the template's
+/// fixed texts (converted to the literal an `infer X extends C` constraint
+/// prefers, or the constraint itself when the capture does not satisfy it),
+/// and the branch is the check type's assignability to the template
+/// instantiated with those captures. Written as a pattern with `infer` holes,
+/// the template itself can only resolve to `string`, which matches every
+/// string and leaves the captures unbound.
+fn try_template_infer_match(
+    extends: &ParsedType,
+    check: &Type,
+    substitution: &TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+) -> TuplePatternMatch {
+    let ParsedType::TemplateLiteral(template) = extends else {
+        return TuplePatternMatch::Undecided;
+    };
+    if !template
+        .interpolations
+        .iter()
+        .any(|interpolation| matches!(interpolation, ParsedType::Infer(_)))
+    {
+        return TuplePatternMatch::Undecided;
+    }
+    let source = crate::program::with_dts_expansion_reason(
+        crate::program::DtsExpansionReason::ConditionalType,
+        || surge_ts_types::peel_to_pattern_literal(check),
+    );
+    let source_is_pattern = surge_ts_types::is_template_literal_type(&source)
+        || surge_ts_types::string_mapping_parts(&source).is_some();
+    if matches!(
+        source,
+        Type::Unknown | Type::ErrorType | Type::Any | Type::TypeParameter(_) | Type::Never
+    ) || (matches!(source, Type::Reference(_)) && !source_is_pattern)
+    {
+        return TuplePatternMatch::Undecided;
+    }
+
+    let mut texts = vec![template.quasis.first().cloned().unwrap_or_default()];
+    let mut slots = Vec::with_capacity(template.interpolations.len());
+    for (index, interpolation) in template.interpolations.iter().enumerate() {
+        let following = template.quasis.get(index + 1).cloned().unwrap_or_default();
+        if let ParsedType::Infer(infer) = interpolation {
+            slots.push(TemplateSlot::Infer(infer.clone()));
+            texts.push(following);
+            continue;
+        }
+        let resolved = resolve_parsed_type(interpolation.clone(), ctx, resolving, substitution);
+        if resolved.had_error {
+            return TuplePatternMatch::Undecided;
+        }
+        let placeholder = surge_ts_types::peel_to_pattern_literal(&resolved.ty);
+        let literal_text = match &placeholder {
+            Type::StringLiteral(value) => Some(value.clone()),
+            Type::NumberLiteral(literal) => Some(literal.value.clone()),
+            Type::BooleanLiteral(value) => Some(value.to_string()),
+            Type::Null => Some("null".to_string()),
+            Type::Undefined => Some("undefined".to_string()),
+            _ => None,
+        };
+        if let Some(literal_text) = literal_text {
+            let last = texts.last_mut().expect("texts starts non-empty");
+            last.push_str(&literal_text);
+            last.push_str(&following);
+        } else if matches!(placeholder, Type::String | Type::Number | Type::BigInt | Type::Any)
+            || surge_ts_types::is_template_literal_type(&placeholder)
+            || surge_ts_types::string_mapping_parts(&placeholder).is_some()
+        {
+            slots.push(TemplateSlot::Fixed(placeholder));
+            texts.push(following);
+        } else {
+            return TuplePatternMatch::Undecided;
+        }
+    }
+
+    let constraints: Vec<Option<Type>> = slots
+        .iter()
+        .map(|slot| match slot {
+            TemplateSlot::Infer(infer) => infer.constraint.as_ref().map(|constraint| {
+                resolve_parsed_type(constraint.clone(), ctx, resolving, substitution).ty
+            }),
+            TemplateSlot::Fixed(_) => None,
+        })
+        .collect();
+    let slot_targets: Vec<Type> = slots
+        .iter()
+        .zip(&constraints)
+        .map(|(slot, constraint)| match slot {
+            TemplateSlot::Fixed(ty) => ty.clone(),
+            TemplateSlot::Infer(_) => constraint.clone().unwrap_or(Type::GenuineUnknown),
+        })
+        .collect();
+    let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let target_refs: Vec<&Type> = slot_targets.iter().collect();
+    let matches =
+        match surge_ts_types::infer_template_literal_placeholders(&source, &text_refs, &target_refs) {
+            Some(matches) => matches,
+            // An all-placeholder template extracts characters; with nothing to
+            // extract every capture is `never`, so the instantiated template is
+            // `never` and the branch test fails.
+            None if texts.iter().all(String::is_empty) => vec![Type::Never; slots.len()],
+            None => return TuplePatternMatch::Rejected,
+        };
+
+    let mut bound = substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+    let mut instantiated = Vec::with_capacity(slots.len());
+    let mut captured_names = std::collections::HashSet::new();
+    for ((slot, constraint), captured) in slots.iter().zip(&constraints).zip(matches) {
+        match slot {
+            TemplateSlot::Fixed(ty) => instantiated.push(ty.clone()),
+            TemplateSlot::Infer(infer) => {
+                let mut inferred = match (&captured, constraint) {
+                    (Type::StringLiteral(text), Some(constraint))
+                        if !matches!(constraint, Type::Any) =>
+                    {
+                        surge_ts_types::preferred_template_placeholder_inference(text, constraint)
+                            .unwrap_or(captured)
+                    }
+                    _ => captured,
+                };
+                if let Some(constraint) = constraint
+                    && !is_assignable_to(&inferred, constraint)
+                {
+                    inferred = constraint.clone();
+                }
+                if captured_names.insert(infer.name.as_str()) {
+                    bound.insert(infer.name.clone(), inferred.clone());
+                }
+                instantiated.push(inferred);
+            }
+        }
+    }
+    let instantiated = surge_ts_types::template_literal_type(&texts, &instantiated);
+    if is_assignable_to(check, &instantiated) {
+        TuplePatternMatch::Matched(bound)
+    } else {
+        TuplePatternMatch::Rejected
+    }
+}
+
 /// Branch test for a conditional whose `extends` pattern is a tuple carrying an
 /// `infer` capture. A spread pattern (`[infer head, ...infer tail]`) has no fixed
 /// length, so it resolves to the `unknown` sentinel and the assignability test
@@ -1479,7 +1652,7 @@ fn bind_union_signature_infer_captures(
 /// positions), `false` for covariant.
 fn collect_infer_variance(ty: &ParsedType, contravariant: bool, out: &mut Vec<(String, bool)>) {
     match ty {
-        ParsedType::Infer(name) => out.push((name.clone(), contravariant)),
+        ParsedType::Infer(infer) => out.push((infer.name.clone(), contravariant)),
         ParsedType::Function(function) => {
             for parameter in function.parameters.iter().filter(|it| !it.is_this) {
                 collect_infer_variance(&parameter.ty, !contravariant, out);
@@ -1707,7 +1880,7 @@ fn seed_infer_placeholders(pattern: &ParsedType, substitution: &mut TypeParamete
 /// [`bind_infer_captures`].
 fn collect_infer_names(ty: &ParsedType, names: &mut Vec<String>) {
     match ty {
-        ParsedType::Infer(name) => names.push(name.clone()),
+        ParsedType::Infer(infer) => names.push(infer.name.clone()),
         ParsedType::Array(inner) | ParsedType::KeyOf(inner) => collect_infer_names(inner, names),
         ParsedType::Union(members)
         | ParsedType::Intersection(members)

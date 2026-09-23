@@ -95,10 +95,52 @@ pub(crate) fn evaluate_expression(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    crate::checks::function::settle_call_result(
+    let result = crate::checks::function::settle_call_result(
         expression,
         evaluate_expression_unsettled(expression, fallback_span, symbols, ctx),
-    )
+    );
+    if let Some(substitutions) = tagged_template_substitutions(expression) {
+        report_symbol_substitutions(substitutions, symbols, ctx);
+    }
+    result
+}
+
+/// The substitutions of a tagged template, which lowers to a call whose first
+/// argument is the template's strings array.
+fn tagged_template_substitutions(expression: &ParsedExpression) -> Option<&[surge_ts_syntax::ParsedCallArgument]> {
+    let arguments = match expression {
+        ParsedExpression::Call { arguments, .. }
+        | ParsedExpression::PropertyCall { arguments, .. }
+        | ParsedExpression::ExpressionCall { arguments, .. } => arguments,
+        _ => return None,
+    };
+    match arguments.split_first() {
+        Some((first, rest))
+            if matches!(first.expression, ParsedExpression::TemplateStringsArray { .. }) =>
+        {
+            Some(rest)
+        }
+        _ => None,
+    }
+}
+
+/// A tagged template is still a template expression: a substitution that may
+/// be a symbol cannot be converted to a string (TS2731), whatever the tag.
+fn report_symbol_substitutions(
+    substitutions: &[surge_ts_syntax::ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    for substitution in substitutions {
+        if let InferredExpression::Known(ty) = infer_expression(&substitution.expression, symbols, ctx)
+            && type_may_be_symbol(&ty)
+        {
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2731(ctx.file_name.clone()),
+                substitution.span,
+            ));
+        }
+    }
 }
 
 fn evaluate_expression_unsettled(
@@ -162,10 +204,8 @@ fn evaluate_expression_unsettled(
             expressions,
             span,
             expression_spans,
-            is_tagged,
             ..
         } => {
-            let mut tag_signature = None;
             for (index, interpolation) in expressions.iter().enumerate() {
                 let interpolation_span = expression_spans
                     .get(index)
@@ -177,24 +217,12 @@ fn evaluate_expression_unsettled(
                 let InferredExpression::Known(ty) = &result else {
                     continue;
                 };
-                if *is_tagged && index == 0 {
-                    tag_signature = tagged_template_signature(ty);
-                    continue;
-                }
                 // A symbol cannot be converted to a string implicitly (TS2731).
                 if type_may_be_symbol(ty) {
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2731(ctx.file_name.clone()),
                         interpolation_span,
                     ));
-                }
-                if let Some(signature) = &tag_signature {
-                    // The tag receives the strings array first, so interpolation
-                    // `index` is argument `index`. tsc reports a call's first
-                    // inapplicable argument and stops.
-                    if check_tagged_template_argument(signature, index, ty, interpolation_span, ctx) {
-                        tag_signature = None;
-                    }
                 }
             }
             infer_expression(expression, symbols, ctx)
@@ -1788,65 +1816,6 @@ fn is_primitive_assertion_side(ty: &Type) -> bool {
         Type::Union(union) => union.types().iter().all(is_primitive_assertion_side),
         _ => false,
     }
-}
-
-/// The signature a tagged template calls when surge can relate its arguments
-/// directly: a single, non-generic function with resolved parameters.
-pub(crate) fn tagged_template_signature(tag: &Type) -> Option<surge_ts_types::FunctionType> {
-    let peeled;
-    let function = match tag {
-        Type::Function(function) => function,
-        Type::Reference(_) | Type::Object(_) => {
-            peeled = tag.peeled();
-            match &peeled {
-                Type::Function(function) => function,
-                Type::Object(object) => object.call_signature()?,
-                _ => return None,
-            }
-        }
-        _ => return None,
-    };
-    if function.overloads().is_some()
-        || function
-            .parameters()
-            .iter()
-            .chain([function.return_type()])
-            .any(crate::checks::function::type_contains_degradation)
-    {
-        return None;
-    }
-    Some(function.clone())
-}
-
-fn check_tagged_template_argument(
-    signature: &surge_ts_types::FunctionType,
-    position: usize,
-    argument: &Type,
-    span: Option<SyntaxTextSpan>,
-    ctx: &mut CheckerContext,
-) -> bool {
-    let parameters = signature.parameters();
-    let parameter = if signature.is_variadic() && position + 1 >= parameters.len() {
-        match parameters.last().map(Type::peeled) {
-            Some(Type::Array(element)) => *element,
-            _ => return false,
-        }
-    } else {
-        match parameters.get(position) {
-            Some(parameter) => parameter.clone(),
-            None => return false,
-        }
-    };
-    if argument.is_unknown() || surge_ts_types::is_assignable_to(argument, &parameter) {
-        return false;
-    }
-    let parameter = super::reported_relation_target(argument, &parameter);
-    let source_name = super::source_display_name(argument, &parameter);
-    ctx.push(diagnostic_with_syntax_span(
-        Diagnostic::ts2345(&source_name, &parameter.name(), ctx.file_name.clone()),
-        span,
-    ));
-    true
 }
 
 fn report_property_of_unknown(

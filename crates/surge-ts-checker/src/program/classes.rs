@@ -412,6 +412,10 @@ fn parameter_to_type_parameter(parameter: &ParsedFunctionParameter) -> ParsedFun
         optional: parameter.optional,
         is_this: false,
         rest: parameter.rest,
+        bound_names: match &parameter.binding_name {
+            ParsedBindingName::Identifier { .. } => Vec::new(),
+            pattern => pattern.bound_names(),
+        },
     }
 }
 

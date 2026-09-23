@@ -246,6 +246,159 @@ fn infer_types_from_template_literal(
     infer_from_literal_parts(&source_texts, &source_types, texts)
 }
 
+/// tsc's `inferTypesFromTemplateLiteralType` against a template written as
+/// `texts` around `types`: what each placeholder captures from `source`, or
+/// `None` when `source` does not fit the texts.
+pub fn infer_template_literal_placeholders(
+    source: &Type,
+    texts: &[&str],
+    types: &[&Type],
+) -> Option<Vec<Type>> {
+    infer_types_from_template_literal(source, texts, types)
+}
+
+/// The literal a `infer X extends C` placeholder prefers over the captured
+/// string `text` (tsc's `inferToTemplateLiteralType`): `"100"` against a
+/// `number` constraint is `100`, against `boolean` `"true"` is `true`. `None`
+/// keeps the string itself.
+pub fn preferred_template_placeholder_inference(text: &str, constraint: &Type) -> Option<Type> {
+    let members: Vec<Type> = match constraint {
+        Type::Union(union) => union.types().iter().flat_map(distribute_boolean).collect(),
+        other => distribute_boolean(other),
+    };
+    let category = |ty: &Type| PlaceholderCategory::of(ty);
+    let mut present: Vec<PlaceholderCategory> = members.iter().filter_map(category).collect();
+    if present.contains(&PlaceholderCategory::String) {
+        return None;
+    }
+    let number_value = js_string_to_number(text);
+    if !number_value.is_some_and(|value| format_js_number(value) == text) {
+        present.retain(|category| {
+            !matches!(category, PlaceholderCategory::Number | PlaceholderCategory::NumberLiteral)
+        });
+    }
+    if !is_valid_bigint_string(text) || text.starts_with("0") && text.len() > 1 {
+        present.retain(|category| *category != PlaceholderCategory::BigInt);
+    }
+    let choose = |left: Type, right: &Type| -> Type {
+        let Some(right_category) = category(right).filter(|category| present.contains(category)) else {
+            return left;
+        };
+        if let Some(left_category) = category(&left)
+            && left_category <= right_category
+        {
+            return left;
+        }
+        match (right_category, right) {
+            (PlaceholderCategory::Template, _)
+                if template_literal_parts(right).is_some_and(|(texts, types)| {
+                    is_type_matched_by_template_literal(&Type::StringLiteral(text.to_string()), &texts, &types)
+                }) =>
+            {
+                Type::StringLiteral(text.to_string())
+            }
+            (PlaceholderCategory::StringMapping, _)
+                if string_mapping_parts(right).is_some_and(|(kind, _)| kind.apply(text) == text) =>
+            {
+                Type::StringLiteral(text.to_string())
+            }
+            (PlaceholderCategory::StringLiteral, Type::StringLiteral(value)) if value == text => right.clone(),
+            (PlaceholderCategory::Number, _) => Type::NumberLiteral(NumberLiteralType {
+                value: format_js_number(number_value.unwrap_or_default()),
+            }),
+            (PlaceholderCategory::NumberLiteral, Type::NumberLiteral(literal))
+                if literal.value.parse::<f64>().ok() == number_value =>
+            {
+                right.clone()
+            }
+            (PlaceholderCategory::BigInt, _) => Type::BigInt,
+            (PlaceholderCategory::BooleanLiteral, Type::BooleanLiteral(value))
+                if value.to_string() == text =>
+            {
+                right.clone()
+            }
+            (PlaceholderCategory::Undefined, _) if text == "undefined" => right.clone(),
+            (PlaceholderCategory::Null, _) if text == "null" => right.clone(),
+            _ => left,
+        }
+    };
+    let chosen = members.iter().fold(Type::Never, choose);
+    (chosen != Type::Never).then_some(chosen)
+}
+
+/// The flag groups tsc's `choose` walks, in its preference order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum PlaceholderCategory {
+    String,
+    Template,
+    StringMapping,
+    StringLiteral,
+    Number,
+    NumberLiteral,
+    BigInt,
+    BooleanLiteral,
+    Undefined,
+    Null,
+}
+
+impl PlaceholderCategory {
+    fn of(ty: &Type) -> Option<Self> {
+        Some(match ty {
+            Type::String => Self::String,
+            _ if is_template_literal_type(ty) => Self::Template,
+            _ if string_mapping_parts(ty).is_some() => Self::StringMapping,
+            Type::StringLiteral(_) => Self::StringLiteral,
+            Type::Number => Self::Number,
+            Type::NumberLiteral(_) => Self::NumberLiteral,
+            Type::BigInt => Self::BigInt,
+            Type::BooleanLiteral(_) => Self::BooleanLiteral,
+            Type::Undefined => Self::Undefined,
+            Type::Null => Self::Null,
+            _ => return None,
+        })
+    }
+}
+
+fn distribute_boolean(ty: &Type) -> Vec<Type> {
+    match ty {
+        Type::Boolean => vec![Type::BooleanLiteral(false), Type::BooleanLiteral(true)],
+        other => vec![other.clone()],
+    }
+}
+
+/// JavaScript's `Number(text)`, `None` for `NaN` and the infinities.
+fn js_string_to_number(text: &str) -> Option<f64> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Some(0.0);
+    }
+    let radix = |prefixes: [&str; 2], radix: u32| {
+        prefixes
+            .iter()
+            .find_map(|prefix| trimmed.strip_prefix(prefix))
+            .map(|digits| u64::from_str_radix(digits, radix).ok().map(|value| value as f64))
+    };
+    if let Some(value) = radix(["0x", "0X"], 16)
+        .or_else(|| radix(["0o", "0O"], 8))
+        .or_else(|| radix(["0b", "0B"], 2))
+    {
+        return value;
+    }
+    if !is_valid_number_string(trimmed) {
+        return None;
+    }
+    trimmed.parse::<f64>().ok().filter(|value| value.is_finite())
+}
+
+/// How surge spells a number literal type's value, which is Rust's shortest
+/// round-trip form; `-0` reads back as `0`, as JavaScript prints it.
+fn format_js_number(value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    value.to_string()
+}
+
 /// tsc's `getStringLikeTypeForType`.
 fn string_like_type_for(ty: &Type) -> Type {
     if matches!(ty, Type::Any | Type::String | Type::StringLiteral(_)) || is_template_literal_type(ty) {

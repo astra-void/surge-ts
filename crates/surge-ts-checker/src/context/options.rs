@@ -105,6 +105,8 @@ pub struct CheckerOptions {
     pub allow_importing_ts_extensions: bool,
     pub no_unused_locals: bool,
     pub no_unused_parameters: bool,
+    /// `allowUnreachableCode: true`; unset and `false` both leave it off.
+    pub allow_unreachable_code: bool,
     pub stub_external_modules: bool,
     pub resolved_modules: FxHashMap<String, String>,
     /// Importer-scoped module resolutions: canonical importer file name →
@@ -196,6 +198,7 @@ impl Default for CheckerOptions {
             allow_importing_ts_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
+            allow_unreachable_code: false,
             stub_external_modules: false,
             resolved_modules: FxHashMap::default(),
             resolved_modules_by_importer: FxHashMap::default(),

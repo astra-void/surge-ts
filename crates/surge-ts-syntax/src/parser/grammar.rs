@@ -1417,13 +1417,18 @@ impl GrammarCollector {
     /// or an accessor is a *different* diagnostic there (TS2300 for methods, a
     /// legal get/set pair for accessors), so only plain properties count.
     fn check_duplicate_properties(&mut self, object: &ObjectExpression<'_>) {
-        let mut seen: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Methods report in first-written order, so the spans live in a `Vec`
+        // and the map only finds a name's slot.
         let mut methods: Vec<(String, Vec<Span>)> = Vec::new();
-        let mut accessors: Vec<String> = Vec::new();
+        let mut method_slots: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut accessors: std::collections::HashSet<String> = std::collections::HashSet::new();
         // The accessor kinds seen per name (1 = get, 2 = set): a second
         // accessor of a kind already seen is TS1118, after which tsc's
         // `checkGrammarObjectLiteralExpression` stops looking at the literal.
-        let mut accessor_kinds: Vec<(String, u8)> = Vec::new();
+        let mut accessor_kinds: std::collections::HashMap<String, u8> =
+            std::collections::HashMap::new();
 
         for property in &object.properties {
             let ObjectPropertyKind::ObjectProperty(property) = property else {
@@ -1432,25 +1437,25 @@ impl GrammarCollector {
             if property.kind != PropertyKind::Init {
                 if let Some(name) = property_key_name(&property.key) {
                     let kind = if property.kind == PropertyKind::Get { 1 } else { 2 };
-                    match accessor_kinds.iter_mut().find(|(other, _)| *other == name) {
-                        Some((_, seen_kinds)) if *seen_kinds == 3 || *seen_kinds == kind => {
+                    match accessor_kinds.get_mut(&name) {
+                        Some(seen_kinds) if *seen_kinds == 3 || *seen_kinds == kind => {
                             self.push(Kind::Ts(1118), property.key.span(), None);
                             self.report_duplicate_accessors(object, &name);
                             return;
                         }
-                        Some((_, seen_kinds)) => *seen_kinds |= kind,
-                        None => accessor_kinds.push((name.clone(), kind)),
+                        Some(seen_kinds) => *seen_kinds |= kind,
+                        None => {
+                            accessor_kinds.insert(name.clone(), kind);
+                        }
                     }
-                    if seen.contains(&name)
-                        || methods.iter().any(|(other, _)| *other == name)
-                    {
+                    if seen.contains(&name) || method_slots.contains_key(&name) {
                         self.push(
                             Kind::ObjectLiteralPropertyAndAccessor,
                             property.key.span(),
                             None,
                         );
                     }
-                    accessors.push(name);
+                    accessors.insert(name);
                 }
                 continue;
             }
@@ -1470,16 +1475,19 @@ impl GrammarCollector {
                 );
             }
             if property.method {
-                match methods.iter_mut().find(|(other, _)| *other == name) {
-                    Some((_, spans)) => spans.push(property.span),
-                    None => methods.push((name, vec![property.span])),
+                match method_slots.get(&name) {
+                    Some(&slot) => methods[slot].1.push(property.span),
+                    None => {
+                        method_slots.insert(name.clone(), methods.len());
+                        methods.push((name, vec![property.span]));
+                    }
                 }
                 continue;
             }
             if seen.contains(&name) {
                 self.push(Kind::DuplicateObjectLiteralProperty, property.span, None);
             } else {
-                seen.push(name);
+                seen.insert(name);
             }
         }
 
@@ -1518,6 +1526,23 @@ impl GrammarCollector {
                 for span in spans {
                     self.push(Kind::DuplicateMember, span, Some(name));
                 }
+            }
+        }
+    }
+
+    /// A type-level signature has no body to infer a parameter from, so an
+    /// unannotated one is `any` unless an (erroneous) initializer types it.
+    fn check_implicit_any_signature_parameters(&mut self, parameters: &FormalParameters<'_>) {
+        for parameter in &parameters.items {
+            if parameter.type_annotation.is_some() || parameter.initializer.is_some() {
+                continue;
+            }
+            if let oxc_ast::ast::BindingPattern::BindingIdentifier(binding) = &parameter.pattern {
+                self.push(
+                    Kind::ImplicitAnySignatureParameter,
+                    binding.span,
+                    Some(binding.name.as_str()),
+                );
             }
         }
     }
@@ -2103,7 +2128,43 @@ impl<'a> Visit<'a> for GrammarCollector {
         oxc_ast_visit::walk::walk_ts_property_signature(self, property);
     }
 
+    fn visit_ts_call_signature_declaration(
+        &mut self,
+        signature: &oxc_ast::ast::TSCallSignatureDeclaration<'a>,
+    ) {
+        if signature.return_type.is_none() {
+            self.push(Kind::ImplicitAnyCallReturn, signature.span, None);
+        }
+        self.check_signature_parameters(&signature.params, false);
+        self.check_implicit_any_signature_parameters(&signature.params);
+        oxc_ast_visit::walk::walk_ts_call_signature_declaration(self, signature);
+    }
+
+    fn visit_ts_construct_signature_declaration(
+        &mut self,
+        signature: &oxc_ast::ast::TSConstructSignatureDeclaration<'a>,
+    ) {
+        if signature.return_type.is_none() {
+            self.push(Kind::ImplicitAnyConstructReturn, signature.span, None);
+        }
+        self.check_signature_parameters(&signature.params, false);
+        self.check_implicit_any_signature_parameters(&signature.params);
+        oxc_ast_visit::walk::walk_ts_construct_signature_declaration(self, signature);
+    }
+
+    fn visit_ts_function_type(&mut self, function: &oxc_ast::ast::TSFunctionType<'a>) {
+        self.check_implicit_any_signature_parameters(&function.params);
+        oxc_ast_visit::walk::walk_ts_function_type(self, function);
+    }
+
+    fn visit_ts_constructor_type(&mut self, constructor: &oxc_ast::ast::TSConstructorType<'a>) {
+        self.check_implicit_any_signature_parameters(&constructor.params);
+        oxc_ast_visit::walk::walk_ts_constructor_type(self, constructor);
+    }
+
     fn visit_ts_method_signature(&mut self, method: &TSMethodSignature<'a>) {
+        self.check_signature_parameters(&method.params, false);
+        self.check_implicit_any_signature_parameters(&method.params);
         if method.kind == TSMethodSignatureKind::Method
             && method.return_type.is_none()
             && !method.computed

@@ -1048,10 +1048,22 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
 /// structural comparison — which is why `[string, string | undefined]` overlaps
 /// `string[]` even though it is not assignable to it.
 fn union_source_related(from_union: &crate::UnionType, to: &Type) -> bool {
+    // tsc's `containsType` shortcut: a source member that is itself a target
+    // member relates without a comparison. Probing each one against every
+    // target member instead costs n·m relation steps, which on two large
+    // literal unions exhausts `MAX_ASSIGNABILITY_STEPS` and answers `true`.
+    let target_index = match to {
+        Type::Union(to_union) => crate::union::UnionMemberIndex::for_large(to_union.types()),
+        _ => None,
+    };
+    let related = |from_ty: &Type| {
+        target_index.as_ref().is_some_and(|index| index.contains(from_ty))
+            || is_assignable_to(from_ty, to)
+    };
     let mut members = from_union.types().iter();
     match current_relation() {
-        Relation::Assignable => members.all(|from_ty| is_assignable_to(from_ty, to)),
-        Relation::Comparable => members.any(|from_ty| is_assignable_to(from_ty, to)),
+        Relation::Assignable => members.all(related),
+        Relation::Comparable => members.any(related),
     }
 }
 

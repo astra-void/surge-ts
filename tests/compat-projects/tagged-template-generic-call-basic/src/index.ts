@@ -1,0 +1,16 @@
+declare function f(s: TemplateStringsArray, g: (x: number) => number): void;
+f `${ x => x }`;
+f `${ (x: string) => 1 }`;
+declare function g<T>(s: TemplateStringsArray, v: T): T;
+const r1: string = g `${1}`;
+const r2 = g<string> `${1}`;
+declare function none(): void;
+none `x${1}`;
+declare const obj: { tag(s: TemplateStringsArray, n: number): string };
+const r3: number = obj.tag `a${2}b`;
+declare const notCallable: number;
+notCallable `x`;
+declare function over(s: TemplateStringsArray, n: number): number;
+declare function over(s: TemplateStringsArray, s2: string): string;
+const r4: number = over `${"a"}`;
+export {};

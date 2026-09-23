@@ -445,6 +445,7 @@ pub(crate) fn check_expression_flow_impl(
         | ParsedExpression::BooleanLiteral(_)
         | ParsedExpression::UndefinedLiteral
         | ParsedExpression::NullLiteral
+        | ParsedExpression::TemplateStringsArray { .. }
         | ParsedExpression::Unknown => FlowCheck::Clear,
     };
     if blocked { FlowCheck::Blocked } else { result }

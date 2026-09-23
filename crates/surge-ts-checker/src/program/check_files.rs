@@ -1018,11 +1018,27 @@ fn grammar_finding_diagnostic(
         Kind::DuplicateImplementation => Diagnostic::ts2393(ctx.file_name.clone()),
         Kind::MultipleConstructorImplementations => Diagnostic::ts2392(ctx.file_name.clone()),
         Kind::MissingSuperCall => Diagnostic::ts2377(ctx.file_name.clone()),
+        // `checkBinaryLikeExpression` reports it only when unreachable code is
+        // not explicitly allowed.
+        Kind::UnusedCommaOperand if ctx.options.allow_unreachable_code => return None,
         Kind::UnusedCommaOperand => Diagnostic::ts2695(ctx.file_name.clone()),
         Kind::AlwaysTruthyExpression => Diagnostic::ts2872(ctx.file_name.clone()),
         Kind::AlwaysFalsyExpression => Diagnostic::ts2873(ctx.file_name.clone()),
         Kind::NeverNullishCoalesceOperand => Diagnostic::ts2869(ctx.file_name.clone()),
         Kind::AlwaysNullishCoalesceOperand => Diagnostic::ts2871(ctx.file_name.clone()),
+        Kind::ImplicitAnyConstructReturn | Kind::ImplicitAnyCallReturn | Kind::ImplicitAnySignatureParameter
+            if !ctx.options.no_implicit_any =>
+        {
+            return None;
+        }
+        Kind::ImplicitAnyConstructReturn => Diagnostic::ts7013(ctx.file_name.clone()),
+        Kind::ImplicitAnyCallReturn => Diagnostic::ts7020(ctx.file_name.clone()),
+        Kind::ImplicitAnySignatureParameter => {
+            let Some(name) = finding.name.as_deref() else {
+                return None;
+            };
+            Diagnostic::ts7006(name, ctx.file_name.clone())
+        }
         Kind::ImplicitAnyReturn => {
             if !ctx.options.no_implicit_any {
                 return None;
@@ -1265,6 +1281,34 @@ pub(super) fn check_program_file(
             .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
         for (name, symbol) in ctx.ambient_global_symbols.iter_handles() {
             let _ = script_sym.insert_handle(name.clone(), clone_symbol_info_handle(symbol));
+        }
+        // Other scripts' values are globals here too. A `var` this file declares
+        // itself is the first declaration of it only against later files, and
+        // TS2403 compares every redeclaration with the first one.
+        let own_vars: std::collections::HashSet<&str> = parsed_file
+            .statements
+            .iter()
+            .filter_map(|statement| match statement {
+                surge_ts_syntax::ParsedStatement::VariableDeclaration(variable)
+                    if matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Var) =>
+                {
+                    Some(variable.name.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        for (other_index, values) in shared_state.script_values.iter().enumerate() {
+            let Some(values) = values.as_ref().filter(|_| other_index != file_index) else {
+                continue;
+            };
+            for (name, symbol) in values.iter_handles() {
+                if other_index > file_index && own_vars.contains(name.as_ref()) {
+                    continue;
+                }
+                if script_sym.get(name).is_none() {
+                    let _ = script_sym.insert_handle(name.clone(), clone_symbol_info_handle(symbol));
+                }
+            }
         }
         ctx.set_symbols(script_sym);
 

@@ -706,6 +706,15 @@ export const fixturePresets: Record<string, string> = {
   'generic-static-class-value-basic': path.join(workspaceRoot, 'tests/compat-projects/generic-static-class-value-basic/tsconfig.json'),
   'conditional-parameter-inference-basic': path.join(workspaceRoot, 'tests/compat-projects/conditional-parameter-inference-basic/tsconfig.json'),
   'falsy-narrowing-filter-predicate-basic': path.join(workspaceRoot, 'tests/compat-projects/falsy-narrowing-filter-predicate-basic/tsconfig.json'),
+  'ambient-block-import-signature-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-block-import-signature-basic/tsconfig.json'),
+  'script-typeof-global-signature-basic': path.join(workspaceRoot, 'tests/compat-projects/script-typeof-global-signature-basic/tsconfig.json'),
+  'template-literal-infer-basic': path.join(workspaceRoot, 'tests/compat-projects/template-literal-infer-basic/tsconfig.json'),
+  'comma-operand-allow-unreachable-code-basic': path.join(workspaceRoot, 'tests/compat-projects/comma-operand-allow-unreachable-code-basic/tsconfig.json'),
+  'signature-implicit-any-basic': path.join(workspaceRoot, 'tests/compat-projects/signature-implicit-any-basic/tsconfig.json'),
+  'signature-parameter-typeof-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/signature-parameter-typeof-scope-basic/tsconfig.json'),
+  'script-global-values-across-files-basic': path.join(workspaceRoot, 'tests/compat-projects/script-global-values-across-files-basic/tsconfig.json'),
+  'var-redeclaration-identity-basic': path.join(workspaceRoot, 'tests/compat-projects/var-redeclaration-identity-basic/tsconfig.json'),
+  'tagged-template-generic-call-basic': path.join(workspaceRoot, 'tests/compat-projects/tagged-template-generic-call-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

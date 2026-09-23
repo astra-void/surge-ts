@@ -309,7 +309,6 @@ pub(crate) fn infer_const_expression(
         ParsedExpression::TemplateLiteral {
             expressions,
             quasis,
-            is_tagged: false,
             ..
         } if !expressions.is_empty() => {
             let inferred = infer_expression(expression, symbols, ctx);

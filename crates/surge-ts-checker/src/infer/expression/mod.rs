@@ -411,7 +411,12 @@ fn infer_expression_unsettled(
                         None => InferredExpression::Unknown,
                     }
                 }
-                _ => InferredExpression::Unknown,
+                // A non-generic, single call signature has one answer, whatever
+                // the arguments: `f("")[0]` reads its result like any other value.
+                callee_type => match callable_return_without_inference(callee_type) {
+                    Some(return_type) => InferredExpression::Known(return_type),
+                    None => InferredExpression::Unknown,
+                },
             },
             None => InferredExpression::Unknown,
         },
@@ -531,7 +536,6 @@ fn infer_expression_unsettled(
         ParsedExpression::TemplateLiteral {
             expressions,
             quasis,
-            is_tagged,
             ..
         } => {
             // Walk the interpolations so their identifier reads are observed (e.g.
@@ -539,23 +543,21 @@ fn infer_expression_unsettled(
             for expression in expressions {
                 let _ = infer_expression(expression, symbols, ctx);
             }
-            if *is_tagged {
-                match expressions
-                    .first()
-                    .map(|tag| infer_expression(tag, symbols, ctx))
-                {
-                    Some(InferredExpression::Known(tag)) => {
-                        match crate::checks::expr::tagged_template_signature(&tag) {
-                            Some(signature) => {
-                                InferredExpression::Known(signature.return_type().clone())
-                            }
-                            None => InferredExpression::Unknown,
-                        }
-                    }
-                    _ => InferredExpression::Unknown,
-                }
-            } else {
-                InferredExpression::Known(template_literal_type(expressions, quasis))
+            InferredExpression::Known(template_literal_type(expressions, quasis))
+        }
+        ParsedExpression::TemplateStringsArray { .. } => {
+            match ctx.lookup_type_declaration("TemplateStringsArray") {
+                Some(_) => InferredExpression::Known(crate::infer::map_parsed_type(
+                    surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(
+                        surge_ts_syntax::ParsedNamedType {
+                            name: "TemplateStringsArray".to_string(),
+                            span: None,
+                            type_arguments: Vec::new(),
+                        },
+                    )),
+                    ctx,
+                )),
+                None => InferredExpression::Unknown,
             }
         }
         ParsedExpression::Unknown => InferredExpression::Unknown,
@@ -634,4 +636,14 @@ fn template_literal_type(expressions: &[ParsedExpression], quasis: &[Option<Stri
         }
     }
     Type::StringLiteral(text)
+}
+
+fn callable_return_without_inference(callee_type: &Type) -> Option<Type> {
+    let peeled = callee_type.peeled();
+    let Type::Object(object) = &peeled else {
+        return None;
+    };
+    let signature = object.call_signature()?;
+    (signature.overloads().is_none() && signature.type_parameter_names().is_empty())
+        .then(|| signature.return_type().clone())
 }
