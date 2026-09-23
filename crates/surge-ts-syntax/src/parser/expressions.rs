@@ -307,8 +307,10 @@ fn parse_jsx_fragment(fragment: &JSXFragment<'_>) -> ParsedExpression {
 
 /// Returns `(tag_name, tag_name_span, component_name, component_span)`. The
 /// component name/span are populated only when the tag is a value reference (a
-/// capitalized component or a `Foo.Bar` member tag) so the checker can resolve it
-/// and report TS2304 for missing names; intrinsic lowercase tags carry `None`.
+/// capitalized component, a `Foo.Bar` member tag, or `this` and `this.x`, which
+/// tsc's `isJsxIntrinsicTagName` never takes for intrinsic) so the checker can
+/// resolve it and report TS2304 for missing names; intrinsic lowercase tags carry
+/// `None`.
 fn parse_jsx_element_name(
     name: &JSXElementName<'_>,
 ) -> (String, Option<TextSpan>, Option<String>, Option<TextSpan>) {
@@ -347,12 +349,10 @@ fn parse_jsx_element_name(
                 None,
             )
         }
-        JSXElementName::ThisExpression(this) => (
-            "this".to_string(),
-            Some(text_span_from_oxc_span(this.span)),
-            None,
-            None,
-        ),
+        JSXElementName::ThisExpression(this) => {
+            let span = Some(text_span_from_oxc_span(this.span));
+            ("this".to_string(), span, Some("this".to_string()), span)
+        }
     }
 }
 
@@ -366,8 +366,8 @@ fn jsx_member_expression_name(member: &JSXMemberExpression<'_>) -> String {
     format!("{}.{}", object, member.property.name)
 }
 
-/// Returns the head identifier of a member tag (the value that must resolve in
-/// scope). `<UI.Button />` resolves `UI`; `<this.Foo />` has no resolvable head.
+/// Returns the head of a member tag (the value that must resolve in scope):
+/// `<UI.Button />` resolves `UI`, `<this.Foo />` reads `this`.
 fn jsx_member_expression_head(
     member: &JSXMemberExpression<'_>,
 ) -> (Option<String>, Option<TextSpan>) {
@@ -383,7 +383,9 @@ fn jsx_member_expression_head(
             JSXMemberExpressionObject::MemberExpression(inner) => {
                 object = &inner.object;
             }
-            JSXMemberExpressionObject::ThisExpression(_) => return (None, None),
+            JSXMemberExpressionObject::ThisExpression(this) => {
+                return (Some("this".to_string()), Some(text_span_from_oxc_span(this.span)));
+            }
         }
     }
 }

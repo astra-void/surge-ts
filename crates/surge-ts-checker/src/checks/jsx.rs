@@ -330,16 +330,21 @@ fn report_missing_intrinsic_elements(
 }
 
 /// Builds the value expression a component tag refers to: an identifier for
-/// `<Button />` or a property-access chain for `<UI.Button />`.
+/// `<Button />`, `this` for `<this />`, or a property-access chain for
+/// `<UI.Button />` and `<this.tag />`.
 fn build_component_value_expression(
     head_name: &str,
     tag_name: &str,
     head_span: Option<SyntaxTextSpan>,
     tag_name_span: Option<SyntaxTextSpan>,
 ) -> ParsedExpression {
-    let mut expression = ParsedExpression::Identifier {
-        name: head_name.to_string(),
-        span: head_span,
+    let mut expression = if head_name == "this" {
+        ParsedExpression::This { span: head_span }
+    } else {
+        ParsedExpression::Identifier {
+            name: head_name.to_string(),
+            span: head_span,
+        }
     };
 
     let mut segments = tag_name.split('.');
