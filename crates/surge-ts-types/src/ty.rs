@@ -1386,6 +1386,26 @@ pub fn is_global_function_interface(ty: &Type) -> bool {
     }
 }
 
+/// tsc's `isUntypedFunctionCall` for a callee that is not `any`: no call or
+/// construct signature, not a union, and assignable to the global `Function`
+/// interface, which surge reads off `Function`'s own `apply`, `call` and
+/// `bind` as [`is_global_function_interface`] does. Such a call is untyped.
+pub fn is_untyped_function_callee(ty: &Type) -> bool {
+    if is_global_function_interface(ty) {
+        return true;
+    }
+    match ty.peeled() {
+        Type::Object(object) => {
+            object.call_signature().is_none()
+                && object.construct_signature().is_none()
+                && ["apply", "call", "bind"]
+                    .iter()
+                    .all(|member| object.properties.get(*member).is_some())
+        }
+        _ => false,
+    }
+}
+
 /// A member of a type variable narrowed to `T & X` (see
 /// `type_variable::intersect_type_variable`): the variable's constraint and the
 /// other operands answer it, as the intersection's apparent members do in tsc.

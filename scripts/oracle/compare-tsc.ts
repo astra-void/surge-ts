@@ -802,6 +802,7 @@ export const fixturePresets: Record<string, string> = {
   'decorator-targets-es': path.join(workspaceRoot, 'tests/compat-projects/decorator-targets-es/tsconfig.json'),
   'jsdoc-nullability-in-typescript': path.join(workspaceRoot, 'tests/compat-projects/jsdoc-nullability-in-typescript/tsconfig.json'),
   'jsdoc-unknown-type-in-typescript': path.join(workspaceRoot, 'tests/compat-projects/jsdoc-unknown-type-in-typescript/tsconfig.json'),
+  'untyped-function-subtype-calls': path.join(workspaceRoot, 'tests/compat-projects/untyped-function-subtype-calls/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -153,10 +153,18 @@ pub(crate) fn check_call_like_with_expected_type(
         return None;
     }
 
-    // The global `Function` interface is callable with any arguments in tsc even
-    // though it declares no call signature, so it has to be answered before the
-    // peel below turns it into a signature-less object.
-    if surge_ts_types::is_global_function_interface(&symbol.ty) {
+    // tsc's `isUntypedFunctionCall`: `Function` — the global interface or a
+    // type deriving from it — is callable with any arguments though it
+    // declares no call signature, and takes no type arguments (TS2347). It has
+    // to be answered before the peel below turns it into a signature-less
+    // object.
+    if surge_ts_types::is_untyped_function_callee(&symbol.ty) {
+        if !type_arguments.is_empty() {
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2347(ctx.file_name.clone()),
+                call_span.or(callee_span),
+            ));
+        }
         for argument in arguments {
             let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
         }
