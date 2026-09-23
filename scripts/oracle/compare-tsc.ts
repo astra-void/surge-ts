@@ -1016,6 +1016,7 @@ export const fixturePresets: Record<string, string> = {
   'reference-path-skip-lib-check': path.join(workspaceRoot, 'tests/compat-projects/reference-path-skip-lib-check/tsconfig.json'),
   'reference-path-no-resolve': path.join(workspaceRoot, 'tests/compat-projects/reference-path-no-resolve/tsconfig.json'),
   'super-type-arguments-follower': path.join(workspaceRoot, 'tests/compat-projects/super-type-arguments-follower/tsconfig.json'),
+  'update-expression-write-target': path.join(workspaceRoot, 'tests/compat-projects/update-expression-write-target/tsconfig.json'),
   'class-property-arrow-signature': path.join(workspaceRoot, 'tests/compat-projects/class-property-arrow-signature/tsconfig.json'),
 };
 

@@ -7,8 +7,8 @@
 //! program report its syntactic diagnostics alone.
 
 use oxc_ast::ast::{
-    BinaryExpression, CallExpression, Expression, JSDocUnknownType, NumericLiteral, Program, Super,
-    UnaryExpression,
+    BinaryExpression, CallExpression, Expression, JSDocUnknownType, NumericLiteral, Program,
+    SimpleAssignmentTarget, Super, UnaryExpression, UpdateExpression,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_syntax::operator::{BinaryOperator, UnaryOperator};
@@ -50,6 +50,30 @@ impl<'a> Visit<'a> for Collector<'_> {
             self.after_minus.push(literal.span.start);
         }
         walk::walk_binary_expression(self, expression);
+    }
+
+    fn visit_update_expression(&mut self, update: &UpdateExpression<'a>) {
+        // `--x--`: tsc's parser ends the statement after `--x` (TS1005 on the
+        // trailing operator; see `update_target_stop`) and begins the next at
+        // that operator, whose operand — a left-hand-side expression — is
+        // missing unless the token after it starts one: TS1109 there. oxc
+        // keeps the invalid operand in a same-span non-null wrapper.
+        if update.prefix
+            && let SimpleAssignmentTarget::TSNonNullExpression(wrapper) = &update.argument
+            && let Expression::UpdateExpression(inner) = &wrapper.expression
+            && !inner.prefix
+            && wrapper.span == inner.span
+        {
+            let next = skip_whitespace(self.source_text, inner.span.end as usize);
+            let starts_operand = self.source_text[next..].chars().next().is_some_and(|c| {
+                c.is_alphanumeric() || matches!(c, '_' | '$' | '(' | '[' | '{' | '"' | '\'' | '`' | '/' | '#' | '@')
+            });
+            if !starts_operand {
+                let end = super::grammar_context::first_token_end(self.source_text, next);
+                self.push(1109, "Expression expected.".to_string(), next, end);
+            }
+        }
+        walk::walk_update_expression(self, update);
     }
 
     fn visit_super(&mut self, keyword: &Super) {

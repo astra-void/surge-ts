@@ -3454,6 +3454,7 @@ oracle = [
 status = "emitted"
 oracle = [
   "for-await-in-parse-error",
+  "update-expression-write-target",
 ]
 
 [TS2846]
@@ -3521,4 +3522,10 @@ oracle = [
 status = "emitted"
 oracle = [
   "reference-path-unresolved",
+]
+
+[TS1109]
+status = "emitted"
+oracle = [
+  "update-expression-write-target",
 ]

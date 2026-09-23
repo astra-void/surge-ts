@@ -5385,6 +5385,16 @@ pub const TS1006: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1109: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1109",
+    number: Some(1109),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Expression expected.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
     TS2411,
@@ -5924,6 +5934,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS6231,
     TS6504,
     TS1006,
+    TS1109,
 ];
 
 impl Diagnostic {
@@ -10066,5 +10077,10 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts1006(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS1006, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1109(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1109, Vec::<DiagnosticArg>::new(), file_name)
     }
 }

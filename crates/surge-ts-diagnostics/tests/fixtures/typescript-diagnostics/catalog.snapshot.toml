@@ -4304,3 +4304,11 @@ support = "emitted"
 message = "A file cannot have a reference to itself."
 arity = 0
 
+[[diagnostic]]
+code = "TS1109"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expression expected."
+arity = 0
+

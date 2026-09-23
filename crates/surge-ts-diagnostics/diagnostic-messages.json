@@ -4302,5 +4302,13 @@
     "source": "typescript",
     "arity": 0,
     "support": "emitted"
+  },
+  {
+    "code": "TS1109",
+    "category": "Error",
+    "message": "Expression expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
   }
 ]

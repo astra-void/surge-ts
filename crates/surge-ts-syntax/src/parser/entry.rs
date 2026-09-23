@@ -64,6 +64,9 @@ fn classify_uncoded_parser_error(
     let text = source_text.get(span.start..span.end)?;
     match message {
         "Cannot assign to this expression" => {
+            if let Some(stop) = update_target_stop(text, span, source_text) {
+                return Some((1005, stop));
+            }
             // tsc's target node keeps the parentheses oxc's label drops.
             let mut span = span;
             loop {
@@ -214,6 +217,36 @@ fn parameter_property_modifiers_start(source_text: &str, position: usize) -> Opt
         .all(|word| PARAMETER_PROPERTY_MODIFIERS.contains(&word))
         .then_some(start)
 }
+
+/// Where tsc's parser stops at an update expression (`x++`, `--x`) written
+/// as a write target. tsc parses an assignment's target and a prefix `++`/`--`
+/// operand as a left-hand-side expression only, so the update expression ends
+/// the statement, and the next token — the assignment operator, or the
+/// trailing `++`/`--` of `--x--` — is TS1005 `';' expected`
+/// (`parseExpressionStatement`'s `parseSemicolon`). Parenthesized, the update
+/// expression is a left-hand-side expression and the checker's to judge.
+fn update_target_stop(text: &str, span: crate::TextSpan, source_text: &str) -> Option<crate::TextSpan> {
+    let postfix = text.ends_with("++") || text.ends_with("--");
+    if !postfix && !text.starts_with("++") && !text.starts_with("--") {
+        return None;
+    }
+    let after = source_text.get(span.end..)?.trim_start();
+    let after_start = source_text.len() - after.len();
+    let assignment = ASSIGNMENT_OPERATORS
+        .iter()
+        .find(|operator| after.starts_with(**operator))
+        .filter(|operator| **operator != "=" || !matches!(after.as_bytes().get(1), Some(b'=' | b'>')));
+    if let Some(operator) = assignment {
+        return Some(crate::TextSpan { start: after_start, end: after_start + operator.len() });
+    }
+    let before = source_text.get(..span.start)?.trim_end();
+    (postfix && (before.ends_with("++") || before.ends_with("--")))
+        .then(|| crate::TextSpan { start: span.end - 2, end: span.end })
+}
+
+const ASSIGNMENT_OPERATORS: [&str; 16] = [
+    ">>>=", "**=", "<<=", ">>=", "&&=", "||=", "??=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "=",
+];
 
 /// The code tsc gives a failure oxc numbers differently. tsc's parser
 /// reports a decorator or modifier on a `this` parameter as TS1433 at the
@@ -385,6 +418,8 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         })
         .collect();
     parser_errors.extend(super::scanner_checks::collect_missing_parser_errors(
+            } else if code == Some(1005) && message == "Cannot assign to this expression" {
+                message = "';' expected.".to_string();
         &parsed.program,
         source_text,
     ));
