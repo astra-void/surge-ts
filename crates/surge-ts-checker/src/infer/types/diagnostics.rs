@@ -52,8 +52,7 @@ fn unknown_type_name_diagnostic(name: &str, ctx: &CheckerContext) -> Diagnostic 
 
 /// Whether `name` resolves with a namespace meaning. surge binds every
 /// namespace as a value and publishes its members under qualified `ns.member`
-/// keys, so a name heading such a key — or a namespace import — is one. An
-/// import alias's members live in the file's import layers.
+/// keys, so a name heading such a key — or a namespace import — is one.
 fn is_namespace_like(name: &str, ctx: &CheckerContext) -> bool {
     if ctx.is_namespace_import_binding(name)
         || ctx.namespace_meaning(name).is_some()
@@ -67,12 +66,6 @@ fn is_namespace_like(name: &str, ctx: &CheckerContext) -> bool {
             .is_some_and(|rest| rest.starts_with('.'))
     };
     ctx.type_declarations.iter().any(|(key, _)| heads_key(key))
-        || ctx.type_declaration_scope.as_ref().is_some_and(|scope| {
-            scope
-                .layers()
-                .iter()
-                .any(|layer| layer.iter().any(|(key, _)| heads_key(key)))
-        })
         || ctx.ambient_global_type_declarations.iter().any(|(key, _)| heads_key(key))
         || ctx.symbols.iter().any(|(key, _)| heads_key(key))
         || ctx.ambient_global_symbols.iter().any(|(key, _)| heads_key(key))

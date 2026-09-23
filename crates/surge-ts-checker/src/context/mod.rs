@@ -1407,6 +1407,24 @@ impl CheckerContext {
             .rev()
             .find_map(|prefix| registry.lookup(&self.file_name, &format!("{prefix}.{name}")))
             .or_else(|| registry.lookup(&self.file_name, name))
+            .or_else(|| self.import_alias_namespace_meaning(name))
+    }
+
+    /// An import alias whose target has a namespace meaning (`import N =
+    /// require("./m")` over `export = N`): the members the import binds are keyed
+    /// `N.<member>` in the file's import layers. Instantiated when the alias
+    /// binds a value too.
+    fn import_alias_namespace_meaning(&self, name: &str) -> Option<bool> {
+        if !self.is_import_binding(name) {
+            return None;
+        }
+        let heads_member = self.type_declaration_scope.as_ref()?.layers().iter().any(|layer| {
+            layer.iter().any(|(key, _)| {
+                key.strip_prefix(name)
+                    .is_some_and(|rest| rest.starts_with('.'))
+            })
+        });
+        heads_member.then(|| self.symbols.get(name).is_some())
     }
 
     /// The namespace `name` names here, looking through the namespaces whose
