@@ -288,12 +288,18 @@ pub(crate) fn collect_exports_from_statement(
                     }
 
                     if !found {
-                        // tsc's `checkExportSpecifier`: a name that resolves to a
-                        // global declaration is not a local to export (TS2661);
-                        // only a name that resolves to nothing is TS2304.
-                        let global = ctx.ambient_global_symbols.get(&specifier.local_name).is_some()
-                            || ctx.lookup_type_declaration_handle(&specifier.local_name).is_some()
-                            || ctx.namespace_registry.is_global(&specifier.local_name);
+                        // tsc's `checkExportSpecifier`: a name that resolves to
+                        // `undefined`, `globalThis`, or a global declaration is
+                        // not a local to export (TS2661), and a primitive type
+                        // name that resolves to nothing is reported the same way
+                        // (`checkAndReportErrorForExportingPrimitiveType`); only
+                        // any other name that resolves to nothing is TS2304.
+                        let name = specifier.local_name.as_str();
+                        let global = matches!(name, "undefined" | "globalThis")
+                            || crate::checks::expr::is_primitive_type_name(name)
+                            || ctx.ambient_global_symbols.get(name).is_some()
+                            || ctx.lookup_type_declaration_handle(name).is_some()
+                            || ctx.namespace_registry.is_global(name);
                         if global {
                             let mut diagnostic =
                                 surge_ts_diagnostics::Diagnostic::ts2661(&specifier.local_name, ctx.file_name.clone());

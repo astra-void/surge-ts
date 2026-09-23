@@ -31,7 +31,7 @@ pub(crate) use operand_types::{
 pub(crate) use operand_writes::{check_delete_operand, check_update_operand, update_result_type};
 pub(crate) use unresolved::{
     EnclosingClassMembers, UnresolvedNameSite, cannot_find_name_message,
-    export_assignment_target_is_exempt, report_unresolved_value_name,
+    export_assignment_target_is_exempt, is_primitive_type_name, report_unresolved_value_name,
     unresolved_type_query_diagnostic,
 };
 
