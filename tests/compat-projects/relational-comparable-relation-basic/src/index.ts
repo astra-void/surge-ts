@@ -87,3 +87,8 @@ text > never;
 nonPrimitive < text;
 big < text;
 numberOrX < 1;
+function unrelated<T, U>(t: T, u: U, n: number) {
+  t < u;
+  t < n;
+  n >= u;
+}

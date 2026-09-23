@@ -9,6 +9,9 @@ members always overlap and an optional source is not held to a required
 target; the simple type rules also hold with source and target swapped
 (`string` against `"x"`, `object` against a shaped type); a tuple relates to an
 array when some element does; and single signatures compare with their type
-parameters erased. `never` is numeric (`never < "a"` is still an error).
+parameters erased. `never` is numeric (`never < "a"` is still an error), and a
+type variable of a generic body is an operand like any other: unconstrained it
+is not numeric, and it is comparable to another type variable only through a
+constraint that is one (`unrelated`).
 
 The second block pins the pairs that stay errors in tsc.

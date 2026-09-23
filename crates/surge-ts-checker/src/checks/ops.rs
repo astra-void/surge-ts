@@ -453,7 +453,10 @@ fn evaluate_comparison_binary(
         return InferredExpression::Unknown;
     };
 
-    if is_unmodelled(&left_type) || is_unmodelled(&right_type) {
+    // A type variable of the body being checked is a real operand, related
+    // through its constraint.
+    let unjudged = |ty: &Type| is_unmodelled(ty) && !ty.is_type_variable();
+    if unjudged(left_type) || unjudged(right_type) {
         return InferredExpression::Unknown;
     }
 
