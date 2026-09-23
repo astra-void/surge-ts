@@ -1468,11 +1468,13 @@ fn new_with_call_signature(
         symbols,
         ctx,
     );
+    // A return inferred from the body is a lazy reference until read.
+    let returned = function_type.return_type().peeled();
     let diagnostic = if ctx.options.no_implicit_any {
         Some(Diagnostic::ts7009(ctx.file_name.clone()))
-    } else if *function_type.return_type() != Type::Void
+    } else if returned != Type::Void
         // A return type surge has not inferred may well be `void`.
-        && !function_type.return_type().is_unmodelled()
+        && !returned.is_unmodelled()
     {
         Some(Diagnostic::ts2350(ctx.file_name.clone()))
     } else {

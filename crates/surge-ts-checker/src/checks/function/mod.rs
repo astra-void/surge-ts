@@ -638,12 +638,16 @@ fn infer_statements_return(
         &mut shadow,
     );
     drop(shadow);
+    // A body that returns nothing is `void` (`getReturnTypeFromBody`).
+    if usable && returned.is_empty() {
+        return Some(Type::Void);
+    }
     // tsc widens the fresh literals a returned expression carries
     // (`getReturnTypeFromBody` runs the result through the widening machinery),
     // so `return { importName: "trpc" }` is `{ importName: string }`. Freezing
     // the literal instead publishes a type far narrower than the declaration's,
     // and every consumer compares against the wrong one.
-    let inferred = (usable && !returned.is_empty())
+    let inferred = usable
         .then(|| crate::checks::expr::widen_type(&surge_ts_types::union_type(returned)))
         .filter(usable_type)?;
     Some(inferred)
