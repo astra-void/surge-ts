@@ -903,6 +903,15 @@ fn register_ambient_blocks(
             );
             ctx.symbols = current_symbols;
 
+            // A block's imports are its locals (Go's binder declares them in
+            // the module's table), so `export var v: typeof lib` reads the value
+            // `import lib = require("lib")` binds.
+            let saved_value_fallback = bound_imports.map(|bindings| {
+                std::mem::replace(
+                    &mut ctx.module_value_fallback,
+                    Some(Arc::new(bindings.symbols.clone())),
+                )
+            });
             for stmt in module.statements.iter().chain(&nested_global_statements) {
                 match stmt {
                     ParsedStatement::VariableDeclaration(var) => {
@@ -962,6 +971,9 @@ fn register_ambient_blocks(
                     }
                     _ => {}
                 }
+            }
+            if let Some(saved_value_fallback) = saved_value_fallback {
+                ctx.module_value_fallback = saved_value_fallback;
             }
 
             let mut temp_file = parsed_file.clone();
