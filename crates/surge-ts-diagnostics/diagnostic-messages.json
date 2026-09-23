@@ -896,6 +896,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS6192",
+    "category": "Error",
+    "message": "All imports in import declaration are unused.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS6198",
     "category": "Error",
     "message": "All destructured elements are unused.",

@@ -897,6 +897,14 @@ message = "Module '{0}' was resolved to '{1}', but '--jsx' is not set."
 arity = 2
 
 [[diagnostic]]
+code = "TS6192"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "All imports in import declaration are unused."
+arity = 0
+
+[[diagnostic]]
 code = "TS6198"
 category = "Error"
 source = "typescript"

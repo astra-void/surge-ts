@@ -34,15 +34,33 @@ pub(crate) fn emit_unused_module_bindings(
 
     let is_used = |name: &str| reads.contains(name) || exported.contains(name);
 
+    // tsc's `reportUnusedImports`: the bindings of one import declaration are
+    // reported together — as TS6192 on the declaration when it has more than
+    // one and none is used. The parser splits type-only specifiers into
+    // several declarations that share the statement's span.
+    let mut import_groups: Vec<(Option<TextSpan>, usize, Vec<(&str, Option<TextSpan>)>)> = Vec::new();
     for statement in statements {
         match statement {
             ParsedStatement::ImportDeclaration(import) => {
-                for (name, span) in import_local_bindings(&import.kind) {
-                    // tsc exempts an `_`-prefixed *import* binding, the idiom for
-                    // importing a name only to assert it is exported. (A plain
-                    // `const _x` is still reported.)
-                    if !is_used(name) && !name.starts_with('_') {
-                        push_unused(name, span, ctx);
+                let bindings = import_local_bindings(&import.kind);
+                let group = match import_groups
+                    .iter()
+                    .position(|(span, _, _)| span.is_some() && *span == import.span)
+                {
+                    Some(index) => index,
+                    None => {
+                        import_groups.push((import.span, 0, Vec::new()));
+                        import_groups.len() - 1
+                    }
+                };
+                import_groups[group].1 += bindings.len();
+                let is_equals = matches!(import.kind, ParsedImportKind::Equals { .. });
+                for (name, span) in bindings {
+                    // tsc exempts an `_`-prefixed import-clause binding, the idiom
+                    // for importing a name only to assert it is exported; an
+                    // `import x = require()` and a plain `const _x` still report.
+                    if !is_used(name) && (is_equals || !name.starts_with('_')) {
+                        import_groups[group].2.push((name, span));
                     }
                 }
             }
@@ -64,6 +82,20 @@ pub(crate) fn emit_unused_module_bindings(
             // noUnusedLocals (only variables, imports, and functions), so classes
             // are intentionally excluded here.
             _ => {}
+        }
+    }
+
+    for (span, binding_count, unused) in import_groups {
+        if binding_count > 1 && unused.len() == binding_count {
+            let diagnostic = Diagnostic::ts6192(ctx.file_name.clone());
+            ctx.push(match span {
+                Some(span) => diagnostic.with_span(convert_span(span)),
+                None => diagnostic,
+            });
+            continue;
+        }
+        for (name, span) in unused {
+            push_unused(name, span, ctx);
         }
     }
 }

@@ -2662,3 +2662,9 @@ status = "emitted"
 oracle = [
   "leading-zero-numeric-literal-basic",
 ]
+
+[TS6192]
+status = "emitted"
+oracle = [
+  "unused-import-declaration-grouping",
+]
