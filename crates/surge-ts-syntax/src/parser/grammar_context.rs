@@ -1259,10 +1259,11 @@ impl<'a> ContextCollector<'a, '_> {
     }
 
     /// `import x = require("m")` inside a namespace — TS1147 on the module
-    /// name. An ambient external module (`declare module "m"`) may.
-    fn check_import_require_in_namespace(&mut self, declaration: &oxc_ast::ast::TSImportEqualsDeclaration<'_>) {
+    /// name. An ambient external module (`declare module "m"`) may. Whether it
+    /// was reported.
+    fn check_import_require_in_namespace(&mut self, declaration: &oxc_ast::ast::TSImportEqualsDeclaration<'_>) -> bool {
         let oxc_ast::ast::TSModuleReference::ExternalModuleReference(reference) = &declaration.module_reference else {
-            return;
+            return false;
         };
         let in_namespace = self.stack.iter().rev().find_map(|kind| match kind {
             AstKind::TSModuleDeclaration(module) => Some(matches!(
@@ -1274,7 +1275,9 @@ impl<'a> ContextCollector<'a, '_> {
         });
         if in_namespace == Some(true) {
             self.push(1147, reference.expression.span, &[]);
+            return true;
         }
+        false
     }
 
     /// `assert { … }` in place of `with { … }` — TS2880 on the keyword.
@@ -1907,10 +1910,11 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             AstKind::TSTypeParameterDeclaration(declaration) => self.check_circular_constraints(declaration),
             AstKind::Decorator(decorator) => self.check_parameter_decorator(decorator),
             AstKind::TSImportEqualsDeclaration(declaration) => {
-                self.check_import_require_in_namespace(declaration);
                 // Gated on `module` by the checker: ES2015..ESNext cannot emit it.
-                // Inside a namespace it is TS1147 instead, and tsc stops there.
-                if self.at_module_element_level()
+                // Inside a namespace it is TS1147 instead, and tsc stops there
+                // (`checkExternalImportOrExportDeclaration`).
+                if !self.check_import_require_in_namespace(declaration)
+                    && self.at_module_element_level()
                     && !matches!(self.stack.last(), Some(AstKind::TSModuleBlock(_)))
                     && matches!(
                     declaration.module_reference,
