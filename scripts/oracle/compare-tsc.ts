@@ -376,6 +376,7 @@ export const fixturePresets: Record<string, string> = {
   'export-default-inside-namespace': path.join(workspaceRoot, 'tests/compat-projects/export-default-inside-namespace/tsconfig.json'),
   'for-of-head-pattern-bindings': path.join(workspaceRoot, 'tests/compat-projects/for-of-head-pattern-bindings/tsconfig.json'),
   'for-of-var-hoisting': path.join(workspaceRoot, 'tests/compat-projects/for-of-var-hoisting/tsconfig.json'),
+  'mapped-type-parameter-self-constraint': path.join(workspaceRoot, 'tests/compat-projects/mapped-type-parameter-self-constraint/tsconfig.json'),
   'merged-interface-type-parameter-names': path.join(workspaceRoot, 'tests/compat-projects/merged-interface-type-parameter-names/tsconfig.json'),
   'script-global-shadowed-by-module-local': path.join(workspaceRoot, 'tests/compat-projects/script-global-shadowed-by-module-local/tsconfig.json'),
   'type-query-hoisted-function': path.join(workspaceRoot, 'tests/compat-projects/type-query-hoisted-function/tsconfig.json'),

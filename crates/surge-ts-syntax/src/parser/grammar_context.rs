@@ -1165,6 +1165,32 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
+    /// tsc's `checkTypeParameter` on a mapped type's key: its constraint is in
+    /// the key's own scope, and resolving the key's base constraint cycles when
+    /// the constraint is the key, or a union or intersection with the key among
+    /// its members (`computeBaseConstraint`) — TS2313 on the constraint.
+    fn check_circular_mapped_key(&mut self, mapped: &oxc_ast::ast::TSMappedType<'_>) {
+        fn names_key(ty: &oxc_ast::ast::TSType<'_>, key: &str) -> bool {
+            use oxc_ast::ast::TSType as T;
+            match ty {
+                T::TSTypeReference(reference) if reference.type_arguments.is_none() => matches!(
+                    &reference.type_name,
+                    oxc_ast::ast::TSTypeName::IdentifierReference(name) if name.name == key
+                ),
+                T::TSUnionType(union) => union.types.iter().any(|member| names_key(member, key)),
+                T::TSIntersectionType(intersection) => {
+                    intersection.types.iter().any(|member| names_key(member, key))
+                }
+                T::TSParenthesizedType(parenthesized) => names_key(&parenthesized.type_annotation, key),
+                _ => false,
+            }
+        }
+        let key = mapped.key.name.as_str();
+        if names_key(&mapped.constraint, key) {
+            self.push(2313, mapped.constraint.span(), &[key]);
+        }
+    }
+
     /// tsc's `checkGrammarTypeOperatorNode` for `unique symbol`: only a
     /// `const` variable in a variable statement (TS1332/TS1333/TS1334), a
     /// `static readonly` class property (TS1331), or a `readonly` property
@@ -1896,6 +1922,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 }
             }
             AstKind::TSTypeParameterDeclaration(declaration) => self.check_circular_constraints(declaration),
+            AstKind::TSMappedType(mapped) => self.check_circular_mapped_key(mapped),
             AstKind::Decorator(decorator) => self.check_parameter_decorator(decorator),
             AstKind::TSImportEqualsDeclaration(declaration) => {
                 self.check_import_require_in_namespace(declaration);
