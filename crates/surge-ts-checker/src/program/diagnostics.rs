@@ -28,10 +28,11 @@ pub(crate) fn parser_error_diagnostic(
     )
 }
 
-/// Codes whose one argument is the modifier oxc's label covers. oxc words
-/// some of them differently from tsc (TS1031 on a constructor, TS1273), so
-/// the argument cannot always be read back out of its message.
-const MODIFIER_LABEL_CODES: &[u32] = &[1030, 1031, 1070, 1071, 1090, 1273];
+/// Codes whose one argument is the text oxc's label covers: the modifier, or
+/// the `this` of a misplaced `this` parameter (TS2680). oxc words some of them
+/// differently from tsc (TS1031 on a constructor, TS1273), so the argument
+/// cannot always be read back out of its message.
+const MODIFIER_LABEL_CODES: &[u32] = &[1030, 1031, 1070, 1071, 1090, 1273, 2680];
 
 fn parser_error_descriptor(
     code: u32,

@@ -1121,13 +1121,17 @@ impl GrammarCollector {
         let mut groups: Vec<MemberGroup> = Vec::new();
         let mut group_slots: std::collections::HashMap<(String, bool), usize> =
             std::collections::HashMap::new();
-        let mut constructors: Vec<(Span, bool)> = Vec::new();
+        let mut constructors: Vec<(Span, bool, bool)> = Vec::new();
 
         for element in &class.body.body {
             let (key, is_static, member) = match element {
                 ClassElement::MethodDefinition(method) => {
-                    if method.r#type == MethodDefinitionType::TSAbstractMethodDefinition
+                    let is_abstract =
+                        method.r#type == MethodDefinitionType::TSAbstractMethodDefinition;
+                    // `abstract constructor` is TS1242, where tsc stops.
+                    if is_abstract
                         && !class.r#abstract
+                        && method.kind != MethodDefinitionKind::Constructor
                     {
                         self.push(Kind::AbstractMethodOutsideAbstractClass, method.span, None);
                     }
@@ -1135,7 +1139,11 @@ impl GrammarCollector {
                         if method.value.body.is_none() {
                             self.check_signature_parameters(&method.value.params, true);
                         }
-                        constructors.push((method.key.span(), method.value.body.is_some()));
+                        constructors.push((
+                            method.key.span(),
+                            method.value.body.is_some(),
+                            is_abstract,
+                        ));
                         continue;
                     }
                     let member = match method.kind {
@@ -1230,8 +1238,8 @@ impl GrammarCollector {
         if constructors.len() > 1 {
             let implementations: Vec<Span> = constructors
                 .iter()
-                .filter(|(_, has_body)| *has_body)
-                .map(|(span, _)| *span)
+                .filter(|(_, has_body, _)| *has_body)
+                .map(|(span, _, _)| *span)
                 .collect();
             if implementations.len() > 1 {
                 for span in implementations {
@@ -1239,14 +1247,21 @@ impl GrammarCollector {
                 }
             }
         }
+        // tsc exempts an `abstract` last overload from needing an implementation.
         if !ambient
             && !constructors.is_empty()
-            && !constructors.iter().any(|(_, has_body)| *has_body)
-            && let Some((span, _)) = constructors.last() {
+            && !constructors.iter().any(|(_, has_body, _)| *has_body)
+            && let Some((span, _, false)) = constructors.last() {
                 self.push(Kind::ConstructorImplementationMissing, *span, None);
             }
 
-        if !ambient && class.super_class.is_some() {
+        // A class extending `null` has no base constructor to call (TS17005
+        // when it does), so tsc does not require the call.
+        let extends_null = matches!(
+            class.super_class.as_ref().map(Expression::without_parentheses),
+            Some(Expression::NullLiteral(_))
+        );
+        if !ambient && class.super_class.is_some() && !extends_null {
             for element in &class.body.body {
                 let ClassElement::MethodDefinition(method) = element else {
                     continue;
@@ -2118,13 +2133,8 @@ impl<'a> Visit<'a> for GrammarCollector {
         if method.kind == MethodDefinitionKind::Get {
             self.check_getter_returns(method.key.span(), method.value.body.as_deref());
         }
-        if method.kind == MethodDefinitionKind::Set {
-            if method.value.return_type.is_some() {
-                self.push(Kind::SetAccessorReturnType, method.key.span(), None);
-            }
-            if method.value.params.items.len() != 1 || method.value.params.rest.is_some() {
-                self.push(Kind::SetAccessorParameterCount, method.key.span(), None);
-            }
+        if method.kind == MethodDefinitionKind::Set && method.value.return_type.is_some() {
+            self.push(Kind::SetAccessorReturnType, method.key.span(), None);
         }
         if method.kind == MethodDefinitionKind::Method
             && method.value.body.is_none()

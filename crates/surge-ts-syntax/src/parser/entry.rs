@@ -83,15 +83,48 @@ fn classify_uncoded_parser_error(
                 || after.starts_with("++")
                 || after.starts_with("--");
             let optional = text.contains("?.");
+            let keyword_follows = |keyword: &str| {
+                after.strip_prefix(keyword).is_some_and(|rest| {
+                    !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$')
+                })
+            };
+            let object_rest = before
+                .strip_suffix("...")
+                .is_some_and(|head| innermost_open_bracket(head) == Some('{'));
+            // tsc words the message by the statement holding the target; the
+            // for-in form assumes the type check before it (TS2405) passed.
             let code = match (is_update, optional) {
-                (false, false) => 2364,
-                (false, true) => 2779,
                 (true, false) => 2357,
                 (true, true) => 2777,
+                (false, true) if keyword_follows("in") => 2780,
+                (false, true) if keyword_follows("of") => 2781,
+                (false, true) if object_rest => 2778,
+                (false, true) => 2779,
+                (false, false) if keyword_follows("in") => 2406,
+                (false, false) => 2364,
             };
             Some((code, span))
         }
         "A rest parameter must be last in a parameter list" => Some((1014, span)),
+        "Identifier expected. 'this' is a reserved word that cannot be used here." => {
+            let start = parameter_start(source_text, span.start)?;
+            let head = source_text.get(start..span.start)?;
+            let first_word = head.split(|c: char| !is_identifier_char(c)).next().unwrap_or("");
+            if head.starts_with('@') || MODIFIER_KEYWORDS.contains(&first_word) {
+                return Some((1433, crate::TextSpan { start, end: span.start }));
+            }
+            // A bare `this` after another parameter: tsc's `checkParameter`.
+            let preceded_by_parameter = head.is_empty()
+                && source_text[..start].trim_end().ends_with(',')
+                && innermost_open_bracket(&source_text[..start]) == Some('(');
+            preceded_by_parameter.then_some((2680, span))
+        }
+        // tsc parses a parameter-property modifier on a rest parameter and
+        // rejects it as TS1317 over the whole parameter; oxc fails at the `...`.
+        "Unexpected token" if text.starts_with("...") => {
+            let start = parameter_property_modifiers_start(source_text, span.start)?;
+            Some((1317, crate::TextSpan { start, end: span.end }))
+        }
         // tsc reports the rest element at its name, past the `...`.
         "A rest element must be last in a destructuring pattern" => {
             let name = text.strip_prefix("...").map_or(text, str::trim_start);
@@ -100,6 +133,100 @@ fn classify_uncoded_parser_error(
         }
         _ => None,
     }
+}
+
+/// The bracket that is open at the end of `text`: `{` for a target inside an
+/// object literal. Brackets inside strings and comments are not skipped.
+fn innermost_open_bracket(text: &str) -> Option<char> {
+    let mut depth = 0usize;
+    for ch in text.chars().rev() {
+        match ch {
+            ')' | ']' | '}' => depth += 1,
+            '(' | '[' | '{' => {
+                if depth == 0 {
+                    return Some(ch);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+const MODIFIER_KEYWORDS: &[&str] = &[
+    "public", "private", "protected", "readonly", "override", "static", "abstract", "accessor",
+    "declare", "async", "export", "default", "const", "in", "out",
+];
+
+const PARAMETER_PROPERTY_MODIFIERS: &[&str] =
+    &["public", "private", "protected", "readonly", "override"];
+
+fn is_identifier_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '$'
+}
+
+/// The first token of the parameter holding `position`: just past the `(` or
+/// `,` that opens it.
+fn parameter_start(source_text: &str, position: usize) -> Option<usize> {
+    let head = source_text.get(..position)?;
+    let mut depth = 0usize;
+    for (index, ch) in head.char_indices().rev() {
+        match ch {
+            ')' | ']' | '}' => depth += 1,
+            '(' | '[' | '{' | ',' if depth == 0 => {
+                if ch != '(' && ch != ',' {
+                    return None;
+                }
+                let rest = &source_text[index + 1..];
+                return Some(source_text.len() - rest.trim_start().len());
+            }
+            '(' | '[' | '{' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The start of the parameter-property modifiers written right before
+/// `position`, when the parameter begins with them (no decorator).
+fn parameter_property_modifiers_start(source_text: &str, position: usize) -> Option<usize> {
+    let start = parameter_start(source_text, position)?;
+    let mut words = source_text.get(start..position)?.split_whitespace().peekable();
+    words.peek()?;
+    words
+        .all(|word| PARAMETER_PROPERTY_MODIFIERS.contains(&word))
+        .then_some(start)
+}
+
+/// The code tsc gives a failure oxc numbers differently. tsc's parser
+/// reports a decorator or modifier on a `this` parameter as TS1433 at the
+/// first of them, where oxc stops at the reserved word (after a TS1090 for
+/// each modifier outside a constructor, which tsc does not report).
+fn recode_parser_error(
+    code: Option<u32>,
+    span: Option<crate::TextSpan>,
+    source_text: &str,
+) -> Option<u32> {
+    let Some(span) = span else {
+        return code;
+    };
+    if code == Some(1090) {
+        let mut after = source_text.get(span.end..).unwrap_or("");
+        loop {
+            after = after.trim_start();
+            let word_len = after.find(|c: char| !is_identifier_char(c)).unwrap_or(after.len());
+            let word = &after[..word_len];
+            if word == "this" {
+                return None;
+            }
+            if word.is_empty() {
+                break;
+            }
+            after = &after[word_len..];
+        }
+    }
+    code
 }
 
 /// Where tsc anchors a failure oxc labels elsewhere: the name after a
@@ -232,6 +359,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
                 other => other,
             };
             let span = span.map(|span| tsc_anchor_for_parser_error(code, span, source_text));
+            let code = recode_parser_error(code, span, source_text);
             let span_text = span
                 .and_then(|span| source_text.get(span.start..span.end))
                 .map(str::to_string);

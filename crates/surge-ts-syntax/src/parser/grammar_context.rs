@@ -21,6 +21,8 @@ use super::grammar_modifiers::{self as modifiers, ModifierContext, NodeKind, Par
 use super::spans::text_span_from_oxc_span;
 use crate::{ParsedGrammarDiagnostic, ParsedGrammarDiagnosticKind as Kind};
 
+mod members;
+
 pub(crate) fn collect_context_grammar_diagnostics(
     program: &Program<'_>,
     out: &mut Vec<ParsedGrammarDiagnostic>,
@@ -1836,6 +1838,7 @@ fn collect_binding_names<'n>(pattern: &'n BindingPattern<'_>, out: &mut Vec<(&'n
 impl<'a> Visit<'a> for ContextCollector<'a, '_> {
     fn enter_node(&mut self, kind: AstKind<'a>) {
         self.check_declaration_position(&kind);
+        self.check_member_placement(&kind);
         match kind {
             AstKind::BreakStatement(statement) => {
                 self.check_jump(statement.span, statement.label.as_ref().map(|l| l.name.as_str()), false);
