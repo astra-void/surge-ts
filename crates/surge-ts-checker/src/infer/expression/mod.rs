@@ -639,11 +639,11 @@ fn template_literal_type(expressions: &[ParsedExpression], quasis: &[Option<Stri
 }
 
 fn callable_return_without_inference(callee_type: &Type) -> Option<Type> {
-    let peeled = callee_type.peeled();
-    let Type::Object(object) = &peeled else {
-        return None;
+    let signature = match callee_type.peeled() {
+        Type::Object(object) => object.call_signature()?.clone(),
+        Type::Union(union) => crate::checks::call::union_call_signature(&union)?,
+        _ => return None,
     };
-    let signature = object.call_signature()?;
     (signature.overloads().is_none() && signature.type_parameter_names().is_empty())
         .then(|| signature.return_type().clone())
 }
