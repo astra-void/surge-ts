@@ -445,6 +445,7 @@ export const fixturePresets: Record<string, string> = {
   'inference-fixed-parameter-widening': path.join(workspaceRoot, 'tests/compat-projects/inference-fixed-parameter-widening/tsconfig.json'),
   'inference-rest-tuple-contextual-parameters': path.join(workspaceRoot, 'tests/compat-projects/inference-rest-tuple-contextual-parameters/tsconfig.json'),
   'inference-callback-parameter-fixing': path.join(workspaceRoot, 'tests/compat-projects/inference-callback-parameter-fixing/tsconfig.json'),
+  'inference-fixing-after-other-arguments': path.join(workspaceRoot, 'tests/compat-projects/inference-fixing-after-other-arguments/tsconfig.json'),
   'instantiation-expression-basic': path.join(workspaceRoot, 'tests/compat-projects/instantiation-expression-basic/tsconfig.json'),
   'literal-equality-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/literal-equality-narrowing-basic/tsconfig.json'),
   'optional-chain-guard-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-guard-narrowing-basic/tsconfig.json'),
