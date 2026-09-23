@@ -268,10 +268,10 @@ fn evaluate_add_binary(
 }
 
 /// `isTypeAssignableToKindEx(ty, kind, strict = true)`: the operand relates to
-/// the kind's primitive, where `any`, `unknown`, `void` and `undefined` do not
-/// count on their own.
+/// the kind's primitive, where `any`, `unknown`, `void`, `undefined` and `null`
+/// do not count on their own.
 fn is_strictly_assignable_to(ty: &Type, target: &Type) -> bool {
-    !matches!(ty, Type::Any | Type::Void | Type::Undefined)
+    !matches!(ty, Type::Any | Type::Void | Type::Undefined | Type::Null)
         && !ty.is_unknown()
         && surge_ts_types::is_assignable_to(ty, target)
 }

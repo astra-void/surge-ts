@@ -770,6 +770,7 @@ export const fixturePresets: Record<string, string> = {
   'tuple-union-indexed-access-type': path.join(workspaceRoot, 'tests/compat-projects/tuple-union-indexed-access-type/tsconfig.json'),
   'for-await-in-parse-error': path.join(workspaceRoot, 'tests/compat-projects/for-await-in-parse-error/tsconfig.json'),
   'missing-return-loose-null-checks': path.join(workspaceRoot, 'tests/compat-projects/missing-return-loose-null-checks/tsconfig.json'),
+  'plus-nullish-operands-loose': path.join(workspaceRoot, 'tests/compat-projects/plus-nullish-operands-loose/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

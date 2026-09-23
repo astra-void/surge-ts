@@ -1692,16 +1692,18 @@ fn binary_operands_must_be_non_null(
     right_result: &InferredExpression,
 ) -> bool {
     use surge_ts_syntax::ParsedBinaryOperator as Op;
-    // surge types the `null` keyword as `any`, which would read as string-like.
-    // An operand surge could not type is tsc's error type, an `any`.
+    // tsc's `isTypeAssignableToKind(t, StringLike)` is the non-strict check, so
+    // without `strictNullChecks` the `null` keyword is string-like (surge types
+    // the keyword as `any`, which would read as string-like under it too). An
+    // operand surge could not type is tsc's error type, an `any`.
     let string_like = |operand: &ParsedExpression, result: &InferredExpression| {
-        !matches!(operand, ParsedExpression::NullLiteral)
-            && match result {
-                InferredExpression::Known(ty) => {
-                    surge_ts_types::is_assignable_to(ty, &Type::String)
-                }
-                _ => true,
-            }
+        if matches!(operand, ParsedExpression::NullLiteral) {
+            return !surge_ts_types::strict_null_checks();
+        }
+        match result {
+            InferredExpression::Known(ty) => surge_ts_types::is_assignable_to(ty, &Type::String),
+            _ => true,
+        }
     };
     let symbol_like = |result: &InferredExpression| matches!(result, InferredExpression::Known(ty) if type_may_be_symbol(&ty.peeled()));
     match operator {
