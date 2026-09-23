@@ -252,6 +252,25 @@ fn parse_for_clause_statements(expression: &Expression<'_>) -> Vec<ParsedFunctio
 fn parse_expression_as_function_body_statements(
     statement_expression: &Expression<'_>,
 ) -> Option<Vec<ParsedFunctionBodyStatement>> {
+    // A comma expression's operands run in order, so a destructuring
+    // assignment among them assigns its targets as one standing alone does
+    // (`[a] = xs, f();`) — each operand is lowered as its own statement.
+    if let Expression::SequenceExpression(sequence) = statement_expression.without_parentheses()
+        && sequence
+            .expressions
+            .iter()
+            .any(|operand| !super::parse_destructuring_assignment(operand).is_empty())
+    {
+        return Some(
+            sequence
+                .expressions
+                .iter()
+                .flat_map(|operand| {
+                    parse_expression_as_function_body_statements(operand).unwrap_or_default()
+                })
+                .collect(),
+        );
+    }
     let destructured = super::parse_destructuring_assignment(statement_expression);
     if !destructured.is_empty() {
         return Some(
