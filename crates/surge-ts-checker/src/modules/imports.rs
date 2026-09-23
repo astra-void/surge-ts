@@ -2007,13 +2007,19 @@ fn report_ts_extension_import(
     let Some(extension) = written_ts_extension(&import.module_specifier) else {
         return;
     };
-    if resolve_relative_module(
+    let Some(resolved) = resolve_relative_module(
         &ctx.file_name,
         &import.module_specifier,
         program_files,
         &ctx.module_file_index_by_identity,
-    )
-    .is_none()
+    ) else {
+        return;
+    };
+    // tsc's `ResolvedUsingTsExtension`: the file the path names, not one a
+    // CommonJS-mode lookup reached by appending extensions or as a directory.
+    let named_file = relative_specifier_path(&ctx.file_name, &import.module_specifier);
+    if canonical_file_identity(&named_file)
+        != canonical_file_identity(&resolved.resolved_file_name)
     {
         return;
     }

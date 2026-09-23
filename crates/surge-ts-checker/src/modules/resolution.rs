@@ -183,6 +183,17 @@ pub(crate) fn resolve_relative_module_in_mode(
             program_files,
             file_index_by_identity,
         )
+        .or_else(|| {
+            if esm {
+                return None;
+            }
+            resolve_relative_path_with_implicit_extensions(
+                importer_file_name,
+                specifier,
+                program_files,
+                file_index_by_identity,
+            )
+        })
     };
     RELATIVE_MODULE_CACHE.with(|cache| {
         cache.borrow_mut().insert(cache_key, resolved.clone());
@@ -228,22 +239,67 @@ fn resolve_relative_directory(
     program_files: &[ParsedProgramFile],
     file_index_by_identity: &surge_ts_types::fx::FxHashMap<Arc<str>, usize>,
 ) -> Option<ModuleResolution> {
+    let directory = relative_specifier_path(importer_file_name, specifier);
+    first_program_file(
+        super::candidates::directory_index_candidates(&directory),
+        program_files,
+        file_index_by_identity,
+    )
+}
+
+/// tsc's CommonJS-mode lookups once a specifier with an extension misses as
+/// that file (`loadModuleFromFile`, `nodeLoadModuleByRelativeName`): the whole
+/// path takes the implicit extensions, then loads as a directory, so
+/// `./foo.ts` can be `./foo.ts/index.ts`.
+fn resolve_relative_path_with_implicit_extensions(
+    importer_file_name: &str,
+    specifier: &str,
+    program_files: &[ParsedProgramFile],
+    file_index_by_identity: &surge_ts_types::fx::FxHashMap<Arc<str>, usize>,
+) -> Option<ModuleResolution> {
+    use super::candidates::RelativeSpecifierShape;
+    if !matches!(
+        super::candidates::classify_relative_specifier(&normalize_path_string(specifier)),
+        RelativeSpecifierShape::ExplicitTs
+            | RelativeSpecifierShape::ExplicitJs
+            | RelativeSpecifierShape::ExplicitMjs
+            | RelativeSpecifierShape::ExplicitCjs
+            | RelativeSpecifierShape::ExplicitJson
+    ) {
+        return None;
+    }
+    let path = relative_specifier_path(importer_file_name, specifier);
+    let mut candidates = vec![
+        format!("{path}.ts"),
+        format!("{path}.tsx"),
+        format!("{path}.d.ts"),
+    ];
+    candidates.extend(super::candidates::directory_index_candidates(&path));
+    first_program_file(candidates, program_files, file_index_by_identity)
+}
+
+pub(crate) fn relative_specifier_path(importer_file_name: &str, specifier: &str) -> String {
     let importer_dir = module_directory(importer_file_name);
-    let directory = if importer_dir.is_empty() {
+    if importer_dir.is_empty() {
         normalize_path_string(specifier)
     } else {
         normalize_path_string(&format!("{importer_dir}/{specifier}"))
-    };
-    super::candidates::directory_index_candidates(&directory)
-        .into_iter()
-        .find_map(|candidate| {
-            let resolved_file_index =
-                *file_index_by_identity.get(canonical_file_identity(&candidate).as_str())?;
-            Some(ModuleResolution {
-                resolved_file_index,
-                resolved_file_name: program_files[resolved_file_index].file_name.clone(),
-            })
+    }
+}
+
+fn first_program_file(
+    candidates: Vec<String>,
+    program_files: &[ParsedProgramFile],
+    file_index_by_identity: &surge_ts_types::fx::FxHashMap<Arc<str>, usize>,
+) -> Option<ModuleResolution> {
+    candidates.into_iter().find_map(|candidate| {
+        let resolved_file_index =
+            *file_index_by_identity.get(canonical_file_identity(&candidate).as_str())?;
+        Some(ModuleResolution {
+            resolved_file_index,
+            resolved_file_name: program_files[resolved_file_index].file_name.clone(),
         })
+    })
 }
 
 #[allow(dead_code)]
