@@ -451,6 +451,20 @@ fn bind_infer_captures(
         ParsedType::Infer(infer) => {
             substitution.insert(infer.name.clone(), check.clone());
         }
+        // `readonly (infer E)[]` infers exactly as the mutable pattern does:
+        // tsc's `inferFromObjectTypes` relates `Array` and `ReadonlyArray`
+        // references by their type arguments (`isArrayType` on both sides).
+        ParsedType::Readonly(inner) if matches!(inner.as_ref(), ParsedType::Array(_)) => {
+            bind_infer_captures(
+                inner,
+                check,
+                substitution,
+                ctx,
+                resolving,
+                depth,
+                reference_positional,
+            );
+        }
         // `[infer head, ...infer tail]` / `[infer a, infer b]` against a tuple:
         // line up the fixed slots positionally and hand the spread slot the
         // middle as a tuple of its own. This is the list primitive every
