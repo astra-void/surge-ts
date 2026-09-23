@@ -739,6 +739,30 @@ pub(super) fn narrow_this_predicate_call_in_scope(
     true
 }
 
+/// Whether `expression` calls a `param is T` predicate with a reference in the
+/// tested position — the one call shape that narrows as a condition.
+pub(crate) fn is_type_predicate_call(
+    expression: &ParsedExpression,
+    scopes: &ScopeStack,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let arguments = match expression {
+        ParsedExpression::Call { arguments, .. }
+        | ParsedExpression::PropertyCall { arguments, .. } => arguments,
+        _ => return false,
+    };
+    if !arguments
+        .iter()
+        .any(|argument| reference_path(&argument.expression).is_some())
+    {
+        return false;
+    }
+    parse_type_predicate_condition(expression, &mut |callee| {
+        predicate_callee_signature(callee, |name| scopes.resolve(name), scopes.visible_symbols(), ctx)
+    })
+    .is_some()
+}
+
 /// Applies user-defined type-predicate narrowing (`isFoo(x)`) in place to a
 /// `ScopeStack`. Returns whether the condition was such a predicate call over a
 /// bare-identifier argument.

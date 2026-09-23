@@ -84,6 +84,7 @@ pub(crate) fn enter_container(
     }
     let mut inherited = seed;
     collect_body_candidates(body, type_parameters, ctx, &mut inherited);
+    flow.set_assigned_bindings(super::assigned_bindings(body));
     std::mem::replace(&mut ctx.inherited_never_initialized, inherited)
 }
 

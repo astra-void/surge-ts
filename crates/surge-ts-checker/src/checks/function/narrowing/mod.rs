@@ -7,6 +7,7 @@ use surge_ts_types::{Type, TypeCopyReason, union_type};
 use crate::context::CheckerContext;
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolTable};
 
+mod aliases;
 mod element_reference;
 mod guards;
 mod predicate;
@@ -14,6 +15,8 @@ mod reference;
 mod truthy;
 mod type_guards;
 
+pub(crate) use aliases::{ALIAS_INLINE_LIMIT, retain_constant_reference_guards};
+use aliases::enter_alias_inlining;
 pub(crate) use element_reference::*;
 use guards::*;
 pub(crate) use predicate::*;
@@ -991,8 +994,11 @@ fn narrow_condition_symbol_table_by_guard(
     // …and by the alias binding itself, which is what was tested.
     if let ParsedExpression::Identifier { name, .. } = condition
         && let Some(alias) = symbols.alias_condition(name)
+        && let Some(inlining) = enter_alias_inlining()
     {
-        let by_alias = narrow_condition_symbol_table(&alias, symbols, branch_is_true);
+        let inlined = retain_constant_reference_guards(&alias, symbols, &|_| false);
+        let by_alias = narrow_condition_symbol_table(&inlined, symbols, branch_is_true);
+        drop(inlining);
         return narrow_reference_guard_symbol_table(
             condition,
             by_alias.as_ref().unwrap_or(symbols),
@@ -1063,7 +1069,7 @@ fn narrow_condition_symbol_table_by_guard(
         );
     }
 
-    narrow_discriminant_symbol_table(condition, symbols, branch_is_true)
+    let narrowed = narrow_discriminant_symbol_table(condition, symbols, branch_is_true)
         .or_else(|| narrow_literal_equality_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_typeof_symbol_table(condition, symbols, branch_is_true))
         .or_else(|| narrow_instanceof_symbol_table(condition, symbols, branch_is_true))
@@ -1086,7 +1092,87 @@ fn narrow_condition_symbol_table_by_guard(
             )
             .or(filtered)
         })
-        .or_else(|| narrow_reference_equality_symbol_table(condition, symbols, branch_is_true))
+        .or_else(|| narrow_reference_equality_symbol_table(condition, symbols, branch_is_true));
+    match destructured_discriminant_guard(condition, symbols) {
+        Some(rewritten) => narrow_condition_symbol_table_by_guard(
+            &rewritten,
+            narrowed.as_ref().unwrap_or(symbols),
+            branch_is_true,
+        )
+        .or(narrowed),
+        None => narrowed,
+    }
+}
+
+/// A guard over a binding destructured from another (`const { kind } = obj`),
+/// written over the property that binding reads (`obj.kind === "a"`): tsc's
+/// `getCandidateDiscriminantPropertyAccess` narrows `obj` by a test of `kind`
+/// as it would by a test of `obj.kind`.
+fn destructured_discriminant_guard(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+) -> Option<ParsedExpression> {
+    let property_read = |expression: &ParsedExpression| -> Option<ParsedExpression> {
+        let ParsedExpression::Identifier { name, span } = expression else {
+            return None;
+        };
+        let binding = symbols.tuple_destructure(name)?;
+        let crate::symbols::DestructureKey::Property(property) = &binding.key else {
+            return None;
+        };
+        if binding.source.starts_with('\0') {
+            return None;
+        }
+        Some(ParsedExpression::PropertyAccess {
+            object: Box::new(ParsedExpression::Identifier {
+                name: binding.source.to_string(),
+                span: *span,
+            }),
+            object_span: *span,
+            property_name: property.to_string(),
+            property_span: None,
+            is_bracketed: false,
+        })
+    };
+    let operand = |expression: &ParsedExpression| match expression {
+        ParsedExpression::Unary {
+            operator,
+            operator_span,
+            operand,
+            operand_span,
+        } => property_read(operand).map(|read| ParsedExpression::Unary {
+            operator: *operator,
+            operator_span: *operator_span,
+            operand: Box::new(read),
+            operand_span: *operand_span,
+        }),
+        other => property_read(other),
+    };
+    match condition {
+        ParsedExpression::Binary {
+            left,
+            left_span,
+            operator,
+            operator_span,
+            right,
+            right_span,
+        } => {
+            let new_left = operand(left);
+            let new_right = operand(right);
+            if new_left.is_none() && new_right.is_none() {
+                return None;
+            }
+            Some(ParsedExpression::Binary {
+                left: Box::new(new_left.unwrap_or_else(|| left.as_ref().clone())),
+                left_span: *left_span,
+                operator: *operator,
+                operator_span: *operator_span,
+                right: Box::new(new_right.unwrap_or_else(|| right.as_ref().clone())),
+                right_span: *right_span,
+            })
+        }
+        other => property_read(other),
+    }
 }
 
 /// Merges the two disjunct narrowings of an `A || B` true branch: each name

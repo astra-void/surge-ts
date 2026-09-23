@@ -10,6 +10,7 @@ use crate::program::{
     record_flow_state_clone_count, record_flow_state_full_clone_avoided_count,
 };
 
+mod assigned;
 mod branch;
 mod expr;
 mod facts;
@@ -17,6 +18,7 @@ mod guards;
 mod module_scope;
 mod never_initialized;
 
+pub(crate) use assigned::assigned_bindings;
 pub(crate) use branch::*;
 pub(crate) use expr::*;
 pub(crate) use facts::*;
@@ -242,6 +244,10 @@ pub(crate) struct FunctionFlowState {
     /// it only when the binding's declared type does not assume it initialized,
     /// and an unannotated one is circular, so `any`.
     initializing: Vec<InitializingBinding>,
+    /// The bindings the container assigns anywhere, nested functions included
+    /// (tsc's `isSymbolAssigned`); a parameter or `let` among them is not a
+    /// constant reference.
+    assigned_bindings: Arc<std::collections::HashSet<Arc<str>>>,
 }
 
 /// What [`FunctionFlowState::begin_initializer`] changed, for
@@ -273,6 +279,7 @@ impl Clone for FunctionFlowState {
             guarded_defined: self.guarded_defined.clone(),
             unreachable_depth: self.unreachable_depth.clone(),
             initializing: self.initializing.clone(),
+            assigned_bindings: Arc::clone(&self.assigned_bindings),
         }
     }
 }
@@ -368,7 +375,16 @@ impl FunctionFlowState {
             guarded_defined: std::cell::RefCell::new(Vec::new()),
             unreachable_depth: std::cell::Cell::new(0),
             initializing: Vec::new(),
+            assigned_bindings: Arc::default(),
         }
+    }
+
+    pub(crate) fn set_assigned_bindings(&mut self, names: std::collections::HashSet<Arc<str>>) {
+        self.assigned_bindings = Arc::new(names);
+    }
+
+    pub(crate) fn is_binding_assigned(&self, name: &str) -> bool {
+        self.assigned_bindings.contains(name)
     }
 
     /// Marks `names` as declared by the initializer walked next (see

@@ -74,8 +74,17 @@ pub(crate) fn check_function_variable_declaration(
             .record_alias_guard_targets(local_name.clone(), guarded_value_identifiers(initializer));
         // A `const` whose initializer is plainly a condition keeps that
         // condition, so a later `if (ok)` narrows exactly as the written
-        // expression would (tsc's aliased-condition narrowing).
-        if matches!(variable_kind, ParsedVariableKind::Const) && is_condition_shaped(initializer) {
+        // expression would (tsc's aliased-condition narrowing). tsc inlines
+        // only an unannotated `const` declared on its own, not a destructured
+        // element; an alias of an alias and a type-predicate call qualify too.
+        let inlinable = matches!(variable_kind, ParsedVariableKind::Const)
+            && variable.declared_type.is_none()
+            && !variable.from_binding_pattern
+            && (is_condition_shaped(initializer)
+                || matches!(initializer, ParsedExpression::Identifier { name, .. }
+                    if scopes.visible_symbols().alias_condition(name).is_some())
+                || is_type_predicate_call(initializer, scopes, ctx));
+        if inlinable {
             let condition = std::sync::Arc::new(initializer.clone());
             flow_state.record_alias_guard_condition(local_name.clone(), condition.clone());
             scopes.record_alias_condition(local_name.as_str(), Some(condition));

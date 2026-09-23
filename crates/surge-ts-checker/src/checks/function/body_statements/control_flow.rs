@@ -79,7 +79,7 @@ pub(crate) fn check_function_if_statement(
         .contains_assignment()
         .then(|| if_statement.condition.with_assignments_as_reads());
     let narrowing_condition = narrowing_source.as_ref().unwrap_or(&if_statement.condition);
-    let alias_condition = resolved_alias_condition(narrowing_condition, flow_state);
+    let alias_condition = resolved_alias_condition(narrowing_condition, scopes, flow_state);
     let base_condition: &ParsedExpression =
         alias_condition.as_deref().unwrap_or(narrowing_condition);
     let rewritten_condition = rewrite_discriminant_aliases(base_condition, flow_state);
@@ -396,7 +396,7 @@ pub(crate) fn check_function_while_statement(
         .contains_assignment()
         .then(|| condition.with_assignments_as_reads());
     let narrowing_condition = narrowing_source.as_ref().unwrap_or(&condition);
-    let alias_condition = resolved_alias_condition(narrowing_condition, flow_state);
+    let alias_condition = resolved_alias_condition(narrowing_condition, scopes, flow_state);
     let base_condition: &ParsedExpression =
         alias_condition.as_deref().unwrap_or(narrowing_condition);
     let rewritten_condition = rewrite_discriminant_aliases(base_condition, flow_state);
@@ -1050,8 +1050,7 @@ pub(crate) fn check_function_switch_statement(
 
             scopes.push_child();
             if let Some((condition, branch_is_true)) = case_group_conditions[case_index].as_ref() {
-                narrow_discriminant_in_scope(condition, scopes, *branch_is_true, ctx);
-                narrow_tuple_destructure_siblings(condition, scopes, *branch_is_true);
+                narrow_switch_case(condition, *branch_is_true, scopes, flow_state, ctx);
             }
             flow_state.begin_branch_capture();
             check_function_body(
@@ -1075,8 +1074,7 @@ pub(crate) fn check_function_switch_statement(
         for (case_index, switch_case) in switch_statement.cases.into_iter().enumerate() {
             scopes.push_child();
             if let Some((condition, branch_is_true)) = case_group_conditions[case_index].as_ref() {
-                narrow_discriminant_in_scope(condition, scopes, *branch_is_true, ctx);
-                narrow_tuple_destructure_siblings(condition, scopes, *branch_is_true);
+                narrow_switch_case(condition, *branch_is_true, scopes, flow_state, ctx);
             }
             check_function_body(
                 switch_case.consequent,
@@ -1106,9 +1104,26 @@ pub(crate) fn check_function_switch_statement(
             scopes,
             ctx,
         );
-        narrow_discriminant_in_scope(condition, scopes, false, ctx);
-        narrow_tuple_destructure_siblings(condition, scopes, false);
+        narrow_switch_case(condition, false, scopes, flow_state, ctx);
     }
+}
+
+/// Narrows by a `switch`'s synthesized case condition. A discriminant alias
+/// (`const { kind } = obj; switch (kind)`) also narrows the object it was read
+/// from, as tsc's `getCandidateDiscriminantPropertyAccess` reads it as
+/// `obj.kind`.
+fn narrow_switch_case(
+    condition: &ParsedExpression,
+    branch_is_true: bool,
+    scopes: &mut ScopeStack,
+    flow_state: &FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    narrow_discriminant_in_scope(condition, scopes, branch_is_true, ctx);
+    if let Some(rewritten) = rewrite_discriminant_aliases(condition, flow_state) {
+        narrow_discriminant_in_scope(&rewritten, scopes, branch_is_true, ctx);
+    }
+    narrow_tuple_destructure_siblings(condition, scopes, branch_is_true);
 }
 
 /// tsc's `isExhaustiveSwitchStatement`, recorded only on positive evidence: a
