@@ -313,7 +313,7 @@ pub(super) fn resolve_package_entrypoint(
 ) -> Option<PackageEntrypointResolution> {
     // `#alias` imports resolve against the importer's own enclosing package.
     if req.is_imports {
-        return resolve_imports_entrypoint(req, opts, importer_is_esm, cache);
+        return resolve_imports_entrypoint(req, opts, importer_is_esm, cache, root_dir);
     }
 
     // Package self-name imports: an enclosing package whose `name` matches takes
@@ -365,6 +365,7 @@ pub(super) fn resolve_imports_entrypoint(
     opts: &ResolverOptions,
     importer_is_esm: bool,
     cache: &mut PackageDeclarationResolverCache,
+    root_dir: &Path,
 ) -> Option<PackageEntrypointResolution> {
     if !opts.resolve_imports {
         return None;
@@ -374,7 +375,56 @@ pub(super) fn resolve_imports_entrypoint(
     let imports = json.get("imports")?;
     let conditions = opts.active_conditions(importer_is_esm);
     let targets = select_import_targets(imports, &req.specifier, &conditions);
-    resolve_first_target_in_package(&pkg_dir, &targets)
+    let mut runtime_fallback = None;
+    for target in &targets {
+        let resolution = if target.starts_with("./") {
+            resolve_target_in_package(&pkg_dir, target)
+        } else if let Some(module_request) = imports_module_target(req, target, &pkg_dir) {
+            resolve_package_entrypoint(&module_request, opts, importer_is_esm, cache, root_dir)
+        } else {
+            None
+        };
+        match resolution {
+            Some(resolution) if resolution.kind == PackageEntrypointKind::Declaration => {
+                return Some(resolution);
+            }
+            Some(resolution) => {
+                runtime_fallback.get_or_insert(resolution);
+            }
+            None => {}
+        }
+    }
+    runtime_fallback
+}
+
+/// tsc's `loadModuleFromTargetExportOrImport` for an `imports` target that
+/// is not a `./` path: a bare name resolves as a module specifier from the
+/// package scope (`"#type": "package"` reaches the package's own `exports`
+/// by self-name), while `../` and absolute targets are invalid.
+fn imports_module_target(
+    req: &PackageDeclarationRequest,
+    target: &str,
+    package_dir: &Path,
+) -> Option<PackageDeclarationRequest> {
+    if target.starts_with("../") || Path::new(target).has_root() {
+        return None;
+    }
+    let is_imports = target.starts_with('#');
+    let (package_name, subpath) = if is_imports {
+        (target.to_string(), None)
+    } else {
+        parse_package_specifier(target)?
+    };
+    Some(PackageDeclarationRequest {
+        specifier: target.to_string(),
+        package_name,
+        subpath,
+        importer_dir: package_dir.to_path_buf(),
+        importer_file: package_dir.join("package.json"),
+        is_imports,
+        usage: req.usage,
+        import_condition: req.import_condition,
+    })
 }
 
 /// Resolve a bare package import through an enclosing package whose `name`
