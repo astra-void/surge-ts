@@ -2877,6 +2877,27 @@ fn infer_through_generic_reference(
         }
     }
 
+    // tsc infers from type arguments only between references to the same
+    // generic target, or two array types (`inferFromObjectTypes`); a reference
+    // to another declaration is inferred from as the structure it expands to.
+    // Zipping any reference by position bound `TQueryFnData` to the `() =>
+    // number` of a `Mock<() => number>` matched against `Query<TQueryFnData, …>`.
+    if let Type::Reference(reference) = argument_type
+        && !reference_targets_declaration(reference, named_type, ctx)
+    {
+        let resolved = argument_type.peeled();
+        if !matches!(&resolved, Type::Reference(_)) && !resolved.is_unknown() {
+            return infer_through_generic_reference(
+                named_type,
+                &resolved,
+                substitution,
+                widen_literals,
+                ctx,
+                depth + 1,
+            );
+        }
+        return;
+    }
     if let Type::Reference(reference) = argument_type {
         for (pattern_argument, actual_argument) in named_type
             .type_arguments
@@ -3046,6 +3067,49 @@ fn with_inference_scope_file<R>(
         files.borrow_mut().pop();
     });
     resolved
+}
+
+/// Whether `reference` instantiates the declaration `named_type` names: its
+/// nominal id is that declaration's `file\0Name`, or both are array types. A
+/// declaration surge cannot find proves nothing either way and keeps the
+/// positional reading.
+fn reference_targets_declaration(
+    reference: &surge_ts_types::TypeReference,
+    named_type: &ParsedNamedType,
+    ctx: &CheckerContext,
+) -> bool {
+    if matches!(named_type.name.as_str(), "Array" | "ReadonlyArray") && reference.is_readonly_array()
+    {
+        return true;
+    }
+    let Some(handle) = lookup_declaration_for_inference(&named_type.name, ctx) else {
+        return true;
+    };
+    let (file_name, declaration_name) = match handle.get() {
+        TypeDeclarationInfo::Alias(alias) => (alias.file_name.clone(), alias.name.clone()),
+        TypeDeclarationInfo::Interface(interface) => {
+            (interface.file_name.clone(), interface.name.clone())
+        }
+    };
+    reference
+        .id
+        .strip_prefix(file_name.as_ref() as &str)
+        .and_then(|rest| rest.strip_prefix('\u{0}'))
+        .is_some_and(|written| names_one_declaration(written, &declaration_name))
+}
+
+/// A reference's id carries the name as written where it was referenced
+/// (`core.$constructor` through a namespace import) and a declaration the name
+/// it declares; within one file they name one declaration when one is the
+/// other's dotted tail.
+fn names_one_declaration(written: &str, declared: &str) -> bool {
+    written == declared
+        || written
+            .strip_suffix(declared)
+            .is_some_and(|qualifier| qualifier.ends_with('.'))
+        || declared
+            .strip_suffix(written)
+            .is_some_and(|qualifier| qualifier.ends_with('.'))
 }
 
 fn lookup_declaration_for_inference(
