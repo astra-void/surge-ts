@@ -400,6 +400,7 @@ export const fixturePresets: Record<string, string> = {
   'export-clause-global-augmentation': path.join(workspaceRoot, 'tests/compat-projects/export-clause-global-augmentation/tsconfig.json'),
   'export-import-alias-of-imported-namespace': path.join(workspaceRoot, 'tests/compat-projects/export-import-alias-of-imported-namespace/tsconfig.json'),
   'export-default-imported-name-over-global': path.join(workspaceRoot, 'tests/compat-projects/export-default-imported-name-over-global/tsconfig.json'),
+  'reexport-namespace-beside-value': path.join(workspaceRoot, 'tests/compat-projects/reexport-namespace-beside-value/tsconfig.json'),
   'export-clause-primitive-and-global-names': path.join(workspaceRoot, 'tests/compat-projects/export-clause-primitive-and-global-names/tsconfig.json'),
   'export-default-inside-namespace': path.join(workspaceRoot, 'tests/compat-projects/export-default-inside-namespace/tsconfig.json'),
   'for-of-head-pattern-bindings': path.join(workspaceRoot, 'tests/compat-projects/for-of-head-pattern-bindings/tsconfig.json'),

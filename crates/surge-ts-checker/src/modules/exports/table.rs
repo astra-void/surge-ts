@@ -853,6 +853,23 @@ pub(crate) fn resolve_module_export_table(
                     continue;
                 }
 
+                // The names the target publishes qualified `NS.Member` keys
+                // under: a namespace, which the alias re-exports beside any
+                // type or value of the same name.
+                let mut namespace_heads: Option<surge_ts_types::fx::FxHashSet<Arc<str>>> = None;
+                let mut is_namespace = |name: &str| {
+                    namespace_heads
+                        .get_or_insert_with(|| {
+                            target_export_table
+                                .type_declarations
+                                .iter()
+                                .filter_map(|(key, _)| {
+                                    key.split_once('.').map(|(head, _)| head.into())
+                                })
+                                .collect()
+                        })
+                        .contains(name)
+                };
                 for specifier in specifiers {
                     let specifier_is_type_only = *is_type_only || specifier.is_type_only;
                     let type_export =
@@ -888,6 +905,14 @@ pub(crate) fn resolve_module_export_table(
                                 None,
                                 Arc::make_mut(&mut resolved_export_table.type_declarations),
                             );
+                            if is_namespace(&specifier.local_name) {
+                                copy_qualified_type_exports(
+                                    &target_export_table,
+                                    &specifier.local_name,
+                                    &specifier.exported_name,
+                                    Arc::make_mut(&mut resolved_export_table.type_declarations),
+                                );
+                            }
                             continue;
                         }
 
@@ -951,7 +976,7 @@ pub(crate) fn resolve_module_export_table(
                         found = true;
                     }
 
-                    if !found
+                    if (!found || is_namespace(&specifier.local_name))
                         && copy_qualified_type_exports(
                             &target_export_table,
                             &specifier.local_name,
