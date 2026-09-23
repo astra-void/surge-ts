@@ -101,7 +101,9 @@ pub(super) fn predicate_callee_signature<'a>(
 }
 
 /// Binds a generic predicate's type parameters for the guard site. A
-/// non-generic predicate needs none.
+/// non-generic predicate needs none. `subject_ty` is the type of the tested
+/// argument itself — for `isDefined(this.x)` the type of `this.x` — which is
+/// what tsc infers the predicate's type parameters from.
 pub(super) fn predicate_type_argument_substitution(
     guard: &PredicateGuardInfo,
     subject_ty: Option<&Type>,
@@ -115,13 +117,6 @@ pub(super) fn predicate_type_argument_substitution(
     if !guard.explicit_type_arguments.is_empty() {
         return Some(explicit_predicate_type_argument_substitution(guard, ctx));
     }
-    // A property path means the tested value is not the whole argument, so the
-    // parameter annotation cannot be matched against the subject's type — only
-    // that inference is skipped. The loop below does not read the subject at
-    // all, so a predicate whose parameters come from its *other* arguments still
-    // binds: `is(options.role, PgRole)` takes `T` from the class, and dropping
-    // the whole guard here left every `is(x.y, C)` in drizzle unnarrowed.
-    let subject_ty = guard.path.is_empty().then_some(subject_ty).flatten();
     for type_parameter in &guard.signature.type_parameters {
         substitution.insert_placeholder(
             type_parameter.name.clone(),
@@ -665,10 +660,11 @@ pub(super) fn this_predicate_target(
     )
 }
 
-/// The object a `this is T` method is called on: the subject itself, or the
-/// member its path reaches (`this.activeConnection.isOpen()`). tsc narrows
-/// whichever reference the call's receiver is (`getTypePredicateArgument`).
-fn this_predicate_receiver(subject_ty: &Type, path: &[String]) -> Option<Type> {
+/// The reference a predicate tests — the argument of `isDefined(this.x)`, or
+/// the object a `this is T` method is called on
+/// (`this.activeConnection.isOpen()`): the subject itself, or the member its
+/// path reaches (tsc's `getTypePredicateArgument`).
+fn predicate_argument_type(subject_ty: &Type, path: &[String]) -> Option<Type> {
     if path.is_empty() {
         return Some(subject_ty.clone());
     }
@@ -688,7 +684,7 @@ pub(super) fn narrow_this_predicate_symbol_table(
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let target = this_predicate_target(&this_predicate_receiver(&subject_ty, &path)?, method, ctx)?;
+    let target = this_predicate_target(&predicate_argument_type(&subject_ty, &path)?, method, ctx)?;
     let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
         narrowed_predicate_subject(&subject_ty, &path, &target, branch_is_true)
     })?;
@@ -721,7 +717,7 @@ pub(super) fn narrow_this_predicate_call_in_scope(
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let Some(target) = this_predicate_receiver(&subject_ty, &path)
+    let Some(target) = predicate_argument_type(&subject_ty, &path)
         .and_then(|receiver| this_predicate_target(&receiver, method, ctx))
     else {
         return false;
@@ -763,9 +759,10 @@ pub(super) fn narrow_predicate_call_in_scope(
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
+    let argument_ty = predicate_argument_type(&subject_ty, &guard.path);
     let narrowed = match resolve_predicate_guard_target(
         &guard,
-        Some(&subject_ty),
+        argument_ty.as_ref(),
         scopes.visible_symbols(),
         ctx,
     ) {
@@ -1089,7 +1086,8 @@ pub(crate) fn narrow_predicate_guards_symbol_table(
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let narrowed = match resolve_predicate_guard_target(&guard, Some(&subject_ty), symbols, ctx)? {
+    let argument_ty = predicate_argument_type(&subject_ty, &guard.path);
+    let narrowed = match resolve_predicate_guard_target(&guard, argument_ty.as_ref(), symbols, ctx)? {
         PredicateTarget::Resolved(predicate_ty) => {
             with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
                 narrowed_predicate_subject(&subject_ty, &guard.path, &predicate_ty, branch_is_true)
@@ -1162,8 +1160,11 @@ pub(super) fn narrow_predicate_reference_guards_in_scope(
     if guard.path.is_empty() {
         return;
     }
+    let argument_ty = scopes
+        .resolve(&guard.subject)
+        .and_then(|symbol| predicate_argument_type(&symbol.ty, &guard.path));
     let Some(predicate_ty) =
-        resolve_predicate_guard_type(&guard, None, scopes.visible_symbols(), ctx)
+        resolve_predicate_guard_type(&guard, argument_ty.as_ref(), scopes.visible_symbols(), ctx)
     else {
         return;
     };

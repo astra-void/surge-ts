@@ -205,6 +205,7 @@ fn narrow_single_guard_for_identifier(
             ctx,
         )
     }) && guard.subject == var_name
+        && guard.path.is_empty()
     {
         return match resolve_predicate_guard_target(
             &guard,
