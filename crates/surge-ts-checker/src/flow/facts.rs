@@ -624,22 +624,35 @@ pub(crate) fn report_read_flow_positioned(
             ctx.push(diagnostic);
             FlowCheck::Blocked
         }
-        FlowReadOutcome::UseBeforeDeclaration => {
+        FlowReadOutcome::UseBeforeDeclaration {
+            unassigned,
+            circular_at,
+        } => {
             // A block-scoped (`let`/`const`) variable read before its declaration
             // is necessarily in its temporal dead zone, so it is also definitely
-            // unassigned. tsc reports both TS2448 and TS2454 at every such read.
+            // unassigned: tsc reports TS2454 beside TS2448 unless the binding's
+            // type assumes it initialized.
             let mut diagnostic = Diagnostic::ts2448(name, ctx.file_name.clone());
             if let Some(span) = span {
                 diagnostic = diagnostic.with_span(convert_span(span));
             }
             ctx.push(diagnostic);
 
-            if surge_ts_types::strict_null_checks() {
+            if unassigned && surge_ts_types::strict_null_checks() {
                 let mut diagnostic = Diagnostic::ts2454(name, ctx.file_name.clone());
                 if let Some(span) = span {
                     diagnostic = diagnostic.with_span(convert_span(span));
                 }
                 ctx.push(diagnostic);
+            }
+
+            if let Some(declaration_span) = circular_at
+                && ctx.options.no_implicit_any
+            {
+                ctx.push(
+                    Diagnostic::ts7022(name, ctx.file_name.clone())
+                        .with_span(convert_span(declaration_span)),
+                );
             }
 
             FlowCheck::Blocked

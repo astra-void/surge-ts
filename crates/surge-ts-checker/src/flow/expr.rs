@@ -528,7 +528,7 @@ pub(crate) fn check_assignment_target_flow(
         return FlowCheck::Clear;
     }
 
-    let FlowReadOutcome::UseBeforeDeclaration =
+    let FlowReadOutcome::UseBeforeDeclaration { .. } =
         flow_state.read_identifier(target_name, statement_index)
     else {
         return FlowCheck::Clear;

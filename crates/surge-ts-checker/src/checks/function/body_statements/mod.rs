@@ -12,8 +12,7 @@ use crate::checks::expr::evaluate_expression;
 use crate::checks::var::{VariableCheckOptions, check_variable_declaration_against_symbols};
 use crate::context::CheckerContext;
 use crate::flow::{
-    AssignmentState, FlowCheck, FunctionFlowState, apply_variable_declaration_state,
-    check_expression_flow,
+    FlowCheck, FunctionFlowState, apply_variable_declaration_state, check_expression_flow,
 };
 use crate::infer::InferredExpression;
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
@@ -129,17 +128,24 @@ pub(crate) fn check_function_variable_declaration(
     });
 
     let initializer_flow_blocked = variable.initializer.as_ref().is_some_and(|initializer| {
-        if flow_state.tracked_local_count() == 0 {
+        let block_scoped = matches!(
+            variable_kind,
+            ParsedVariableKind::Let | ParsedVariableKind::Const
+        );
+        if flow_state.tracked_local_count() == 0 && !block_scoped {
             return false;
         }
 
-        flow_state.begin_branch_capture();
-        if matches!(
-            variable_kind,
-            ParsedVariableKind::Let | ParsedVariableKind::Const
-        ) {
-            flow_state.declare_current(local_name.as_str(), AssignmentState::DeclaredUnassigned);
-        }
+        let initializing = block_scoped.then(|| {
+            let annotation_excludes_undefined = variable
+                .declared_type
+                .as_ref()
+                .map(|annotation| crate::flow::excludes_undefined(annotation, ctx, &[]));
+            flow_state.begin_initializer([crate::flow::InitializingBinding::declaration(
+                &variable,
+                annotation_excludes_undefined,
+            )])
+        });
 
         // A written annotation other than a bare type parameter is a
         // non-generic contextual type for the initializer.
@@ -161,7 +167,9 @@ pub(crate) fn check_function_variable_declaration(
             )
         }
         .is_blocked();
-        let _ = flow_state.finish_branch_capture();
+        if let Some(mark) = initializing {
+            flow_state.end_initializer(mark);
+        }
         blocked
     });
 

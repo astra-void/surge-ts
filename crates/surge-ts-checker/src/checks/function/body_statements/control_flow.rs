@@ -465,18 +465,31 @@ pub(crate) fn check_function_for_of_statement(
     ctx: &mut CheckerContext,
 ) {
     let flow_active = flow_state.tracked_local_count() > 0;
-    let iterable_blocked = if flow_active {
-        check_expression_flow(
+    let head = crate::flow::for_head_initializing(&for_of_statement);
+    let iterable_blocked = if flow_active || !head.is_empty() {
+        let mark = flow_state.begin_initializer(head);
+        let blocked = check_expression_flow(
             &for_of_statement.iterable,
             for_of_statement.iterable_span,
             flow_state,
             statement_index,
             ctx,
-        )
+        );
+        flow_state.end_initializer(mark);
+        blocked
     } else {
         FlowCheck::Clear
     };
 
+    // A `let`/`const` head is declared by the statement, so the expression it
+    // iterates already sees it — only a deferred read can get past the
+    // temporal dead zone reported above, and its type is circular there.
+    let head_scoped =
+        for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::BlockScoped;
+    if head_scoped {
+        scopes.push_child();
+        insert_binding_name(&for_of_statement.binding_name, Type::Any, scopes);
+    }
     let mut element_type = Type::Unknown;
     let mut numeric_property_names = false;
     if !iterable_blocked.is_blocked() {
@@ -552,6 +565,9 @@ pub(crate) fn check_function_for_of_statement(
                 element_type = for_of_element_type(&iterable_type);
             }
         }
+    }
+    if head_scoped {
+        scopes.pop_child();
     }
 
     let assigned = loop_join_names(&for_of_statement.body);
