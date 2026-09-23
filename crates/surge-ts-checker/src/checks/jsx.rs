@@ -330,10 +330,13 @@ pub(crate) fn check_jsx_element(
     let has_children = children.iter().any(is_semantic_child);
     // Which attribute the body forms decides what the attributes object is;
     // when surge cannot tell, the element's props cannot be judged.
-    let (children_name, children_unmodelled) = match jsx_children_property_name(ctx) {
-        ChildrenPropertyName::Name(name) => (Some(name), false),
-        ChildrenPropertyName::None => (None, false),
-        ChildrenPropertyName::Unmodelled => (None, has_children),
+    // `elaborateJsxComponents` checks the body under `children` even when
+    // the namespace names no property for it to form.
+    let (children_name, body_name, children_unmodelled) = match jsx_children_property_name(ctx) {
+        ChildrenPropertyName::Name(name) => (Some(name.clone()), Some(name), false),
+        ChildrenPropertyName::Missing => (None, Some("children".to_string()), false),
+        ChildrenPropertyName::Empty => (None, None, false),
+        ChildrenPropertyName::Unmodelled => (None, None, has_children),
     };
     let resolution = match &tag.expression {
         Some(expression) => resolve_component_props(
@@ -410,44 +413,30 @@ pub(crate) fn check_jsx_element(
         ctx.unmodelled_jsx_props_depth -= 1;
     }
 
-    let children_attribute = children_name
-        .as_deref()
-        .filter(|_| has_children)
-        .map(|name| (name, children_attribute));
+    let body = body_name.filter(|_| has_children).map(|name| JsxBody {
+        name,
+        in_attributes: children_name.is_some(),
+        children: children_attribute,
+    });
+    let site = RelationSite {
+        tag_name,
+        tag_name_span,
+    };
     match candidates.as_slice() {
         [] => {}
         [props] => {
-            for (diagnostic, span) in relate_attributes(
-                &evaluated,
-                children_attribute.as_ref(),
-                props,
-                tag_name_span,
-                ctx,
-            ) {
+            for (diagnostic, span) in relate_attributes(&evaluated, body.as_ref(), props, &site, ctx) {
                 ctx.push(diagnostic_with_syntax_span(diagnostic, span));
             }
         }
         [.., last] => {
             let chosen = candidates.iter().any(|props| {
-                relate_attributes(
-                    &evaluated,
-                    children_attribute.as_ref(),
-                    props,
-                    tag_name_span,
-                    ctx,
-                )
-                .is_empty()
+                relate_attributes(&evaluated, body.as_ref(), props, &site, ctx).is_empty()
             });
             if !chosen {
                 // tsc reports the last candidate's errors, each as "No overload
                 // matches this call".
-                for (_, span) in relate_attributes(
-                    &evaluated,
-                    children_attribute.as_ref(),
-                    last,
-                    tag_name_span,
-                    ctx,
-                ) {
+                for (_, span) in relate_attributes(&evaluated, body.as_ref(), last, &site, ctx) {
                     ctx.push(diagnostic_with_syntax_span(
                         Diagnostic::ts2769(ctx.file_name.clone()),
                         span,
@@ -917,7 +906,11 @@ fn jsx_attributes_container_member(container: &str, ctx: &mut CheckerContext) ->
 /// name the element's body is not an attribute at all.
 enum ChildrenPropertyName {
     Name(String),
-    None,
+    /// The namespace declares no `ElementChildrenAttribute`, or one with
+    /// several members (tsc's `InternalSymbolNameMissing`).
+    Missing,
+    /// `ElementChildrenAttribute` declares no member.
+    Empty,
     Unmodelled,
 }
 
@@ -927,7 +920,8 @@ fn jsx_children_property_name(ctx: &mut CheckerContext) -> ChildrenPropertyName 
     }
     match jsx_attributes_container_member("ElementChildrenAttribute", ctx) {
         ContainerMember::Name(name) => ChildrenPropertyName::Name(name),
-        ContainerMember::Missing | ContainerMember::Empty => ChildrenPropertyName::None,
+        ContainerMember::Missing => ChildrenPropertyName::Missing,
+        ContainerMember::Empty => ChildrenPropertyName::Empty,
         ContainerMember::Unmodelled => ChildrenPropertyName::Unmodelled,
     }
 }
@@ -1010,6 +1004,22 @@ struct EvaluatedAttributes<'a> {
     /// A spread whose members surge cannot enumerate: the attributes object
     /// may have any property, so none can be reported missing.
     opaque_spread: bool,
+}
+
+/// The element's body as tsc's `elaborateJsxComponents` relates it.
+struct JsxBody {
+    /// The property the body is checked under.
+    name: String,
+    /// Whether the body forms that property of the attributes object; when it
+    /// does not, the attributes object has no such property to relate.
+    in_attributes: bool,
+    children: ChildrenAttribute,
+}
+
+/// Where a relation failure is reported, and the tag it names.
+struct RelationSite<'a> {
+    tag_name: &'a str,
+    tag_name_span: Option<SyntaxTextSpan>,
 }
 
 /// The children attribute tsc synthesizes from the element's body.
@@ -1535,14 +1545,15 @@ fn child_contextual_type(children: &Type, index: usize) -> Type {
 
 /// tsc's `checkApplicableSignatureForJsxCallLikeElement` relation of the
 /// attributes object to one candidate's props, as the diagnostics it reports:
-/// every explicit attribute whose value does not fit its prop
-/// (`elaborateJsxComponents`), else the children against the children prop,
-/// else the first excess attribute, else the missing required props.
+/// when the relation fails, every explicit attribute whose value does not fit
+/// its prop and the body against the children prop (`elaborateJsxComponents`),
+/// else the relation's own failure — the first excess attribute, else the
+/// missing required props.
 fn relate_attributes(
     evaluated: &EvaluatedAttributes<'_>,
-    children: Option<&(&str, ChildrenAttribute)>,
+    body: Option<&JsxBody>,
     props: &JsxProps,
-    tag_name_span: Option<SyntaxTextSpan>,
+    site: &RelationSite<'_>,
     ctx: &CheckerContext,
 ) -> Vec<(Diagnostic, Option<SyntaxTextSpan>)> {
     let target = props.target.peeled();
@@ -1564,46 +1575,61 @@ fn relate_attributes(
         }
         elaborated.push((
             relation_diagnostic(ty, &expected, ctx),
-            value.attribute.name_span.or(tag_name_span),
+            value.attribute.name_span.or(site.tag_name_span),
         ));
     }
-    if let Some((name, children)) = children
-        && let Some(diagnostic) = relate_children(name, children, &target, tag_name_span, ctx)
-    {
-        elaborated.push(diagnostic);
-    }
-    if !elaborated.is_empty() {
+    let body_diagnostic = body.and_then(|body| relate_children(body, &target, site, ctx));
+    // A body the attributes object carries fails the relation itself; one it
+    // does not carry is only elaborated once something else has.
+    let body_fails_relation = body_diagnostic.is_some() && body.is_some_and(|body| body.in_attributes);
+    if !elaborated.is_empty() || body_fails_relation {
+        elaborated.extend(body_diagnostic);
         return elaborated;
     }
+    let attributes_body = body.filter(|body| body.in_attributes);
+    match relation_failure(evaluated, attributes_body, props, &target, site.tag_name_span, ctx) {
+        Some(failure) => vec![body_diagnostic.unwrap_or(failure)],
+        None => Vec::new(),
+    }
+}
 
-    let source_name = || attributes_object_name(evaluated, children);
+/// The relation's own report when no attribute or child elaborates it.
+fn relation_failure(
+    evaluated: &EvaluatedAttributes<'_>,
+    body: Option<&JsxBody>,
+    props: &JsxProps,
+    target: &Type,
+    tag_name_span: Option<SyntaxTextSpan>,
+    ctx: &CheckerContext,
+) -> Option<(Diagnostic, Option<SyntaxTextSpan>)> {
+    let source_name = || attributes_object_name(evaluated, body);
     // Only a written attribute makes the attributes object a fresh literal
     // (`createJsxAttributesType`); spreads and children alone are never
     // checked for excess properties.
-    if !evaluated.explicit.is_empty() && is_excess_property_check_target(&target) {
-        let known_in = excess_check_members(&target, evaluated);
+    if !evaluated.explicit.is_empty() && is_excess_property_check_target(target) {
+        let known_in = excess_check_members(target, evaluated);
         let excess = evaluated
             .explicit
             .iter()
             .map(|value| (value.attribute.name.as_str(), value.attribute.name_span))
-            .chain(children.map(|(name, _)| (*name, None)))
+            .chain(body.map(|body| (body.name.as_str(), None)))
             .find(|(name, _)| {
                 !is_hyphenated_jsx_name(name)
                     && !known_in.iter().any(|member| is_known_property(member, name))
             });
         if let Some((_, span)) = excess {
-            return vec![(
+            return Some((
                 Diagnostic::ts2322(source_name(), props.target.name(), ctx.file_name.clone()),
                 span.or(tag_name_span),
-            )];
+            ));
         }
     }
 
-    let Type::Object(object) = &target else {
-        return Vec::new();
+    let Type::Object(object) = target else {
+        return None;
     };
     if evaluated.opaque_spread {
-        return Vec::new();
+        return None;
     }
     let present = |name: &str| {
         evaluated
@@ -1611,7 +1637,7 @@ fn relate_attributes(
             .iter()
             .any(|value| value.attribute.name == name)
             || evaluated.spread.contains_key(name)
-            || children.is_some_and(|(children_name, _)| *children_name == name)
+            || body.is_some_and(|body| body.name == name)
             || surge_ts_types::object_prototype_member_type(name).is_some()
     };
     let missing_from = |object: &ObjectType| -> Vec<String> {
@@ -1622,7 +1648,6 @@ fn relate_attributes(
             .collect()
     };
     let missing = missing_from(object);
-    let target_name = props.target.name();
     // A primitive operand (the props of a class component constructed from a
     // `string`) fails every attributes object, whatever it carries.
     let primitive_operand = object.is_intersection
@@ -1632,8 +1657,7 @@ fn relate_attributes(
             .unwrap_or_default()
             .iter()
             .any(|operand| is_primitive_type(&operand.peeled()));
-    let first = missing.first();
-    if first.is_none() && !primitive_operand {
+    if missing.is_empty() && !primitive_operand {
         // A hyphenated attribute is never elaborated, but a prop the target
         // declares under its name still has to fit; the whole object is
         // reported then.
@@ -1646,25 +1670,24 @@ fn relate_attributes(
                     })
                 })
         });
-        if hyphenated_mismatch {
-            return vec![(
-                Diagnostic::ts2322(source_name(), target_name, ctx.file_name.clone()),
+        return hyphenated_mismatch.then(|| {
+            (
+                Diagnostic::ts2322(source_name(), props.target.name(), ctx.file_name.clone()),
                 tag_name_span,
-            )];
-        }
-        return Vec::new();
+            )
+        });
     }
-    if let (false, Some(first)) = (object.is_intersection, first) {
-        return vec![(
+    if !object.is_intersection {
+        return Some((
             crate::checks::expr::missing_properties_diagnostic(
-                first,
+                &missing[0],
                 &missing,
                 &source_name(),
-                &target_name,
+                &props.target.name(),
                 &ctx.file_name,
             ),
             tag_name_span,
-        )];
+        ));
     }
     if props.reports_constituent {
         // The intersection is related one constituent at a time, and the
@@ -1674,16 +1697,16 @@ fn relate_attributes(
             let constituent_object = match constituent.peeled() {
                 Type::Object(constituent_object) => constituent_object,
                 other if is_primitive_type(&other) => {
-                    return vec![(
+                    return Some((
                         Diagnostic::ts2322(source_name(), constituent.name(), ctx.file_name.clone()),
                         tag_name_span,
-                    )];
+                    ));
                 }
                 _ => continue,
             };
             let missing = missing_from(&constituent_object);
             if let Some(first) = missing.first() {
-                return vec![(
+                return Some((
                     crate::checks::expr::missing_properties_diagnostic(
                         first,
                         &missing,
@@ -1692,14 +1715,14 @@ fn relate_attributes(
                         &ctx.file_name,
                     ),
                     tag_name_span,
-                )];
+                ));
             }
         }
     }
-    vec![(
-        Diagnostic::ts2322(source_name(), target_name, ctx.file_name.clone()),
+    Some((
+        Diagnostic::ts2322(source_name(), props.target.name(), ctx.file_name.clone()),
         tag_name_span,
-    )]
+    ))
 }
 
 /// A type no object is assignable to.
@@ -1774,38 +1797,74 @@ fn attribute_target_type(target: &Type, name: &str) -> Option<Type> {
     }
 }
 
-/// The children branch of tsc's `elaborateJsxComponents`: a lone child that
-/// does not fit a children type with a member that is not iterable is
-/// reported at the child; against an iterable-only children type it is TS2745
-/// at the tag.
+/// The children branch of tsc's `elaborateJsxComponents`. A lone child is
+/// related to the children type when a member of it is not iterable, and
+/// reported at the child (TS2747 for text); otherwise a lone child against an
+/// iterable-only type, or several against a type with no iterable member, is
+/// TS2745/TS2746 at the tag. A body the attributes object does not carry is
+/// `unknown` there, so only those two can report it.
 fn relate_children(
-    name: &str,
-    children: &ChildrenAttribute,
+    body: &JsxBody,
     target: &Type,
-    tag_name_span: Option<SyntaxTextSpan>,
+    site: &RelationSite<'_>,
     ctx: &CheckerContext,
 ) -> Option<(Diagnostic, Option<SyntaxTextSpan>)> {
-    let expected = attribute_target_type(target, name)?;
-    let (kind, span) = children.single?;
-    let child_type = children.ty.as_ref()?;
-    if type_contains_unknown_or_any(&expected)
-        || type_contains_unknown_or_any(child_type)
-        || is_assignable_to(child_type, &expected)
-    {
+    let expected = attribute_target_type(target, &body.name)?;
+    if type_contains_unknown_or_any(&expected) {
         return None;
     }
+    let source = match (body.in_attributes, body.children.ty.as_ref()) {
+        (true, Some(source)) if !type_contains_unknown_or_any(source) => Some(source),
+        (true, _) => return None,
+        (false, _) => None,
+    };
+    let relates = source.is_some_and(|source| is_assignable_to(source, &expected));
     let iterable_declared = ctx.lookup_type_declaration("Iterable").is_some();
-    if !has_non_array_like_member(&expected, iterable_declared) {
-        return Some((
-            Diagnostic::ts2745(name, expected.name(), ctx.file_name.clone()),
-            tag_name_span,
-        ));
+    match body.children.single {
+        Some((kind, span)) if has_non_array_like_member(&expected, iterable_declared) => {
+            let source = source.filter(|_| !relates)?;
+            let diagnostic = match kind {
+                ChildKind::Text => Diagnostic::ts2747(
+                    site.tag_name,
+                    &body.name,
+                    expected.name(),
+                    ctx.file_name.clone(),
+                ),
+                ChildKind::Expression | ChildKind::Element => {
+                    relation_diagnostic(source, &expected, ctx)
+                }
+            };
+            Some((diagnostic, span.or(site.tag_name_span)))
+        }
+        Some(_) => (!relates).then(|| {
+            (
+                Diagnostic::ts2745(&body.name, expected.name(), ctx.file_name.clone()),
+                site.tag_name_span,
+            )
+        }),
+        // Several children against an iterable member are related one by one
+        // (`elaborateIterableOrArrayLikeTargetElementwise`), which surge does
+        // not model.
+        None if has_array_like_member(&expected, iterable_declared) => None,
+        None => (!relates).then(|| {
+            (
+                Diagnostic::ts2746(&body.name, expected.name(), ctx.file_name.clone()),
+                site.tag_name_span,
+            )
+        }),
     }
-    // A text child's mismatch is TS2747, which surge does not report.
-    if kind == ChildKind::Text {
-        return None;
+}
+
+/// Whether some member of a children type is array-like, the other half of
+/// [`has_non_array_like_member`]'s split.
+fn has_array_like_member(ty: &Type, iterable_declared: bool) -> bool {
+    match ty.peeled() {
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| has_array_like_member(member, iterable_declared)),
+        other => !has_non_array_like_member(&other, iterable_declared),
     }
-    Some((relation_diagnostic(child_type, &expected, ctx), span.or(tag_name_span)))
 }
 
 /// Whether some member of a children type is not array-like: tsc splits the
@@ -1868,7 +1927,7 @@ fn is_known_property(target: &Type, name: &str) -> bool {
 /// the children.
 fn attributes_object_name(
     evaluated: &EvaluatedAttributes<'_>,
-    children: Option<&(&str, ChildrenAttribute)>,
+    body: Option<&JsxBody>,
 ) -> String {
     let mut properties = evaluated.spread.clone();
     for value in &evaluated.explicit {
@@ -1879,10 +1938,10 @@ fn attributes_object_name(
             ObjectProperty::required(value.ty.clone().unwrap_or(Type::Any)),
         );
     }
-    if let Some((name, children)) = children {
+    if let Some(body) = body {
         properties.insert(
-            (*name).into(),
-            ObjectProperty::required(children.ty.clone().unwrap_or(Type::Any)),
+            body.name.as_str().into(),
+            ObjectProperty::required(body.children.ty.clone().unwrap_or(Type::Any)),
         );
     }
     if properties.is_empty() {

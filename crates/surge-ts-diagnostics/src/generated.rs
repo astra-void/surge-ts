@@ -935,6 +935,26 @@ pub const TS2745: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2746: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2746",
+    number: Some(2746),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This JSX tag's '{0}' prop expects a single child of type '{1}', but multiple children were provided.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2747: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2747",
+    number: Some(2747),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' components don't accept text as child elements. Text in JSX has the type 'string', but the expected type of '{1}' is '{2}'.",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2754: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2754",
     number: Some(2754),
@@ -4249,6 +4269,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2686,
     TS2741,
     TS2745,
+    TS2746,
+    TS2747,
     TS2754,
     TS2749,
     TS2869,
@@ -5510,6 +5532,36 @@ impl Diagnostic {
             vec![
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2746(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2746,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2747(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2747,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
             ],
             file_name,
         )

@@ -933,6 +933,26 @@ oracle = [
   "tests/compat-projects/jsx-children-basic/tsconfig.json",
 ]
 
+[TS2746]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/jsx-children-arity-basic/src/arity.tsx",
+  "tests/compat-projects/jsx-children-arity-unnamed-basic/src/arity.tsx",
+]
+oracle = [
+  "jsx-children-arity-basic",
+  "jsx-children-arity-unnamed-basic",
+]
+
+[TS2747]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/jsx-children-arity-basic/src/arity.tsx",
+]
+oracle = [
+  "jsx-children-arity-basic",
+]
+
 [TS2749]
 status = "emitted"
 oracle = [
