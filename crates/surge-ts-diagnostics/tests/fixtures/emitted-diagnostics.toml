@@ -1156,8 +1156,10 @@ status = "catalog-only"
 reason = "Cataloged for future coverage"
 
 [TS7061]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "mapped-type-member-in-body-basic",
+]
 
 ["surge::parser-error"]
 status = "emitted"
@@ -1776,8 +1778,10 @@ oracle = [
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
 [TS1164]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "enum-computed-member-name-basic",
+]
 [TS1176]
 status = "emitted"
 oracle = [

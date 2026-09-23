@@ -729,6 +729,8 @@ export const fixturePresets: Record<string, string> = {
   'use-strict-parameter-list-basic': path.join(workspaceRoot, 'tests/compat-projects/use-strict-parameter-list-basic/tsconfig.json'),
   'super-type-arguments-basic': path.join(workspaceRoot, 'tests/compat-projects/super-type-arguments-basic/tsconfig.json'),
   'instanceof-instantiation-expression-basic': path.join(workspaceRoot, 'tests/compat-projects/instanceof-instantiation-expression-basic/tsconfig.json'),
+  'mapped-type-member-in-body-basic': path.join(workspaceRoot, 'tests/compat-projects/mapped-type-member-in-body-basic/tsconfig.json'),
+  'enum-computed-member-name-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-computed-member-name-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
