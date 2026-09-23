@@ -196,7 +196,7 @@ arity = 2
 code = "TS2306"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "File '{0}' is not a module."
 arity = 1
 
@@ -388,7 +388,7 @@ arity = 0
 code = "TS2351"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "This expression is not constructable."
 arity = 0
 
@@ -956,7 +956,7 @@ arity = 2
 code = "TS7051"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Parameter has a name but no type. Did you mean '{0}: {1}'?"
 arity = 2
 
@@ -1036,7 +1036,7 @@ arity = 0
 code = "TS7061"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "A mapped type may not declare properties or methods."
 arity = 0
 
@@ -1644,7 +1644,7 @@ arity = 0
 code = "TS1051"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "A 'set' accessor cannot have an optional parameter."
 arity = 0
 
@@ -1732,7 +1732,7 @@ arity = 0
 code = "TS1164"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Computed property names are not allowed in enums."
 arity = 0
 
@@ -1956,7 +1956,7 @@ arity = 0
 code = "TS2566"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "A rest element cannot have a property name."
 arity = 0
 
@@ -1980,7 +1980,7 @@ arity = 0
 code = "TS2784"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "'get' and 'set' accessors cannot declare 'this' parameters."
 arity = 0
 
@@ -3191,4 +3191,900 @@ source = "typescript"
 support = "emitted"
 message = "Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '{0}'?"
 arity = 1
+
+[[diagnostic]]
+code = "TS1044"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier cannot appear on a module or namespace element."
+arity = 1
+
+[[diagnostic]]
+code = "TS1040"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier cannot be used in an ambient context."
+arity = 1
+
+[[diagnostic]]
+code = "TS1042"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier cannot be used here."
+arity = 1
+
+[[diagnostic]]
+code = "TS1243"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier cannot be used with '{1}' modifier."
+arity = 2
+
+[[diagnostic]]
+code = "TS1277"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' modifier can only appear on a type parameter of a function, method or class"
+arity = 1
+
+[[diagnostic]]
+code = "TS1191"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An import declaration cannot have modifiers."
+arity = 0
+
+[[diagnostic]]
+code = "TS1319"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A default export can only be used in an ECMAScript-style module."
+arity = 0
+
+[[diagnostic]]
+code = "TS1231"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An export assignment must be at the top level of a file or module declaration."
+arity = 0
+
+[[diagnostic]]
+code = "TS1232"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An import declaration can only be used at the top level of a namespace or module."
+arity = 0
+
+[[diagnostic]]
+code = "TS1233"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An export declaration can only be used at the top level of a namespace or module."
+arity = 0
+
+[[diagnostic]]
+code = "TS1234"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An ambient module declaration is only allowed at the top level in a file."
+arity = 0
+
+[[diagnostic]]
+code = "TS1235"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A namespace declaration is only allowed at the top level of a namespace or module."
+arity = 0
+
+[[diagnostic]]
+code = "TS1258"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A default export must be at the top level of a file or module declaration."
+arity = 0
+
+[[diagnostic]]
+code = "TS2435"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Ambient modules cannot be nested in other modules or namespaces."
+arity = 0
+
+[[diagnostic]]
+code = "TS1540"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'namespace' declaration should not be declared using the 'module' keyword. Please use the 'namespace' keyword instead."
+arity = 0
+
+[[diagnostic]]
+code = "TS2669"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Augmentations for the global scope can only be directly nested in external modules or ambient module declarations."
+arity = 0
+
+[[diagnostic]]
+code = "TS2670"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Augmentations for the global scope should have 'declare' modifier unless they appear in already ambient context."
+arity = 0
+
+[[diagnostic]]
+code = "TS2666"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Exports and export assignments are not permitted in module augmentations."
+arity = 0
+
+[[diagnostic]]
+code = "TS2667"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Imports are not permitted in module augmentations. Consider moving them to the enclosing external module."
+arity = 0
+
+[[diagnostic]]
+code = "TS2668"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'export' modifier cannot be applied to ambient modules and module augmentations since they are always visible."
+arity = 0
+
+[[diagnostic]]
+code = "TS1046"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Top-level declarations in .d.ts files must start with either a 'declare' or 'export' modifier."
+arity = 0
+
+[[diagnostic]]
+code = "TS1346"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This parameter is not allowed with 'use strict' directive."
+arity = 0
+
+[[diagnostic]]
+code = "TS1347"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'use strict' directive cannot be used with non-simple parameter list."
+arity = 0
+
+[[diagnostic]]
+code = "TS1162"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An object member cannot be declared optional."
+arity = 0
+
+[[diagnostic]]
+code = "TS2754"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'super' may not use type arguments."
+arity = 0
+
+[[diagnostic]]
+code = "TS2848"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The right-hand side of an 'instanceof' expression must not be an instantiation expression."
+arity = 0
+
+[[diagnostic]]
+code = "TS18016"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Private identifiers are not allowed outside class bodies."
+arity = 0
+
+[[diagnostic]]
+code = "TS1034"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'super' must be followed by an argument list or member access."
+arity = 0
+
+[[diagnostic]]
+code = "TS1275"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'accessor' modifier can only appear on a property declaration."
+arity = 0
+
+[[diagnostic]]
+code = "TS1228"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A type predicate is only allowed in return type position for functions and methods."
+arity = 0
+
+[[diagnostic]]
+code = "TS2815"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'arguments' cannot be referenced in property initializers or class static initialization blocks."
+arity = 0
+
+[[diagnostic]]
+code = "TS2737"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "BigInt literals are not available when targeting lower than ES2020."
+arity = 0
+
+[[diagnostic]]
+code = "TS1433"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Neither decorators nor modifiers may be applied to 'this' parameters."
+arity = 0
+
+[[diagnostic]]
+code = "TS1196"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Catch clause variable type annotation must be 'any' or 'unknown' if specified."
+arity = 0
+
+[[diagnostic]]
+code = "TS2463"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A binding pattern parameter cannot be optional in an implementation signature."
+arity = 0
+
+[[diagnostic]]
+code = "TS2491"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of a 'for...in' statement cannot be a destructuring pattern."
+arity = 0
+
+[[diagnostic]]
+code = "TS2406"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of a 'for...in' statement must be a variable or a property access."
+arity = 0
+
+[[diagnostic]]
+code = "TS2780"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of a 'for...in' statement may not be an optional property access."
+arity = 0
+
+[[diagnostic]]
+code = "TS2781"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of a 'for...of' statement may not be an optional property access."
+arity = 0
+
+[[diagnostic]]
+code = "TS2778"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The target of an object rest assignment may not be an optional property access."
+arity = 0
+
+[[diagnostic]]
+code = "TS2408"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Setters cannot return a value."
+arity = 0
+
+[[diagnostic]]
+code = "TS18041"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'return' statement cannot be used inside a class static block."
+arity = 0
+
+[[diagnostic]]
+code = "TS17005"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A constructor cannot contain a 'super' call when its class extends 'null'."
+arity = 0
+
+[[diagnostic]]
+code = "TS1053"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'set' accessor cannot have rest parameter."
+arity = 0
+
+[[diagnostic]]
+code = "TS1052"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'set' accessor parameter cannot have an initializer."
+arity = 0
+
+[[diagnostic]]
+code = "TS1054"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'get' accessor cannot have parameters."
+arity = 0
+
+[[diagnostic]]
+code = "TS1267"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' cannot have an initializer because it is marked abstract."
+arity = 1
+
+[[diagnostic]]
+code = "TS1242"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'abstract' modifier can only appear on a class, method, or property declaration."
+arity = 0
+
+[[diagnostic]]
+code = "TS18006"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Classes may not have a field named 'constructor'."
+arity = 0
+
+[[diagnostic]]
+code = "TS2680"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A '{0}' parameter must be the first parameter."
+arity = 1
+
+[[diagnostic]]
+code = "TS1358"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Tagged template expressions are not permitted in an optional chain."
+arity = 0
+
+[[diagnostic]]
+code = "TS1317"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A parameter property cannot be declared using a rest parameter."
+arity = 0
+
+[[diagnostic]]
+code = "TS2467"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A computed property name cannot reference a type parameter from its containing type."
+arity = 0
+
+[[diagnostic]]
+code = "TS1225"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot find parameter '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS1230"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A type predicate cannot reference element '{0}' in a binding pattern."
+arity = 1
+
+[[diagnostic]]
+code = "TS2415"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class '{0}' incorrectly extends base class '{1}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS2417"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class static side '{0}' incorrectly extends base class static side '{1}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS2507"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' is not a constructor function type."
+arity = 1
+
+[[diagnostic]]
+code = "TS2863"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A class cannot extend a primitive type like '{0}'. Classes can only extend constructable values."
+arity = 1
+
+[[diagnostic]]
+code = "TS2864"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A class cannot implement a primitive type like '{0}'. It can only implement other named object types."
+arity = 1
+
+[[diagnostic]]
+code = "TS2446"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' is protected and only accessible through an instance of class '{1}'. This is an instance of class '{2}'."
+arity = 3
+
+[[diagnostic]]
+code = "TS18013"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' is not accessible outside class '{1}' because it has a private identifier."
+arity = 2
+
+[[diagnostic]]
+code = "TS2673"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Constructor of class '{0}' is private and only accessible within the class declaration."
+arity = 1
+
+[[diagnostic]]
+code = "TS2674"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Constructor of class '{0}' is protected and only accessible within the class declaration."
+arity = 1
+
+[[diagnostic]]
+code = "TS2675"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot extend a class '{0}'. Class constructor is marked as private."
+arity = 1
+
+[[diagnostic]]
+code = "TS4105"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Private or protected member '{0}' cannot be accessed on a type parameter."
+arity = 1
+
+[[diagnostic]]
+code = "TS2376"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'super' call must be the first statement in the constructor to refer to 'super' or 'this' when a derived class contains initialized properties, parameter properties, or private identifiers."
+arity = 0
+
+[[diagnostic]]
+code = "TS2401"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'super' call must be a root-level statement within a constructor of a derived class that contains initialized properties, parameter properties, or private identifiers."
+arity = 0
+
+[[diagnostic]]
+code = "TS2301"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Initializer of instance member variable '{0}' cannot reference identifier '{1}' declared in the constructor."
+arity = 2
+
+[[diagnostic]]
+code = "TS2803"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot assign to private method '{0}'. Private methods are not writable."
+arity = 1
+
+[[diagnostic]]
+code = "TS2806"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Private accessor was defined without a getter."
+arity = 0
+
+[[diagnostic]]
+code = "TS2725"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class name cannot be 'Object' when targeting ES5 and above with module {0}."
+arity = 1
+
+[[diagnostic]]
+code = "TS2397"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Declaration name conflicts with built-in global identifier '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS1216"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Identifier expected. '__esModule' is reserved as an exported marker when transforming ECMAScript modules."
+arity = 0
+
+[[diagnostic]]
+code = "TS2438"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Import name cannot be '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2441"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Duplicate identifier '{0}'. Compiler reserves name '{1}' in top level scope of a module."
+arity = 2
+
+[[diagnostic]]
+code = "TS2818"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Duplicate identifier '{0}'. Compiler reserves name '{1}' when emitting 'super' references in static initializers."
+arity = 2
+
+[[diagnostic]]
+code = "TS2661"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot export '{0}'. Only local declarations can be exported from a module."
+arity = 1
+
+[[diagnostic]]
+code = "TS1362"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' cannot be used as a value because it was exported using 'export type'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2578"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unused '@ts-expect-error' directive."
+arity = 0
+
+[[diagnostic]]
+code = "TS2664"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Invalid module name in augmentation, module '{0}' cannot be found."
+arity = 1
+
+[[diagnostic]]
+code = "TS2671"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot augment module '{0}' because it resolves to a non-module entity."
+arity = 1
+
+[[diagnostic]]
+code = "TS2436"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Ambient module declaration cannot specify relative module name."
+arity = 0
+
+[[diagnostic]]
+code = "TS2432"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "In an enum with multiple declarations, only one declaration can omit an initializer for its first enum element."
+arity = 0
+
+[[diagnostic]]
+code = "TS2477"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'const' enum member initializer was evaluated to a non-finite value."
+arity = 0
+
+[[diagnostic]]
+code = "TS2478"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'const' enum member initializer was evaluated to disallowed value 'NaN'."
+arity = 0
+
+[[diagnostic]]
+code = "TS2476"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A const enum member can only be accessed using a string literal."
+arity = 0
+
+[[diagnostic]]
+code = "TS2475"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'const' enums can only be used in property or index access expressions or the right hand side of an import declaration or export assignment or type query."
+arity = 0
+
+[[diagnostic]]
+code = "TS2748"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot access ambient const enums when '{0}' is enabled."
+arity = 1
+
+[[diagnostic]]
+code = "TS17004"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot use JSX unless the '--jsx' flag is provided."
+arity = 0
+
+[[diagnostic]]
+code = "TS2707"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Generic type '{0}' requires between {1} and {2} type arguments."
+arity = 3
+
+[[diagnostic]]
+code = "TS7027"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unreachable code detected."
+arity = 0
+
+[[diagnostic]]
+code = "TS2687"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "All declarations of '{0}' must have identical modifiers."
+arity = 1
+
+[[diagnostic]]
+code = "TS2814"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Function with bodies can only merge with classes that are ambient."
+arity = 0
+
+[[diagnostic]]
+code = "TS2813"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class declaration cannot implement overload list for '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2434"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A namespace declaration cannot be located prior to a class or function with which it is merged."
+arity = 0
+
+[[diagnostic]]
+code = "TS2433"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A namespace declaration cannot be in a different file from a class or function with which it is merged."
+arity = 0
+
+[[diagnostic]]
+code = "TS2652"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Merged declaration '{0}' cannot include a default export declaration. Consider adding a separate 'export default {0}' declaration instead."
+arity = 1
+
+[[diagnostic]]
+code = "TS2481"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot initialize outer scoped variable '{0}' in the same scope as block scoped declaration '{1}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS2744"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type parameter defaults can only reference previously declared type parameters."
+arity = 0
+
+[[diagnostic]]
+code = "TS2700"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Rest types may only be created from object types."
+arity = 0
+
+[[diagnostic]]
+code = "TS2574"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A rest element type must be an array type."
+arity = 0
+
+[[diagnostic]]
+code = "TS2495"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' is not an array type or a string type."
+arity = 1
+
+[[diagnostic]]
+code = "TS6234"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This expression is not callable because it is a 'get' accessor. Did you mean to use it without '()'?"
+arity = 0
+
+[[diagnostic]]
+code = "TS2812"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' does not exist on type '{1}'. Try changing the 'lib' compiler option to include 'dom'."
+arity = 2
+
+[[diagnostic]]
+code = "TS2690"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' only refers to a type, but is being used as a value here. Did you mean to use '{1} in {0}'?"
+arity = 2
+
+[[diagnostic]]
+code = "TS2560"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Value of type '{0}' has no properties in common with type '{1}'. Did you mean to call it?"
+arity = 2
+
+[[diagnostic]]
+code = "TS7032"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' implicitly has type 'any', because its set accessor lacks a parameter type annotation."
+arity = 1
+
+[[diagnostic]]
+code = "TS7041"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The containing arrow function captures the global value of 'this'."
+arity = 0
+
+[[diagnostic]]
+code = "TS7028"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unused label."
+arity = 0
+
+[[diagnostic]]
+code = "TS2677"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A type predicate's type must be assignable to its parameter's type."
+arity = 0
+
+[[diagnostic]]
+code = "TS2405"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of a 'for...in' statement must be of type 'string' or 'any'."
+arity = 0
 
