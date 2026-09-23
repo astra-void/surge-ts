@@ -3335,3 +3335,9 @@ reason = "Cataloged for future coverage"
 [TS6234]
 status = "catalog-only"
 reason = "Cataloged for future coverage"
+
+[TS2487]
+status = "emitted"
+oracle = [
+  "for-of-invalid-target-basic",
+]

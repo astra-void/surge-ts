@@ -432,6 +432,7 @@ export const fixturePresets: Record<string, string> = {
   'static-block-return-basic': path.join(workspaceRoot, 'tests/compat-projects/static-block-return-basic/tsconfig.json'),
   'for-in-destructuring-target-basic': path.join(workspaceRoot, 'tests/compat-projects/for-in-destructuring-target-basic/tsconfig.json'),
   'optional-chain-write-targets-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-write-targets-basic/tsconfig.json'),
+  'for-of-invalid-target-basic': path.join(workspaceRoot, 'tests/compat-projects/for-of-invalid-target-basic/tsconfig.json'),
   'tagged-template-optional-chain-basic': path.join(workspaceRoot, 'tests/compat-projects/tagged-template-optional-chain-basic/tsconfig.json'),
   'super-call-extends-null-basic': path.join(workspaceRoot, 'tests/compat-projects/super-call-extends-null-basic/tsconfig.json'),
   'super-follower-grammar-basic': path.join(workspaceRoot, 'tests/compat-projects/super-follower-grammar-basic/tsconfig.json'),

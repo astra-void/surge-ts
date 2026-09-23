@@ -5135,6 +5135,16 @@ pub const TS1221: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2487: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2487",
+    number: Some(2487),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The left-hand side of a 'for...of' statement must be a variable or a property access.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
     TS2411,
@@ -5649,6 +5659,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2405,
     TS1011,
     TS1221,
+    TS2487,
 ];
 
 impl Diagnostic {
@@ -9562,5 +9573,10 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts1221(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS1221, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2487(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2487, Vec::<DiagnosticArg>::new(), file_name)
     }
 }

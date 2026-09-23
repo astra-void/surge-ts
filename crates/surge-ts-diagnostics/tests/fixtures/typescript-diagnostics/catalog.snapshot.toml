@@ -4104,3 +4104,11 @@ support = "emitted"
 message = "Generators are not allowed in an ambient context."
 arity = 0
 
+[[diagnostic]]
+code = "TS2487"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of a 'for...of' statement must be a variable or a property access."
+arity = 0
+

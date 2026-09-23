@@ -100,6 +100,7 @@ fn classify_uncoded_parser_error(
                 (false, true) if object_rest => 2778,
                 (false, true) => 2779,
                 (false, false) if keyword_follows("in") => 2406,
+                (false, false) if keyword_follows("of") => 2487,
                 (false, false) => 2364,
             };
             Some((code, span))
