@@ -364,10 +364,16 @@ pub(crate) fn check_call_like_with_expected_type(
                 eprintln!("[call] not callable: {shown} in {}", ctx.file_name);
             }
             // tsc's `resolveCallExpression`: a callee that can only be
-            // constructed is TS2348, which names it and suggests `new`.
+            // constructed is TS2348, which names it and suggests `new`. A
+            // tagged template's tag goes through `invocationError` instead.
+            let is_tagged_template = arguments.first().is_some_and(|argument| {
+                matches!(argument.expression, ParsedExpression::TemplateStringsArray { .. })
+            });
             let diagnostic = match other {
                 Type::Object(object)
-                    if object.construct_signature().is_some() && object.call_signature().is_none() =>
+                    if !is_tagged_template
+                        && object.construct_signature().is_some()
+                        && object.call_signature().is_none() =>
                 {
                     Diagnostic::ts2348(other.name(), ctx.file_name.clone())
                 }

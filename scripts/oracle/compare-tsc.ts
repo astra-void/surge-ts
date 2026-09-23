@@ -786,6 +786,7 @@ export const fixturePresets: Record<string, string> = {
   'type-parameter-default-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/type-parameter-default-reference-basic/tsconfig.json'),
   'type-predicate-assignability-basic': path.join(workspaceRoot, 'tests/compat-projects/type-predicate-assignability-basic/tsconfig.json'),
   'unused-label-basic': path.join(workspaceRoot, 'tests/compat-projects/unused-label-basic/tsconfig.json'),
+  'enum-reverse-mapping-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-reverse-mapping-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

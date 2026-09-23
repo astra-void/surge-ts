@@ -388,8 +388,9 @@ pub(crate) fn property_spelling_suggestion(name: &str, object_type: &Type) -> Op
 
 /// tsc's `getPropertyTypeForIndexType` for a literal key that neither a member
 /// nor an index signature answers: under `noImplicitAny` the whole element
-/// access is an implicit `any` (TS7053, or TS2576 for a static-member mixup);
-/// without it the access silently reads `any`.
+/// access is an implicit `any` (TS7053, TS2576 for a static-member mixup, or
+/// TS7015 on the key when the receiver has only a number index); without it
+/// the access silently reads `any`.
 pub(crate) fn report_missing_element(
     key: &str,
     key_type: &Type,
@@ -404,7 +405,17 @@ pub(crate) fn report_missing_element(
     }
     let object_type_name = object_type.name();
     let file_name = ctx.file_name.clone();
-    if static_member_owner_for_missing_instance_property(key, object_type, symbols).is_none()
+    let static_owner = static_member_owner_for_missing_instance_property(key, object_type, symbols);
+    if static_owner.is_none()
+        && matches!(object_type.peeled(), Type::Object(object) if object.number_index_type.is_some())
+    {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts7015(file_name),
+            key_span.or(access_span),
+        ));
+        return;
+    }
+    if static_owner.is_none()
         && let Some(suggestion) = property_spelling_suggestion(key, object_type)
     {
         ctx.push(diagnostic_with_syntax_span(
@@ -413,8 +424,7 @@ pub(crate) fn report_missing_element(
         ));
         return;
     }
-    let diagnostic = match static_member_owner_for_missing_instance_property(key, object_type, symbols)
-    {
+    let diagnostic = match static_owner {
         Some(class_name) => {
             let written_key = match key_type {
                 Type::StringLiteral(_) => format!("\"{key}\""),

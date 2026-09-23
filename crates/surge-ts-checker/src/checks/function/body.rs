@@ -588,7 +588,11 @@ fn collect_body_local_type_declarations(
                     alias.ty.clone(),
                     None,
                 )
-                .with_enum_name(alias.enum_name.as_deref(), alias.enum_exported);
+                .with_enum_name(
+                    alias.enum_name.as_deref(),
+                    alias.enum_exported,
+                    alias.enum_is_const,
+                );
                 (alias.name.clone(), TypeDeclarationInfo::Alias(info))
             }
             ParsedFunctionBodyStatement::Interface(interface) => {

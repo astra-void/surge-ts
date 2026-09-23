@@ -30,6 +30,9 @@ pub(crate) fn infer_index_access(
             span: *object_span,
         };
     };
+    if indexes_const_enum_object(object_name, index, &symbol.ty, ctx) {
+        return InferredExpression::Known(Type::ErrorType);
+    }
 
     if let ParsedExpression::NumberLiteral(index_value) = index
         && let Type::OpenTuple(tuple) = symbol.ty.peeled()
@@ -242,6 +245,36 @@ pub(crate) fn infer_tuple_index_access(
 
     let _ = index_span;
     InferredExpression::Unknown
+}
+
+/// tsc's `checkElementAccessExpression`: a const enum object indexed by
+/// anything but a string literal is TS2476 (a grammar diagnostic) and the
+/// access is the error type, so the object's reverse mapping never answers it.
+pub(crate) fn indexes_const_enum_object(
+    object_name: &str,
+    index: &ParsedExpression,
+    object_type: &Type,
+    ctx: &CheckerContext,
+) -> bool {
+    let string_literal_like = match index {
+        ParsedExpression::StringLiteral(_) => true,
+        ParsedExpression::TemplateLiteral { expressions, .. } => expressions.is_empty(),
+        _ => false,
+    };
+    if string_literal_like {
+        return false;
+    }
+    let Some(crate::symbols::TypeDeclarationInfo::Alias(alias)) =
+        ctx.lookup_type_declaration(object_name)
+    else {
+        return false;
+    };
+    // A value of the same name that is not the enum's object shadows it.
+    alias.enum_is_const
+        && alias.enum_name.as_deref() == Some(object_name)
+        && matches!(object_type, Type::Object(object)
+            if object.alias_name.as_deref().and_then(|name| name.strip_prefix("typeof "))
+                == Some(object_name))
 }
 
 /// `E.A` read off an enum's object is the enum member type `E.A`, not the
