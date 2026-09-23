@@ -336,7 +336,19 @@ pub(crate) fn check_jsx_element(
         ChildrenPropertyName::Unmodelled => (None, has_children),
     };
     let resolution = match &tag.expression {
-        Some(expression) => resolve_component_props(expression, tag_name_span, symbols, ctx),
+        Some(expression) => resolve_component_props(
+            &JsxCallSite {
+                tag_expression: expression,
+                type_arguments: &tag.type_arguments,
+                type_arguments_span: tag.type_arguments_span,
+                attributes,
+                children: has_children.then_some(children).unwrap_or_default(),
+                children_name: children_name.as_deref(),
+            },
+            tag_name_span,
+            symbols,
+            ctx,
+        ),
         None => intrinsic_element_props(tag_name, tag.span.or(fallback_span), ctx),
     };
     let (contextual, candidates, unmodelled_props) = match resolution {
@@ -351,6 +363,15 @@ pub(crate) fn check_jsx_element(
         PropsResolution::Unmodelled => (None, Vec::new(), true),
     };
     let overloaded = candidates.len() > 1;
+    let contextual = contextual.map(|contextual| {
+        discriminate_by_attributes(
+            &contextual,
+            attributes,
+            has_children.then_some(children_name.as_deref()).flatten(),
+            symbols,
+            ctx,
+        )
+    });
 
     // A component whose props type collapsed to the degradation sentinel offers
     // no contextual type for an inline callback attribute, so any implicit-any
@@ -376,8 +397,15 @@ pub(crate) fn check_jsx_element(
         symbols,
         ctx,
     );
-    let children_attribute =
-        evaluate_children(children, &tag.child_spans, fallback_span, symbols, ctx);
+    let children_attribute = evaluate_children(
+        children,
+        &tag.child_spans,
+        contextual.as_ref(),
+        children_name.as_deref(),
+        fallback_span,
+        symbols,
+        ctx,
+    );
     if unmodelled_props {
         ctx.unmodelled_jsx_props_depth -= 1;
     }
@@ -442,16 +470,28 @@ pub(crate) fn check_jsx_element(
     }
 }
 
+/// A value tag seen as the call tsc resolves it as: the attributes (with the
+/// body's children) are its single argument.
+struct JsxCallSite<'a> {
+    tag_expression: &'a ParsedExpression,
+    type_arguments: &'a [ParsedType],
+    type_arguments_span: Option<SyntaxTextSpan>,
+    attributes: &'a [ParsedJsxAttribute],
+    /// The children when the body has semantic ones.
+    children: &'a [ParsedJsxChild],
+    children_name: Option<&'a str>,
+}
+
 /// The props a value tag's attributes are checked against (tsc's
 /// `resolveJsxOpeningLikeElement` for a non-intrinsic tag). Evaluating the tag
 /// reports what an unresolved name or member reports anywhere else.
 fn resolve_component_props(
-    expression: &ParsedExpression,
+    site: &JsxCallSite<'_>,
     span: Option<SyntaxTextSpan>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> PropsResolution {
-    let component_type = match evaluate_expression(expression, span, symbols, ctx) {
+    let component_type = match evaluate_expression(site.tag_expression, span, symbols, ctx) {
         InferredExpression::Known(component_type) => component_type,
         // A value surge could not type at all is its own gap: tsc has the
         // component's props and types the callbacks from them.
@@ -469,6 +509,23 @@ fn resolve_component_props(
         } else {
             PropsResolution::Unchecked
         };
+    };
+    let signatures = match signatures.as_slice() {
+        [signature] if !construct => match instantiate_jsx_signature(signature, site, symbols, ctx) {
+            Some(signature) => vec![signature],
+            // tsc instantiates the props with what inference found; surge
+            // found nothing, so props that name the type parameters are
+            // unknown to it. Props that do not are the same either way.
+            None if signature
+                .parameters()
+                .first()
+                .is_some_and(|props| mentions_type_parameter(&props.peeled())) =>
+            {
+                return PropsResolution::Unmodelled;
+            }
+            None => signatures,
+        },
+        _ => signatures,
     };
     let mut candidates = Vec::with_capacity(signatures.len());
     for signature in &signatures {
@@ -497,6 +554,155 @@ fn resolve_component_props(
     PropsResolution::Props {
         contextual,
         candidates,
+    }
+}
+
+/// tsc's `inferJsxTypeArguments`: a generic component's type arguments are
+/// inferred from the attributes object, read as the call's one argument, and
+/// explicit type arguments on the tag are taken as written. `None` when the
+/// signature is generic but could not be instantiated.
+fn instantiate_jsx_signature(
+    signature: &FunctionType,
+    site: &JsxCallSite<'_>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<FunctionType> {
+    let declared = signature.declaration().and_then(|declaration| {
+        if let Some(member) = declaration.downcast_ref::<crate::checks::call::DeclaredMemberSignature>() {
+            return Some((member.signature.clone(), member.outer_type_arguments.clone()));
+        }
+        declaration
+            .downcast_ref::<crate::symbols::FunctionSignatureInfo>()
+            .map(|info| (Arc::new(info.clone()), Vec::new()))
+    });
+    let declared = declared.or_else(|| match site.tag_expression {
+        ParsedExpression::Identifier { name, .. } => symbols
+            .get(name)
+            .and_then(|symbol| symbol.function_signature.clone())
+            .map(|info| (info, Vec::new())),
+        _ => None,
+    });
+    let Some((info, outer_type_arguments)) = declared else {
+        return Some(signature.clone());
+    };
+    if info.type_parameters.is_empty() || info.overloaded {
+        return Some(signature.clone());
+    }
+    let argument = jsx_attributes_argument(site);
+    match crate::checks::call::instantiate_function_type(
+        signature,
+        Some(&info),
+        &outer_type_arguments,
+        site.type_arguments,
+        site.type_arguments_span,
+        std::slice::from_ref(&argument),
+        None,
+        symbols,
+        ctx,
+    ) {
+        std::borrow::Cow::Owned(instantiated) => Some(instantiated),
+        std::borrow::Cow::Borrowed(_) => None,
+    }
+}
+
+/// Whether a type still names an uninstantiated type parameter anywhere.
+fn mentions_type_parameter(ty: &Type) -> bool {
+    match ty {
+        Type::TypeParameter(_) => true,
+        Type::Reference(reference) => reference.arguments.iter().any(mentions_type_parameter),
+        Type::Union(union) => union.types().iter().any(mentions_type_parameter),
+        Type::Array(element) => mentions_type_parameter(element),
+        Type::Tuple(elements) => elements.iter().any(mentions_type_parameter),
+        Type::Function(function) => {
+            function.parameters().iter().any(mentions_type_parameter)
+                || mentions_type_parameter(function.return_type())
+        }
+        Type::Object(object) => {
+            object
+                .properties
+                .values()
+                .any(|property| mentions_type_parameter(&property.ty))
+                || object
+                    .string_index_type
+                    .as_deref()
+                    .is_some_and(mentions_type_parameter)
+                || object
+                    .intersection_operands
+                    .as_deref()
+                    .is_some_and(|operands| operands.iter().any(mentions_type_parameter))
+        }
+        _ => false,
+    }
+}
+
+/// The attributes object as an object literal argument: each attribute a
+/// property, each spread a spread, and a lone child as the children.
+fn jsx_attributes_argument(site: &JsxCallSite<'_>) -> surge_ts_syntax::ParsedCallArgument {
+    let property = |name: &str, name_span, value: ParsedExpression, value_span, is_spread| {
+        surge_ts_syntax::ParsedObjectProperty {
+            name: name.to_string(),
+            name_span,
+            value,
+            value_span,
+            span: name_span.or(value_span),
+            is_method: false,
+            is_spread,
+            is_shorthand: false,
+            is_accessor: false,
+            is_getter: false,
+            computed_key: None,
+            paired_setter: None,
+            unnamed_key_value: None,
+        }
+    };
+    let mut properties = Vec::with_capacity(site.attributes.len() + 1);
+    for attribute in site.attributes {
+        if attribute.name.is_empty() {
+            if let Some(value) = &attribute.value {
+                properties.push(property("", None, value.clone(), attribute.value_span, true));
+            }
+            continue;
+        }
+        let value = match &attribute.value_kind {
+            ParsedJsxAttributeValueKind::StringLiteral(value) => {
+                ParsedExpression::StringLiteral(value.clone())
+            }
+            ParsedJsxAttributeValueKind::BooleanShorthand => ParsedExpression::BooleanLiteral(true),
+            ParsedJsxAttributeValueKind::Expression => match &attribute.value {
+                Some(value) => value.clone(),
+                None => continue,
+            },
+        };
+        properties.push(property(
+            &attribute.name,
+            attribute.name_span,
+            value,
+            attribute.value_span,
+            false,
+        ));
+    }
+    let mut semantic = site.children.iter().filter(|child| is_semantic_child(child));
+    if let (Some(name), Some(child), None) = (site.children_name, semantic.next(), semantic.next()) {
+        let child = match child {
+            ParsedJsxChild::Expression {
+                expression: Some(expression),
+                span,
+            } => Some((expression.clone(), *span)),
+            ParsedJsxChild::Element(element) => Some((element.clone(), jsx_child_span(element))),
+            _ => None,
+        };
+        if let Some((value, span)) = child {
+            properties.push(property(name, None, value, span, false));
+        }
+    }
+    surge_ts_syntax::ParsedCallArgument {
+        expression: ParsedExpression::ObjectLiteral {
+            properties,
+            span: None,
+        },
+        span: None,
+        spread: false,
+        expression_span: None,
     }
 }
 
@@ -831,13 +1037,29 @@ fn evaluate_attributes<'a>(
 ) -> EvaluatedAttributes<'a> {
     let mut evaluated = EvaluatedAttributes::default();
     for attribute in attributes {
-        // `{...spread}` attributes carry no name.
+        // `{...spread}` attributes carry no name. tsc contextually types the
+        // spread expression by the attributes' contextual type.
         if attribute.name.is_empty() {
             let Some(value) = &attribute.value else {
                 continue;
             };
-            let spread =
-                evaluate_expression(value, attribute.value_span.or(fallback_span), symbols, ctx);
+            let spread = match evaluate_expression_with_expected_type(
+                value,
+                attribute.value_span.or(fallback_span),
+                contextual,
+                ExpectedTypeDiagnostic::ContextOnly,
+                symbols,
+                ctx,
+            ) {
+                // tsc spreads the expression's own type; the context only
+                // types the functions inside it. The contextual walk answers
+                // an object literal with what it was checked against, or with
+                // nothing when it does not fit, so its type is read again.
+                _ if matches!(value, ParsedExpression::ObjectLiteral { .. }) => {
+                    crate::infer::infer_expression(value, symbols, ctx)
+                }
+                spread => spread,
+            };
             match spread {
                 InferredExpression::Known(ty) => match ty.peeled() {
                     Type::Any | Type::ErrorType => evaluated.any_spread = true,
@@ -927,6 +1149,9 @@ fn attribute_contextual_type(contextual: &Type, name: &str) -> Option<Type> {
         }
         Type::Object(object) => match object.get_property(name) {
             Some(property) => Some(optional_aware_property_type(property)),
+            // The index stands for members surge could not enumerate, so it
+            // is no context at all: the sentinel says so.
+            None if object.synthetic_open_index => Some(Type::Unknown),
             None => object
                 .applicable_index_type(surge_ts_types::is_numeric_key(name))
                 .cloned(),
@@ -943,6 +1168,61 @@ fn optional_aware_property_type(property: &ObjectProperty) -> Type {
         union_type(vec![property.ty.clone(), Type::Undefined])
     } else {
         property.ty.clone()
+    }
+}
+
+/// tsc's `discriminateContextualTypeByJSXAttributes`: a union of props is
+/// narrowed to the members whose discriminant properties admit the values the
+/// attributes write, a discriminant the attributes leave out counting as
+/// `undefined` — except `children` when the body supplies it.
+fn discriminate_by_attributes(
+    contextual: &Type,
+    attributes: &[ParsedJsxAttribute],
+    supplied_children: Option<&str>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Type {
+    let Type::Union(union) = contextual.peeled() else {
+        return contextual.clone();
+    };
+    let members = union.types().to_vec();
+
+    let mut discriminators: Vec<(String, Type)> = Vec::new();
+    for attribute in attributes {
+        if attribute.name.is_empty()
+            || !is_possibly_discriminant_value(attribute)
+            || !is_discriminant_property(&members, &attribute.name)
+        {
+            continue;
+        }
+        let value = match &attribute.value_kind {
+            ParsedJsxAttributeValueKind::BooleanShorthand => Type::BooleanLiteral(true),
+            ParsedJsxAttributeValueKind::StringLiteral(value) => Type::StringLiteral(value.clone()),
+            ParsedJsxAttributeValueKind::Expression => {
+                let Some(value) = &attribute.value else {
+                    continue;
+                };
+                match crate::infer::infer_expression(value, symbols, ctx) {
+                    InferredExpression::Known(ty) => ty,
+                    _ => continue,
+                }
+            }
+        };
+        discriminators.push((attribute.name.clone(), value));
+    }
+    for name in common_optional_properties(&members) {
+        if attributes.iter().any(|attribute| attribute.name == name)
+            || supplied_children == Some(name.as_str())
+            || !is_discriminant_property(&members, &name)
+        {
+            continue;
+        }
+        discriminators.push((name, Type::Undefined));
+    }
+
+    match discriminate_members(&members, &discriminators) {
+        Some(remaining) => union_type(remaining),
+        None => contextual.clone(),
     }
 }
 
@@ -1003,6 +1283,29 @@ fn discriminate_members(members: &[Type], discriminators: &[(String, Type)]) -> 
     (!remaining.is_empty()).then_some(remaining)
 }
 
+/// tsc's `isPossiblyDiscriminantValue` for an attribute's initializer.
+fn is_possibly_discriminant_value(attribute: &ParsedJsxAttribute) -> bool {
+    fn expression(value: &ParsedExpression) -> bool {
+        match value {
+            ParsedExpression::StringLiteral(_)
+            | ParsedExpression::NumberLiteral(_)
+            | ParsedExpression::BigIntLiteral(_)
+            | ParsedExpression::TemplateLiteral { .. }
+            | ParsedExpression::BooleanLiteral(_)
+            | ParsedExpression::NullLiteral
+            | ParsedExpression::UndefinedLiteral
+            | ParsedExpression::Identifier { .. } => true,
+            ParsedExpression::PropertyAccess { object, .. } => expression(object),
+            _ => false,
+        }
+    }
+    match &attribute.value_kind {
+        ParsedJsxAttributeValueKind::BooleanShorthand
+        | ParsedJsxAttributeValueKind::StringLiteral(_) => true,
+        ParsedJsxAttributeValueKind::Expression => attribute.value.as_ref().is_none_or(expression),
+    }
+}
+
 /// A union member's property type as `getTypeOfPropertyOrIndexSignatureOfType`
 /// reads it.
 fn member_property_type(member: &Type, name: &str) -> Option<Type> {
@@ -1054,6 +1357,37 @@ fn is_literal_type(ty: &Type) -> bool {
     }
 }
 
+/// The properties every member of a union declares, optional in at least one
+/// of them (tsc's union property flags).
+fn common_optional_properties(members: &[Type]) -> Vec<String> {
+    let objects: Vec<ObjectType> = members
+        .iter()
+        .filter_map(|member| match member.peeled() {
+            Type::Object(object) => Some(object),
+            _ => None,
+        })
+        .collect();
+    let Some(first) = objects.first() else {
+        return Vec::new();
+    };
+    first
+        .properties
+        .keys()
+        .filter(|name| {
+            objects
+                .iter()
+                .all(|object| object.properties.contains_key(name.as_ref()))
+                && objects.iter().any(|object| {
+                    object
+                        .properties
+                        .get(name.as_ref())
+                        .is_some_and(ObjectProperty::is_optional)
+                })
+        })
+        .map(|name| name.to_string())
+        .collect()
+}
+
 /// tsc's `GetSemanticJsxChildren` entry test: an empty `{}` container is no
 /// child. Whitespace-only text never reaches the checker.
 fn is_semantic_child(child: &ParsedJsxChild) -> bool {
@@ -1066,11 +1400,15 @@ fn is_semantic_child(child: &ParsedJsxChild) -> bool {
     )
 }
 
-/// tsc's `checkJsxChildren`, and the children attribute the children form: the
-/// lone child's type, else an array of their union.
+/// tsc's `checkJsxChildren` with each `{expression}` child contextually typed
+/// by the children attribute (`getContextualTypeForChildJsxExpression`), and
+/// the children attribute they form: the lone child's type, else an array of
+/// their union.
 fn evaluate_children(
     children: &[ParsedJsxChild],
     child_spans: &[Option<SyntaxTextSpan>],
+    contextual: Option<&Type>,
+    children_name: Option<&str>,
     fallback_span: Option<SyntaxTextSpan>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
@@ -1081,6 +1419,9 @@ fn evaluate_children(
         .filter(|(_, child)| is_semantic_child(child))
         .map(|(index, child)| (child, child_spans.get(index).copied().flatten()))
         .collect();
+    let children_contextual = contextual
+        .zip(children_name)
+        .and_then(|(contextual, name)| attribute_contextual_type(contextual, name));
     let element_type = match semantic
         .iter()
         .any(|(child, _)| matches!(child, ParsedJsxChild::Element(_)))
@@ -1094,13 +1435,20 @@ fn evaluate_children(
 
     let mut types: Vec<Option<Type>> = Vec::with_capacity(semantic.len());
     let mut single = None;
-    for &(child, child_span) in &semantic {
+    for (index, &(child, child_span)) in semantic.iter().enumerate() {
         let (kind, ty) = match child {
             ParsedJsxChild::Text => (ChildKind::Text, Some(Type::String)),
             ParsedJsxChild::Expression { expression, span } => {
                 let Some(expression) = expression else {
                     continue;
                 };
+                let child_contextual = children_contextual.as_ref().map(|contextual| {
+                    if semantic.len() == 1 {
+                        contextual.clone()
+                    } else {
+                        child_contextual_type(contextual, index)
+                    }
+                });
                 // The element's own props say nothing about a callback
                 // nested inside a child expression: `{items.map((item) =>
                 // …)}` takes its parameter types from `map`, not from this
@@ -1117,13 +1465,22 @@ fn evaluate_children(
                 if release {
                     ctx.unmodelled_jsx_props_depth = 0;
                 }
-                let inferred =
-                    evaluate_expression(expression, span.or(fallback_span), symbols, ctx);
+                let inferred = evaluate_expression_with_expected_type(
+                    expression,
+                    span.or(fallback_span),
+                    child_contextual.as_ref(),
+                    ExpectedTypeDiagnostic::ContextOnly,
+                    symbols,
+                    ctx,
+                );
                 ctx.unmodelled_jsx_props_depth = saved_depth;
                 let ty = match inferred {
-                    InferredExpression::Known(ty) if !ty.is_unknown() => {
-                        Some(crate::checks::function::widen_unit_return_type(ty, None))
-                    }
+                    InferredExpression::Known(ty) if !ty.is_unknown() => Some(
+                        crate::checks::function::widen_unit_return_type(
+                            ty,
+                            child_contextual.as_ref(),
+                        ),
+                    ),
                     _ => None,
                 };
                 (ChildKind::Expression, ty)
@@ -1149,6 +1506,31 @@ fn evaluate_children(
             .map(|types| Type::Array(Box::new(union_type(types)))),
     };
     ChildrenAttribute { ty, single }
+}
+
+fn jsx_child_span(element: &ParsedExpression) -> Option<SyntaxTextSpan> {
+    match element {
+        ParsedExpression::JsxElement { tag, .. } => tag.span,
+        ParsedExpression::JsxFragment { span, .. } => *span,
+        _ => None,
+    }
+}
+
+/// The contextual type of the `index`th of several children: an array-like
+/// children type's element, anything else as is.
+fn child_contextual_type(children: &Type, index: usize) -> Type {
+    match children.peeled() {
+        Type::Union(union) => union_type(
+            union
+                .types()
+                .iter()
+                .map(|member| child_contextual_type(member, index))
+                .collect(),
+        ),
+        Type::Array(element) => *element,
+        Type::Tuple(elements) => elements.get(index).cloned().unwrap_or(Type::Undefined),
+        other => other,
+    }
 }
 
 /// tsc's `checkApplicableSignatureForJsxCallLikeElement` relation of the
