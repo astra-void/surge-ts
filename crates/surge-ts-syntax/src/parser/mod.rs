@@ -201,6 +201,22 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
 
             let (initializer, initializer_span) = parse_expression(init);
             let initializer_span = Some(text_span_from_oxc_span(initializer_span));
+            // An annotated pattern's elements read from the annotation, which
+            // the initializer must be assignable to.
+            let initializer = match (&declarator.id, declared_type.clone(), declarator.type_annotation.as_ref()) {
+                (
+                    BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_),
+                    Some(ty),
+                    Some(annotation),
+                ) => ParsedExpression::TypeAssertion {
+                    expression: Box::new(initializer),
+                    expression_span: initializer_span,
+                    ty,
+                    type_span: Some(text_span_from_oxc_span(annotation.span)),
+                    annotation: true,
+                },
+                _ => initializer,
+            };
 
             parse_binding_pattern_declarations(
                 &declarator.id,

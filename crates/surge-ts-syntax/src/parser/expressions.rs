@@ -45,6 +45,7 @@ fn lower_type_assertion(
         expression_span: Some(text_span_from_oxc_span(expression_span)),
         ty,
         type_span: Some(text_span_from_oxc_span(type_annotation.span())),
+        annotation: false,
     }
 }
 
@@ -917,6 +918,7 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
                     type_span: Some(text_span_from_oxc_span(
                         as_expression.type_annotation.span(),
                     )),
+                    annotation: false,
                 },
                 as_expression.span,
             )

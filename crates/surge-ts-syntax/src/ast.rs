@@ -1371,6 +1371,10 @@ pub enum ParsedExpression {
         expression_span: Option<TextSpan>,
         ty: ParsedType,
         type_span: Option<TextSpan>,
+        /// Not written as an assertion: the annotation of a destructuring
+        /// declaration (`const { a }: T = init`), whose elements read from `T`.
+        /// `init` must be assignable to it (TS2322), not merely comparable.
+        annotation: bool,
     },
     SatisfiesExpression {
         expression: Box<ParsedExpression>,

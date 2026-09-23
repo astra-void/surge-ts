@@ -636,6 +636,30 @@ fn evaluate_expression_unsettled(
             expression_span,
             ty,
             type_span: _,
+            annotation: true,
+        } => {
+            // A destructuring declaration's annotation: the initializer is
+            // checked against it like any declared type, and the elements read
+            // the declared type itself.
+            let declared = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+                crate::infer::map_parsed_type(ty.clone(), ctx)
+            });
+            let _ = crate::checks::expected::evaluate_expression_with_expected_type(
+                asserted_expression,
+                expression_span.or(fallback_span),
+                Some(&declared),
+                crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                symbols,
+                ctx,
+            );
+            InferredExpression::Known(declared)
+        }
+        ParsedExpression::TypeAssertion {
+            expression: asserted_expression,
+            expression_span,
+            ty,
+            type_span: _,
+            annotation: false,
         } => evaluate_type_assertion(
             asserted_expression,
             expression_span,
