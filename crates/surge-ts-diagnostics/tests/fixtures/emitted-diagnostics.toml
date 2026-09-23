@@ -3286,3 +3286,31 @@ status = "emitted"
 oracle = [
   "setter-implicit-any-basic",
 ]
+
+[TS1162]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS1191]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS18013]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2560]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2737]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS2748]
+status = "catalog-only"
+reason = "Cataloged for future coverage"
+
+[TS6234]
+status = "catalog-only"
+reason = "Cataloged for future coverage"

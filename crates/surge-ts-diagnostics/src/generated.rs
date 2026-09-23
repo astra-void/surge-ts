@@ -4052,7 +4052,7 @@ pub const TS1191: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "An import declaration cannot have modifiers.",
     argument_count: 0,
-    support: DiagnosticSupport::Emitted,
+    support: DiagnosticSupport::CatalogOnly,
 };
 
 pub const TS1319: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -4232,7 +4232,7 @@ pub const TS1162: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "An object member cannot be declared optional.",
     argument_count: 0,
-    support: DiagnosticSupport::Emitted,
+    support: DiagnosticSupport::CatalogOnly,
 };
 
 pub const TS2754: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -4312,7 +4312,7 @@ pub const TS2737: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "BigInt literals are not available when targeting lower than ES2020.",
     argument_count: 0,
-    support: DiagnosticSupport::Emitted,
+    support: DiagnosticSupport::CatalogOnly,
 };
 
 pub const TS1433: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -4612,7 +4612,7 @@ pub const TS18013: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Property '{0}' is not accessible outside class '{1}' because it has a private identifier.",
     argument_count: 2,
-    support: DiagnosticSupport::Emitted,
+    support: DiagnosticSupport::CatalogOnly,
 };
 
 pub const TS2673: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -4882,7 +4882,7 @@ pub const TS2748: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Cannot access ambient const enums when '{0}' is enabled.",
     argument_count: 1,
-    support: DiagnosticSupport::Emitted,
+    support: DiagnosticSupport::CatalogOnly,
 };
 
 pub const TS17004: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -5032,7 +5032,7 @@ pub const TS6234: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "This expression is not callable because it is a 'get' accessor. Did you mean to use it without '()'?",
     argument_count: 0,
-    support: DiagnosticSupport::Emitted,
+    support: DiagnosticSupport::CatalogOnly,
 };
 
 pub const TS2812: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -5062,7 +5062,7 @@ pub const TS2560: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Value of type '{0}' has no properties in common with type '{1}'. Did you mean to call it?",
     argument_count: 2,
-    support: DiagnosticSupport::Emitted,
+    support: DiagnosticSupport::CatalogOnly,
 };
 
 pub const TS7032: DiagnosticDescriptor = DiagnosticDescriptor {

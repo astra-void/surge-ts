@@ -3236,7 +3236,7 @@ arity = 1
 code = "TS1191"
 category = "Error"
 source = "typescript"
-support = "emitted"
+support = "catalog-only"
 message = "An import declaration cannot have modifiers."
 arity = 0
 
@@ -3380,7 +3380,7 @@ arity = 0
 code = "TS1162"
 category = "Error"
 source = "typescript"
-support = "emitted"
+support = "catalog-only"
 message = "An object member cannot be declared optional."
 arity = 0
 
@@ -3444,7 +3444,7 @@ arity = 0
 code = "TS2737"
 category = "Error"
 source = "typescript"
-support = "emitted"
+support = "catalog-only"
 message = "BigInt literals are not available when targeting lower than ES2020."
 arity = 0
 
@@ -3684,7 +3684,7 @@ arity = 3
 code = "TS18013"
 category = "Error"
 source = "typescript"
-support = "emitted"
+support = "catalog-only"
 message = "Property '{0}' is not accessible outside class '{1}' because it has a private identifier."
 arity = 2
 
@@ -3900,7 +3900,7 @@ arity = 0
 code = "TS2748"
 category = "Error"
 source = "typescript"
-support = "emitted"
+support = "catalog-only"
 message = "Cannot access ambient const enums when '{0}' is enabled."
 arity = 1
 
@@ -4020,7 +4020,7 @@ arity = 1
 code = "TS6234"
 category = "Error"
 source = "typescript"
-support = "emitted"
+support = "catalog-only"
 message = "This expression is not callable because it is a 'get' accessor. Did you mean to use it without '()'?"
 arity = 0
 
@@ -4044,7 +4044,7 @@ arity = 2
 code = "TS2560"
 category = "Error"
 source = "typescript"
-support = "emitted"
+support = "catalog-only"
 message = "Value of type '{0}' has no properties in common with type '{1}'. Did you mean to call it?"
 arity = 2
 

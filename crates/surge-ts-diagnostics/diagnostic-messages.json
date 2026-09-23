@@ -3237,7 +3237,7 @@
     "message": "An import declaration cannot have modifiers.",
     "source": "typescript",
     "arity": 0,
-    "support": "emitted"
+    "support": "catalog-only"
   },
   {
     "code": "TS1319",
@@ -3381,7 +3381,7 @@
     "message": "An object member cannot be declared optional.",
     "source": "typescript",
     "arity": 0,
-    "support": "emitted"
+    "support": "catalog-only"
   },
   {
     "code": "TS2754",
@@ -3445,7 +3445,7 @@
     "message": "BigInt literals are not available when targeting lower than ES2020.",
     "source": "typescript",
     "arity": 0,
-    "support": "emitted"
+    "support": "catalog-only"
   },
   {
     "code": "TS1433",
@@ -3685,7 +3685,7 @@
     "message": "Property '{0}' is not accessible outside class '{1}' because it has a private identifier.",
     "source": "typescript",
     "arity": 2,
-    "support": "emitted"
+    "support": "catalog-only"
   },
   {
     "code": "TS2673",
@@ -3901,7 +3901,7 @@
     "message": "Cannot access ambient const enums when '{0}' is enabled.",
     "source": "typescript",
     "arity": 1,
-    "support": "emitted"
+    "support": "catalog-only"
   },
   {
     "code": "TS17004",
@@ -4021,7 +4021,7 @@
     "message": "This expression is not callable because it is a 'get' accessor. Did you mean to use it without '()'?",
     "source": "typescript",
     "arity": 0,
-    "support": "emitted"
+    "support": "catalog-only"
   },
   {
     "code": "TS2812",
@@ -4045,7 +4045,7 @@
     "message": "Value of type '{0}' has no properties in common with type '{1}'. Did you mean to call it?",
     "source": "typescript",
     "arity": 2,
-    "support": "emitted"
+    "support": "catalog-only"
   },
   {
     "code": "TS7032",
