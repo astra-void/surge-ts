@@ -717,14 +717,32 @@ fn export_entity_alias_types(
     type_declarations: &mut TypeDeclarationTable,
     ctx: &CheckerContext,
 ) {
-    let (table, target) = match target.strip_prefix("globalThis.") {
-        Some(global) => (ctx.ambient_global_type_declarations.as_ref(), global),
-        None => (local_type_declarations, target),
+    // The entity resolves the way tsc's `resolveEntityName` reads it from the
+    // module: its own declarations, then its imports, then the globals —
+    // `export import JSX = Internal` over `import { Internal } from ".."`.
+    let (target, globals_only) = match target.strip_prefix("globalThis.") {
+        Some(global) => (global, true),
+        None => (target, false),
+    };
+    let prefix = format!("{target}.");
+    let declares = |table: &TypeDeclarationTable| {
+        table.get(target).is_some() || table.iter().any(|(key, _)| key.starts_with(&prefix))
+    };
+    let module_tables = std::iter::once(local_type_declarations).chain(
+        resolution_scope
+            .into_iter()
+            .flat_map(|scope| scope.layers().iter().map(Arc::as_ref)),
+    );
+    let table = match module_tables
+        .filter(|_| !globals_only)
+        .find(|table| declares(table))
+    {
+        Some(table) => table,
+        None => ctx.ambient_global_type_declarations.as_ref(),
     };
     if let Some(declaration) = table.get(target) {
         export_local_type_declaration(declaration, exported, resolution_scope, type_declarations);
     }
-    let prefix = format!("{target}.");
     for (key, declaration) in table.iter() {
         if let Some(member) = key.strip_prefix(prefix.as_str()) {
             let _ = type_declarations.insert(format!("{exported}.{member}"), declaration.clone());
