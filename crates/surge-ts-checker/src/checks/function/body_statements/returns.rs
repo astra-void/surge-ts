@@ -134,6 +134,22 @@ pub(crate) fn check_function_return_statement(
         return;
     };
 
+    // tsc's `unwrapReturnType`: a generator returns the return type argument of
+    // the generator type it is declared with
+    // (`getIterationTypeOfGeneratorFunctionReturnType`); a type that is not one
+    // leaves the value unchecked.
+    let generator_return_type;
+    let return_type = if ctx.in_generator_body {
+        let Some(declared) = generator_return_type_argument(return_type) else {
+            let _ = evaluate_expression(expression, return_statement.expression_span, symbols, ctx);
+            return;
+        };
+        generator_return_type = declared;
+        &generator_return_type
+    } else {
+        return_type
+    };
+
     // tsc's `unwrapReturnType`: what an async function returns is related — and
     // contextually typed — by the awaited return type, so `return { … }` under
     // `Promise<R>` is read against `R`.
@@ -266,4 +282,28 @@ pub(crate) fn check_function_return_statement(
             }
         }
     }
+}
+
+/// The `TReturn` of a generator's declared `Generator<T, TReturn, TNext>` (or
+/// the iterator and iterable types a generator may be declared as), `any` when
+/// the argument is left to its default.
+fn generator_return_type_argument(declared: &Type) -> Option<Type> {
+    let Type::Reference(reference) = declared else {
+        return None;
+    };
+    let name = reference.id.split('\u{0}').next_back()?;
+    matches!(
+        name,
+        "Generator"
+            | "AsyncGenerator"
+            | "Iterator"
+            | "AsyncIterator"
+            | "IterableIterator"
+            | "AsyncIterableIterator"
+            | "Iterable"
+            | "AsyncIterable"
+            | "IteratorObject"
+            | "AsyncIteratorObject"
+    )
+    .then(|| reference.arguments.get(1).cloned().unwrap_or(Type::Any))
 }

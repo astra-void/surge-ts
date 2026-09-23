@@ -795,6 +795,7 @@ export const fixturePresets: Record<string, string> = {
   'never-call-statement-exits': path.join(workspaceRoot, 'tests/compat-projects/never-call-statement-exits/tsconfig.json'),
   'destructuring-assignment-computed-key': path.join(workspaceRoot, 'tests/compat-projects/destructuring-assignment-computed-key/tsconfig.json'),
   'destructuring-declaration-computed-key': path.join(workspaceRoot, 'tests/compat-projects/destructuring-declaration-computed-key/tsconfig.json'),
+  'generator-return-type-argument': path.join(workspaceRoot, 'tests/compat-projects/generator-return-type-argument/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

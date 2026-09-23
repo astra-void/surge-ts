@@ -598,6 +598,9 @@ pub(crate) struct CheckerContext {
     /// The body being checked belongs to an `async` function, whose returns
     /// relate awaited value to awaited return type (tsc's `unwrapReturnType`).
     pub(crate) in_async_body: bool,
+    /// The body being checked belongs to a generator, whose returns relate to
+    /// its declared type's return type argument (tsc's `unwrapReturnType`).
+    pub(crate) in_generator_body: bool,
     /// The arrow about to be checked is a call argument, so a whole-signature
     /// mismatch is an argument error (TS2345). Taken by that arrow's check.
     pub(crate) next_arrow_is_argument: bool,
@@ -817,6 +820,7 @@ impl CheckerContext {
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
             in_async_body: false,
+            in_generator_body: false,
             next_arrow_is_argument: false,
             next_arrow_context_only: false,
             namespace_require_reads: None,
@@ -989,6 +993,7 @@ impl CheckerContext {
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
             in_async_body: false,
+            in_generator_body: false,
             next_arrow_is_argument: false,
             next_arrow_context_only: false,
             namespace_require_reads: None,
@@ -1468,6 +1473,7 @@ impl CheckerContext {
         self.contextual_return_frames.clear();
         self.in_contextual_return_check = false;
         self.in_async_body = false;
+        self.in_generator_body = false;
         self.next_arrow_is_argument = false;
         self.next_arrow_context_only = false;
         self.next_body_frame_active = false;

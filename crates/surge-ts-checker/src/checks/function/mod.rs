@@ -1952,8 +1952,16 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     ctx.activate_next_body_frame();
                 }
                 ctx.open_contextual_return_frame();
-                let outer_async_body =
-                    std::mem::replace(&mut ctx.in_async_body, is_async && !is_generator);
+                // tsc relates a generator's returns to its `TReturn` only under a
+                // return type annotation (`getReturnTypeFromAnnotation`); a
+                // contextually typed one is related by its whole signature.
+                let annotated_generator = is_generator && has_explicit_return_type;
+                let outer_async_body = std::mem::replace(
+                    &mut ctx.in_async_body,
+                    is_async && (!is_generator || annotated_generator),
+                );
+                let outer_generator_body =
+                    std::mem::replace(&mut ctx.in_generator_body, annotated_generator);
                 check_function_body(
                     statements,
                     return_type_for_body,
@@ -1962,6 +1970,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     ctx,
                 );
                 ctx.in_async_body = outer_async_body;
+                ctx.in_generator_body = outer_generator_body;
                 let body_flow = match recheck_body {
                     Some(body)
                         if !ctx.non_exhaustive_switches.is_empty()

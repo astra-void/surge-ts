@@ -2044,7 +2044,8 @@ pub(crate) fn check_function_body_with_signature_and_this(
         // its returns are checked. Opening one stops a nested declaration from
         // recording into an enclosing arrow's frame.
         ctx.open_contextual_return_frame();
-        let outer_async_body = std::mem::replace(&mut ctx.in_async_body, is_async && !is_generator);
+        let outer_async_body = std::mem::replace(&mut ctx.in_async_body, is_async);
+        let outer_generator_body = std::mem::replace(&mut ctx.in_generator_body, is_generator);
         // Every caller is a declaration or a class member, neither of which is
         // ever contextually typed, so an unannotated one's returns relate to
         // nothing — Go checks a return only against the annotation.
@@ -2059,6 +2060,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
             ctx,
         );
         ctx.in_async_body = outer_async_body;
+        ctx.in_generator_body = outer_generator_body;
         ctx.close_contextual_return_frame()
     });
     ctx.inherited_never_initialized = saved_never_initialized;
