@@ -2127,10 +2127,30 @@ pub(crate) fn check_function_type_call(
     // `f(...xs)` supplies as many arguments as the spread's type has elements,
     // which is one for a tuple of one and any number for an array. Counting the
     // spread as a single argument made `three(...tupleOfThree)` a false TS2554,
-    // so a call carrying one has no statically known count and skips the check.
+    // so a call carrying one has no statically known count and skips the check —
+    // except an array literal spread, a tuple (`isSpreadIntoCallOrNew`) that
+    // tsc's `getEffectiveCallArguments` expands into one argument per element.
+    // Only the too-few bound is checked for it, since an excess element has no
+    // argument node of its own to anchor the error on.
+    let literal_spread_count = arguments
+        .iter()
+        .map(|argument| match &argument.expression {
+            _ if !argument.spread => Some(1),
+            ParsedExpression::ArrayLiteral { elements, .. }
+                if elements.iter().all(|element| !element.spread) =>
+            {
+                Some(elements.len())
+            }
+            _ => None,
+        })
+        .sum::<Option<usize>>();
     let has_spread_argument = arguments.iter().any(|argument| argument.spread);
-    let too_many = !function_type.is_variadic() && actual > expected;
-    if !has_spread_argument && (actual < required || too_many) {
+    let (actual, too_many) = match literal_spread_count {
+        Some(count) if has_spread_argument => (count, false),
+        _ => (actual, !function_type.is_variadic() && actual > expected),
+    };
+    let arity_known = !has_spread_argument || literal_spread_count.is_some();
+    if arity_known && (actual < required || too_many) {
         let expected_count = if actual < required {
             required
         } else {
@@ -2188,8 +2208,27 @@ pub(crate) fn check_function_type_call(
     let mut i = 0usize;
     for argument in arguments.iter() {
         if argument.spread {
-            let spread_result =
-                evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            let spread_result = match &argument.expression {
+                // tsc's `checkArrayLiteral`: an array literal spread straight
+                // into a call is a tuple (`isSpreadIntoCallOrNew`), one argument
+                // per element.
+                ParsedExpression::ArrayLiteral { elements, .. }
+                    if elements.iter().all(|element| !element.spread) =>
+                {
+                    InferredExpression::Known(Type::Tuple(
+                        elements
+                            .iter()
+                            .map(|element| {
+                                match evaluate_expression(&element.expression, element.span, symbols, ctx) {
+                                    InferredExpression::Known(ty) => ty,
+                                    _ => Type::Unknown,
+                                }
+                            })
+                            .collect(),
+                    ))
+                }
+                _ => evaluate_expression(&argument.expression, argument.span, symbols, ctx),
+            };
             crate::checks::expr::check_iterable_operand(
                 &spread_result,
                 argument.expression_span,
