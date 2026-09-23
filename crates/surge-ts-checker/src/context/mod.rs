@@ -662,6 +662,12 @@ pub(crate) struct CheckerContext {
     /// (see [`crate::program::ConstructorLocalProperty`]), keyed by file name.
     pub(crate) constructor_local_properties:
         Arc<FxHashMap<Arc<str>, Arc<[crate::program::ConstructorLocalProperty]>>>,
+    /// While a property initializer is checked: the binding each of its
+    /// constructor's locals resolves to *outside* the property, so a read that
+    /// lands on it (rather than on a binding the initializer itself made) is
+    /// the read tsc's name resolver refuses.
+    pub(crate) constructor_local_outer_bindings:
+        Vec<(Arc<str>, Option<crate::symbols::SymbolInfoHandle>)>,
     /// The scope enclosing a nested `function` declaration whose body is
     /// about to be checked. It already chains to the module and the ambient
     /// globals, so it replaces the usual module-over-ambient body root.
@@ -843,6 +849,7 @@ impl CheckerContext {
             never_returning_calls: FxHashSet::default(),
             static_member_type_parameters: None,
             constructor_local_properties: Arc::default(),
+            constructor_local_outer_bindings: Vec::new(),
             nested_function_scope: None,
             parenthesized_expressions: Arc::from([]),
             evolving_array_operation_target: None,
@@ -1019,6 +1026,7 @@ impl CheckerContext {
             never_returning_calls: FxHashSet::default(),
             static_member_type_parameters: None,
             constructor_local_properties: Arc::default(),
+            constructor_local_outer_bindings: Vec::new(),
             nested_function_scope: None,
             parenthesized_expressions: Arc::from([]),
             evolving_array_operation_target: None,

@@ -797,6 +797,37 @@ fn evaluate_expression_unsettled(
                 return InferredExpression::Known(read);
             }
             let inferred_expression = infer_expression(expression, symbols, ctx);
+            // tsc's name resolver runs `checkAndReportErrorForInvalidInitializer`
+            // for a property-initializer read of a constructor local whether or
+            // not the name also resolves further out, and answers no symbol. A
+            // binding the initializer made itself (an arrow's parameter) is
+            // found first and is not that read.
+            if let ParsedExpression::Identifier {
+                name,
+                span: Some(span),
+            } = expression
+                && matches!(inferred_expression, InferredExpression::Known(_))
+                && ctx
+                    .constructor_local_outer_bindings
+                    .iter()
+                    .any(|(local, outer)| {
+                        local.as_ref() == name.as_str()
+                            && match (outer, symbols.get_handle(name)) {
+                                (Some(outer), Some(found)) => std::sync::Arc::ptr_eq(outer, &found),
+                                (None, None) => true,
+                                _ => false,
+                            }
+                    })
+                && let Some(property) =
+                    crate::program::property_with_invalid_initializer(name, *span, ctx)
+            {
+                let diagnostic = property.invalid_reference_diagnostic(name, *span, ctx.file_name.clone());
+                ctx.push_utility_diagnostic_once(crate::spans::diagnostic_with_syntax_span(
+                    diagnostic,
+                    Some(*span),
+                ));
+                return InferredExpression::Known(Type::ErrorType);
+            }
             report_inferred_expression(
                 with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
                     inferred_expression.clone()

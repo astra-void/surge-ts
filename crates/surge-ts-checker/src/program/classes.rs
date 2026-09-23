@@ -1806,6 +1806,27 @@ fn check_class_property_initializer(
             function_signature: None,
         },
     );
+    let outer_bindings = property
+        .initializer_span
+        .and_then(|span| {
+            ctx.constructor_local_properties
+                .get(ctx.file_name.as_str())?
+                .iter()
+                .filter(|candidate| {
+                    candidate.span.start <= span.start && span.end <= candidate.span.end
+                })
+                .min_by_key(|candidate| candidate.span.start)
+        })
+        .map(|candidate| {
+            candidate
+                .constructor_locals
+                .iter()
+                .map(|local| (Arc::from(local.as_str()), symbols.get_handle(local)))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let saved_outer_bindings =
+        std::mem::replace(&mut ctx.constructor_local_outer_bindings, outer_bindings);
     let Some(declared_type) = property.declared_type.clone() else {
         crate::checks::expr::evaluate_expression(
             initializer,
@@ -1813,6 +1834,7 @@ fn check_class_property_initializer(
             &symbols,
             ctx,
         );
+        ctx.constructor_local_outer_bindings = saved_outer_bindings;
         return;
     };
     let declared_type = map_parsed_type(declared_type, ctx);
@@ -1825,6 +1847,7 @@ fn check_class_property_initializer(
         &symbols,
         ctx,
     );
+    ctx.constructor_local_outer_bindings = saved_outer_bindings;
     if let crate::infer::InferredExpression::Known(inferred_type) = inferred {
         crate::checks::var::report_initializer_mismatch(
             &inferred_type,
