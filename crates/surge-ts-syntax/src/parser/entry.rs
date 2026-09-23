@@ -208,13 +208,14 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     // (it would otherwise run over every dependency `.d.ts`). The conversion
     // still asks each body for its reads; without an index those calls fall back
     // to walking the body, which for a `.d.ts` is nothing.
-    let (module_reads, statements) = if is_declaration_file_name(file_name) {
+    let (mut module_reads, statements) = if is_declaration_file_name(file_name) {
         (Vec::new(), collect_statements())
     } else {
         super::spans::with_lowering_source(source_text, is_javascript_file_name(file_name), || {
             super::reads::with_body_read_index(&parsed.program, collect_statements)
         })
     };
+    module_reads.extend(jsdoc_link_reads(&parsed.program.comments, source_text));
 
     let mut parser_errors: Vec<crate::ParserError> = parsed
         .errors
@@ -314,6 +315,38 @@ pub fn is_declaration_file_name(file_name: &str) -> bool {
         bytes.len() >= suffix.len() && bytes[bytes.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
     };
     ends_with(".d.ts") || ends_with(".d.mts") || ends_with(".d.cts") || (base.ends_with(".ts") && base.contains(".d."))
+}
+
+/// The names JSDoc `{@link X}`, `{@linkcode X}` and `{@linkplain X}` tags
+/// refer to (the first identifier of an entity name): tsc resolves each
+/// (`checkJSDocLinkLikeTag`), which counts as a use of the import it names.
+fn jsdoc_link_reads(comments: &[oxc_ast::Comment], source_text: &str) -> Vec<String> {
+    let mut reads = Vec::new();
+    for comment in comments.iter().filter(|comment| comment.is_jsdoc()) {
+        let Some(mut rest) = source_text.get(comment.span.start as usize..comment.span.end as usize)
+        else {
+            continue;
+        };
+        while let Some(at) = rest.find("{@link") {
+            rest = &rest[at + "{@link".len()..];
+            let after_tag = rest
+                .strip_prefix("code")
+                .or_else(|| rest.strip_prefix("plain"))
+                .unwrap_or(rest);
+            if !after_tag.starts_with(char::is_whitespace) {
+                continue;
+            }
+            let name: String = after_tag
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+                .collect();
+            if !name.is_empty() {
+                reads.push(name);
+            }
+        }
+    }
+    reads
 }
 
 /// A JavaScript source file: `.js`, `.jsx`, `.mjs` or `.cjs`.

@@ -811,6 +811,7 @@ export const fixturePresets: Record<string, string> = {
   'global-this-script-globals': path.join(workspaceRoot, 'tests/compat-projects/global-this-script-globals/tsconfig.json'),
   'optional-chain-element-call': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-element-call/tsconfig.json'),
   'destructuring-assignment-in-comma': path.join(workspaceRoot, 'tests/compat-projects/destructuring-assignment-in-comma/tsconfig.json'),
+  'jsdoc-link-counts-as-use': path.join(workspaceRoot, 'tests/compat-projects/jsdoc-link-counts-as-use/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
