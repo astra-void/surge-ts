@@ -734,6 +734,7 @@ export const fixturePresets: Record<string, string> = {
   'shorthand-ambient-module-basic': path.join(workspaceRoot, 'tests/compat-projects/shorthand-ambient-module-basic/tsconfig.json'),
   'lib-feature-missing-member-basic': path.join(workspaceRoot, 'tests/compat-projects/lib-feature-missing-member-basic/tsconfig.json'),
   'lib-feature-member-present': path.join(workspaceRoot, 'tests/compat-projects/lib-feature-member-present/tsconfig.json'),
+  'callable-object-function-members': path.join(workspaceRoot, 'tests/compat-projects/callable-object-function-members/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

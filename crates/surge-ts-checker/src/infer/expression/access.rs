@@ -804,6 +804,13 @@ pub(crate) fn lib_builtin_member_type(
         Type::Boolean | Type::BooleanLiteral(_) => ("Boolean", None),
         Type::BigInt => ("BigInt", None),
         Type::Function(_) => ("Function", None),
+        // tsc's `getPropertyOfType`: an object type with call or construct
+        // signatures reads the members it lacks from the global `Function`.
+        _ if matches!(receiver.peeled(), Type::Object(object)
+            if object.call_signature().is_some() || object.construct_signature().is_some()) =>
+        {
+            ("Function", None)
+        }
         _ => return None,
     };
     let (member_type, optional, scope) = match ctx.lookup_type_declaration(interface_name)? {
