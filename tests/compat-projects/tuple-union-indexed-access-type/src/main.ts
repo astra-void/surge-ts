@@ -1,0 +1,12 @@
+type Pair = [boolean] | [string, number];
+type Open = [boolean] | [string, ...number[]];
+export type First = Pair[0];
+export type Second = Pair[1];
+export type Beyond = Pair[2];
+export type Every = Pair[number];
+export type OpenFar = Open[5];
+const first: First = true;
+const second: Second = undefined;
+const far: OpenFar = 3;
+const every: Every = "text";
+export const used = [first, second, far, every];

@@ -541,6 +541,71 @@ pub(super) fn resolve_indexed_access_type(
                 had_error: false,
             }
         }
+        // tsc distributes an indexed access over a union receiver: a union of
+        // tuples read at a numeric index is each member's element there, a
+        // member too short for it contributing `undefined`, and it is a missing
+        // property only when every member is too short.
+        (Type::Union(union_ty), Type::NumberLiteral(_) | Type::Number)
+            if union_ty.types().iter().all(|member| {
+                matches!(member.peeled(), Type::Tuple(_) | Type::OpenTuple(_) | Type::Array(_))
+            }) =>
+        {
+            let position = match &resolved_index.ty {
+                Type::NumberLiteral(num) => num.value.parse::<usize>().ok(),
+                _ => None,
+            };
+            let mut types = Vec::new();
+            let mut beyond_every_member = position.is_some();
+            for member in union_ty.types() {
+                match (member.peeled(), position) {
+                    (Type::Tuple(elements), Some(index)) => match elements.get(index) {
+                        Some(element) => {
+                            beyond_every_member = false;
+                            types.push(element.clone());
+                        }
+                        None => types.push(Type::Undefined),
+                    },
+                    (Type::Tuple(elements), None) => types.push(union_type(elements)),
+                    (Type::OpenTuple(open), Some(index)) => {
+                        beyond_every_member = false;
+                        types.push(match open.leading.get(index) {
+                            Some(element) => element.clone(),
+                            None => {
+                                let mut tail = vec![open.rest.as_ref().clone()];
+                                tail.extend(open.trailing.iter().cloned());
+                                union_type(tail)
+                            }
+                        });
+                    }
+                    (Type::OpenTuple(open), None) => types.push(open.element_union()),
+                    (Type::Array(element), _) => {
+                        beyond_every_member = false;
+                        types.push(*element);
+                    }
+                    _ => unreachable!("every member is a tuple or an array"),
+                }
+            }
+            if beyond_every_member {
+                let key = resolved_index.ty.name();
+                let mut diagnostic =
+                    Diagnostic::ts2339(&key, &resolved_object.ty.name(), ctx.file_name.clone());
+                if let Some(span) = indexed_access.span {
+                    diagnostic = diagnostic.with_span(convert_span(span));
+                }
+                ctx.push(diagnostic);
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: true,
+                };
+            }
+            if generic_indexed_access {
+                record_generic_indexed_access_success();
+            }
+            ResolvedType {
+                ty: union_type(types),
+                had_error: false,
+            }
+        }
         // Index a union receiver by a string key (`(A | B)["k"]`, notably
         // `T[number]["_zod"]`): read the key from each member and union the results.
         // Each member is peeled by `get_property_access_type`, so a member that is a

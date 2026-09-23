@@ -767,6 +767,7 @@ export const fixturePresets: Record<string, string> = {
   'unresolved-import-type-arguments': path.join(workspaceRoot, 'tests/compat-projects/unresolved-import-type-arguments/tsconfig.json'),
   'bare-super-parse-error': path.join(workspaceRoot, 'tests/compat-projects/bare-super-parse-error/tsconfig.json'),
   'union-rest-signature-call': path.join(workspaceRoot, 'tests/compat-projects/union-rest-signature-call/tsconfig.json'),
+  'tuple-union-indexed-access-type': path.join(workspaceRoot, 'tests/compat-projects/tuple-union-indexed-access-type/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
