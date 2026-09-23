@@ -171,15 +171,19 @@ pub(crate) fn resolve_conditional_type(
                 results.push(Type::Unknown);
                 continue;
             }
-            // Same `any` rule as the non-distributive path below: an `any`
-            // member makes the branch indeterminate (tsc yields the union of
-            // both branches), so degrade to an open `any` rather than selecting
-            // the true branch — which would also leave its `infer` captures
-            // unbound (`MakeReadonly<any>` was measured resolving
-            // `ReadonlyMap<K, V>` with `K`/`V` unresolvable at thousands of zod
-            // sites, silently degrading every enclosing interface expansion).
             if matches!(member, Type::Any) {
-                results.push(Type::Any);
+                let resolved = resolve_any_check_member(
+                    &parameter_name,
+                    &conditional.true_type,
+                    &conditional.false_type,
+                    &extends_pattern,
+                    &resolved_extends,
+                    substitution,
+                    ctx,
+                    resolving,
+                );
+                had_error |= resolved.had_error;
+                results.push(resolved.ty);
                 continue;
             }
             // The sentinel guard above only sees a *syntactic* `unknown`; a
@@ -198,7 +202,18 @@ pub(crate) fn resolve_conditional_type(
                     continue;
                 }
                 if matches!(peeled, Type::Any) {
-                    results.push(Type::Any);
+                    let resolved = resolve_any_check_member(
+                        &parameter_name,
+                        &conditional.true_type,
+                        &conditional.false_type,
+                        &extends_pattern,
+                        &resolved_extends,
+                        substitution,
+                        ctx,
+                        resolving,
+                    );
+                    had_error |= resolved.had_error;
+                    results.push(resolved.ty);
                     continue;
                 }
             }
@@ -401,16 +416,16 @@ pub(crate) fn resolve_conditional_type(
         };
     }
 
-    // An `any` check type makes the branch indeterminate: tsc yields the union of
-    // both branches, which with `any` in play collapses to an open `any` rather
-    // than deterministically picking the true branch. Degrade to `any` so the
-    // result stays open instead of resolving to a misleading concrete branch
-    // (e.g. node's `_Request = typeof globalThis extends {...} ? {} : ...`).
     if matches!(resolved_check.ty, Type::Any) {
-        return ResolvedType {
-            ty: Type::Any,
-            had_error: false,
-        };
+        return resolve_any_check_type(
+            &conditional.true_type,
+            &conditional.false_type,
+            &extends_pattern,
+            &resolved_extends.ty,
+            substitution,
+            ctx,
+            resolving,
+        );
     }
 
     if is_assignable_to(&resolved_check.ty, &resolved_extends.ty) {
@@ -430,6 +445,455 @@ pub(crate) fn resolve_conditional_type(
     } else {
         resolve_parsed_type(*conditional.false_type, ctx, resolving, substitution)
     }
+}
+
+/// tsc's `getConditionalType` for an `any` check type (checker.go:24727): `any`
+/// relates to every extends type, so the true branch — instantiated with what
+/// inference from `any` binds its captures to — is part of the result, and so
+/// is the false branch unless the extends type is itself `any` or `unknown`,
+/// which the definitely-true test (:24765) answers alone.
+fn resolve_any_check_type(
+    true_type: &ParsedType,
+    false_type: &ParsedType,
+    extends_pattern: &ParsedType,
+    resolved_extends: &Type,
+    substitution: &TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+) -> ResolvedType {
+    let mut true_substitution = substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+    bind_captures_inferred_from_any(extends_pattern, &mut true_substitution, ctx, resolving);
+    let true_branch = resolve_parsed_type(true_type.clone(), ctx, resolving, &true_substitution);
+    if matches!(resolved_extends, Type::Any | Type::GenuineUnknown) {
+        return true_branch;
+    }
+    let false_branch = resolve_parsed_type(false_type.clone(), ctx, resolving, substitution);
+    ResolvedType {
+        ty: union_type(vec![true_branch.ty, false_branch.ty]),
+        had_error: true_branch.had_error || false_branch.had_error,
+    }
+}
+
+/// A distributive conditional's `any` member: [`resolve_any_check_type`] with the
+/// member bound as the check type parameter.
+#[allow(clippy::too_many_arguments)]
+fn resolve_any_check_member(
+    parameter_name: &str,
+    true_type: &ParsedType,
+    false_type: &ParsedType,
+    extends_pattern: &ParsedType,
+    resolved_extends: &ResolvedType,
+    substitution: &TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+) -> ResolvedType {
+    // Which branches `any` reaches depends on the extends type, so an extends
+    // clause surge could not model leaves the member the open `any` it is.
+    if (resolved_extends.ty.is_unknown() && !matches!(resolved_extends.ty, Type::GenuineUnknown))
+        || pattern_shape_degraded(extends_pattern, resolved_extends)
+    {
+        return ResolvedType {
+            ty: Type::Any,
+            had_error: false,
+        };
+    }
+    let mut member_substitution = substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+    member_substitution.insert(parameter_name.to_string(), Type::Any);
+    resolve_any_check_type(
+        true_type,
+        false_type,
+        extends_pattern,
+        &resolved_extends.ty,
+        &member_substitution,
+        ctx,
+        resolving,
+    )
+}
+
+/// Binds each `infer` capture of `pattern` to what tsc infers for it from an
+/// `any` check type (`inferTypes`, then `getInferredType`): its one candidate
+/// when the pattern yields it one; otherwise its declared or position-implied
+/// constraint, or `unknown` without one (inference.go:1376).
+fn bind_captures_inferred_from_any(
+    pattern: &ParsedType,
+    substitution: &mut TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+) {
+    let mut names = Vec::new();
+    collect_infer_names(pattern, &mut names);
+    let mut candidates = Vec::new();
+    collect_candidates_from_any(pattern, ctx, 0, &mut candidates);
+    // A constraint resolves before its capture is fixed, so a capture it names
+    // reads as that capture.
+    let mut constraint_substitution =
+        substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+    seed_infer_placeholders(pattern, &mut constraint_substitution);
+    let mut bound: Vec<String> = Vec::with_capacity(names.len());
+    for name in names {
+        if bound.contains(&name) {
+            continue;
+        }
+        let ty = match candidates.iter().find(|(candidate, _)| *candidate == name) {
+            Some((_, candidate)) => candidate.clone(),
+            None => capture_constraint(pattern, &name, &constraint_substitution, ctx, resolving)
+                .unwrap_or(Type::GenuineUnknown),
+        };
+        constraint_substitution.insert(name.clone(), ty.clone());
+        substitution.insert(name.clone(), ty);
+        bound.push(name);
+    }
+}
+
+/// The candidates tsc's inference from `any` makes (`inferFromTypes`,
+/// `inferToMultipleTypes`, `inferToTemplateLiteralType`): `any` for a naked
+/// capture — the whole pattern, a member of a union, the one naked member of an
+/// intersection — and `never` for every placeholder of a template made of
+/// placeholders alone, which `any` cannot match text against. A type alias is
+/// seen through, since its instantiation is what tsc infers to.
+fn collect_candidates_from_any(
+    pattern: &ParsedType,
+    ctx: &CheckerContext,
+    depth: usize,
+    candidates: &mut Vec<(String, Type)>,
+) {
+    match pattern {
+        ParsedType::Infer(infer) => candidates.push((infer.name.clone(), Type::Any)),
+        ParsedType::Union(members) => {
+            for member in members.iter() {
+                collect_candidates_from_any(member, ctx, depth, candidates);
+            }
+        }
+        ParsedType::Intersection(members) => {
+            let mut naked = Vec::new();
+            for member in members.iter() {
+                match member {
+                    ParsedType::Infer(infer) => naked.push(infer.name.clone()),
+                    other => collect_candidates_from_any(other, ctx, depth, candidates),
+                }
+            }
+            if let [single] = naked.as_slice() {
+                candidates.push((single.clone(), Type::Any));
+            }
+        }
+        ParsedType::TemplateLiteral(template)
+            if template.quasis.iter().all(|text| text.is_empty()) =>
+        {
+            for interpolation in &template.interpolations {
+                if let ParsedType::Infer(infer) = interpolation {
+                    candidates.push((infer.name.clone(), Type::Never));
+                }
+            }
+        }
+        ParsedType::Named(named)
+            if depth < INFER_ALIAS_EXPANSION_LIMIT && parsed_type_contains_infer(pattern) =>
+        {
+            if let Some(expanded) = expand_named_alias_pattern(named, ctx) {
+                collect_candidates_from_any(&expanded, ctx, depth + 1, candidates);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// tsc's constraint for an `infer` capture: its written `extends` clause, or
+/// else the constraints its positions imply (`getInferredTypeParameterConstraint`,
+/// checker.go:17414), intersected.
+fn capture_constraint(
+    pattern: &ParsedType,
+    name: &str,
+    substitution: &TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+) -> Option<Type> {
+    if let Some(constraint) = declared_capture_constraint(pattern, name) {
+        return Some(resolve_parsed_type(constraint, ctx, resolving, substitution).ty);
+    }
+    let mut implied = Vec::new();
+    collect_implied_capture_constraints(pattern, name, substitution, ctx, resolving, &mut implied);
+    match implied.len() {
+        0 => None,
+        1 => implied.pop(),
+        _ => Some(merge_intersection_members(implied)),
+    }
+}
+
+/// The `extends` clause written on a capture (`infer X extends C`), searched
+/// through the same positions as [`collect_infer_names`].
+fn declared_capture_constraint(ty: &ParsedType, name: &str) -> Option<ParsedType> {
+    let search = |ty: &ParsedType| declared_capture_constraint(ty, name);
+    match ty {
+        ParsedType::Infer(infer) if infer.name == name => infer.constraint.clone(),
+        ParsedType::Array(inner) | ParsedType::KeyOf(inner) | ParsedType::Readonly(inner) => {
+            search(inner)
+        }
+        ParsedType::Union(members)
+        | ParsedType::Intersection(members)
+        | ParsedType::Tuple(members) => members.iter().find_map(search),
+        ParsedType::VariadicTuple(elements) => elements
+            .iter()
+            .find_map(|element| search(tuple_element_type(element))),
+        ParsedType::Function(function) => signature_capture_constraint(function, name),
+        ParsedType::Predicate(predicate) => predicate.ty.as_ref().and_then(search),
+        ParsedType::Named(named) => named.type_arguments.iter().find_map(search),
+        ParsedType::TemplateLiteral(template) => template.interpolations.iter().find_map(search),
+        ParsedType::Mapped(mapped) => search(&mapped.constraint)
+            .or_else(|| search(&mapped.value_type))
+            .or_else(|| mapped.name_type.as_deref().and_then(search)),
+        ParsedType::Object(object) => object
+            .properties
+            .iter()
+            .find_map(|property| search(&property.ty))
+            .or_else(|| {
+                object
+                    .construct_signature
+                    .as_deref()
+                    .into_iter()
+                    .chain(object.call_signature.as_deref())
+                    .chain(object.call_signature_overloads.iter())
+                    .find_map(|signature| signature_capture_constraint(signature, name))
+            }),
+        _ => None,
+    }
+}
+
+fn signature_capture_constraint(signature: &ParsedFunctionType, name: &str) -> Option<ParsedType> {
+    signature
+        .parameters
+        .iter()
+        .find_map(|parameter| declared_capture_constraint(&parameter.ty, name))
+        .or_else(|| declared_capture_constraint(&signature.return_type, name))
+}
+
+/// The constraints `getInferredTypeParameterConstraint` reads off the positions
+/// a capture is written in: the constraint of the type parameter it fills in
+/// `Name<…, infer X, …>`, `unknown[]` for a rest parameter or rest element,
+/// `string` inside a template literal, and `string | number | symbol` as a
+/// mapped type's key constraint.
+fn collect_implied_capture_constraints(
+    ty: &ParsedType,
+    name: &str,
+    substitution: &TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    out: &mut Vec<Type>,
+) {
+    let is_capture = |ty: &ParsedType| matches!(ty, ParsedType::Infer(infer) if infer.name == name);
+    let unknown_array = || Type::Array(Box::new(Type::GenuineUnknown));
+    match ty {
+        ParsedType::Named(named) => {
+            for (index, argument) in named.type_arguments.iter().enumerate() {
+                if is_capture(argument) {
+                    if let Some(constraint) = reference_parameter_constraint(
+                        named,
+                        index,
+                        name,
+                        substitution,
+                        ctx,
+                        resolving,
+                    ) {
+                        out.push(constraint);
+                    }
+                } else {
+                    collect_implied_capture_constraints(
+                        argument,
+                        name,
+                        substitution,
+                        ctx,
+                        resolving,
+                        out,
+                    );
+                }
+            }
+        }
+        ParsedType::Function(function) => {
+            collect_signature_capture_constraints(function, name, substitution, ctx, resolving, out);
+        }
+        ParsedType::VariadicTuple(elements) => {
+            for element in elements.iter() {
+                match element {
+                    surge_ts_syntax::ParsedTupleElement::Rest(rest) if is_capture(rest) => {
+                        out.push(unknown_array());
+                    }
+                    other => collect_implied_capture_constraints(
+                        tuple_element_type(other),
+                        name,
+                        substitution,
+                        ctx,
+                        resolving,
+                        out,
+                    ),
+                }
+            }
+        }
+        ParsedType::TemplateLiteral(template) => {
+            for interpolation in &template.interpolations {
+                if is_capture(interpolation) {
+                    out.push(Type::String);
+                } else {
+                    collect_implied_capture_constraints(
+                        interpolation,
+                        name,
+                        substitution,
+                        ctx,
+                        resolving,
+                        out,
+                    );
+                }
+            }
+        }
+        ParsedType::Mapped(mapped) => {
+            if is_capture(&mapped.constraint) {
+                out.push(union_type(vec![Type::String, Type::Number, Type::Symbol]));
+            } else {
+                collect_implied_capture_constraints(
+                    &mapped.constraint,
+                    name,
+                    substitution,
+                    ctx,
+                    resolving,
+                    out,
+                );
+            }
+            collect_implied_capture_constraints(
+                &mapped.value_type,
+                name,
+                substitution,
+                ctx,
+                resolving,
+                out,
+            );
+            if let Some(name_type) = mapped.name_type.as_deref() {
+                collect_implied_capture_constraints(name_type, name, substitution, ctx, resolving, out);
+            }
+        }
+        ParsedType::Array(inner) | ParsedType::KeyOf(inner) | ParsedType::Readonly(inner) => {
+            collect_implied_capture_constraints(inner, name, substitution, ctx, resolving, out);
+        }
+        ParsedType::Union(members)
+        | ParsedType::Intersection(members)
+        | ParsedType::Tuple(members) => {
+            for member in members.iter() {
+                collect_implied_capture_constraints(member, name, substitution, ctx, resolving, out);
+            }
+        }
+        ParsedType::Predicate(predicate) => {
+            if let Some(ty) = &predicate.ty {
+                collect_implied_capture_constraints(ty, name, substitution, ctx, resolving, out);
+            }
+        }
+        ParsedType::Object(object) => {
+            for property in &object.properties {
+                collect_implied_capture_constraints(
+                    &property.ty,
+                    name,
+                    substitution,
+                    ctx,
+                    resolving,
+                    out,
+                );
+            }
+            for signature in object
+                .construct_signature
+                .as_deref()
+                .into_iter()
+                .chain(object.call_signature.as_deref())
+                .chain(object.call_signature_overloads.iter())
+            {
+                collect_signature_capture_constraints(
+                    signature,
+                    name,
+                    substitution,
+                    ctx,
+                    resolving,
+                    out,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_signature_capture_constraints(
+    signature: &ParsedFunctionType,
+    name: &str,
+    substitution: &TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    out: &mut Vec<Type>,
+) {
+    for parameter in &signature.parameters {
+        if parameter.rest && matches!(&parameter.ty, ParsedType::Infer(infer) if infer.name == name) {
+            out.push(Type::Array(Box::new(Type::GenuineUnknown)));
+        } else {
+            collect_implied_capture_constraints(&parameter.ty, name, substitution, ctx, resolving, out);
+        }
+    }
+    collect_implied_capture_constraints(
+        &signature.return_type,
+        name,
+        substitution,
+        ctx,
+        resolving,
+        out,
+    );
+}
+
+/// The constraint `infer X` takes from the type parameter it fills in
+/// `Name<…, infer X, …>`: that parameter's declared constraint, instantiated with
+/// the reference's arguments (defaults for the ones it omits) in the declaring
+/// module — discarded when it is `X` itself.
+fn reference_parameter_constraint(
+    named: &ParsedNamedType,
+    index: usize,
+    capture: &str,
+    substitution: &TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+) -> Option<Type> {
+    let (type_parameters, scope, file_name) = match ctx.lookup_type_declaration(&named.name)? {
+        TypeDeclarationInfo::Alias(info) => (
+            info.body.type_parameters.clone(),
+            info.resolution_scope.clone(),
+            info.file_name.clone(),
+        ),
+        TypeDeclarationInfo::Interface(info) => (
+            info.body.type_parameters.clone(),
+            info.resolution_scope.clone(),
+            info.file_name.clone(),
+        ),
+    };
+    let constraint = type_parameters.get(index)?.constraint.clone()?;
+    let diagnostics_before = ctx.diagnostics().len();
+    let mut declaration_substitution = TypeParameterSubstitution::new();
+    for (parameter, argument) in type_parameters.iter().zip(&named.type_arguments) {
+        let ty = match argument {
+            ParsedType::Infer(infer) => substitution
+                .get(&infer.name)
+                .cloned()
+                .unwrap_or_else(|| Type::type_parameter(&infer.name)),
+            other => resolve_parsed_type(other.clone(), ctx, resolving, substitution).ty,
+        };
+        declaration_substitution.insert(parameter.name.clone(), ty);
+    }
+    let resolved = with_type_declaration_scope(&scope, ctx, |ctx| {
+        with_file_name(ctx, &file_name, |ctx| {
+            for parameter in type_parameters.iter().skip(named.type_arguments.len()) {
+                if let Some(default_type) = parameter.default_type.clone() {
+                    let ty = resolve_parsed_type(default_type, ctx, resolving, &declaration_substitution).ty;
+                    declaration_substitution.insert(parameter.name.clone(), ty);
+                }
+            }
+            resolve_parsed_type(constraint, ctx, resolving, &declaration_substitution).ty
+        })
+    });
+    // The constraint is read only to type the capture; nothing it reports on the
+    // way belongs to the source.
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    if matches!(&resolved, Type::TypeParameter(parameter) if &*parameter.name == capture) {
+        return None;
+    }
+    Some(resolved)
 }
 
 /// Structurally matches the parsed `extends` pattern against the resolved check
@@ -1912,6 +2376,11 @@ fn collect_infer_names(ty: &ParsedType, names: &mut Vec<String>) {
         ParsedType::Named(named) => {
             for argument in &named.type_arguments {
                 collect_infer_names(argument, names);
+            }
+        }
+        ParsedType::TemplateLiteral(template) => {
+            for interpolation in &template.interpolations {
+                collect_infer_names(interpolation, names);
             }
         }
         ParsedType::Object(object) => {

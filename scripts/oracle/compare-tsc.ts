@@ -435,6 +435,7 @@ export const fixturePresets: Record<string, string> = {
   'global-augmentation-entity-alias-types': path.join(workspaceRoot, 'tests/compat-projects/global-augmentation-entity-alias-types/tsconfig.json'),
   'library-reference-outside-generic-signature': path.join(workspaceRoot, 'tests/compat-projects/library-reference-outside-generic-signature/tsconfig.json'),
   'indexed-access-index-kinds-basic': path.join(workspaceRoot, 'tests/compat-projects/indexed-access-index-kinds-basic/tsconfig.json'),
+  'conditional-any-check-type-basic': path.join(workspaceRoot, 'tests/compat-projects/conditional-any-check-type-basic/tsconfig.json'),
   'missing-member-prefix-lookup': path.join(workspaceRoot, 'tests/compat-projects/missing-member-prefix-lookup/tsconfig.json'),
   'property-initializer-constructor-locals': path.join(workspaceRoot, 'tests/compat-projects/property-initializer-constructor-locals/tsconfig.json'),
   'inherited-abstract-generic-heritage': path.join(workspaceRoot, 'tests/compat-projects/inherited-abstract-generic-heritage/tsconfig.json'),
