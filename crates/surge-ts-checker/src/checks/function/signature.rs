@@ -64,10 +64,17 @@ pub(crate) fn emit_parameter_diagnostics(
     // once that gap is closed.
     if !ctx.options.no_implicit_any
         || parameter.declared_type.is_some()
-        || parameter.initializer.is_some()
         || (!tsc_implicit_any_rule()
             && (ctx.unmodelled_jsx_props_depth > 0 || ctx.degraded_expected_type_depth > 0))
     {
+        return;
+    }
+    if let Some(initializer) = &parameter.initializer {
+        if contextual_type.is_none()
+            && let ParsedBindingName::ArrayPattern(pattern) = &parameter.binding_name
+        {
+            emit_padded_array_binding_diagnostics(pattern, initializer, ctx);
+        }
         return;
     }
 
@@ -114,8 +121,38 @@ pub(crate) fn emit_array_binding_pattern_diagnostics(
     pattern: &ParsedArrayBindingPattern,
     ctx: &mut CheckerContext,
 ) {
-    for element in pattern.elements.iter().flatten() {
-        emit_array_binding_element_diagnostic(element, ctx);
+    // tsc's `getTypeFromBindingElement` types an element with an initializer
+    // from it; only one without is an implicit `any`.
+    for (index, element) in pattern.elements.iter().enumerate() {
+        if let Some(element) = element
+            && !pattern.defaults.get(index).copied().unwrap_or(false)
+        {
+            emit_array_binding_element_diagnostic(element, ctx);
+        }
+    }
+}
+
+/// A parameter's array literal initializer contextually typed by its binding
+/// pattern is padded to the pattern's length (tsc's `checkArrayLiteral`), and
+/// a padded position without its own default is an implicit `any` that
+/// `reportErrorsFromWidening` reports at the binding element.
+fn emit_padded_array_binding_diagnostics(
+    pattern: &ParsedArrayBindingPattern,
+    initializer: &surge_ts_syntax::ParsedExpression,
+    ctx: &mut CheckerContext,
+) {
+    let surge_ts_syntax::ParsedExpression::ArrayLiteral { elements, .. } = initializer else {
+        return;
+    };
+    if elements.iter().any(|element| element.spread) {
+        return;
+    }
+    for (index, element) in pattern.elements.iter().enumerate().skip(elements.len()) {
+        if let Some(element @ ParsedBindingName::Identifier { .. }) = element
+            && !pattern.defaults.get(index).copied().unwrap_or(false)
+        {
+            emit_array_binding_element_diagnostic(element, ctx);
+        }
     }
 }
 

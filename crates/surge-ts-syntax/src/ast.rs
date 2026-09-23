@@ -731,6 +731,9 @@ pub struct ParsedArrayBindingPattern {
     /// (`[, b]`). The element type is the source tuple element at that index, or
     /// the array element type for a non-tuple source.
     pub elements: Vec<Option<ParsedBindingName>>,
+    /// Whether each position carries a default (`[a = 1]`), parallel to
+    /// `elements`.
+    pub defaults: Vec<bool>,
     /// The `...rest` binding of `[a, ...rest]`, if present.
     pub rest: Option<Box<ParsedBindingName>>,
     pub span: Option<TextSpan>,

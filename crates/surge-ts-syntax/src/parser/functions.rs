@@ -928,6 +928,11 @@ fn parse_array_binding_pattern(
             .iter()
             .map(|element| element.as_ref().map(|element| parse_binding_name(element)))
             .collect(),
+        defaults: array_pattern
+            .elements
+            .iter()
+            .map(|element| matches!(element, Some(BindingPattern::AssignmentPattern(_))))
+            .collect(),
         rest: array_pattern
             .rest
             .as_deref()
