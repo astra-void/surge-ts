@@ -1560,6 +1560,7 @@ pub(crate) fn parse_array_expression(
     Some(ParsedExpression::ArrayLiteral {
         elements,
         span: Some(text_span_from_oxc_span(array_expression.span())),
+        tuple_context: false,
     })
 }
 

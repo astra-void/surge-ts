@@ -211,9 +211,11 @@ fn infer_expression_unsettled(
         ParsedExpression::ObjectLiteral { properties, .. } => {
             InferredExpression::Known(infer_object_literal(properties, symbols, ctx))
         }
-        ParsedExpression::ArrayLiteral { elements, .. } => {
-            infer_array_literal(elements, symbols, ctx)
-        }
+        ParsedExpression::ArrayLiteral {
+            elements,
+            tuple_context,
+            ..
+        } => infer_array_literal(elements, *tuple_context, symbols, ctx),
         ParsedExpression::Unary {
             operator, operand, ..
         } => infer_unary_expression(*operator, operand, symbols, ctx),

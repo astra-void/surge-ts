@@ -393,6 +393,7 @@ export const fixturePresets: Record<string, string> = {
   'function-name-in-own-signature': path.join(workspaceRoot, 'tests/compat-projects/function-name-in-own-signature/tsconfig.json'),
   'ambient-type-query-forward-reference': path.join(workspaceRoot, 'tests/compat-projects/ambient-type-query-forward-reference/tsconfig.json'),
   'arrow-type-parameters-in-expression-body': path.join(workspaceRoot, 'tests/compat-projects/arrow-type-parameters-in-expression-body/tsconfig.json'),
+  'destructuring-pattern-tuple-context': path.join(workspaceRoot, 'tests/compat-projects/destructuring-pattern-tuple-context/tsconfig.json'),
   'export-clause-primitive-and-global-names': path.join(workspaceRoot, 'tests/compat-projects/export-clause-primitive-and-global-names/tsconfig.json'),
   'export-default-inside-namespace': path.join(workspaceRoot, 'tests/compat-projects/export-default-inside-namespace/tsconfig.json'),
   'for-of-head-pattern-bindings': path.join(workspaceRoot, 'tests/compat-projects/for-of-head-pattern-bindings/tsconfig.json'),

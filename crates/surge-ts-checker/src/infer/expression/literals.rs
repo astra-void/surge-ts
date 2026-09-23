@@ -328,9 +328,13 @@ pub(crate) fn infer_const_expression(
 
 pub(crate) fn infer_array_literal(
     elements: &[ParsedArrayElement],
+    tuple_context: bool,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    if tuple_context && elements.iter().all(|element| !element.spread) {
+        return infer_tuple_literal(elements, symbols, ctx);
+    }
     // `[]` is `never[]`, or `undefined[]` when `undefined` is in every type's
     // domain (the implicit element type tsc widens to `any`).
     if elements.is_empty() {
@@ -397,6 +401,30 @@ pub(crate) fn infer_array_literal(
         union_type(spread_element_types)
     };
     InferredExpression::Known(Type::Array(Box::new(element_type)))
+}
+
+/// tsc's `checkArrayLiteral` in a tuple context: a tuple of the elements'
+/// types, each literal widened (`checkExpressionForMutableLocation`) since the
+/// context a destructuring pattern gives an element is never a literal type.
+fn infer_tuple_literal(
+    elements: &[ParsedArrayElement],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let mut element_types = Vec::with_capacity(elements.len());
+    for element in elements {
+        match infer_expression(&element.expression, symbols, ctx) {
+            InferredExpression::Known(ty) if ty.is_unknown() => return InferredExpression::Unknown,
+            InferredExpression::Known(ty) if is_fresh_literal_expression(&element.expression) => {
+                element_types.push(crate::checks::expr::widen_type(&ty));
+            }
+            InferredExpression::Known(ty) => element_types.push(ty),
+            InferredExpression::UnresolvedIdentifier { .. }
+            | InferredExpression::MissingProperty { .. }
+            | InferredExpression::Unknown => return InferredExpression::Unknown,
+        }
+    }
+    InferredExpression::Known(Type::Tuple(element_types))
 }
 
 fn is_fresh_literal_expression(expression: &ParsedExpression) -> bool {

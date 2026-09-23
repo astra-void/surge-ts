@@ -1294,6 +1294,10 @@ pub enum ParsedExpression {
     ArrayLiteral {
         elements: Vec<ParsedArrayElement>,
         span: Option<TextSpan>,
+        /// Contextually typed by a tuple-like type the parser can see — the
+        /// type a destructuring pattern implies for its initializer — so tsc's
+        /// `checkArrayLiteral` types the literal as a tuple (`inTupleContext`).
+        tuple_context: bool,
     },
     /// A template literal (`` `a${x}b` ``).
     TemplateLiteral {
