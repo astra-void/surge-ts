@@ -679,6 +679,32 @@ fn is_object_type(ty: &Type) -> bool {
     }
 }
 
+/// tsc's `isWeakType` for a plain object: members, every one optional, and no
+/// signature or index signature.
+fn is_weak_object(object: &ObjectType) -> bool {
+    !object.properties.is_empty()
+        && object.properties.values().all(crate::ObjectProperty::is_optional)
+        && object.string_index_type.is_none()
+        && object.number_index_type.is_none()
+        && object.call_signature().is_none()
+        && object.construct_signature().is_none()
+        && !object.is_intersection
+        && !object.synthetic_open_index
+        && !object.non_primitive
+}
+
+/// tsc's `isUnitType` for a source with an apparent type to list members of:
+/// a literal, an enum member or a unique symbol (`undefined` and `null` have
+/// no members). `boolean` is tsc's `false | true`, two unit types whose
+/// apparent type is the same, so it answers as either member does.
+fn is_unit_literal(ty: &Type) -> bool {
+    match ty {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) | Type::Boolean => true,
+        Type::Reference(reference) => reference.is_unique_symbol() || enum_member_value(ty).is_some(),
+        _ => false,
+    }
+}
+
 fn is_empty_anonymous_object(ty: &Type) -> bool {
     matches!(ty, Type::Object(object)
         if object.properties.is_empty()
@@ -833,6 +859,18 @@ fn type_variable_related(from: &Type, to: &Type) -> Option<bool> {
 }
 
 fn assignability_arms(from: &Type, to: &Type) -> bool {
+    // relater.go `isRelatedTo`: the comparable relation skips the weak type
+    // check (`isPerformingCommonPropertyChecks`) except for a unit source,
+    // which must still share a property with an all-optional target.
+    if current_relation() == Relation::Comparable
+        && let Type::Object(target) = to
+        && is_weak_object(target)
+        && is_unit_literal(from)
+        && !target.properties.keys().any(|name| from.get_property_access_type(name).is_some())
+    {
+        return false;
+    }
+
     // A string mapping target (`Uppercase<string>`): the same mapping relates
     // by what it maps, anything else has to be a member of it
     // (`isMemberOfStringMapping`).
