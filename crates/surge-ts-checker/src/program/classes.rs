@@ -189,6 +189,9 @@ fn inferred_property_type(
     infer_members: bool,
     javascript: bool,
 ) -> ParsedType {
+    if let Some(assignments) = &property.this_assignments {
+        return this_assigned_member_type(class, property, assignments, infer_members);
+    }
     // A JavaScript initializer is inferred where it is written, so an object
     // literal in it is open-ended (`isJSLiteralType`) as the syntax alone
     // cannot say.
@@ -212,6 +215,26 @@ fn inferred_property_type(
         }
         _ => ParsedType::Any,
     }
+}
+
+/// A JavaScript member declared by `this.x = v`, typed from what is assigned
+/// (`getWidenedTypeForAssignmentDeclaration`).
+fn this_assigned_member_type(
+    class: &ParsedClassDeclaration,
+    property: &ParsedClassProperty,
+    assignments: &surge_ts_syntax::ParsedThisAssignments,
+    infer_members: bool,
+) -> ParsedType {
+    if !infer_members {
+        return ParsedType::Any;
+    }
+    ParsedType::InferredMember(Arc::new(surge_ts_syntax::ParsedInferredMember {
+        class_name: class.name.clone(),
+        member_start: property.name_span.map_or(0, |span| span.start),
+        member_name: property.name.clone(),
+        keep_literal: false,
+        source: surge_ts_syntax::ParsedInferredMemberSource::ThisAssignments(assignments.clone()),
+    }))
 }
 
 /// A getter with no annotation on either half of the pair takes its body's
@@ -457,7 +480,7 @@ fn collect_static_members(
     for member in &class.members {
         match member {
             ParsedClassMember::Property(property) if property.is_static => {
-                let property_type = static_property_type(property, ctx);
+                let property_type = static_property_type(class, property, ctx);
                 let object_property = if property.optional {
                     ObjectProperty::optional(property_type)
                 } else {
@@ -706,7 +729,19 @@ fn inherited_construct_signature(base: &FunctionType, instance_type: &Type) -> F
     }
 }
 
-fn static_property_type(property: &ParsedClassProperty, ctx: &mut CheckerContext) -> Type {
+fn static_property_type(
+    class: &ParsedClassDeclaration,
+    property: &ParsedClassProperty,
+    ctx: &mut CheckerContext,
+) -> Type {
+    if let Some(assignments) = &property.this_assignments {
+        let infer_members = class.type_parameters.is_empty()
+            && crate::checks::function::lazy_body_returns(&ctx.file_name);
+        return map_parsed_type(
+            this_assigned_member_type(class, property, assignments, infer_members),
+            ctx,
+        );
+    }
     match property.declared_type.clone() {
         Some(declared_type) => map_parsed_type(declared_type, ctx),
         // An open-ended JavaScript object literal (`isJSLiteralType`) has no

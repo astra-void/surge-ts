@@ -807,6 +807,7 @@ export const fixturePresets: Record<string, string> = {
   'javascript-script-globals': path.join(workspaceRoot, 'tests/compat-projects/javascript-script-globals/tsconfig.json'),
   'javascript-object-literals-open-ended': path.join(workspaceRoot, 'tests/compat-projects/javascript-object-literals-open-ended/tsconfig.json'),
   'javascript-object-literals-no-implicit-any': path.join(workspaceRoot, 'tests/compat-projects/javascript-object-literals-no-implicit-any/tsconfig.json'),
+  'javascript-this-assigned-members': path.join(workspaceRoot, 'tests/compat-projects/javascript-this-assigned-members/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

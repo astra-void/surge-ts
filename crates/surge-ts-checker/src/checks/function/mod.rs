@@ -291,6 +291,34 @@ fn infer_member_type(
             };
             type_is_deeply_concrete(&ty).then_some(ty)
         }
+        // tsc's `getWidenedTypeForAssignmentDeclaration` for `this.x = v`: the
+        // union of what is assigned, widened, with `undefined` for a member
+        // only methods assign; an empty array is `any[]`, and a member
+        // assigned nothing but `null` or `undefined` is `any`.
+        surge_ts_syntax::ParsedInferredMemberSource::ThisAssignments(assignments) => {
+            let mut shadow = body_inference_shadow_context(ctx);
+            let mut types = Vec::with_capacity(assignments.values.len() + 1);
+            for value in &assignments.values {
+                if matches!(value, surge_ts_syntax::ParsedExpression::ArrayLiteral { elements, .. } if elements.is_empty()) {
+                    types.push(Type::Array(Box::new(Type::Any)));
+                    continue;
+                }
+                let crate::infer::InferredExpression::Known(ty) =
+                    crate::infer::infer_expression(value, &scope, &mut shadow)
+                else {
+                    return None;
+                };
+                types.push(crate::checks::expr::widen_type(&ty));
+            }
+            if types.iter().all(|ty| matches!(ty, Type::Null | Type::Undefined)) {
+                return Some(Type::Any);
+            }
+            if !assignments.in_constructor && surge_ts_types::strict_null_checks() {
+                types.push(Type::Undefined);
+            }
+            let ty = surge_ts_types::union_type(types);
+            type_is_deeply_concrete(&ty).then_some(ty)
+        }
     }
 }
 

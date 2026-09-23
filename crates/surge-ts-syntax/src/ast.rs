@@ -419,6 +419,7 @@ pub struct ParsedInferredMember {
 pub enum ParsedInferredMemberSource {
     Initializer(ParsedExpression),
     GetterBody(Vec<ParsedFunctionBodyStatement>),
+    ThisAssignments(ParsedThisAssignments),
 }
 
 impl PartialEq for ParsedInferredMember {
@@ -1006,6 +1007,19 @@ pub struct ParsedClassProperty {
     /// The member's whole source range, which is where a class type
     /// parameter is out of scope when the member is static (TS2302).
     pub span: Option<TextSpan>,
+    /// Set for a JavaScript member declared by `this.x = v` rather than
+    /// written in the class body.
+    pub this_assignments: Option<ParsedThisAssignments>,
+}
+
+/// The values a JavaScript class assigns to a member through `this`, which
+/// is how tsc declares it (`bindThisPropertyAssignment`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedThisAssignments {
+    pub values: Vec<ParsedExpression>,
+    /// Whether the values are the constructor's (or a static block's), which
+    /// then are the only ones that count (`isConstructorDeclaredThisProperty`).
+    pub in_constructor: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
