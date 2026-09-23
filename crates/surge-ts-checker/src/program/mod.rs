@@ -113,6 +113,10 @@ pub(crate) struct ParsedProgramFile {
 pub struct ProgramCheckResult {
     pub diagnostics: Vec<Diagnostic>,
     pub stats: CompatibilityStats,
+    /// A program file failed to parse the way tsc's parser fails, so
+    /// `diagnostics` holds only syntactic diagnostics (tsc then reports no
+    /// program or semantic diagnostics either).
+    pub syntax_errors: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -277,6 +281,7 @@ fn check_program_with_stats_and_jobs_inner(
         return ProgramCheckResult {
             diagnostics: Vec::new(),
             stats: CompatibilityStats::default(),
+            syntax_errors: false,
         };
     }
 
@@ -288,6 +293,7 @@ fn check_program_with_stats_and_jobs_inner(
         mut parsed_files,
         mut ctx,
     } = start_program_run(files, prescanned, options, jobs, &store);
+    let syntax_errors = diagnostics::program_has_syntax_errors(&parsed_files);
     let globals = collect_program_globals(&parsed_files, &mut ctx, &timings, program_start);
     let preliminary = run_preliminary_pass(
         &mut parsed_files,
@@ -368,7 +374,7 @@ fn check_program_with_stats_and_jobs_inner(
         drop(shared_state);
         drop(parsed_files);
     }
-    finish_program_run(
+    let mut result = finish_program_run(
         ctx,
         &store,
         &timings,
@@ -376,7 +382,12 @@ fn check_program_with_stats_and_jobs_inner(
         program_start,
         census_external,
         skip_teardown,
-    )
+    );
+    if syntax_errors {
+        result.diagnostics.retain(diagnostics::is_syntactic_diagnostic);
+        result.syntax_errors = true;
+    }
+    result
 }
 
 fn start_program_run(
@@ -1297,7 +1308,11 @@ fn finish_program_run(
         eprintln!("  total: {total}");
     }
 
-    ProgramCheckResult { diagnostics, stats }
+    ProgramCheckResult {
+        diagnostics,
+        stats,
+        syntax_errors: false,
+    }
 }
 
 fn inject_generated_default_lib_inputs(files: &mut Vec<SourceFileInput>, no_lib: bool) {

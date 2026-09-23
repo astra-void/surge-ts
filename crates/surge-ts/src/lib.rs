@@ -606,31 +606,44 @@ impl Project {
             timings.checking += checking_start.elapsed();
         }
 
-        let mut diagnostics = apply_project_no_lib_compatibility_diagnostics(
-            result.diagnostics,
-            loaded.compiler_options.no_lib,
-            !loaded.compiler_options.type_roots.is_empty(),
-            options.diagnostic_profile,
-        );
-        diagnostics.extend(
+        let mut program_diagnostics = removed_option_diagnostics(loaded);
+        program_diagnostics.extend(
             type_package_resolution
                 .missing
                 .iter()
                 .map(|type_name| Diagnostic::ts2688(type_name, String::new())),
         );
-        for missing in &reference_type_resolution.missing {
-            if loaded.compiler_options.skip_lib_check && missing.from_declaration_file {
-                continue;
-            }
-            diagnostics.push(
-                Diagnostic::ts2688(&missing.type_name, missing.file_name.clone()).with_span(
-                    TextSpan {
-                        start: missing.value_span.start,
-                        end: missing.value_span.end,
-                    },
-                ),
+        // tsc's `GetDiagnosticsOfAnyProgram`: syntactic diagnostics alone when
+        // there are any, else the program's option and location-less
+        // file-inclusion diagnostics alone when there are any, else the
+        // semantic ones. An inclusion error located in a file (an unresolved
+        // `/// <reference types>`) is reported with that file's semantics.
+        let diagnostics = if result.syntax_errors {
+            result.diagnostics
+        } else if !program_diagnostics.is_empty() {
+            program_diagnostics
+        } else {
+            let mut diagnostics = apply_project_no_lib_compatibility_diagnostics(
+                result.diagnostics,
+                loaded.compiler_options.no_lib,
+                !loaded.compiler_options.type_roots.is_empty(),
+                options.diagnostic_profile,
             );
-        }
+            for missing in &reference_type_resolution.missing {
+                if loaded.compiler_options.skip_lib_check && missing.from_declaration_file {
+                    continue;
+                }
+                diagnostics.push(
+                    Diagnostic::ts2688(&missing.type_name, missing.file_name.clone()).with_span(
+                        TextSpan {
+                            start: missing.value_span.start,
+                            end: missing.value_span.end,
+                        },
+                    ),
+                );
+            }
+            diagnostics
+        };
 
         if !options.retain_all_sources {
             let needed: std::collections::HashSet<&str> = diagnostics
@@ -718,6 +731,27 @@ fn read_project_sources(
         sources.extend(chunk?);
     }
     Ok(sources)
+}
+
+/// `TS5102`/`TS5108` for every compiler option TypeScript 7 removed, spanned
+/// inside the config file the way tsc spans them (the value node for the
+/// `name=value` form, the key node otherwise).
+pub fn removed_option_diagnostics(loaded: &LoadedTsConfig) -> Vec<Diagnostic> {
+    let file_name = loaded.config_path.display().to_string();
+    loaded
+        .removed_options
+        .iter()
+        .map(|option| {
+            let diagnostic = match &option.value {
+                Some(value) => Diagnostic::ts5108(&option.name, value, file_name.clone()),
+                None => Diagnostic::ts5102(&option.name, file_name.clone()),
+            };
+            diagnostic.with_span(TextSpan {
+                start: option.start,
+                end: option.end,
+            })
+        })
+        .collect()
 }
 
 fn referenced_lib_names(inputs: &[SourceFileInput]) -> Vec<String> {

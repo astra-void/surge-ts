@@ -717,6 +717,10 @@ export const fixturePresets: Record<string, string> = {
   'tagged-template-generic-call-basic': path.join(workspaceRoot, 'tests/compat-projects/tagged-template-generic-call-basic/tsconfig.json'),
   'reference-lib-directive-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-lib-directive-basic/tsconfig.json'),
   'reference-lib-directive-leading-only-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-lib-directive-leading-only-basic/tsconfig.json'),
+  'syntactic-diagnostics-gate-basic': path.join(workspaceRoot, 'tests/compat-projects/syntactic-diagnostics-gate-basic/tsconfig.json'),
+  'grammar-diagnostics-do-not-gate-basic': path.join(workspaceRoot, 'tests/compat-projects/grammar-diagnostics-do-not-gate-basic/tsconfig.json'),
+  'program-diagnostics-gate-basic': path.join(workspaceRoot, 'tests/compat-projects/program-diagnostics-gate-basic/tsconfig.json'),
+  'reference-types-diagnostic-does-not-gate-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-types-diagnostic-does-not-gate-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
