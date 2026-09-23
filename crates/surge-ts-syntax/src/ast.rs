@@ -71,11 +71,15 @@ pub struct ParsedSource {
 pub struct JsxFactoryUses {
     pub has_elements: bool,
     pub has_fragments: bool,
+    /// The file's first element, or first fragment's opening tag, where tsc
+    /// reports a JSX runtime import that resolves to nothing.
+    pub first_tag: Option<TextSpan>,
     /// The first identifier of the `@jsx` factory.
     pub factory_pragma: Option<String>,
     /// The first identifier of the `@jsxFrag` factory.
     pub fragment_pragma: Option<String>,
-    pub import_source_pragma: bool,
+    /// The `@jsxImportSource` package.
+    pub import_source_pragma: Option<String>,
     pub runtime_pragma: Option<String>,
 }
 

@@ -761,6 +761,14 @@ message = "'{0}' components don't accept text as child elements. Text in JSX has
 arity = 3
 
 [[diagnostic]]
+code = "TS2875"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This JSX tag requires the module path '{0}' to exist, but none could be found. Make sure you have types for the appropriate package installed."
+arity = 1
+
+[[diagnostic]]
 code = "TS2754"
 category = "Error"
 source = "typescript"

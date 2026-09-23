@@ -490,14 +490,10 @@ pub(crate) struct CheckerContext {
     /// analysis rounds' collection calls; see `modules::exports::values::
     /// thin_prelim_enabled` for the soundness argument.
     pub(crate) thin_superseded_value_collection: bool,
-    /// The export-table type declarations of the module that exports the
-    /// program's JSX intrinsic-elements interface, plus its key in that table
-    /// (`JSX.IntrinsicElements`), located once after module binding. Under the
-    /// automatic runtime (`jsx: react-jsx`) the JSX checker resolves intrinsic
-    /// tags through this table when no `JSX`/`React.JSX` binding is visible from
-    /// the consuming file — tsc reaches the namespace through the runtime module
-    /// import it synthesizes.
-    pub(crate) jsx_intrinsic_elements_declarer: Option<(Arc<TypeDeclarationTable>, String)>,
+    /// The modules JSX namespaces are read from that no lexical scope exposes
+    /// (each file's implicit `jsx-runtime` import, each UMD global), located
+    /// once after module binding.
+    pub(crate) jsx_namespace_modules: Arc<crate::checks::jsx::JsxNamespaceModules>,
     /// The current file's JSX pragmas ([`surge_ts_syntax::ParsedSource::jsx_factory_uses`]).
     /// Per-file: reset by [`Self::begin_file_check`].
     pub(crate) jsx_factory_uses: surge_ts_syntax::JsxFactoryUses,
@@ -807,7 +803,7 @@ impl CheckerContext {
             thin_superseded_value_collection: false,
             lazy_library_value_annotations: false,
             skip_annotated_function_bodies: false,
-            jsx_intrinsic_elements_declarer: None,
+            jsx_namespace_modules: Default::default(),
             jsx_factory_uses: Default::default(),
             jsx_namespace: None,
             type_parameter_scopes: Vec::new(),
@@ -982,7 +978,7 @@ impl CheckerContext {
             thin_superseded_value_collection: false,
             lazy_library_value_annotations: false,
             skip_annotated_function_bodies: false,
-            jsx_intrinsic_elements_declarer: data.jsx_intrinsic_elements_declarer.clone(),
+            jsx_namespace_modules: data.jsx_namespace_modules.clone(),
             jsx_factory_uses: Default::default(),
             jsx_namespace: None,
             type_parameter_scopes: data.type_parameter_scopes.clone(),

@@ -760,6 +760,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2875",
+    "category": "Error",
+    "message": "This JSX tag requires the module path '{0}' to exist, but none could be found. Make sure you have types for the appropriate package installed.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2754",
     "category": "Error",
     "message": "'super' may not use type arguments.",

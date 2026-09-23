@@ -998,11 +998,15 @@ fn finalize_module_bindings(
     });
     let module_scope_map = module_scope_by_file_map(&parsed_files, &module_resolution_scopes, &ctx);
     ctx.set_module_scope_by_file(module_scope_map);
-    ctx.jsx_intrinsic_elements_declarer =
-        locate_jsx_intrinsic_elements_declarer(&parsed_files, &module_export_tables);
+    ctx.jsx_namespace_modules = Arc::new(crate::checks::jsx::collect_jsx_namespace_modules(
+        &parsed_files,
+        &module_export_tables,
+        &module_resolution_scopes,
+        ctx,
+    ));
     // The resolved (re-export-expanded) export tables were only consumed by
-    // import binding and the JSX locator; the check phase reads the analyses'
-    // local export tables through `shared_state`.
+    // import binding and the JSX namespace modules; the check phase reads the
+    // analyses' local export tables through `shared_state`.
     drop(module_export_tables);
     sync_global_this_symbol(ctx);
     record_program_timing(timings.as_ref(), |timings| {
@@ -1456,26 +1460,6 @@ fn namespace_object_module_path(ty: &surge_ts_types::Type) -> Option<&str> {
         .as_deref()?
         .strip_prefix("typeof import(\"")?
         .strip_suffix("\")")
-}
-
-fn locate_jsx_intrinsic_elements_declarer(
-    parsed_files: &[ParsedProgramFile],
-    module_export_tables: &[Option<crate::modules::ModuleExportTable>],
-) -> Option<(Arc<TypeDeclarationTable>, String)> {
-    const CANDIDATE_KEYS: [&str; 2] = ["JSX.IntrinsicElements", "React.JSX.IntrinsicElements"];
-
-    for key in CANDIDATE_KEYS {
-        for (parsed_file, table) in parsed_files.iter().zip(module_export_tables) {
-            if !parsed_file.file_kind.is_declaration() {
-                continue;
-            }
-            let Some(table) = table else { continue };
-            if table.type_declarations.get(key).is_some() {
-                return Some((table.type_declarations.clone(), key.to_string()));
-            }
-        }
-    }
-    None
 }
 
 fn clone_type_declaration_table(

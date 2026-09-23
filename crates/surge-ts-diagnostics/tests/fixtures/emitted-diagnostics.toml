@@ -953,6 +953,15 @@ oracle = [
   "jsx-children-arity-basic",
 ]
 
+[TS2875]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/jsx-implicit-runtime-import-basic/src/missing.tsx",
+]
+oracle = [
+  "jsx-implicit-runtime-import-basic",
+]
+
 [TS2749]
 status = "emitted"
 oracle = [

@@ -294,6 +294,8 @@ export const fixturePresets: Record<string, string> = {
   'jsx-children-arity-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-children-arity-basic/tsconfig.json'),
   'jsx-children-arity-unnamed-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-children-arity-unnamed-basic/tsconfig.json'),
   'jsx-type-only-factory-import-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-type-only-factory-import-basic/tsconfig.json'),
+  'jsx-implicit-runtime-import-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-implicit-runtime-import-basic/tsconfig.json'),
+  'jsx-umd-factory-namespace-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-umd-factory-namespace-basic/tsconfig.json'),
   'auto-types-node-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-node-basic/tsconfig.json'),
   'auto-types-disabled-empty-types-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-disabled-empty-types-basic/tsconfig.json'),
   'auto-types-narrowed-types-basic': path.join(workspaceRoot, 'tests/compat-projects/auto-types-narrowed-types-basic/tsconfig.json'),
