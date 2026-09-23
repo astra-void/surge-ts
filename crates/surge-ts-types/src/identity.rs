@@ -19,6 +19,12 @@ fn identical(left: &Type, right: &Type, depth: usize) -> bool {
     if left == right || depth == 0 {
         return true;
     }
+    // Peeling drops the `readonly` wrapper, but `readonly [A]` is another
+    // tuple target than `[A]`, and `ReadonlyArray<T>` another generic than
+    // `Array<T>`.
+    if is_readonly_array_like(left) != is_readonly_array_like(right) {
+        return false;
+    }
     let (left, right) = (left.peeled(), right.peeled());
     if left == right {
         return true;
@@ -43,15 +49,33 @@ fn identical(left: &Type, right: &Type, depth: usize) -> bool {
         }
         (Type::Function(left), Type::Function(right)) => signatures_identical(left, right, depth),
         (Type::Array(left), Type::Array(right)) => identical(left, right, depth - 1),
-        (Type::Tuple(left), Type::Tuple(right)) => {
-            left.len() == right.len()
-                && left
-                    .iter()
-                    .zip(right.iter())
-                    .all(|(left, right)| identical(left, right, depth - 1))
+        (Type::Tuple(left), Type::Tuple(right)) => elements_identical(left, right, depth),
+        (Type::OpenTuple(left), Type::OpenTuple(right)) => {
+            elements_identical(&left.leading, &right.leading, depth)
+                && identical(&left.rest, &right.rest, depth - 1)
+                && elements_identical(&left.trailing, &right.trailing, depth)
         }
         _ => false,
     }
+}
+
+fn is_readonly_array_like(ty: &Type) -> bool {
+    match ty {
+        Type::Reference(reference) => {
+            reference.is_readonly_array() || is_readonly_array_like(&reference.resolve_arc())
+        }
+        _ => false,
+    }
+}
+
+/// Two tuples are one target only with the same element positions, each
+/// element identical to its counterpart.
+fn elements_identical(left: &[Type], right: &[Type], depth: usize) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right.iter())
+            .all(|(left, right)| identical(left, right, depth - 1))
 }
 
 fn members_identical(left: &[Type], right: &[Type], depth: usize) -> bool {

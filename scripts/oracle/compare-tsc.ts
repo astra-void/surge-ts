@@ -783,6 +783,7 @@ export const fixturePresets: Record<string, string> = {
   'script-global-values-across-files-basic': path.join(workspaceRoot, 'tests/compat-projects/script-global-values-across-files-basic/tsconfig.json'),
   'var-redeclaration-identity-basic': path.join(workspaceRoot, 'tests/compat-projects/var-redeclaration-identity-basic/tsconfig.json'),
   'tuple-length-literal-basic': path.join(workspaceRoot, 'tests/compat-projects/tuple-length-literal-basic/tsconfig.json'),
+  'tuple-identity-arity-basic': path.join(workspaceRoot, 'tests/compat-projects/tuple-identity-arity-basic/tsconfig.json'),
   'tagged-template-generic-call-basic': path.join(workspaceRoot, 'tests/compat-projects/tagged-template-generic-call-basic/tsconfig.json'),
   'reference-lib-directive-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-lib-directive-basic/tsconfig.json'),
   'reference-lib-directive-leading-only-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-lib-directive-leading-only-basic/tsconfig.json'),
