@@ -812,6 +812,7 @@ export const fixturePresets: Record<string, string> = {
   'optional-chain-element-call': path.join(workspaceRoot, 'tests/compat-projects/optional-chain-element-call/tsconfig.json'),
   'destructuring-assignment-in-comma': path.join(workspaceRoot, 'tests/compat-projects/destructuring-assignment-in-comma/tsconfig.json'),
   'jsdoc-link-counts-as-use': path.join(workspaceRoot, 'tests/compat-projects/jsdoc-link-counts-as-use/tsconfig.json'),
+  'labeled-const-declaration-context': path.join(workspaceRoot, 'tests/compat-projects/labeled-const-declaration-context/tsconfig.json'),
   'protected-access-this-parameter': path.join(workspaceRoot, 'tests/compat-projects/protected-access-this-parameter/tsconfig.json'),
   'protected-access-through-instance': path.join(workspaceRoot, 'tests/compat-projects/protected-access-through-instance/tsconfig.json'),
 };

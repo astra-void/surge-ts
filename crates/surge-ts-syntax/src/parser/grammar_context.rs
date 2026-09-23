@@ -946,8 +946,10 @@ impl<'a> ContextCollector<'a, '_> {
     }
 
     /// tsc's `checkGrammarForDisallowedBlockScopedVariableStatement`: a
-    /// `const`/`using` declaration as the whole body of an `if`, loop, or
-    /// label — TS1156. (A `let` there does not survive oxc's parse.)
+    /// `const`/`using` declaration as the whole body of an `if`, a loop or a
+    /// `with` — through any labels in between (`allowLetAndConstDeclarations`
+    /// looks past a label to its parent) — is TS1156. (A `let` there does not
+    /// survive oxc's parse.)
     fn check_single_statement_declaration(&mut self, declaration: &oxc_ast::ast::VariableDeclaration<'_>) {
         let keyword = match declaration.kind {
             VariableDeclarationKind::Const => "const",
@@ -955,18 +957,26 @@ impl<'a> ContextCollector<'a, '_> {
             VariableDeclarationKind::AwaitUsing => "await using",
             _ => return,
         };
-        let is_body = match self.stack.last() {
+        let mut child = declaration.span;
+        let mut ancestors = self.stack.iter().rev();
+        let mut parent = ancestors.next();
+        while let Some(AstKind::LabeledStatement(label)) = parent
+            && label.body.span() == child
+        {
+            child = label.span;
+            parent = ancestors.next();
+        }
+        let is_body = match parent {
             Some(AstKind::IfStatement(statement)) => {
-                statement.consequent.span() == declaration.span
-                    || statement.alternate.as_ref().is_some_and(|alternate| alternate.span() == declaration.span)
+                statement.consequent.span() == child
+                    || statement.alternate.as_ref().is_some_and(|alternate| alternate.span() == child)
             }
-            Some(AstKind::WhileStatement(statement)) => statement.body.span() == declaration.span,
-            Some(AstKind::DoWhileStatement(statement)) => statement.body.span() == declaration.span,
-            Some(AstKind::ForStatement(statement)) => statement.body.span() == declaration.span,
-            Some(AstKind::ForInStatement(statement)) => statement.body.span() == declaration.span,
-            Some(AstKind::ForOfStatement(statement)) => statement.body.span() == declaration.span,
-            Some(AstKind::LabeledStatement(statement)) => statement.body.span() == declaration.span,
-            Some(AstKind::WithStatement(statement)) => statement.body.span() == declaration.span,
+            Some(AstKind::WhileStatement(statement)) => statement.body.span() == child,
+            Some(AstKind::DoWhileStatement(statement)) => statement.body.span() == child,
+            Some(AstKind::ForStatement(statement)) => statement.body.span() == child,
+            Some(AstKind::ForInStatement(statement)) => statement.body.span() == child,
+            Some(AstKind::ForOfStatement(statement)) => statement.body.span() == child,
+            Some(AstKind::WithStatement(statement)) => statement.body.span() == child,
             _ => false,
         };
         if is_body {
