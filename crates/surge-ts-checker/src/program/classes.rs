@@ -1031,6 +1031,11 @@ fn check_implemented_interfaces(class: &ParsedClassDeclaration, ctx: &mut Checke
     };
 
     for implemented in &class.implements {
+        // `implements string` is TS2864 alone: the clause's type is tsc's
+        // error type, which no member check compares against.
+        if is_primitive_type_name(&implemented.name) {
+            continue;
+        }
         // tsc reports the member-specific errors first and falls back to the
         // broad one only when that walk found nothing. A clause carrying type
         // arguments is left to the broad check: resolving the interface by name
