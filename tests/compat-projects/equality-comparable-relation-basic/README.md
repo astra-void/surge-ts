@@ -20,3 +20,8 @@ discriminant under the same relation (TS2678, `switches.ts`).
 source relates when some constituent does or its members do as a whole, an
 intersection target needs every constituent, so `A & B` overlaps `A` but not
 `B & C`, and `I1 & I3` has no overlap with `I2 extends I1` in either direction.
+
+`weak.ts` pins the one weak-type rule the comparable relation keeps
+(`isPerformingCommonPropertyChecks`, relater.go): a unit source — a literal,
+an enum member, or `boolean` as `false | true` — has to share a property with
+an all-optional target, while `string` against the same target is comparable.
