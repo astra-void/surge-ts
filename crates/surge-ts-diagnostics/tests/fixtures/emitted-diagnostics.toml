@@ -1776,8 +1776,11 @@ oracle = [
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
 [TS1164]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "enum-computed-member-name-basic",
+]
+
 [TS1176]
 status = "emitted"
 oracle = [
@@ -2576,36 +2579,66 @@ oracle = [
 status = "emitted"
 oracle = [
   "invalid-write-target-basic",
+  "invalid-write-target-recovery-basic",
 ]
 
 [TS2357]
 status = "emitted"
 oracle = [
   "invalid-write-target-basic",
+  "invalid-write-target-recovery-basic",
 ]
 
 [TS2779]
 status = "emitted"
 oracle = [
   "invalid-write-target-basic",
+  "invalid-write-target-recovery-basic",
 ]
 
 [TS2777]
 status = "emitted"
 oracle = [
   "invalid-write-target-basic",
+  "invalid-write-target-recovery-basic",
 ]
 
 [TS1014]
 status = "emitted"
 oracle = [
   "invalid-write-target-basic",
+  "invalid-write-target-recovery-basic",
 ]
 
 [TS2462]
 status = "emitted"
 oracle = [
   "invalid-write-target-basic",
+  "invalid-write-target-recovery-basic",
+]
+
+[TS1011]
+status = "emitted"
+oracle = [
+  "element-access-argument-basic",
+]
+
+[TS1162]
+status = "emitted"
+oracle = [
+  "object-member-optional-basic",
+]
+
+[TS1191]
+status = "emitted"
+oracle = [
+  "import-declaration-modifiers-basic",
+]
+
+[TS1221]
+status = "emitted"
+oracle = [
+  "ambient-generator-basic",
 ]
 
 [TS1166]
