@@ -720,6 +720,7 @@ export const fixturePresets: Record<string, string> = {
   'optional-call-lib-member-basic': path.join(workspaceRoot, 'tests/compat-projects/optional-call-lib-member-basic/tsconfig.json'),
   'conditional-readonly-array-infer-basic': path.join(workspaceRoot, 'tests/compat-projects/conditional-readonly-array-infer-basic/tsconfig.json'),
   'async-implicit-return-awaited-basic': path.join(workspaceRoot, 'tests/compat-projects/async-implicit-return-awaited-basic/tsconfig.json'),
+  'index-signature-key-slots-basic': path.join(workspaceRoot, 'tests/compat-projects/index-signature-key-slots-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
