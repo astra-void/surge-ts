@@ -1013,7 +1013,7 @@
     "message": "Element implicitly has an 'any' type because type '{0}' has no index signature. Did you mean to call '{1}'?",
     "source": "typescript",
     "arity": 2,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS7053",

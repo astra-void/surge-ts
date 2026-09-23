@@ -504,8 +504,9 @@ fn evaluate_expression_unsettled(
             operand,
             operand_span,
         } => {
-            let operand_result =
-                evaluate_expression(operand, operand_span.or(fallback_span), symbols, ctx);
+            let operand_result = super::diagnostics::with_element_write_target(|| {
+                evaluate_expression(operand, operand_span.or(fallback_span), symbols, ctx)
+            });
 
             super::check_update_operand(
                 operand,
@@ -728,6 +729,8 @@ fn evaluate_expression_unsettled(
             index,
             index_span,
         } => {
+            // A write target's receiver is read.
+            let _ = super::diagnostics::take_element_write_target();
             let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
             check_property_receiver(object, &receiver, *object_span, fallback_span, symbols, ctx);
             if let InferredExpression::Known(receiver_type) = &receiver
@@ -1094,6 +1097,7 @@ fn evaluate_optional_property_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    let is_write = super::diagnostics::take_element_write_target();
     if property_name == "length" && !is_bracketed {
         super::mark_evolving_array_operation(object, ctx);
     }
@@ -1131,6 +1135,7 @@ fn evaluate_optional_property_access(
             object_type,
             *property_span,
             element_access_span(*object_span, *property_span).or(fallback_span),
+            &super::diagnostics::ElementAccessSite::of(object, is_write),
             symbols,
             ctx,
         );
@@ -1442,6 +1447,7 @@ fn evaluate_property_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    let is_write = super::diagnostics::take_element_write_target();
     if property_name == "length" && !is_bracketed {
         super::mark_evolving_array_operation(object, ctx);
     }
@@ -1482,6 +1488,7 @@ fn evaluate_property_access(
             object_type,
             *property_span,
             element_access_span(*object_span, *property_span).or(fallback_span),
+            &super::diagnostics::ElementAccessSite::of(object, is_write),
             symbols,
             ctx,
         );

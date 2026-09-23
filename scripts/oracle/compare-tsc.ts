@@ -760,6 +760,7 @@ export const fixturePresets: Record<string, string> = {
   'nullish-right-operand-context-only': path.join(workspaceRoot, 'tests/compat-projects/nullish-right-operand-context-only/tsconfig.json'),
   'function-namespace-merge-members': path.join(workspaceRoot, 'tests/compat-projects/function-namespace-merge-members/tsconfig.json'),
   'local-enum-used-before-declaration': path.join(workspaceRoot, 'tests/compat-projects/local-enum-used-before-declaration/tsconfig.json'),
+  'element-access-missing-key-selection': path.join(workspaceRoot, 'tests/compat-projects/element-access-missing-key-selection/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

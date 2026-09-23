@@ -1012,7 +1012,7 @@ arity = 2
 code = "TS7052"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Element implicitly has an 'any' type because type '{0}' has no index signature. Did you mean to call '{1}'?"
 arity = 2
 

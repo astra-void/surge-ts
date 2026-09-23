@@ -1272,7 +1272,7 @@ pub const TS7052: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Element implicitly has an 'any' type because type '{0}' has no index signature. Did you mean to call '{1}'?",
     argument_count: 2,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS7053: DiagnosticDescriptor = DiagnosticDescriptor {

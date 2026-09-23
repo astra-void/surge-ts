@@ -116,6 +116,7 @@ pub(super) fn evaluate_index_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    let is_write = super::diagnostics::take_element_write_target();
     if super::check_auto_array_read(object_name, object_span, symbols, ctx).is_some() {
         return InferredExpression::Known(Type::Any);
     }
@@ -448,6 +449,7 @@ pub(super) fn evaluate_index_access(
                     &receiver_type,
                     index_span,
                     element_access_span(object_span, index_span).or(fallback_span),
+                    &super::diagnostics::ElementAccessSite::named(object_name, is_write),
                     symbols,
                     ctx,
                 );
