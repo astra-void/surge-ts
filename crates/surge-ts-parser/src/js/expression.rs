@@ -171,6 +171,14 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         if lhs_precedence >= Precedence::Compare {
             return self.fatal_error(diagnostics::unexpected_private_identifier(left.span));
         }
+        // surge: TS18016 — tsc parses a bare `#x` as an expression and reports its placement from
+        // the checker; keep the file, with an empty-span placeholder operand.
+        if !self.at(Kind::In) {
+            let found = self.cur_token().span();
+            self.error(diagnostics::expect_token(Kind::In.to_str(), self.cur_kind().to_str(), found));
+            let right = self.ast.expression_null_literal(Span::empty(left.span.end));
+            return self.ast.expression_private_in(self.end_span(lhs_span), left, right);
+        }
         self.expect(Kind::In);
         let right = self.parse_binary_expression_or_higher(Precedence::Compare);
         if let Expression::PrivateInExpression(private_in_expr) = right {

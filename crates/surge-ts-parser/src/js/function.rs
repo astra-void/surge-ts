@@ -134,6 +134,22 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             let span = self.start_span();
             let decorators = self.parse_decorators();
 
+            // surge: TS1317 — tsc parses parameter-property modifiers on a rest parameter and rejects
+            // them from the checker; report oxc's unexpected `...` and keep the rest parameter.
+            if self.is_ts
+                && matches!(
+                    self.cur_kind(),
+                    Kind::Public | Kind::Private | Kind::Protected | Kind::Readonly | Kind::Override
+                )
+                && self.lookahead(|p| {
+                    p.parse_modifiers(false, false);
+                    p.at(Kind::Dot3)
+                })
+            {
+                self.parse_modifiers(false, false);
+                self.error(diagnostics::unexpected_token(self.cur_token().span()));
+            }
+
             if self.at(Kind::Dot3) {
                 let rest_element = self.parse_rest_element_for_formal_parameter();
                 let type_annotation =
@@ -195,7 +211,18 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 diagnostics::parameter_modifiers_in_ts,
             );
         }
-        let pattern = self.parse_binding_pattern();
+        // surge: TS1433/TS2680 — tsc parses a `this` parameter after a modifier, a decorator or
+        // another parameter and reports it; keep it as a parameter named `this`.
+        let pattern = if self.is_ts && self.at(Kind::This) {
+            let this_span = self.cur_token().span();
+            self.error(diagnostics::identifier_reserved_word(this_span, "this"));
+            self.bump_any();
+            BindingPattern::BindingIdentifier(
+                self.alloc(self.ast.binding_identifier(this_span, "this")),
+            )
+        } else {
+            self.parse_binding_pattern()
+        };
 
         let optional = self.is_ts && self.eat(Kind::Question);
         let type_annotation = self.parse_ts_type_annotation();
