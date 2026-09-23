@@ -757,6 +757,7 @@ export const fixturePresets: Record<string, string> = {
   'signature-collection-restores-scope': path.join(workspaceRoot, 'tests/compat-projects/signature-collection-restores-scope/tsconfig.json'),
   'unused-declaration-list-grouping': path.join(workspaceRoot, 'tests/compat-projects/unused-declaration-list-grouping/tsconfig.json'),
   'destructuring-missing-property-at-element': path.join(workspaceRoot, 'tests/compat-projects/destructuring-missing-property-at-element/tsconfig.json'),
+  'nullish-right-operand-context-only': path.join(workspaceRoot, 'tests/compat-projects/nullish-right-operand-context-only/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -811,7 +811,9 @@ fn evaluate_nullish_coalescing(
     let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
     // With no outer contextual type, tsc contextually types the right
     // operand from the left's — that is what gives `opts.uri ?? ((id) =>
-    // id)`'s parameter a type instead of a false TS7006.
+    // id)`'s parameter a type instead of a false TS7006. It is a contextual
+    // type only (`getContextualTypeForBinaryOperand`): the operand is not
+    // required to fit it.
     let right_result = match contextual_default_operand_type(&left_result) {
         Some(contextual) => match empty_object_fallback_type(right, &contextual) {
             Some(fallback) => InferredExpression::Known(fallback),
@@ -819,7 +821,7 @@ fn evaluate_nullish_coalescing(
                 right,
                 right_span.or(fallback_span),
                 Some(&contextual),
-                crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                crate::checks::expected::ExpectedTypeDiagnostic::ContextOnly,
                 symbols,
                 ctx,
             ),
@@ -992,7 +994,7 @@ fn evaluate_logical(
                 right,
                 right_span.or(fallback_span),
                 Some(&contextual),
-                crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                crate::checks::expected::ExpectedTypeDiagnostic::ContextOnly,
                 right_symbols,
                 ctx,
             ),
