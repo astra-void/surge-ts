@@ -2553,6 +2553,17 @@ pub(crate) fn collect_inferred_type_argument(
             }
         }
         ParsedType::Union(expected_types) => {
+            // `getUnionType` flattens a union written inside a union — the shape
+            // substituting `T := void | C2` into `MaybePromise<T> = T |
+            // Promise<T>` writes — so the naked member stays visible below.
+            let flattened;
+            let expected_types: &[ParsedType] =
+                if expected_types.iter().any(|member| matches!(member, ParsedType::Union(_))) {
+                    flattened = flatten_parsed_union_members(expected_types);
+                    &flattened
+                } else {
+                    expected_types
+                };
             // `T | PromiseLike<T>` (the lib's `then` callbacks, `Awaited`-style
             // parameters): a promise argument infers `T` from what it resolves
             // to, never as the whole promise — tsc pairs it with the
@@ -2715,6 +2726,17 @@ fn is_conditional_alias_reference(member: &ParsedType, ctx: &CheckerContext) -> 
 
 /// The `T` of a `T | PromiseLike<T>` / `T | Promise<T>` union, when the union
 /// has exactly that shape.
+fn flatten_parsed_union_members(members: &[ParsedType]) -> Vec<ParsedType> {
+    let mut flattened = Vec::with_capacity(members.len());
+    for member in members {
+        match member {
+            ParsedType::Union(inner) => flattened.extend(flatten_parsed_union_members(inner)),
+            other => flattened.push(other.clone()),
+        }
+    }
+    flattened
+}
+
 fn promise_like_member_target(members: &[ParsedType]) -> Option<&ParsedType> {
     let [first, second] = members else {
         return None;
