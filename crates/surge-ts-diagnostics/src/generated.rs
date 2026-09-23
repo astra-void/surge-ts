@@ -1095,6 +1095,16 @@ pub const TS6133: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS6142: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS6142",
+    number: Some(6142),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Module '{0}' was resolved to '{1}', but '--jsx' is not set.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS6198: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS6198",
     number: Some(6198),
@@ -4115,6 +4125,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS7019,
     TS4111,
     TS6133,
+    TS6142,
     TS6198,
     TS6196,
     TS4112,
@@ -5470,6 +5481,18 @@ impl Diagnostic {
         Self::from_descriptor(
             &TS6133,
             vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts6142(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS6142,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
             file_name,
         )
     }

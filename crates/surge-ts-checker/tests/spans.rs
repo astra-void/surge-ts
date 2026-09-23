@@ -59,6 +59,8 @@ fn native_program(files: Vec<SourceFileInput>) -> Vec<Diagnostic> {
         CheckerOptions {
             diagnostic_profile: DiagnosticProfile::Native,
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -99,6 +101,8 @@ fn span_ts2304_identifier_expression() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -140,6 +144,8 @@ fn span_ts2304_unknown_type_annotation_points_to_type_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -181,6 +187,8 @@ fn span_ts2304_unknown_type_alias_target() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -222,6 +230,8 @@ fn span_ts2304_unknown_interface_property_type() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -263,6 +273,8 @@ fn span_ts2304_unknown_function_parameter_type() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -304,6 +316,8 @@ fn span_ts2304_unknown_function_return_type() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -345,6 +359,8 @@ fn span_ts2304_unknown_tuple_element_type() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -386,6 +402,8 @@ fn span_ts2304_unknown_array_element_type() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -427,6 +445,8 @@ fn span_ts7006_points_to_parameter_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -468,6 +488,8 @@ fn span_ts7031_points_to_binding_element_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -509,6 +531,8 @@ fn span_uninitialized_variable_no_longer_emits_ts7005() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -550,6 +574,8 @@ fn span_ts2451_points_to_duplicate_variable_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -606,6 +632,8 @@ fn span_ts2393_points_to_duplicate_function_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -662,6 +690,8 @@ fn span_ts2300_points_to_duplicate_type_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -717,6 +747,8 @@ fn span_ts2588_points_to_assignment_target() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -758,6 +790,8 @@ fn span_ts2322_variable_initializer() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -801,6 +835,8 @@ fn span_ts2322_assignment_points_to_target() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -842,6 +878,8 @@ fn span_ts2322_return_points_to_return_keyword() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -883,6 +921,8 @@ fn span_ts2322_object_property_value() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -926,6 +966,8 @@ fn span_ts2322_array_element() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -967,6 +1009,8 @@ fn span_ts2322_tuple_element() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1008,6 +1052,8 @@ fn span_tuple_length_too_few_points_to_declaration_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1049,6 +1095,8 @@ fn span_tuple_length_too_many_points_to_declaration_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1090,6 +1138,8 @@ fn span_ts2322_conditional_true_branch_points_to_declaration_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1131,6 +1181,8 @@ fn span_ts2322_conditional_false_branch_points_to_declaration_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1172,6 +1224,8 @@ fn span_ts2322_property_call_return_initializer() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1213,6 +1267,8 @@ fn span_ts2322_index_access_initializer() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1254,6 +1310,8 @@ fn span_ts2345_identifier_call_argument() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1295,6 +1353,8 @@ fn span_ts2304_call_argument() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1336,6 +1396,8 @@ fn span_ts2304_call_callee() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1377,6 +1439,8 @@ fn span_ts2304_property_call_receiver() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1418,6 +1482,8 @@ fn span_ts2304_index_receiver() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1459,6 +1525,8 @@ fn span_ts2304_index_expression() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1500,6 +1568,8 @@ fn span_ts2345_contextual_object_argument_property_value() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1542,6 +1612,8 @@ fn span_ts2345_contextual_array_argument_element() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1583,6 +1655,8 @@ fn span_ts2345_contextual_tuple_argument_element() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1624,6 +1698,8 @@ fn span_ts2554_identifier_call_arity_points_to_callee() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1665,6 +1741,8 @@ fn span_ts2554_property_call_arity_points_to_property_or_call() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1711,6 +1789,8 @@ fn span_ts2349_identifier_non_callable_points_to_callee() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1752,6 +1832,8 @@ fn span_ts2349_property_non_callable_points_to_property() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1793,6 +1875,8 @@ fn span_ts2339_property_access_missing_points_to_property_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1834,6 +1918,8 @@ fn span_ts2339_property_call_missing_points_to_property_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1875,6 +1961,8 @@ fn span_ts2536_invalid_generic_indexed_access_points_to_index_type() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1916,6 +2004,8 @@ fn span_ts2339_primitive_receiver_property_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -1957,6 +2047,8 @@ fn span_ts2493_tuple_out_of_range_index() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -2010,6 +2102,8 @@ fn index_access_primitive_receiver_no_ts2339() {
             CheckerOptions {
                 diagnostic_profile: Default::default(),
                 resolve_json_module: true,
+                allow_js: false,
+                jsx_configured: false,
                 resolved_modules: Default::default(),
                 resolved_modules_by_importer: Default::default(),
                 stub_external_modules: false,
@@ -2052,6 +2146,8 @@ fn span_ts2353_excess_property_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -2095,6 +2191,8 @@ fn span_ts2739_missing_required_object_literal() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -2138,6 +2236,8 @@ fn span_object_literal_unresolved_property_value() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -2179,6 +2279,8 @@ fn span_ts2362_left_operand() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -2220,6 +2322,8 @@ fn span_ts2363_right_operand() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -2261,6 +2365,8 @@ fn span_ts2365_operator() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -2302,6 +2408,8 @@ fn span_ts2367_equality_operator() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -2349,6 +2457,8 @@ fn span_ts2872_truthy_literal() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -2392,6 +2502,8 @@ fn span_ts2873_falsy_literal() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -3061,6 +3173,8 @@ fn span_module_exported_unknown_type_points_to_type_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -3248,6 +3362,8 @@ fn span_generic_arity_missing_points_to_type_reference_name() {
         CheckerOptions {
             diagnostic_profile: DiagnosticProfile::Native,
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -3297,6 +3413,8 @@ fn span_generic_unknown_type_argument_points_to_type_argument() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -3400,6 +3518,8 @@ fn span_generic_arity_too_many_points_to_type_reference_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -3442,6 +3562,8 @@ fn span_generic_non_generic_type_args_points_to_type_reference_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -3484,6 +3606,8 @@ fn span_invalid_pick_alias_points_to_pick_reference_and_dedupes_usage() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -3526,6 +3650,8 @@ fn span_generic_default_unknown_points_to_default_type_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -3569,6 +3695,8 @@ fn span_generic_constraint_unknown_points_to_constraint_type_name() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -3613,6 +3741,8 @@ fn span_generic_duplicate_type_parameter_points_to_duplicate_name() {
         CheckerOptions {
             diagnostic_profile: DiagnosticProfile::Native,
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,
@@ -3660,6 +3790,8 @@ fn span_generic_function_type_parameter_no_unresolved_span() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,

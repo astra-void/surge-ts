@@ -873,6 +873,14 @@ message = "'{0}' is declared but its value is never read."
 arity = 1
 
 [[diagnostic]]
+code = "TS6142"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Module '{0}' was resolved to '{1}', but '--jsx' is not set."
+arity = 2
+
+[[diagnostic]]
 code = "TS6198"
 category = "Error"
 source = "typescript"

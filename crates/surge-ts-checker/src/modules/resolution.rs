@@ -56,6 +56,12 @@ pub(crate) fn is_unresolvable_extensionless_esm_import(importer_file_name: &str,
     if last_segment.contains('.') {
         return false;
     }
+    resolves_in_node_esm_mode(importer_file_name)
+}
+
+/// Whether node16/nodenext resolves this file's imports in ESM mode, where a
+/// relative specifier gets no extension appended and no directory lookup.
+pub(crate) fn resolves_in_node_esm_mode(importer_file_name: &str) -> bool {
     NODE_ESM_FILES
         .read()
         .ok()

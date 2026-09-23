@@ -526,6 +526,8 @@ fn run_single_file_mode(
             jsx_classic_react: false,
             allow_umd_global_access: false,
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             diagnostic_profile,
         })
         .check_source(&source_text, &file_name);

@@ -1057,6 +1057,8 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             use_unknown_in_catch_variables: false,
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: false,

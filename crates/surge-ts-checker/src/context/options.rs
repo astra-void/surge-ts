@@ -142,6 +142,12 @@ pub struct CheckerOptions {
     /// `compilerOptions.resolveJsonModule`. Off, a `.json` specifier is not a
     /// module and the import reports `TS2732` instead of `TS2307`.
     pub resolve_json_module: bool,
+    /// `compilerOptions.allowJs`. On, tsc makes a JavaScript file a relative
+    /// import resolves to a program file instead of an untyped module.
+    pub allow_js: bool,
+    /// `compilerOptions.jsx` is set. Unset, a module that resolves to a `.jsx`
+    /// file is TS6142 (`GetResolutionDiagnostic`).
+    pub jsx_configured: bool,
     pub diagnostic_profile: DiagnosticProfile,
 }
 
@@ -209,6 +215,8 @@ impl Default for CheckerOptions {
             jsx_classic_react: false,
             allow_umd_global_access: false,
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             diagnostic_profile: DiagnosticProfile::default(),
         }
     }

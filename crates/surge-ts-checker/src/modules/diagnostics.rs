@@ -85,51 +85,50 @@ fn suggested_import_extension(ctx: &CheckerContext, module_specifier: &str) -> O
     .map(|(_, output)| output)
 }
 
-/// A relative specifier that names an *existing* JavaScript file with no
-/// adjacent declaration file is resolved by tsc — it is just untyped, which is
-/// TS7016 under `noImplicitAny` and silent otherwise. Reporting TS2307 there
-/// says the module is missing, which it is not. Only explicit `.js`/`.mjs`/
-/// `.cjs`/`.jsx` specifiers are recognized; extensionless resolution stays with
-/// the module loader.
-fn untyped_javascript_module_path(ctx: &CheckerContext, module_specifier: &str) -> Option<String> {
-    if !module_specifier.starts_with('.') {
+/// The JavaScript file tsc resolves `module_specifier` to when no TypeScript
+/// or declaration file answers it; the loader records where the resolver's
+/// JavaScript fallback lands, for packages and relative paths alike.
+fn javascript_module_resolution(ctx: &CheckerContext, module_specifier: &str) -> Option<String> {
+    if is_unresolvable_extensionless_esm_import(&ctx.file_name, module_specifier) {
         return None;
     }
-    let extension = Path::new(module_specifier).extension()?.to_str()?;
-    if !matches!(extension, "js" | "mjs" | "cjs" | "jsx") {
-        return None;
-    }
-    let resolved = Path::new(ctx.file_name.as_str())
-        .parent()?
-        .join(module_specifier);
-    let resolved = canonicalize_if_exists_string(&resolved);
-    if !Path::new(&resolved).is_file() {
-        return None;
-    }
-    let declaration = Path::new(&resolved).with_extension(match extension {
-        "mjs" => "d.mts",
-        "cjs" => "d.cts",
-        _ => "d.ts",
-    });
-    if declaration.is_file() {
-        return None;
-    }
-    Some(resolved)
+    let resolved = ctx
+        .options
+        .resolved_module_for(&ctx.file_name, module_specifier)?;
+    let lower = resolved.to_ascii_lowercase();
+    [".js", ".jsx", ".mjs", ".cjs"]
+        .into_iter()
+        .any(|extension| lower.ends_with(extension))
+        .then(|| resolved.clone())
 }
 
-/// Pushes the right diagnostic for a specifier the module loader did not
-/// resolve: TS7016 (or silence) for an existing untyped JavaScript file, and the
-/// caller's unresolved-module diagnostic otherwise.
+/// tsc's `resolveExternalModule` for a module that resolves to a JavaScript
+/// file outside the program. The module exists, so it is never TS2307:
+/// `GetResolutionDiagnostic` rejects a `.jsx` file while `jsx` is unset
+/// (TS6142), and otherwise the module is untyped — TS7016 under
+/// `noImplicitAny`, nothing without it. Under `allowJs`, tsc makes a
+/// JavaScript file outside `node_modules` a program file, so its import
+/// reports nothing either.
 fn push_untyped_javascript_module_diagnostic(
     ctx: &mut CheckerContext,
     module_specifier: &str,
     span: Option<TextSpan>,
 ) -> bool {
-    let Some(resolved) = untyped_javascript_module_path(ctx, module_specifier) else {
+    let Some(resolved) = javascript_module_resolution(ctx, module_specifier) else {
         return false;
     };
-    if ctx.options.no_implicit_any {
-        let mut diagnostic = Diagnostic::ts7016(module_specifier, &resolved, ctx.file_name.clone());
+    let is_program_file_in_tsc = ctx.options.allow_js
+        && !resolved.contains("/node_modules/")
+        && !resolved.contains("\\node_modules\\");
+    let diagnostic = if resolved.to_ascii_lowercase().ends_with(".jsx") && !ctx.options.jsx_configured
+    {
+        Some(Diagnostic::ts6142(module_specifier, &resolved, ctx.file_name.clone()))
+    } else if ctx.options.no_implicit_any && !is_program_file_in_tsc {
+        Some(Diagnostic::ts7016(module_specifier, &resolved, ctx.file_name.clone()))
+    } else {
+        None
+    };
+    if let Some(mut diagnostic) = diagnostic {
         if let Some(span) = span {
             diagnostic = diagnostic.with_span(convert_span(span));
         }

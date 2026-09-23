@@ -304,6 +304,7 @@ impl Project {
 
         let mut specifier_scanner = specifier_scan::ModuleSpecifierScanner::new();
         let mut import_graph_state = import_graph::ImportGraphState::default();
+        let mut javascript_modules = Vec::new();
 
         loop {
             let files_before = inputs.len();
@@ -355,6 +356,7 @@ impl Project {
                 loaded.compiler_options.base_url.as_deref(),
                 &loaded.compiler_options.paths,
                 loaded.compiler_options.resolve_json_module,
+                &mut javascript_modules,
             );
             if collect {
                 timings.import_graph_expansion += import_graph_start.elapsed();
@@ -370,6 +372,13 @@ impl Project {
             if graph_loaded == 0 && inputs.len() == files_before {
                 break;
             }
+        }
+        for (importer, specifier, resolved_file) in javascript_modules {
+            resolved_modules_by_importer
+                .entry(importer)
+                .or_default()
+                .entry(specifier)
+                .or_insert(resolved_file);
         }
         surge_ts_checker::lowlevel::record_loader_rss_stage("import_graph_expanded");
         io_stats::report_probe_dirs();
@@ -578,6 +587,9 @@ impl Project {
             jsx_classic_react: loaded.compiler_options.jsx == Some(surge_ts_config::JsxMode::React),
             allow_umd_global_access: loaded.compiler_options.allow_umd_global_access,
             resolve_json_module: loaded.compiler_options.resolve_json_module,
+            // tsc's `GetAllowJS`: `checkJs` implies `allowJs`.
+            allow_js: loaded.compiler_options.allow_js || loaded.compiler_options.check_js,
+            jsx_configured: loaded.compiler_options.jsx.is_some(),
             diagnostic_profile: options.diagnostic_profile,
         };
 

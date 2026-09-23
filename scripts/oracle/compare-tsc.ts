@@ -728,6 +728,8 @@ export const fixturePresets: Record<string, string> = {
   'definite-assignment-guard-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/definite-assignment-guard-narrowing-basic/tsconfig.json'),
   'script-typeof-class-member-basic': path.join(workspaceRoot, 'tests/compat-projects/script-typeof-class-member-basic/tsconfig.json'),
   'export-clause-local-targets-basic': path.join(workspaceRoot, 'tests/compat-projects/export-clause-local-targets-basic/tsconfig.json'),
+  'untyped-javascript-module-basic': path.join(workspaceRoot, 'tests/compat-projects/untyped-javascript-module-basic/tsconfig.json'),
+  'untyped-javascript-module-no-implicit-any': path.join(workspaceRoot, 'tests/compat-projects/untyped-javascript-module-no-implicit-any/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

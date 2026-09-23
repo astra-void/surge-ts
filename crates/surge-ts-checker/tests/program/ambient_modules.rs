@@ -31,6 +31,8 @@ fn ambient_module_resolves_before_package_stub_with_stub_external_modules() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
@@ -67,6 +69,8 @@ fn ambient_module_missing_export_ts2305_not_ts2307_with_stub_external_modules() 
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
@@ -116,6 +120,8 @@ fn ambient_module_unknown_specifier_stub_external_modules_suppresses_ts2307() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
@@ -187,6 +193,8 @@ fn ambient_module_default_import_missing_module_stub_external_suppresses_ts2307(
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
@@ -291,6 +299,8 @@ fn ambient_module_namespace_import_unknown_module_stub_external_suppresses_ts230
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,
@@ -477,6 +487,8 @@ fn ambient_module_re_export_unknown_source_stub_external_modules_behavior() {
         CheckerOptions {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
             resolved_modules: Default::default(),
             resolved_modules_by_importer: Default::default(),
             stub_external_modules: true,

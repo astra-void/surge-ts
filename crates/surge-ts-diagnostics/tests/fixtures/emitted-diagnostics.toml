@@ -1019,6 +1019,7 @@ fixtures = [
   "crates/surge-ts-cli/tests/project_mode.rs",
 ]
 oracle = [
+  "untyped-javascript-module-basic",
   "zod real-project parity (untyped .mjs import)",
 ]
 
@@ -2642,4 +2643,10 @@ oracle = [
 status = "emitted"
 oracle = [
   "export-clause-local-targets-basic",
+]
+
+[TS6142]
+status = "emitted"
+oracle = [
+  "untyped-javascript-module-basic",
 ]

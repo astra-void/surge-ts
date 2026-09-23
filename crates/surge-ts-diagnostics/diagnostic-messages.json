@@ -872,6 +872,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS6142",
+    "category": "Error",
+    "message": "Module '{0}' was resolved to '{1}', but '--jsx' is not set.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS6198",
     "category": "Error",
     "message": "All destructured elements are unused.",
