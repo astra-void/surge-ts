@@ -2153,6 +2153,14 @@ message = "Cannot find name '{0}'. Do you need to install type definitions for a
 arity = 1
 
 [[diagnostic]]
+code = "TS2661"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot export '{0}'. Only local declarations can be exported from a module."
+arity = 1
+
+[[diagnostic]]
 code = "TS2662"
 category = "Error"
 source = "typescript"

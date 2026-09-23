@@ -1046,12 +1046,19 @@ pub enum ParsedImportKind {
         is_type_only: bool,
     },
     /// `import local = require("specifier")` — declaration-lite CommonJS import
-    /// equals against a package/module entrypoint. Only the
-    /// `require(...)` (external module reference) form is represented here;
-    /// entity-name references (`import x = a.b`) remain `Unsupported`.
+    /// equals against a package/module entrypoint.
     Equals {
         local_name: String,
         name_span: Option<TextSpan>,
+    },
+    /// `import local = N.M` — an alias of an entity name. The parser already
+    /// rewrote every reference to it; this records the alias for what names it
+    /// without a reference, an export clause (`export { local }`).
+    EntityAlias {
+        local_name: String,
+        name_span: Option<TextSpan>,
+        /// The entity path, dotted (`N.M`).
+        target: String,
     },
     SideEffect,
     Unsupported,

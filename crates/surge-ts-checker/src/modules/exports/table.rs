@@ -7,6 +7,135 @@ use surge_ts_syntax::{ParsedExportSpecifier, ParsedVariableKind};
 
 use crate::context::convert_span;
 
+/// A `var` nested in a module-level block, loop or `try` belongs to the module
+/// scope, so an export clause may name it (`export { hoisted }`).
+fn with_exported_nested_vars(
+    mut values: SymbolTable,
+    parsed_file: &ParsedProgramFile,
+    local_type_declarations: &TypeDeclarationTable,
+    local_symbols: &SymbolTable,
+    imported_symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> SymbolTable {
+    let mut named: Vec<&str> = Vec::new();
+    for statement in &parsed_file.statements {
+        if let ParsedStatement::ExportDeclaration(export) = statement
+            && let ParsedExportDeclaration::Named {
+                specifiers,
+                module_specifier: None,
+                ..
+            } = export.as_ref()
+        {
+            named.extend(
+                specifiers
+                    .iter()
+                    .map(|specifier| specifier.local_name.as_str())
+                    .filter(|name| values.get_own_shared(name).is_none()),
+            );
+        }
+    }
+    if named.is_empty() {
+        return values;
+    }
+    let mut nested = Vec::new();
+    for statement in &parsed_file.statements {
+        match statement {
+            ParsedStatement::Block(body) => nested_vars(body, &named, &mut nested),
+            ParsedStatement::If(if_statement) => {
+                nested_vars(&if_statement.then_body, &named, &mut nested);
+                nested_vars(&if_statement.else_body, &named, &mut nested);
+            }
+            _ => {}
+        }
+    }
+    if nested.is_empty() {
+        return values;
+    }
+    let typed = collect_exportable_value_symbols(
+        &nested,
+        local_type_declarations,
+        local_symbols,
+        Some(imported_symbols),
+        parsed_file.is_module,
+        ctx,
+    );
+    for name in named {
+        if values.get_own_shared(name).is_none()
+            && let Some(symbol) = typed.get_own_shared(name)
+        {
+            let _ = values.insert_shared(Arc::from(name), symbol);
+        }
+    }
+    values
+}
+
+fn nested_vars(
+    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+    named: &[&str],
+    out: &mut Vec<ParsedStatement>,
+) {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+    for statement in body {
+        match statement {
+            Statement::VariableDeclaration(variable)
+                if variable.kind == surge_ts_syntax::ParsedVariableKind::Var
+                    && named.contains(&variable.name.as_str()) =>
+            {
+                out.push(ParsedStatement::VariableDeclaration(variable.clone()));
+            }
+            Statement::Block(block) => nested_vars(block, named, out),
+            Statement::If(if_statement) => {
+                nested_vars(&if_statement.then_body, named, out);
+                nested_vars(&if_statement.else_body, named, out);
+            }
+            Statement::While(while_statement) => nested_vars(&while_statement.body, named, out),
+            Statement::ForOf(for_of_statement) => {
+                // A `for (var k in o)` / `for (var v of xs)` head is a hoisted
+                // `var` too: a key is a `string`, an element is left unmodelled.
+                if for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::Var
+                    && let surge_ts_syntax::ParsedBindingName::Identifier { name, span } =
+                        &for_of_statement.binding_name
+                    && named.contains(&name.as_str())
+                {
+                    out.push(ParsedStatement::VariableDeclaration(Box::new(
+                        surge_ts_syntax::ParsedVariableDeclaration {
+                            is_declare: false,
+                            kind: surge_ts_syntax::ParsedVariableKind::Var,
+                            from_binding_pattern: false,
+                            has_definite_assertion: false,
+                            array_pattern_span: None,
+                            is_enum_object: false,
+                            name: name.clone(),
+                            name_span: *span,
+                            declared_type: Some(if for_of_statement.keys_only {
+                                surge_ts_syntax::ParsedType::String
+                            } else {
+                                surge_ts_syntax::ParsedType::Unknown
+                            }),
+                            initializer: None,
+                            initializer_span: None,
+                        },
+                    )));
+                }
+                nested_vars(&for_of_statement.body, named, out)
+            }
+            Statement::Switch(switch_statement) => {
+                for case in &switch_statement.cases {
+                    nested_vars(&case.consequent, named, out);
+                }
+            }
+            Statement::Try(try_statement) => {
+                nested_vars(&try_statement.block, named, out);
+                if let Some(handler) = &try_statement.handler {
+                    nested_vars(&handler.body, named, out);
+                }
+                nested_vars(&try_statement.finalizer, named, out);
+            }
+            _ => {}
+        }
+    }
+}
+
 pub(crate) fn build_module_export_table(
     parsed_file: &ParsedProgramFile,
     local_type_declarations: &TypeDeclarationTable,
@@ -29,6 +158,14 @@ pub(crate) fn build_module_export_table(
         parsed_file.is_module,
         ctx,
     );
+    let exportable_values = with_exported_nested_vars(
+        exportable_values,
+        parsed_file,
+        local_type_declarations,
+        local_symbols,
+        imported_symbols,
+        ctx,
+    );
     crate::program::binding::analyze_split_record(3, split_start);
     let split_start = crate::program::binding::analyze_split_enabled()
         .then(std::time::Instant::now);
@@ -37,11 +174,14 @@ pub(crate) fn build_module_export_table(
     let mut symbols = SymbolTable::new();
     let mut default_symbol = None;
     let mut export_assignment_symbol = None;
+    let imported_names = crate::program::import_bound_names(&parsed_file.statements);
     for statement in &parsed_file.statements {
         collect_exports_from_statement(
             statement,
             &exportable_values,
             imported_symbols,
+            &imported_names,
+            &parsed_file.statements,
             local_type_declarations,
             local_symbols,
             resolution_scope.as_ref(),

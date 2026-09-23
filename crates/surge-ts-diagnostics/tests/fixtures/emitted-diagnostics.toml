@@ -2637,3 +2637,9 @@ status = "emitted"
 oracle = [
   "node-esm-relative-extension-basic",
 ]
+
+[TS2661]
+status = "emitted"
+oracle = [
+  "export-clause-local-targets-basic",
+]

@@ -1585,6 +1585,16 @@ pub(crate) fn fill_namespace_value_properties(
         };
 
         match inner {
+            // `export import alias = N.M` makes the alias a member. Its entity's
+            // members are reached through the rewritten references, so the
+            // member itself stays permissive like the others here.
+            ParsedStatement::ImportDeclaration(import)
+                if !std::ptr::eq(inner, statement)
+                    && let surge_ts_syntax::ParsedImportKind::EntityAlias { local_name, .. } =
+                        &import.kind =>
+            {
+                properties.insert(local_name.as_str().into(), ObjectProperty::required(Type::Any));
+            }
             ParsedStatement::FunctionDeclaration(function) => {
                 // `(...args: any[]) => any`, spelled out rather than left as a
                 // zero-parameter variadic: an argument lines up with the rest

@@ -179,6 +179,7 @@ pub(crate) fn import_bound_names(statements: &[ParsedStatement]) -> HashSet<&str
             surge_ts_syntax::ParsedImportKind::Default { local_name, .. }
             | surge_ts_syntax::ParsedImportKind::Namespace { local_name, .. }
             | surge_ts_syntax::ParsedImportKind::Equals { local_name, .. }
+            | surge_ts_syntax::ParsedImportKind::EntityAlias { local_name, .. }
             | surge_ts_syntax::ParsedImportKind::TypeOnlyDefault { local_name, .. } => {
                 names.insert(local_name.as_str());
             }

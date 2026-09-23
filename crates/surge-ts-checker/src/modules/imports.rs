@@ -178,6 +178,7 @@ fn report_import_local_declaration_conflicts(
                 ..
             } => vec![(local_name.as_str(), "*", *name_span)],
             ParsedImportKind::Equals { .. }
+            | ParsedImportKind::EntityAlias { .. }
             | ParsedImportKind::SideEffect
             | ParsedImportKind::Unsupported => continue,
         };
@@ -515,6 +516,7 @@ pub(crate) fn resolve_import_declaration(
 ) {
     report_ts_extension_import(import, program_files, ctx);
     match &import.kind {
+        ParsedImportKind::EntityAlias { .. } => return,
         ParsedImportKind::Unsupported | ParsedImportKind::TypeOnlyDefault { .. } => {
             if !is_declaration_file_name(&ctx.file_name) {
                 emit_unsupported_module_syntax_diagnostic(ctx, import);

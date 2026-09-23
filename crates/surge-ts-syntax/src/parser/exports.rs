@@ -308,6 +308,15 @@ fn parse_exported_declaration(
             super::enums::parse_enum_declaration(enum_declaration, true)
         }
         Declaration::TSModuleDeclaration(module) => super::parse_ts_module_declaration(module),
+        Declaration::TSImportEqualsDeclaration(import_equals)
+            if !matches!(
+                import_equals.module_reference,
+                oxc_ast::ast::TSModuleReference::ExternalModuleReference(_)
+            ) =>
+        {
+            super::imports::parse_import_equals_declaration(import_equals)
+                .map(|import| vec![ParsedStatement::ImportDeclaration(Box::new(import))])?
+        }
         _ => return None,
     };
 

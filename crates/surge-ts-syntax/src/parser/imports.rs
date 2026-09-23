@@ -208,12 +208,19 @@ pub(crate) fn parse_import_equals_declaration(
 ) -> Option<ParsedImportDeclaration> {
     let span = Some(text_span_from_oxc_span(declaration.span));
 
-    // Only the `require("specifier")` form participates in the declaration-lite
-    // slice. Entity-name references (`import x = a.b`) stay unsupported.
     let TSModuleReference::ExternalModuleReference(reference) = &declaration.module_reference
     else {
+        let target = match &declaration.module_reference {
+            TSModuleReference::IdentifierReference(identifier) => identifier.name.to_string(),
+            TSModuleReference::QualifiedName(name) => qualified_name_text(name),
+            TSModuleReference::ExternalModuleReference(_) => unreachable!(),
+        };
         return Some(ParsedImportDeclaration {
-            kind: ParsedImportKind::Unsupported,
+            kind: ParsedImportKind::EntityAlias {
+                local_name: declaration.id.name.to_string(),
+                name_span: Some(text_span_from_oxc_span(declaration.id.span)),
+                target,
+            },
             module_specifier: String::new(),
             module_specifier_span: span,
             span,
@@ -251,4 +258,13 @@ fn module_export_name_to_string(name: &ModuleExportName<'_>) -> String {
         ModuleExportName::IdentifierReference(identifier) => identifier.name.to_string(),
         ModuleExportName::StringLiteral(string_literal) => string_literal.value.to_string(),
     }
+}
+
+fn qualified_name_text(name: &oxc_ast::ast::TSQualifiedName<'_>) -> String {
+    let left = match &name.left {
+        oxc_ast::ast::TSTypeName::IdentifierReference(identifier) => identifier.name.to_string(),
+        oxc_ast::ast::TSTypeName::QualifiedName(left) => qualified_name_text(left),
+        oxc_ast::ast::TSTypeName::ThisExpression(_) => "this".to_string(),
+    };
+    format!("{left}.{}", name.right.name)
 }

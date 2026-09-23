@@ -101,6 +101,7 @@ fn import_local_bindings(kind: &ParsedImportKind) -> Vec<(&str, Option<TextSpan>
         } => vec![(local_name.as_str(), *name_span)],
         ParsedImportKind::SideEffect
         | ParsedImportKind::Unsupported
+        | ParsedImportKind::EntityAlias { .. }
         | ParsedImportKind::TypeOnlyDefault { .. } => Vec::new(),
     }
 }

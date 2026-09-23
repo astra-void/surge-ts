@@ -2152,6 +2152,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2661",
+    "category": "Error",
+    "message": "Cannot export '{0}'. Only local declarations can be exported from a module.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2662",
     "category": "Error",
     "message": "Cannot find name '{0}'. Did you mean the static member '{1}.{0}'?",
