@@ -1162,6 +1162,12 @@ pub(crate) fn check_new_like(
         // already implied.
         Type::Any => generic_class_instance_type(callee, type_arguments, arguments, symbols, ctx)
             .or(Some(Type::Any)),
+        // `resolveNewExpression` resolves an error-typed target as an error
+        // call: the arguments are checked and nothing more is reported.
+        Type::ErrorType => {
+            property::evaluate_arguments_on_error_type(arguments, symbols, ctx);
+            Some(Type::ErrorType)
+        }
         // `checkNonNullType` has reported `unknown` under `strictNullChecks`;
         // without it `unknown` is simply not constructable.
         Type::GenuineUnknown => {
