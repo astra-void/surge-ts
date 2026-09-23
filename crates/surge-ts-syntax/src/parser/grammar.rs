@@ -93,11 +93,13 @@ fn accessor_display_name(key: &PropertyKey<'_>, computed: bool) -> Option<String
     }
 }
 
+/// tsc's `getSetAccessorValueParameter` takes the first parameter whatever its
+/// kind, so `set x(...v: T[])` is annotated through its rest parameter.
 fn setter_parameter_annotated(parameters: &FormalParameters<'_>) -> bool {
-    parameters
-        .items
-        .first()
-        .is_some_and(|parameter| parameter.type_annotation.is_some())
+    match parameters.items.first() {
+        Some(parameter) => parameter.type_annotation.is_some(),
+        None => parameters.rest.as_ref().is_some_and(|rest| rest.type_annotation.is_some()),
+    }
 }
 
 /// What tsc's enum constant evaluation can say about an initializer without
