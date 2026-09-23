@@ -1692,6 +1692,14 @@ impl<'a> ContextCollector<'a, '_> {
                     },
                 ))
             }
+            // tsc's parser reports any decorator on a `this` parameter as
+            // TS1433 (`parseParameterWorker`), so the checker never weighs
+            // where it sits.
+            AstKind::FormalParameter(parameter)
+                if matches!(&parameter.pattern, BindingPattern::BindingIdentifier(id) if id.name == "this") =>
+            {
+                None
+            }
             // Parameter decorators are legacy-only: a constructor, method or
             // setter with a body, in a class declaration.
             AstKind::FormalParameter(_) | AstKind::FormalParameterRest(_) => {
