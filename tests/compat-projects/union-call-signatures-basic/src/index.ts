@@ -79,3 +79,14 @@ export function requiredVsOptional(z: { f(x: string | undefined): void } | { f(x
 export function disjointMethods(z: { f(x: number): void } | { f(x: string): void }, value: string | number) {
     z.f(value);
 }
+
+// The union of the matched returns is subtype-reduced: a `Promise<T>` is no
+// subtype of `T`.
+interface Procedure {
+    (opts: { path: string }): Promise<string>;
+    _def: { type: "query" };
+}
+declare const procedure: Procedure | ((opts: { path: string }) => Promise<string>);
+export function callsTheProcedure(path: string): Promise<string> {
+    return procedure({ path });
+}

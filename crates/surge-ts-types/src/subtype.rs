@@ -422,6 +422,32 @@ impl Relater {
         {
             return Some(false);
         }
+        match (promise_reference(source), promise_reference(target)) {
+            // Two promise instantiations relate through `T`'s measured
+            // variance, which is covariant, and a `Promise` is a `PromiseLike`
+            // but not the other way round.
+            (Some((source_is_like, source_arguments)), Some((target_is_like, target_arguments))) => {
+                return Some(
+                    (!source_is_like || target_is_like)
+                        && source_arguments.len() == target_arguments.len()
+                        && source_arguments
+                            .iter()
+                            .zip(target_arguments.iter())
+                            .all(|(source, target)| self.related(source, &REGULAR, false, target, &REGULAR)),
+                );
+            }
+            // A promise's own members are not compared here: only a target
+            // asking for none is decided.
+            (Some(_), None) => {
+                return Some(matches!(target, Type::Object(object)
+                    if is_empty_object_surface(object)
+                        && !object.non_primitive
+                        && !object.synthetic_open_index
+                        && !target_shape.is_object_literal()));
+            }
+            (None, Some(_)) => return Some(false),
+            (None, None) => {}
+        }
         if is_pattern_literal(target) {
             return Some(crate::is_assignable_to(source, target));
         }
@@ -1002,6 +1028,24 @@ fn enum_values(ty: &Type) -> Option<Vec<Type>> {
     }
 }
 
+/// A lib `Promise<T>` or `PromiseLike<T>` reference, with whether it is the
+/// `PromiseLike` and its type arguments. surge collapses the lib promise to
+/// its awaited `T`, so peeling one would relate `Promise<T>` to a plain `T`,
+/// which tsc never does: the promise is an interface instantiation.
+fn promise_reference(ty: &Type) -> Option<(bool, &[Type])> {
+    let Type::Reference(reference) = ty else {
+        return None;
+    };
+    if reference.enum_owner.is_some() || reference.arguments.is_empty() {
+        return None;
+    }
+    match reference.display.split('<').next() {
+        Some("Promise") => Some((false, &reference.arguments)),
+        Some("PromiseLike") => Some((true, &reference.arguments)),
+        _ => None,
+    }
+}
+
 /// tsc's `TypeFlagsObject`: an object, function, array or tuple type.
 fn is_object_type(ty: &Type) -> bool {
     match ty {
@@ -1009,6 +1053,7 @@ fn is_object_type(ty: &Type) -> bool {
         Type::Function(_) | Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) => true,
         Type::Reference(reference) => {
             reference.is_readonly_array()
+                || promise_reference(ty).is_some()
                 || reference.enum_owner.is_none()
                     && !reference.is_unique_symbol()
                     && !is_pattern_literal(ty)
