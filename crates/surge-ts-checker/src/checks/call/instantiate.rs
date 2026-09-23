@@ -2476,10 +2476,19 @@ pub(crate) fn collect_inferred_type_argument(
                 // nothing (which left `TVariables` at its `void` default and
                 // rejected every `mutate(1)`).
                 let rest_element = match rest_index {
-                    Some(rest_index) if index >= rest_index => Some(rest_parameter_element_type(
-                        &actual_parameters[rest_index],
-                        index - rest_index,
-                    )),
+                    Some(rest_index) if index >= rest_index => {
+                        // A rest spelled as a fixed tuple (`...args: []`, which
+                        // `Parameters<() => R>` resolves to) has exactly its
+                        // elements' positions: tsc's `getParameterCount` counts
+                        // those, so nothing past them is inferred from.
+                        let rest_type = actual_parameters[rest_index].peeled();
+                        if let Type::Tuple(elements) = &rest_type
+                            && index - rest_index >= elements.len()
+                        {
+                            break;
+                        }
+                        Some(rest_parameter_element_type(&rest_type, index - rest_index))
+                    }
                     _ => None,
                 };
                 let Some(actual_parameter) = rest_element

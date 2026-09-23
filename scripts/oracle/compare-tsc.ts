@@ -728,6 +728,7 @@ export const fixturePresets: Record<string, string> = {
   'callable-interface-overload-member-call-basic': path.join(workspaceRoot, 'tests/compat-projects/callable-interface-overload-member-call-basic/tsconfig.json'),
   'inference-reference-structural-basic': path.join(workspaceRoot, 'tests/compat-projects/inference-reference-structural-basic/tsconfig.json'),
   'conditional-infer-interface-pattern-basic': path.join(workspaceRoot, 'tests/compat-projects/conditional-infer-interface-pattern-basic/tsconfig.json'),
+  'inference-fixed-tuple-rest-basic': path.join(workspaceRoot, 'tests/compat-projects/inference-fixed-tuple-rest-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
