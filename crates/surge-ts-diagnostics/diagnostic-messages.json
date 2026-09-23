@@ -80,6 +80,22 @@
     "support": "emitted"
   },
   {
+    "code": "TS1063",
+    "category": "Error",
+    "message": "An export assignment cannot be used in a namespace.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1319",
+    "category": "Error",
+    "message": "A default export can only be used in an ECMAScript-style module.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2302",
     "category": "Error",
     "message": "Static members cannot reference class type parameters.",

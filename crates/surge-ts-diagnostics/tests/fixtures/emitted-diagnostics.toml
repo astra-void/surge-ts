@@ -896,6 +896,18 @@ oracle = [
   "tests/compat-projects/type-only-export-value-use/tsconfig.json",
 ]
 
+[TS1063]
+status = "emitted"
+oracle = [
+  "tests/compat-projects/export-default-inside-namespace/tsconfig.json",
+]
+
+[TS1319]
+status = "emitted"
+oracle = [
+  "tests/compat-projects/export-default-inside-namespace/tsconfig.json",
+]
+
 [TS2686]
 status = "emitted"
 fixtures = [

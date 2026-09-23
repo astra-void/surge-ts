@@ -81,6 +81,22 @@ message = "'{0}' cannot be used as a value because it was exported using 'export
 arity = 1
 
 [[diagnostic]]
+code = "TS1063"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An export assignment cannot be used in a namespace."
+arity = 0
+
+[[diagnostic]]
+code = "TS1319"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A default export can only be used in an ECMAScript-style module."
+arity = 0
+
+[[diagnostic]]
 code = "TS2302"
 category = "Error"
 source = "typescript"

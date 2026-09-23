@@ -105,6 +105,26 @@ pub const TS1362: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1063: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1063",
+    number: Some(1063),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An export assignment cannot be used in a namespace.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1319: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1319",
+    number: Some(1319),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A default export can only be used in an ECMAScript-style module.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2302: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2302",
     number: Some(2302),
@@ -4146,6 +4166,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1360,
     TS1361,
     TS1362,
+    TS1063,
+    TS1319,
     TS2302,
     TS2304,
     TS2300,
@@ -4667,6 +4689,16 @@ impl Diagnostic {
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1063(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1063, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1319(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1319, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

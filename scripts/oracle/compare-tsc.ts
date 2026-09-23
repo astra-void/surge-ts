@@ -371,6 +371,7 @@ export const fixturePresets: Record<string, string> = {
   'parameter-initializer-scope': path.join(workspaceRoot, 'tests/compat-projects/parameter-initializer-scope/tsconfig.json'),
   'function-name-in-own-signature': path.join(workspaceRoot, 'tests/compat-projects/function-name-in-own-signature/tsconfig.json'),
   'export-clause-primitive-and-global-names': path.join(workspaceRoot, 'tests/compat-projects/export-clause-primitive-and-global-names/tsconfig.json'),
+  'export-default-inside-namespace': path.join(workspaceRoot, 'tests/compat-projects/export-default-inside-namespace/tsconfig.json'),
   'script-global-shadowed-by-module-local': path.join(workspaceRoot, 'tests/compat-projects/script-global-shadowed-by-module-local/tsconfig.json'),
   'block-scoped-self-reference': path.join(workspaceRoot, 'tests/compat-projects/block-scoped-self-reference/tsconfig.json'),
   'assignment-target-resolution': path.join(workspaceRoot, 'tests/compat-projects/assignment-target-resolution/tsconfig.json'),

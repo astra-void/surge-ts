@@ -1914,7 +1914,8 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             }
             AstKind::TSExportAssignment(assignment) => {
                 // Gated on `module` and the file's emit format by the checker.
-                if self.ambient_depth == 0 {
+                // In a namespace it is TS1063 instead, and tsc stops there.
+                if self.ambient_depth == 0 && !matches!(self.stack.last(), Some(AstKind::TSModuleBlock(_))) {
                     self.push(1203, assignment.span, &[]);
                 }
             }

@@ -804,7 +804,7 @@ fn check_program_statement_itself(
             }
             ParsedExportDeclaration::Named { .. } => {}
             ParsedExportDeclaration::Namespace { .. } => {}
-            ParsedExportDeclaration::Default { declaration, .. } => match declaration {
+            ParsedExportDeclaration::Default { declaration, span } => match declaration {
                 ParsedDefaultExportDeclaration::Function(function) => {
                     with_module_declared_only(ctx, |ctx| {
                         check_program_function_declaration(
@@ -817,7 +817,9 @@ fn check_program_statement_itself(
                     });
                 }
                 ParsedDefaultExportDeclaration::Expression(expression) => {
-                    check_export_assignment_expression(expression, ctx);
+                    if !report_export_assignment_in_namespace(false, span, ctx) {
+                        check_export_assignment_expression(expression, ctx);
+                    }
                 }
                 ParsedDefaultExportDeclaration::Class(class) => {
                     with_module_declared_only(ctx, |ctx| {
@@ -840,18 +842,24 @@ fn check_program_statement_itself(
             ParsedExportDeclaration::Equals {
                 exported_name,
                 exported_name_span,
-                ..
+                span,
             } => {
-                check_export_assignment_expression(
-                    surge_ts_syntax::ParsedExpression::Identifier {
-                        name: exported_name,
-                        span: exported_name_span,
-                    },
-                    ctx,
-                );
+                if !report_export_assignment_in_namespace(true, span, ctx) {
+                    check_export_assignment_expression(
+                        surge_ts_syntax::ParsedExpression::Identifier {
+                            name: exported_name,
+                            span: exported_name_span,
+                        },
+                        ctx,
+                    );
+                }
             }
-            ParsedExportDeclaration::EqualsExpression { expression, .. } => {
-                check_export_assignment_expression(*expression, ctx);
+            ParsedExportDeclaration::EqualsExpression {
+                expression, span, ..
+            } => {
+                if !report_export_assignment_in_namespace(true, span, ctx) {
+                    check_export_assignment_expression(*expression, ctx);
+                }
             }
             ParsedExportDeclaration::NamespaceExport { .. } => {}
             ParsedExportDeclaration::Unsupported { span } => {
@@ -999,6 +1007,26 @@ fn ambient_namespace(
     let mut ambient = namespace.clone();
     ambient.statements.iter_mut().for_each(ambient_statement);
     ambient
+}
+
+/// tsc's `checkExportAssignment`: an export assignment directly in a namespace
+/// body is TS1063 (`export =`) or TS1319 (`export default`), and nothing else
+/// about it is checked, its expression included.
+fn report_export_assignment_in_namespace(
+    is_export_equals: bool,
+    span: Option<TextSpan>,
+    ctx: &mut CheckerContext,
+) -> bool {
+    if ctx.namespace_member_prefix_stack.is_empty() {
+        return false;
+    }
+    let diagnostic = if is_export_equals {
+        Diagnostic::ts1063(ctx.file_name.clone())
+    } else {
+        Diagnostic::ts1319(ctx.file_name.clone())
+    };
+    ctx.push(crate::spans::diagnostic_with_syntax_span(diagnostic, span));
+    true
 }
 
 /// The target of `export =` / `export default <expression>`, which tsc checks
