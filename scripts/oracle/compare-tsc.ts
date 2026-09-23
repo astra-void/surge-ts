@@ -753,6 +753,7 @@ export const fixturePresets: Record<string, string> = {
   'dependent-destructuring-own-guards': path.join(workspaceRoot, 'tests/compat-projects/dependent-destructuring-own-guards/tsconfig.json'),
   'super-type-arguments-parse-error': path.join(workspaceRoot, 'tests/compat-projects/super-type-arguments-parse-error/tsconfig.json'),
   'constructor-guard-definite-assignment': path.join(workspaceRoot, 'tests/compat-projects/constructor-guard-definite-assignment/tsconfig.json'),
+  'new-function-uninferred-return': path.join(workspaceRoot, 'tests/compat-projects/new-function-uninferred-return/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

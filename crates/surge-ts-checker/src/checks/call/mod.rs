@@ -1038,7 +1038,10 @@ pub(crate) fn check_new_like(
             );
             let diagnostic = if ctx.options.no_implicit_any {
                 Some(Diagnostic::ts7009(ctx.file_name.clone()))
-            } else if *function_type.return_type() != Type::Void {
+            } else if *function_type.return_type() != Type::Void
+                // A return type surge has not inferred may well be `void`.
+                && !function_type.return_type().is_unmodelled()
+            {
                 Some(Diagnostic::ts2350(ctx.file_name.clone()))
             } else {
                 None
