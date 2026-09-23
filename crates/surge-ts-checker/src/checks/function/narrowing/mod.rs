@@ -681,6 +681,28 @@ pub(crate) fn tuple_destructure_sibling_narrowings(
                     }
                 }),
             )
+        } else if let Some((tested, nullish, eq)) = identifier_nullish_equality(condition) {
+            // `err === null` keeps the members whose read can be `null`; its
+            // other edge the ones whose read is something besides. `==`
+            // matches `null` and `undefined` alike.
+            let holds = eq == branch_is_true;
+            (
+                tested,
+                Box::new(move |read: &Type| {
+                    let is_nullish = |ty: &Type| nullish.iter().any(|nullish| ty == nullish);
+                    let members = match read {
+                        Type::Union(union) => union.types().to_vec(),
+                        other => vec![other.clone()],
+                    };
+                    if holds {
+                        read.is_unknown()
+                            || matches!(read, Type::Any)
+                            || members.iter().any(|member| is_nullish(member))
+                    } else {
+                        members.iter().any(|member| !is_nullish(member))
+                    }
+                }),
+            )
         } else if let Some((tested, literal, eq)) = parse_identifier_literal_equality(condition, symbols) {
             let holds = eq == branch_is_true;
             (
@@ -755,11 +777,15 @@ pub(crate) fn tuple_destructure_sibling_narrowings(
         if selected.len() != kept.len() {
             continue;
         }
+        // tsc makes the read off the surviving members the sibling's declared
+        // type, which the sibling's own guards then narrow: after
+        // `if (payload)`, `kind === 'A'` leaves `payload` the `number` of
+        // `number | undefined`. The tested binding keeps what its own guard
+        // made of it.
         let narrowed = surge_ts_types::with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-            union_type(selected)
+            renarrowed(&union_type(selected), &symbol.ty)
         });
-        // The tested binding keeps what its own guard made of it.
-        if narrowed == symbol.ty || !surge_ts_types::is_assignable_to(&narrowed, &symbol.ty) {
+        if narrowed == symbol.ty {
             continue;
         }
         let declared = symbols.declared_type(&name).unwrap_or(&symbol.ty).clone();
@@ -774,6 +800,73 @@ pub(crate) fn tuple_destructure_sibling_narrowings(
         ));
     }
     narrowings
+}
+
+/// `x === null` / `undefined !== x` / `x == null`: the local compared, the
+/// nullish types the comparison matches, and whether it is an equality.
+fn identifier_nullish_equality(condition: &ParsedExpression) -> Option<(&str, Vec<Type>, bool)> {
+    use surge_ts_syntax::{ParsedBinaryOperator, ParsedUnaryOperator};
+    let ParsedExpression::Binary {
+        left,
+        operator,
+        right,
+        ..
+    } = condition
+    else {
+        return None;
+    };
+    let (eq, strict) = match operator {
+        ParsedBinaryOperator::StrictEquals => (true, true),
+        ParsedBinaryOperator::StrictNotEquals => (false, true),
+        ParsedBinaryOperator::Equals => (true, false),
+        ParsedBinaryOperator::NotEquals => (false, false),
+        _ => return None,
+    };
+    let nullish = |expression: &ParsedExpression| match expression {
+        ParsedExpression::NullLiteral => Some(Type::Null),
+        ParsedExpression::UndefinedLiteral
+        | ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Void,
+            ..
+        } => Some(Type::Undefined),
+        _ => None,
+    };
+    let (name, matched) = match (left.as_ref(), right.as_ref()) {
+        (ParsedExpression::Identifier { name, .. }, other)
+        | (other, ParsedExpression::Identifier { name, .. }) => (name.as_str(), nullish(other)?),
+        _ => return None,
+    };
+    let matched = if strict {
+        vec![matched]
+    } else {
+        vec![Type::Null, Type::Undefined]
+    };
+    Some((name, matched, eq))
+}
+
+/// `declared` narrowed the way `current` already narrowed the binding: a
+/// member `current` admits stays, and one it narrowed further (`string` to
+/// `"a"`) becomes the members of `current` it narrowed to.
+fn renarrowed(declared: &Type, current: &Type) -> Type {
+    let members = |ty: &Type| match ty {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other.clone()],
+    };
+    let current_members = members(current);
+    let mut kept = Vec::new();
+    for member in members(declared) {
+        if surge_ts_types::is_assignable_to(&member, current) {
+            kept.push(member);
+        } else {
+            kept.extend(
+                current_members
+                    .iter()
+                    .filter(|narrowed| surge_ts_types::is_assignable_to(narrowed, &member))
+                    .cloned(),
+            );
+        }
+    }
+    union_type(kept)
 }
 
 fn narrow_condition_symbol_table_by_guard(
