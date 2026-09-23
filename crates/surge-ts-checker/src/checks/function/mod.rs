@@ -319,10 +319,12 @@ pub(crate) fn settle_call_result(
     result: InferredExpression,
 ) -> InferredExpression {
     use surge_ts_syntax::ParsedExpression as E;
-    // A read of an inferred class member settles it the same way.
+    // A read of an inferred class member or a lazily typed variable settles it
+    // the same way.
     if !matches!(
         expression,
-        E::Call { .. }
+        E::Identifier { .. }
+            | E::Call { .. }
             | E::PropertyCall { .. }
             | E::OptionalPropertyCall { .. }
             | E::ExpressionCall { .. }
@@ -339,7 +341,9 @@ pub(crate) fn settle_call_result(
 }
 
 fn is_settled_on_read(reference: &surge_ts_types::TypeReference) -> bool {
-    reference.id.contains(BODY_RETURN_ID_TAG) || reference.id.contains(INFERRED_MEMBER_ID_TAG)
+    reference.id.contains(BODY_RETURN_ID_TAG)
+        || reference.id.contains(INFERRED_MEMBER_ID_TAG)
+        || reference.id.contains(crate::modules::LAZY_INITIALIZER_ID_TAG)
 }
 
 /// A member or body-return type as a read of it sees it: resolved, never the
@@ -455,7 +459,11 @@ pub(crate) fn instantiated_body_return(
     }
     // The body names what its own module has in scope, not the caller's.
     let file_name = ctx.file_name.clone();
-    let scope = match ctx.module_local_values_for_file(&file_name) {
+    let latest_values = ctx
+        .declaration_environment_store
+        .published_module_local_values()
+        .and_then(|values| values.get(file_name.as_str()).cloned());
+    let scope = match latest_values.or_else(|| ctx.module_local_values_for_file(&file_name)) {
         Some(values) => module_body_scope(&values, ctx),
         None => ctx
             .symbols
@@ -547,6 +555,9 @@ fn module_body_scope(module_values: &SymbolTable, ctx: &CheckerContext) -> Symbo
 /// augmentations, the JSX and namespace registries).
 fn body_check_context(ctx: &CheckerContext) -> CheckerContext {
     let mut shadow = body_inference_shadow_context(ctx);
+    if let Some(latest) = ctx.declaration_environment_store.published_module_local_values() {
+        shadow.module_local_values_by_file = latest;
+    }
     shadow.current_file_kind = ctx.current_file_kind;
     shadow.ambient_modules = ctx.ambient_modules.clone();
     shadow.ambient_file_type_scopes = ctx.ambient_file_type_scopes.clone();

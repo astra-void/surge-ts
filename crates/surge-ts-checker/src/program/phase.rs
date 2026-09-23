@@ -66,6 +66,11 @@ pub(crate) fn program_ambient_globals() -> Option<Arc<crate::symbols::SymbolTabl
     PROGRAM_AMBIENT_GLOBALS.lock().ok()?.clone()
 }
 
+pub(crate) fn program_module_scopes()
+-> Option<Arc<surge_ts_types::fx::FxHashMap<Arc<str>, Arc<crate::symbols::TypeDeclarationScope>>>> {
+    PROGRAM_MODULE_SCOPES.lock().ok()?.clone()
+}
+
 pub(crate) fn clear_program_module_scopes() {
     if let Ok(mut slot) = PROGRAM_MODULE_SCOPES.lock() {
         *slot = None;
