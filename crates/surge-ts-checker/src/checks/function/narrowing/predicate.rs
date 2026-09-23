@@ -597,15 +597,60 @@ pub(super) fn parse_this_predicate_call(
     Some((subject, path, property_name.as_str()))
 }
 
-/// The resolved target of a `this is T` method predicate declared on the
-/// receiver's own interface (`interface Type { isUnion(): this is UnionType }`).
+/// The resolved target of a `this is T` method predicate the receiver's
+/// member declares: the one its own interface declares
+/// (`interface Type { isUnion(): this is UnionType }`), or the one the member
+/// signature it resolves to carries — inherited from a base class or
+/// interface, or merged into an intersection — as tsc reads the predicate off
+/// the call's resolved signature (`getEffectsSignature`).
 ///
 /// Predicates are dropped when a signature resolves to a type — `x is T` and
 /// `this is T` both resolve to `boolean` — so the declaration has to be read
-/// back. Only the receiver's own declaration is consulted: an inherited
-/// predicate would need the heritage chain, which is not what the shapes this
-/// models (`ts.Type`'s `isUnion`/`isIntersection`) declare.
+/// back.
 pub(super) fn this_predicate_target(
+    receiver_ty: &Type,
+    method: &str,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    own_this_predicate_target(receiver_ty, method, ctx)
+        .or_else(|| member_this_predicate_target(receiver_ty, method, ctx))
+}
+
+/// A `this is T` predicate on the written signature a member's resolved type
+/// carries (`DeclaredMemberSignature`), with the enclosing bindings it was
+/// resolved under.
+fn member_this_predicate_target(
+    receiver_ty: &Type,
+    method: &str,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Type::Function(function) = receiver_ty.get_property_access_type(method)?.peeled() else {
+        return None;
+    };
+    let declared = function
+        .declaration()?
+        .downcast_ref::<crate::checks::call::DeclaredMemberSignature>()?;
+    let Some(surge_ts_syntax::ParsedType::Predicate(predicate)) = &declared.signature.return_type
+    else {
+        return None;
+    };
+    if predicate.asserts || predicate.parameter_name != "this" {
+        return None;
+    }
+    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    for (name, ty) in &declared.outer_type_arguments {
+        substitution.insert(name.clone(), ty.clone());
+    }
+    resolve_predicate_type_under(
+        predicate.ty.clone()?,
+        declared.signature.declaring_file.as_deref(),
+        declared.signature.namespace_prefix.as_deref(),
+        &substitution,
+        ctx,
+    )
+}
+
+fn own_this_predicate_target(
     receiver_ty: &Type,
     method: &str,
     ctx: &mut CheckerContext,

@@ -746,6 +746,7 @@ export const fixturePresets: Record<string, string> = {
   'type-only-namespace-export-type-query-basic': path.join(workspaceRoot, 'tests/compat-projects/type-only-namespace-export-type-query-basic/tsconfig.json'),
   'overloaded-signature-infer-return-basic': path.join(workspaceRoot, 'tests/compat-projects/overloaded-signature-infer-return-basic/tsconfig.json'),
   'discriminant-exhaustion-never-basic': path.join(workspaceRoot, 'tests/compat-projects/discriminant-exhaustion-never-basic/tsconfig.json'),
+  'narrowing-this-type-predicate': path.join(workspaceRoot, 'tests/compat-projects/narrowing-this-type-predicate/tsconfig.json'),
   'template-literal-constant-evaluation': path.join(workspaceRoot, 'tests/compat-projects/template-literal-constant-evaluation/tsconfig.json'),
   'narrowing-logical-operand-edges': path.join(workspaceRoot, 'tests/compat-projects/narrowing-logical-operand-edges/tsconfig.json'),
   'narrowing-in-keyword-presence': path.join(workspaceRoot, 'tests/compat-projects/narrowing-in-keyword-presence/tsconfig.json'),
