@@ -194,14 +194,16 @@ pub(crate) fn emit_missing_return_diagnostic(
 
     // tsc's switch (checker.go:3777-3800), in order: a `never` return type with a
     // reachable end point is TS2534; no explicit value return is TS2355; a type
-    // that does not admit `undefined` is TS2366; otherwise `noImplicitReturns`
-    // still owes TS7030.
+    // that does not admit `undefined` is TS2366 (under `strictNullChecks` only);
+    // otherwise `noImplicitReturns` still owes TS7030.
     if matches!(return_type.peeled(), Type::Never) {
         ctx.push(with_span(Diagnostic::ts2534(ctx.file_name.clone())));
         return;
     }
 
-    if !body_flow.contains_value_return {
+    // tsc's `hasExplicitReturn` is set by a `return` statement; a `throw` on
+    // some path does not count.
+    if !body_flow.contains_return_with_value {
         ctx.push(with_span(Diagnostic::ts2355(ctx.file_name.clone())));
         return;
     }
@@ -210,7 +212,7 @@ pub(crate) fn emit_missing_return_diagnostic(
         return;
     }
 
-    if !return_type_admits_undefined(return_type) {
+    if ctx.options.strict_null_checks && !return_type_admits_undefined(return_type) {
         ctx.push(with_span(Diagnostic::ts2366(ctx.file_name.clone())));
     } else if ctx.options.no_implicit_returns {
         ctx.push(with_span(Diagnostic::ts7030(ctx.file_name.clone())));
