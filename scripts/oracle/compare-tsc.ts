@@ -747,6 +747,7 @@ export const fixturePresets: Record<string, string> = {
   'default-and-namespace-import': path.join(workspaceRoot, 'tests/compat-projects/default-and-namespace-import/tsconfig.json'),
   'type-only-export-specifier-value': path.join(workspaceRoot, 'tests/compat-projects/type-only-export-specifier-value/tsconfig.json'),
   'jsx-factory-implicit-use': path.join(workspaceRoot, 'tests/compat-projects/jsx-factory-implicit-use/tsconfig.json'),
+  'nested-destructuring-assignment-targets': path.join(workspaceRoot, 'tests/compat-projects/nested-destructuring-assignment-targets/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

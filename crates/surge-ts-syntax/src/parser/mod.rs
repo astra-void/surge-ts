@@ -356,14 +356,15 @@ fn parse_assignment_expression(
     })
 }
 
-/// `[a, b] = source` / `({ a, b: c } = source)`: each identifier target is an
-/// ordinary assignment of the element or property it reads (with its default
+/// `[a, b] = source` / `({ a, b: { c } } = source)`: each identifier target is
+/// an ordinary assignment of the element or property it reads (with its default
 /// applied as `??`, as a binding pattern does), so the checker reports each write
-/// on its target the way tsc's `checkDestructuringAssignment` does. Nested
-/// patterns and member targets are not lowered.
+/// on its target the way tsc's `checkDestructuringAssignment` does. A nested
+/// pattern reads its elements or properties from its own read, and a rest target
+/// is assigned a value the lowering does not type (tsc's
+/// `bindDestructuringTargetFlow` assigns every target either way). Member
+/// targets are not lowered.
 pub(crate) fn parse_destructuring_assignment(expression: &Expression<'_>) -> Vec<ParsedAssignment> {
-    use oxc_ast::ast::{AssignmentTargetMaybeDefault, AssignmentTargetProperty};
-
     let Expression::AssignmentExpression(assignment) = expression.without_parentheses() else {
         return Vec::new();
     };
@@ -372,29 +373,19 @@ pub(crate) fn parse_destructuring_assignment(expression: &Expression<'_>) -> Vec
     }
     let (source, source_span) = parse_expression(&assignment.right);
     let source_span = Some(text_span_from_oxc_span(source_span));
+    let mut assignments = Vec::new();
+    lower_assignment_pattern(&assignment.left, &source, source_span, &mut assignments);
+    assignments
+}
 
-    let element_read = |index: usize, target_span: Option<crate::TextSpan>| match &source {
-        // An array literal source is contextually a tuple: each target takes
-        // its own element, not the union of all of them.
-        ParsedExpression::ArrayLiteral { elements, .. }
-            if elements.iter().take(index + 1).all(|element| !element.spread)
-                && index < elements.len() =>
-        {
-            elements[index].expression.clone()
-        }
-        ParsedExpression::Identifier { name, .. } => ParsedExpression::IndexAccess {
-            object_name: name.clone(),
-            object_span: source_span,
-            index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
-            index_span: target_span,
-        },
-        _ => ParsedExpression::ElementAccess {
-            object: Box::new(source.clone()),
-            object_span: source_span,
-            index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
-            index_span: target_span,
-        },
-    };
+fn lower_assignment_pattern(
+    pattern: &AssignmentTarget<'_>,
+    source: &ParsedExpression,
+    source_span: Option<crate::TextSpan>,
+    assignments: &mut Vec<ParsedAssignment>,
+) {
+    use oxc_ast::ast::{AssignmentTargetMaybeDefault, AssignmentTargetProperty, IdentifierReference};
+
     let with_default = |read: ParsedExpression, default: Option<&Expression<'_>>| match default {
         Some(default) => {
             let (default_value, default_span) = parse_expression(default);
@@ -407,78 +398,131 @@ pub(crate) fn parse_destructuring_assignment(expression: &Expression<'_>) -> Vec
         }
         None => read,
     };
-    let lowered = |identifier: &oxc_ast::ast::IdentifierReference<'_>, value: ParsedExpression| {
-        ParsedAssignment {
-            target_name: identifier.name.to_string(),
-            target_span: Some(text_span_from_oxc_span(identifier.span)),
-            written_target_span: Some(text_span_from_oxc_span(identifier.span)),
-            value,
-            value_span: source_span,
+    let assign_identifier =
+        |identifier: &IdentifierReference<'_>, value, assignments: &mut Vec<ParsedAssignment>| {
+            assignments.push(ParsedAssignment {
+                target_name: identifier.name.to_string(),
+                target_span: Some(text_span_from_oxc_span(identifier.span)),
+                written_target_span: Some(text_span_from_oxc_span(identifier.span)),
+                value,
+                value_span: source_span,
+            });
+        };
+    let assign = |target: &AssignmentTarget<'_>, value, assignments: &mut Vec<ParsedAssignment>| {
+        match target {
+            AssignmentTarget::AssignmentTargetIdentifier(identifier) => {
+                assign_identifier(identifier, value, assignments);
+            }
+            AssignmentTarget::ArrayAssignmentTarget(_)
+            | AssignmentTarget::ObjectAssignmentTarget(_) => {
+                lower_assignment_pattern(target, &value, source_span, assignments);
+            }
+            _ => {}
         }
     };
+    fn split_default<'t, 'a>(
+        target: &'t AssignmentTargetMaybeDefault<'a>,
+    ) -> Option<(&'t AssignmentTarget<'a>, Option<&'t Expression<'a>>)> {
+        match target {
+            AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(with_default) => {
+                Some((&with_default.binding, Some(&with_default.init)))
+            }
+            other => other.as_assignment_target().map(|target| (target, None)),
+        }
+    }
 
-    let mut assignments = Vec::new();
-    match &assignment.left {
+    match pattern {
         AssignmentTarget::ArrayAssignmentTarget(pattern) => {
             for (index, element) in pattern.elements.iter().enumerate() {
-                let (target, default) = match element {
-                    Some(AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(with_default)) => {
-                        (&with_default.binding, Some(&with_default.init))
-                    }
-                    Some(other) => match other.as_assignment_target() {
-                        Some(target) => (target, None),
-                        None => continue,
-                    },
-                    None => continue,
-                };
-                let AssignmentTarget::AssignmentTargetIdentifier(identifier) = target else {
+                let Some((target, default)) = element.as_ref().and_then(split_default) else {
                     continue;
                 };
-                let span = Some(text_span_from_oxc_span(identifier.span));
-                assignments.push(lowered(identifier, with_default(element_read(index, span), default)));
+                let span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(target)));
+                let read = match source {
+                    // An array literal source is contextually a tuple: each
+                    // target takes its own element, not the union of all of them.
+                    ParsedExpression::ArrayLiteral { elements, .. }
+                        if elements.iter().take(index + 1).all(|element| !element.spread)
+                            && index < elements.len() =>
+                    {
+                        elements[index].expression.clone()
+                    }
+                    ParsedExpression::Identifier { name, .. } => ParsedExpression::IndexAccess {
+                        object_name: name.clone(),
+                        object_span: source_span,
+                        index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
+                        index_span: span,
+                    },
+                    _ => ParsedExpression::ElementAccess {
+                        object: Box::new(source.clone()),
+                        object_span: source_span,
+                        index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
+                        index_span: span,
+                    },
+                };
+                assign(target, with_default(read, default), assignments);
+            }
+            if let Some(rest) = &pattern.rest {
+                assign(&rest.target, ParsedExpression::Unknown, assignments);
             }
         }
         AssignmentTarget::ObjectAssignmentTarget(pattern) => {
+            let property_read = |name: &str, span| ParsedExpression::PropertyAccess {
+                object: Box::new(source.clone()),
+                object_span: source_span,
+                property_name: name.to_string(),
+                property_span: span,
+                is_bracketed: false,
+            };
             for property in &pattern.properties {
-                let (identifier, name, default) = match property {
-                    AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(shorthand) => (
-                        &shorthand.binding,
-                        shorthand.binding.name.to_string(),
-                        shorthand.init.as_ref(),
-                    ),
+                match property {
+                    AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(shorthand) => {
+                        let identifier = &shorthand.binding;
+                        let span = Some(text_span_from_oxc_span(identifier.span));
+                        let read = property_read(&identifier.name, span);
+                        let value = with_default(read, shorthand.init.as_ref());
+                        assign_identifier(identifier, value, assignments);
+                    }
                     AssignmentTargetProperty::AssignmentTargetPropertyProperty(property) => {
                         let Some(name) = property.name.static_name() else {
                             continue;
                         };
-                        let (target, default) = match &property.binding {
-                            AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(with_default) => {
-                                (&with_default.binding, Some(&with_default.init))
-                            }
-                            other => match other.as_assignment_target() {
-                                Some(target) => (target, None),
-                                None => continue,
-                            },
-                        };
-                        let AssignmentTarget::AssignmentTargetIdentifier(identifier) = target else {
+                        let Some((target, default)) = split_default(&property.binding) else {
                             continue;
                         };
-                        (identifier.as_ref(), name.to_string(), default)
+                        let span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(target)));
+                        let value = with_default(property_read(&name, span), default);
+                        assign(target, value, assignments);
                     }
+                }
+            }
+            if let Some(rest) = &pattern.rest {
+                // tsc's `getRestType`: the source without the properties the
+                // pattern names — known only when every key is static.
+                let omitted: Option<Vec<String>> = pattern
+                    .properties
+                    .iter()
+                    .map(|property| match property {
+                        AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(shorthand) => {
+                            Some(shorthand.binding.name.to_string())
+                        }
+                        AssignmentTargetProperty::AssignmentTargetPropertyProperty(property) => {
+                            property.name.static_name().map(|name| name.to_string())
+                        }
+                    })
+                    .collect();
+                let value = match omitted {
+                    Some(omitted) => ParsedExpression::ObjectRest {
+                        source: Box::new(source.clone()),
+                        omitted,
+                    },
+                    None => ParsedExpression::Unknown,
                 };
-                let span = Some(text_span_from_oxc_span(identifier.span));
-                let read = ParsedExpression::PropertyAccess {
-                    object: Box::new(source.clone()),
-                    object_span: source_span,
-                    property_name: name,
-                    property_span: span,
-                    is_bracketed: false,
-                };
-                assignments.push(lowered(identifier, with_default(read, default)));
+                assign(&rest.target, value, assignments);
             }
         }
         _ => {}
     }
-    assignments
 }
 
 fn parse_binding_pattern_declarations(
