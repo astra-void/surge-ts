@@ -999,6 +999,29 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
                 _ => {}
             }
         }
+        // relater.go: a pattern literal's base constraint is itself, so
+        // against a primitive it relates by the simple rules alone — `string`
+        // takes it and no literal does. Its `string` resolution would let the
+        // comparable relation read `string` against a literal.
+        if current_relation() == Relation::Comparable
+            && (crate::is_template_literal_type(from) || crate::string_mapping_parts(from).is_some())
+            && (matches!(
+                to,
+                Type::String
+                    | Type::Number
+                    | Type::Boolean
+                    | Type::BigInt
+                    | Type::Symbol
+                    | Type::Undefined
+                    | Type::Null
+                    | Type::Void
+                    | Type::StringLiteral(_)
+                    | Type::NumberLiteral(_)
+                    | Type::BooleanLiteral(_)
+            ) || enum_member_value(to).is_some())
+        {
+            return is_simple_type_related_to(from, to);
+        }
         // `resolve_arc` borrows the memoized/interned expansion instead of
         // deep-cloning it — this arm is peeled millions of times on
         // conditional-heavy programs.

@@ -1,0 +1,17 @@
+# equality-comparable-relation-basic
+
+tsc checks `==`, `!=`, `===` and `!==` with `isTypeEqualityComparableTo` in
+either direction (`checkBinaryLikeExpression`, checker.go): the other operand
+is `undefined` or `null` as a whole, or the two types are comparable
+(relater.go). surge decided TS2367 by sorting both operands into kinds and
+never reported two object, function, array or class types, so `Base` against
+an unrelated class, `{ fn(): Base }` against `{ new (): Base }` or
+`Promise<string>` against `string` went unreported, while `[string, number]`
+against `string[]` — comparable, since some element relates — was a false
+positive.
+
+The comparable relation also decides the enum and literal cases (`E` against a
+value it has no member for, a template literal against a literal its fixed
+text rules out) and type variables of a generic body: two of them overlap only
+when one is constrained to the other. A `case` test is compared to the
+discriminant under the same relation (TS2678, `switches.ts`).

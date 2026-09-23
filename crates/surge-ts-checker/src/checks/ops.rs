@@ -510,27 +510,13 @@ fn evaluate_equality_binary(
         return InferredExpression::Unknown;
     };
 
-    if left_type.is_unknown() || right_type.is_unknown() {
+    // A type variable of the body being checked is a real operand: two of
+    // them are comparable only when one is constrained to the other.
+    if left_type.is_unmodelled() || right_type.is_unmodelled() {
         return InferredExpression::Unknown;
     }
 
     if matches!(left_type, Type::Any) || matches!(right_type, Type::Any) {
-        return InferredExpression::Known(Type::Boolean);
-    }
-
-    // `never` is comparable to every type, so tsc reports no overlap error on a
-    // comparison in an already-dead branch.
-    if matches!(left_type, Type::Never) || matches!(right_type, Type::Never) {
-        return InferredExpression::Known(Type::Boolean);
-    }
-
-    // tsc's `isTypeEqualityComparableTo` short-circuits when the *other* operand
-    // is nullable, so `x === undefined` / `x === null` never reports TS2367
-    // whatever `x` is. The test is on the operand as a whole, not on individual
-    // union constituents, so it stays here rather than inside the overlap walk.
-    if matches!(left_type, Type::Undefined | Type::Null)
-        || matches!(right_type, Type::Undefined | Type::Null)
-    {
         return InferredExpression::Known(Type::Boolean);
     }
 
@@ -605,109 +591,15 @@ fn widen_literal_for_comparison(ty: &Type) -> Type {
     }
 }
 
+/// tsc's equality check (`checkBinaryLikeExpression`): the operands overlap
+/// when either is `isTypeEqualityComparableTo` the other — the other operand
+/// is `undefined` or `null` as a whole, or the comparable relation holds.
 pub(crate) fn types_overlap_for_equality(left: &Type, right: &Type) -> bool {
-    match (left, right) {
-        (Type::Union(left_union), Type::Union(right_union)) => {
-            left_union.types().iter().any(|left_ty| {
-                right_union
-                    .types()
-                    .iter()
-                    .any(|right_ty| types_overlap_for_equality(left_ty, right_ty))
-            })
-        }
-        (Type::Union(left_union), right_ty) => left_union
-            .types()
-            .iter()
-            .any(|left_ty| types_overlap_for_equality(left_ty, right_ty)),
-        (left_ty, Type::Union(right_union)) => right_union
-            .types()
-            .iter()
-            .any(|right_ty| types_overlap_for_equality(left_ty, right_ty)),
-        // `any`, `unknown` and `never` are comparable to everything, so a
-        // degraded operand — or a union that merely *contains* one — must never
-        // reach the disjointness verdict below.
-        (Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Never, _)
-        | (_, Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Never) => true,
-        (Type::StringLiteral(left_value), Type::StringLiteral(right_value)) => {
-            left_value == right_value
-        }
-        (Type::NumberLiteral(left_value), Type::NumberLiteral(right_value)) => {
-            left_value == right_value
-        }
-        (Type::BooleanLiteral(left_value), Type::BooleanLiteral(right_value)) => {
-            left_value == right_value
-        }
-        (Type::Array(left_element), Type::Array(right_element)) => {
-            types_overlap_for_equality(left_element, right_element)
-        }
-        (Type::Tuple(left_items), Type::Tuple(right_items)) => {
-            left_items.len() == right_items.len()
-                && left_items
-                    .iter()
-                    .zip(right_items.iter())
-                    .all(|(left_item, right_item)| {
-                        types_overlap_for_equality(left_item, right_item)
-                    })
-        }
-        (Type::Array(element), Type::Tuple(items)) | (Type::Tuple(items), Type::Array(element)) => {
-            items
-                .iter()
-                .all(|item| types_overlap_for_equality(item, element))
-        }
-        // Every non-nullish value is assignable to `{}`, so an empty object type
-        // is comparable to anything.
-        (Type::Object(object), _) | (_, Type::Object(object)) if is_empty_object_type(object) => {
-            true
-        }
-        // Everything else is disjoint only when *both* operands land in a kind
-        // whose inhabitants are known: comparing two different known kinds has
-        // no overlap, and anything unclassified (references, type parameters,
-        // …) is assumed comparable rather than reported, matching tsc, which
-        // issues TS2367 only for provably disjoint operands.
-        _ => match (equality_kind(left), equality_kind(right)) {
-            (Some(left_kind), Some(right_kind)) => left_kind == right_kind,
-            _ => true,
-        },
-    }
+    is_type_equality_comparable_to(left, right) || is_type_equality_comparable_to(right, left)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum EqualityKind {
-    String,
-    Number,
-    Boolean,
-    BigInt,
-    Symbol,
-    Undefined,
-    Void,
-    Object,
-    Function,
-    Array,
-    Tuple,
-}
-
-fn equality_kind(ty: &Type) -> Option<EqualityKind> {
-    match ty {
-        Type::String | Type::StringLiteral(_) => Some(EqualityKind::String),
-        Type::Number | Type::NumberLiteral(_) => Some(EqualityKind::Number),
-        Type::Boolean | Type::BooleanLiteral(_) => Some(EqualityKind::Boolean),
-        Type::BigInt => Some(EqualityKind::BigInt),
-        Type::Symbol => Some(EqualityKind::Symbol),
-        Type::Undefined | Type::Null => Some(EqualityKind::Undefined),
-        Type::Void => Some(EqualityKind::Void),
-        Type::Object(_) => Some(EqualityKind::Object),
-        Type::Function(_) => Some(EqualityKind::Function),
-        Type::Array(_) => Some(EqualityKind::Array),
-        Type::Tuple(_) => Some(EqualityKind::Tuple),
-        _ => None,
-    }
-}
-
-fn is_empty_object_type(object: &surge_ts_types::ObjectType) -> bool {
-    object.properties.is_empty()
-        && object.string_index_type.is_none()
-        && object.call_signature.is_none()
-        && object.construct_signature.is_none()
+fn is_type_equality_comparable_to(source: &Type, target: &Type) -> bool {
+    matches!(target, Type::Undefined | Type::Null) || surge_ts_types::is_comparable_to(source, target)
 }
 
 fn push_diagnostic(ctx: &mut CheckerContext, diagnostic: Diagnostic, span: Option<SyntaxTextSpan>) {

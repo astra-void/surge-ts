@@ -588,6 +588,7 @@ export const fixturePresets: Record<string, string> = {
   'relational-comparison-operands-basic': path.join(workspaceRoot, 'tests/compat-projects/relational-comparison-operands-basic/tsconfig.json'),
   'relational-comparable-relation-basic': path.join(workspaceRoot, 'tests/compat-projects/relational-comparable-relation-basic/tsconfig.json'),
   'readonly-array-mutable-target-basic': path.join(workspaceRoot, 'tests/compat-projects/readonly-array-mutable-target-basic/tsconfig.json'),
+  'equality-comparable-relation-basic': path.join(workspaceRoot, 'tests/compat-projects/equality-comparable-relation-basic/tsconfig.json'),
   'class-accessor-bodies-basic': path.join(workspaceRoot, 'tests/compat-projects/class-accessor-bodies-basic/tsconfig.json'),
   'return-mismatch-anchor-basic': path.join(workspaceRoot, 'tests/compat-projects/return-mismatch-anchor-basic/tsconfig.json'),
   'arrow-expression-body-return-basic': path.join(workspaceRoot, 'tests/compat-projects/arrow-expression-body-return-basic/tsconfig.json'),
