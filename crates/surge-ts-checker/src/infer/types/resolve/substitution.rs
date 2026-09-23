@@ -40,8 +40,17 @@ pub(crate) fn bind_type_arguments(
         });
     }
 
-    if type_arguments.len() > type_parameters.len() {
-        emit_generic_arity(name, type_parameters.len(), name_span, ctx);
+    let min_type_argument_count = min_type_argument_count(type_parameters);
+    if type_arguments.len() < min_type_argument_count
+        || type_arguments.len() > type_parameters.len()
+    {
+        emit_generic_arity(
+            name,
+            min_type_argument_count,
+            type_parameters.len(),
+            name_span,
+            ctx,
+        );
         return None;
     }
 
@@ -89,7 +98,6 @@ pub(crate) fn bind_type_arguments(
         }
 
         let Some(default_type) = parameter.default_type.clone() else {
-            emit_generic_arity(name, type_parameters.len(), name_span, ctx);
             return None;
         };
 
@@ -484,4 +492,13 @@ fn constraint_judgeable(ty: &Type) -> bool {
         Type::Union(union) => union.types().iter().all(constraint_judgeable),
         _ => false,
     }
+}
+
+/// tsc's `getMinTypeArgumentCount`: one past the last parameter with no
+/// default, so a defaulted parameter before a required one still counts.
+pub(crate) fn min_type_argument_count(type_parameters: &[ParsedTypeParameter]) -> usize {
+    type_parameters
+        .iter()
+        .rposition(|parameter| parameter.default_type.is_none())
+        .map_or(0, |index| index + 1)
 }

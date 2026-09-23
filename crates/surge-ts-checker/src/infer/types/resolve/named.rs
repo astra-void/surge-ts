@@ -309,6 +309,17 @@ fn resolve_named_type_inner(
         };
     }
 
+    if let TypeDeclarationInfo::Interface(interface) = declaration
+        && is_generic_declaration
+        && !ctx.resolving_class_heritage
+        && report_interface_type_argument_count(interface, &named_type, ctx)
+    {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: true,
+        };
+    }
+
     if !has_type_arguments && !is_generic_declaration {
         let cache_key = type_declaration_resolution_key(declaration);
         if let Some(cached) = get_cached_named_type_resolution(ctx, &cache_key, resolving) {
@@ -1534,4 +1545,32 @@ mod signature_context_cache_tests {
             "placeholder tuples must not hit"
         );
     }
+}
+
+/// tsc's `getTypeFromClassOrInterfaceReference` arity check, at the reference
+/// and naming the declared type with its parameters (`Box<T, U>`).
+fn report_interface_type_argument_count(
+    interface: &crate::symbols::InterfaceInfo,
+    named_type: &ParsedNamedType,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let type_parameters = &interface.body.type_parameters;
+    let min = super::substitution::min_type_argument_count(type_parameters);
+    let count = named_type.type_arguments.len();
+    if count >= min && count <= type_parameters.len() {
+        return false;
+    }
+    let parameter_names: Vec<&str> = type_parameters
+        .iter()
+        .map(|parameter| parameter.name.as_str())
+        .collect();
+    let display = format!("{}<{}>", named_type.name, parameter_names.join(", "));
+    crate::infer::types::emit_generic_arity(
+        &display,
+        min,
+        type_parameters.len(),
+        named_type.span,
+        ctx,
+    );
+    true
 }
