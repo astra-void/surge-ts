@@ -17,7 +17,7 @@ use crate::symbols::{TypeAliasInfo, TypeDeclarationHandle};
 /// intersection qualifies when any member does, and so does a conditional. A
 /// bare alias reference, indexed access, etc. do not, so `type A = A` stays an
 /// error.
-fn alias_body_supports_recursion(ty: &ParsedType) -> bool {
+fn alias_body_supports_recursion(ty: &ParsedType, ctx: &CheckerContext) -> bool {
     match ty {
         ParsedType::Object(_)
         | ParsedType::Array(_)
@@ -31,8 +31,42 @@ fn alias_body_supports_recursion(ty: &ParsedType) -> bool {
         // degraded every declaration that reached it — tanstack's
         // `QueryFilters.queryKey` tainted the whole query-core graph.
         | ParsedType::Conditional(_) => true,
+        // A reference to a generic class or interface whose arguments may name
+        // an alias is created deferred (`isDeferredTypeReferenceNode`), so
+        // React's `type ReactNode = … | Iterable<ReactNode> | …` recurses
+        // through it legally.
+        ParsedType::Named(named) => {
+            !named.type_arguments.is_empty()
+                && !matches!(
+                    ctx.lookup_type_declaration(&named.name),
+                    Some(crate::symbols::TypeDeclarationInfo::Alias(_))
+                )
+                && named.type_arguments.iter().any(may_resolve_type_alias)
+        }
+        ParsedType::Union(members) | ParsedType::Intersection(members) => members
+            .iter()
+            .any(|member| alias_body_supports_recursion(member, ctx)),
+        _ => false,
+    }
+}
+
+/// tsc's `mayResolveTypeAlias`, read off the syntax: a type argument that names
+/// a type (which may be an alias) or is built from one.
+fn may_resolve_type_alias(ty: &ParsedType) -> bool {
+    match ty {
+        ParsedType::Named(_) | ParsedType::TypeOf(_) => true,
+        ParsedType::KeyOf(inner) | ParsedType::Readonly(inner) => may_resolve_type_alias(inner),
         ParsedType::Union(members) | ParsedType::Intersection(members) => {
-            members.iter().any(alias_body_supports_recursion)
+            members.iter().any(may_resolve_type_alias)
+        }
+        ParsedType::IndexedAccess(access) => {
+            may_resolve_type_alias(&access.object_type) || may_resolve_type_alias(&access.index_type)
+        }
+        ParsedType::Conditional(conditional) => {
+            may_resolve_type_alias(&conditional.check_type)
+                || may_resolve_type_alias(&conditional.extends_type)
+                || may_resolve_type_alias(&conditional.true_type)
+                || may_resolve_type_alias(&conditional.false_type)
         }
         _ => false,
     }
@@ -294,7 +328,8 @@ pub(crate) fn resolve_type_alias(
             .structural_resolution_frames
             .iter()
             .any(|&frame| frame > index);
-        let legal_recursion = alias_body_supports_recursion(&alias.body.ty) || structural_crossing;
+        let legal_recursion =
+            alias_body_supports_recursion(&alias.body.ty, ctx) || structural_crossing;
         // A *generic* back-edge stays the degradation sentinel even under the
         // gate. With frames discriminated by their arguments this branch is
         // only reached when the arguments actually repeat — a genuinely
@@ -469,7 +504,7 @@ pub(crate) fn resolve_type_alias(
     // A structural alias body (object/array/function/…) is a structural
     // crossing, like an interface body: a cycle re-entered through it is legal
     // recursion (see `CheckerContext::structural_resolution_frames`).
-    let structural_frame = alias_body_supports_recursion(&alias.body.ty);
+    let structural_frame = alias_body_supports_recursion(&alias.body.ty, ctx);
     if structural_frame {
         ctx.structural_resolution_frames.push(resolving.len() - 1);
     }
