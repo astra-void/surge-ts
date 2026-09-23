@@ -1077,7 +1077,82 @@ fn evaluate_conditional(
         ctx,
     );
 
-    ops::evaluate_conditional_expression(condition_result, true_result, false_result)
+    let branch_types = [
+        (when_true.as_ref(), ops::inferred_type(&true_result).cloned()),
+        (when_false.as_ref(), ops::inferred_type(&false_result).cloned()),
+    ];
+    subtype_reduced_conditional(
+        ops::evaluate_conditional_expression(condition_result, true_result, false_result),
+        branch_types,
+    )
+}
+
+/// tsc's `checkConditionalExpression` unions the branch types with subtype
+/// reduction (`getUnionTypeEx(…, UnionReductionSubtype)`), so a branch whose
+/// type is a strict subtype of the other's is absorbed: `c ? () => {} : (x?:
+/// string) => {}` is `(x?: string) => void`.
+pub(crate) fn subtype_reduced_conditional(
+    result: InferredExpression,
+    branches: [(&ParsedExpression, Option<Type>); 2],
+) -> InferredExpression {
+    if !matches!(result, InferredExpression::Known(Type::Union(_))) {
+        return result;
+    }
+    let [(when_true, Some(true_type)), (when_false, Some(false_type))] = branches else {
+        return result;
+    };
+    InferredExpression::Known(surge_ts_types::subtype_reduced_union(vec![
+        (true_type, literal_shape(when_true)),
+        (false_type, literal_shape(when_false)),
+    ]))
+}
+
+/// Which part of an expression's type is an object literal's own, fresh type
+/// (tsc's `ObjectFlagsObjectLiteral`), which surge's types do not record. A
+/// literal that ends up inside a union or an array's element type, or behind a
+/// function's inferred return, cannot be lined up with the type and is opaque.
+pub(crate) fn literal_shape(expression: &ParsedExpression) -> surge_ts_types::LiteralShape {
+    use surge_ts_types::LiteralShape;
+    let regular = |shape: &LiteralShape| matches!(shape, LiteralShape::Regular);
+    match expression {
+        ParsedExpression::ObjectLiteral { properties, .. } => LiteralShape::Object(
+            properties
+                .iter()
+                .filter(|property| {
+                    !property.is_spread
+                        && !property.is_method
+                        && !property.is_accessor
+                        && property.computed_key.is_none()
+                        && property.unnamed_key_value.is_none()
+                })
+                .map(|property| (std::sync::Arc::from(property.name.as_str()), literal_shape(&property.value)))
+                .collect(),
+        ),
+        ParsedExpression::SatisfiesExpression { expression, .. }
+        | ParsedExpression::NonNullAssertion { expression, .. }
+        | ParsedExpression::Await { operand: expression, .. }
+        | ParsedExpression::Assignment { value: expression, .. } => literal_shape(expression),
+        ParsedExpression::Sequence { expressions } => expressions
+            .last()
+            .map_or(LiteralShape::Regular, |(expression, _)| literal_shape(expression)),
+        ParsedExpression::ConstAssertion { expression, .. } if !regular(&literal_shape(expression)) => {
+            LiteralShape::Opaque
+        }
+        ParsedExpression::ArrayLiteral { elements, .. }
+            if elements.iter().any(|element| !regular(&literal_shape(&element.expression))) =>
+        {
+            LiteralShape::Opaque
+        }
+        ParsedExpression::Conditional { when_true: left, when_false: right, .. }
+        | ParsedExpression::Logical { left, right, .. }
+        | ParsedExpression::NullishCoalescing { left, right, .. }
+            if !regular(&literal_shape(left)) || !regular(&literal_shape(right)) =>
+        {
+            LiteralShape::Opaque
+        }
+        ParsedExpression::ArrowFunction(function) if function.return_type.is_none() => LiteralShape::Opaque,
+        _ => LiteralShape::Regular,
+    }
 }
 
 fn evaluate_optional_property_access(

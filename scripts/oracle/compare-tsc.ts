@@ -367,6 +367,7 @@ export const fixturePresets: Record<string, string> = {
   'void-parameter-arity-basic': path.join(workspaceRoot, 'tests/compat-projects/void-parameter-arity-basic/tsconfig.json'),
   'type-literal-call-overloads-basic': path.join(workspaceRoot, 'tests/compat-projects/type-literal-call-overloads-basic/tsconfig.json'),
   'union-call-signatures-basic': path.join(workspaceRoot, 'tests/compat-projects/union-call-signatures-basic/tsconfig.json'),
+  'conditional-expression-subtype-reduction-basic': path.join(workspaceRoot, 'tests/compat-projects/conditional-expression-subtype-reduction-basic/tsconfig.json'),
   'parameter-initializer-scope': path.join(workspaceRoot, 'tests/compat-projects/parameter-initializer-scope/tsconfig.json'),
   'function-name-in-own-signature': path.join(workspaceRoot, 'tests/compat-projects/function-name-in-own-signature/tsconfig.json'),
   'block-scoped-self-reference': path.join(workspaceRoot, 'tests/compat-projects/block-scoped-self-reference/tsconfig.json'),

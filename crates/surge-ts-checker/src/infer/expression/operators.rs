@@ -201,7 +201,10 @@ pub(crate) fn infer_conditional_expression(
             if true_ty == false_ty {
                 InferredExpression::Known(true_ty)
             } else {
-                InferredExpression::Known(union_type(vec![true_ty, false_ty]))
+                InferredExpression::Known(surge_ts_types::subtype_reduced_union(vec![
+                    (true_ty, crate::checks::expr::literal_shape(when_true)),
+                    (false_ty, crate::checks::expr::literal_shape(when_false)),
+                ]))
             }
         }
         _ => InferredExpression::Unknown,
