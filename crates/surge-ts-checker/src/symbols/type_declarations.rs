@@ -381,11 +381,17 @@ pub(crate) fn merge_interface_infos(
     }
     let mut extends = existing.body.extends.clone();
     extends.extend(incoming.body.extends.iter().cloned());
-    let type_parameters = if existing.body.type_parameters.is_empty() {
-        incoming.body.type_parameters.clone()
-    } else {
-        existing.body.type_parameters.clone()
-    };
+    // tsc's binder declares each declaration's type parameters in the merged
+    // symbol's members, so a name an earlier declaration declared is the same
+    // parameter and any other name is one more: the merged type's parameters
+    // are every name in order of first appearance
+    // (`appendLocalTypeParametersOfClassOrInterfaceOrTypeAlias`).
+    let mut type_parameters = existing.body.type_parameters.clone();
+    for parameter in &incoming.body.type_parameters {
+        if !type_parameters.iter().any(|known| known.name == parameter.name) {
+            type_parameters.push(parameter.clone());
+        }
+    }
     let mut merged_info = InterfaceInfo::new(
         existing.name.clone(),
         existing.file_name.clone(),
