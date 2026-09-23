@@ -286,6 +286,7 @@ impl Project {
                     .clone()
                     .unwrap_or_else(|| loaded.root_dir.clone()),
             ),
+            emit_module: loaded.compiler_options.emit_module,
         };
 
         let type_package_resolution = package_declarations::resolve_type_packages(
@@ -336,15 +337,49 @@ impl Project {
             }
             // Package resolutions are importer-scoped; the flat map keeps the
             // first (BFS-order) resolution per specifier as the project-wide
-            // fallback for importer-agnostic consumers.
-            for (importer, specifier, resolved_file) in package_modules {
-                resolved_modules
-                    .entry(specifier.clone())
-                    .or_insert_with(|| resolved_file.clone());
-                resolved_modules_by_importer
-                    .entry(importer)
-                    .or_default()
-                    .insert(specifier, resolved_file);
+            // fallback for importer-agnostic consumers. An importer whose own
+            // resolution failed keeps that failure rather than the fallback.
+            // A usage whose syntax picks its mode (`import x = require()`, a
+            // `resolution-mode` attribute) also has a key of its own; the
+            // plain key holds the importer's own mode wherever it was used.
+            for resolution in package_modules {
+                use package_declarations::ImportUsage;
+                if !resolution.resolved_file.is_empty()
+                    && !matches!(resolution.usage, ImportUsage::ModeOverride(_))
+                {
+                    resolved_modules
+                        .entry(resolution.specifier.clone())
+                        .or_insert_with(|| resolution.resolved_file.clone());
+                }
+                let per_importer = resolved_modules_by_importer
+                    .entry(resolution.importer)
+                    .or_default();
+                match resolution.usage {
+                    ImportUsage::Declaration => {
+                        per_importer.insert(resolution.specifier, resolution.resolved_file);
+                    }
+                    ImportUsage::ImportEquals => {
+                        per_importer.insert(
+                            surge_ts_checker::lowlevel::resolution_candidates::resolution_mode_override_key(
+                                &resolution.specifier,
+                                surge_ts_syntax::ResolutionModeOverride::Require,
+                            ),
+                            resolution.resolved_file.clone(),
+                        );
+                        per_importer
+                            .entry(resolution.specifier)
+                            .or_insert(resolution.resolved_file);
+                    }
+                    ImportUsage::ModeOverride(mode) => {
+                        per_importer.insert(
+                            surge_ts_checker::lowlevel::resolution_candidates::resolution_mode_override_key(
+                                &resolution.specifier,
+                                mode,
+                            ),
+                            resolution.resolved_file,
+                        );
+                    }
+                }
             }
 
             let import_graph_start = Instant::now();

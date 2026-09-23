@@ -72,6 +72,10 @@ pub(crate) fn parse_export_named_declaration(
                 .as_ref()
                 .map(|source| text_span_from_oxc_span(source.span)),
             span,
+            resolution_mode: super::imports::resolution_mode_attribute(
+                declaration.with_clause.as_deref(),
+                matches!(declaration.export_kind, ImportOrExportKind::Type),
+            ),
         },
     ))])
 }
@@ -298,6 +302,10 @@ pub(crate) fn parse_export_all_declaration(
             module_specifier_span,
             span,
             is_type_only,
+            resolution_mode: super::imports::resolution_mode_attribute(
+                declaration.with_clause.as_deref(),
+                is_type_only,
+            ),
         },
     ))])
 }
@@ -344,6 +352,7 @@ fn parse_exported_declaration(
                     module_specifier: None,
                     module_specifier_span: None,
                     span: import.span,
+                    resolution_mode: None,
                 };
                 return Some(vec![
                     ParsedStatement::ImportDeclaration(Box::new(import)),

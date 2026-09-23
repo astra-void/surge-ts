@@ -190,8 +190,8 @@ fn report_import_local_declaration_conflicts(
             continue;
         }
 
-        let Some((export_table, _, _)) = try_resolve_module(
-            &import.module_specifier,
+        let Some((export_table, _, _)) = try_resolve_import_module(
+            import,
             ctx,
             program_files,
             module_export_tables,
@@ -414,10 +414,54 @@ pub(crate) fn try_resolve_module(
     Option<Arc<TypeDeclarationScope>>,
     Option<usize>,
 )> {
+    try_resolve_module_in_mode(
+        module_specifier,
+        None,
+        ctx,
+        program_files,
+        module_export_tables,
+        module_resolution_scopes,
+    )
+}
+
+/// [`try_resolve_module`] for an import declaration, whose syntax can pick
+/// the mode its specifier resolves in (see [`import_resolution_mode`]).
+fn try_resolve_import_module(
+    import: &ParsedImportDeclaration,
+    ctx: &CheckerContext,
+    program_files: &[ParsedProgramFile],
+    module_export_tables: &[Option<ModuleExportTable>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
+) -> Option<(
+    ModuleExportTable,
+    Option<Arc<TypeDeclarationScope>>,
+    Option<usize>,
+)> {
+    try_resolve_module_in_mode(
+        &import.module_specifier,
+        import_resolution_mode(import),
+        ctx,
+        program_files,
+        module_export_tables,
+        module_resolution_scopes,
+    )
+}
+
+pub(crate) fn try_resolve_module_in_mode(
+    module_specifier: &str,
+    resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
+    ctx: &CheckerContext,
+    program_files: &[ParsedProgramFile],
+    module_export_tables: &[Option<ModuleExportTable>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
+) -> Option<(
+    ModuleExportTable,
+    Option<Arc<TypeDeclarationScope>>,
+    Option<usize>,
+)> {
     let resolution_start = Instant::now();
-    if let Some(resolved_file_name) = ctx
-        .options
-        .resolved_module_for(&ctx.file_name, module_specifier)
+    if let Some(resolved_file_name) =
+        resolved_module_in_mode(ctx, &ctx.file_name, module_specifier, resolution_mode)
     {
         let resolved_file_name = canonical_file_identity(resolved_file_name);
         if let Some(resolved_index) = ctx
@@ -476,9 +520,10 @@ pub(crate) fn try_resolve_module(
         ));
     }
 
-    if let Some(resolved) = resolve_relative_module(
+    if let Some(resolved) = resolve_relative_module_in_mode(
         &ctx.file_name,
         module_specifier,
+        resolution_mode,
         program_files,
         &ctx.module_file_index_by_identity,
     ) {
@@ -729,8 +774,8 @@ fn resolve_default_and_named_import(
     else {
         return;
     };
-    let Some((export_table, default_scope, resolved_index)) = try_resolve_module(
-        &import.module_specifier,
+    let Some((export_table, default_scope, resolved_index)) = try_resolve_import_module(
+        import,
         ctx,
         program_files,
         module_export_tables,
@@ -1061,8 +1106,8 @@ fn resolve_default_import(
     else {
         return;
     };
-    let Some((export_table, scope, resolved_index)) = try_resolve_module(
-        &import.module_specifier,
+    let Some((export_table, scope, resolved_index)) = try_resolve_import_module(
+        import,
         ctx,
         program_files,
         module_export_tables,
@@ -1182,16 +1227,17 @@ fn resolve_import_equals(
         return;
     };
 
-    let Some((export_table, scope, resolved_index)) = try_resolve_module(
-        &import.module_specifier,
+    let Some((export_table, scope, resolved_index)) = try_resolve_import_module(
+        import,
         ctx,
         program_files,
         module_export_tables,
         module_resolution_scopes,
     ) else {
-        if resolve_relative_module(
+        if resolve_relative_module_in_mode(
             &ctx.file_name,
             &import.module_specifier,
+            import_resolution_mode(import),
             program_files,
             &ctx.module_file_index_by_identity,
         )
@@ -1436,8 +1482,8 @@ fn resolve_namespace_import(
         // in type positions — only emitting the binding at runtime is elided. So
         // the namespace value shape is registered too, otherwise
         // `ComponentProps<typeof LabelPrimitive.Root>` reports a false TS2304.
-        if let Some((export_table, scope, resolved_index)) = try_resolve_module(
-            &import.module_specifier,
+        if let Some((export_table, scope, resolved_index)) = try_resolve_import_module(
+            import,
             ctx,
             program_files,
             module_export_tables,
@@ -1491,8 +1537,8 @@ fn resolve_namespace_import(
     }
 
     let (namespace_type, namespace_export_table, namespace_scope, namespace_resolved_index) =
-        if let Some((export_table, scope, resolved_index)) = try_resolve_module(
-            &import.module_specifier,
+        if let Some((export_table, scope, resolved_index)) = try_resolve_import_module(
+            import,
             ctx,
             program_files,
             module_export_tables,
@@ -1587,8 +1633,8 @@ fn resolve_named_import(
     else {
         return;
     };
-    let Some((export_table, scope, resolved_index)) = try_resolve_module(
-        &import.module_specifier,
+    let Some((export_table, scope, resolved_index)) = try_resolve_import_module(
+        import,
         ctx,
         program_files,
         module_export_tables,

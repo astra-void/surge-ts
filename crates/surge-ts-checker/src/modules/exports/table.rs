@@ -3,7 +3,7 @@ use super::*;
 use std::collections::HashMap;
 
 use surge_ts_diagnostics::Diagnostic;
-use surge_ts_syntax::{ParsedExportSpecifier, ParsedVariableKind};
+use surge_ts_syntax::{ParsedExportSpecifier, ParsedResolutionModeAttribute, ParsedVariableKind};
 
 use crate::context::convert_span;
 
@@ -477,6 +477,7 @@ fn report_duplicate_export_declarations(
         let ParsedExportDeclaration::Named {
             specifiers,
             module_specifier,
+            resolution_mode,
             ..
         } = export.as_ref()
         else {
@@ -491,8 +492,9 @@ fn report_duplicate_export_declarations(
 
         let target_export_table = match module_specifier {
             Some(module_specifier) => {
-                let resolved = try_resolve_module_export_table(
+                let resolved = try_resolve_module_export_table_in_mode(
                     module_specifier,
+                    ParsedResolutionModeAttribute::resolution_override(*resolution_mode),
                     ctx,
                     parsed_files,
                     local_module_export_tables,
@@ -604,8 +606,34 @@ pub(crate) fn try_resolve_module_export_table(
     resolving: &mut [bool],
     file_name: &str,
 ) -> Option<(ModuleExportTable, Option<usize>)> {
+    try_resolve_module_export_table_in_mode(
+        module_specifier,
+        None,
+        ctx,
+        parsed_files,
+        local_module_export_tables,
+        resolved_module_export_tables,
+        resolving,
+        file_name,
+    )
+}
+
+/// [`try_resolve_module_export_table`] for a re-export whose
+/// `resolution-mode` attribute picks the mode its specifier resolves in.
+pub(crate) fn try_resolve_module_export_table_in_mode(
+    module_specifier: &str,
+    resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
+    ctx: &mut CheckerContext,
+    parsed_files: &[ParsedProgramFile],
+    local_module_export_tables: &[Option<ModuleExportTable>],
+    resolved_module_export_tables: &mut [Option<ModuleExportTable>],
+    resolving: &mut [bool],
+    file_name: &str,
+) -> Option<(ModuleExportTable, Option<usize>)> {
     let resolution_start = Instant::now();
-    if let Some(resolved_file_name) = ctx.options.resolved_module_for(file_name, module_specifier) {
+    if let Some(resolved_file_name) =
+        resolved_module_in_mode(ctx, file_name, module_specifier, resolution_mode)
+    {
         let resolved_file_name = canonical_file_identity(resolved_file_name);
         if let Some(resolved_index) = ctx
             .module_file_index_by_identity
@@ -734,17 +762,21 @@ pub(crate) fn resolve_module_export_table(
                 specifiers,
                 module_specifier: Some(module_specifier),
                 module_specifier_span,
+                resolution_mode,
                 ..
             } => {
-                let Some((target_export_table, resolved_index)) = try_resolve_module_export_table(
-                    module_specifier,
-                    ctx,
-                    parsed_files,
-                    local_module_export_tables,
-                    resolved_module_export_tables,
-                    resolving,
-                    &parsed_file.file_name,
-                ) else {
+                let Some((target_export_table, resolved_index)) =
+                    try_resolve_module_export_table_in_mode(
+                        module_specifier,
+                        ParsedResolutionModeAttribute::resolution_override(*resolution_mode),
+                        ctx,
+                        parsed_files,
+                        local_module_export_tables,
+                        resolved_module_export_tables,
+                        resolving,
+                        &parsed_file.file_name,
+                    )
+                else {
                     if resolve_relative_module(
                         &parsed_file.file_name,
                         module_specifier,
@@ -1116,14 +1148,16 @@ pub(crate) fn resolve_module_export_table(
             module_specifier,
             module_specifier_span,
             is_type_only,
+            resolution_mode,
             ..
         } = export.as_ref()
         else {
             continue;
         };
 
-        let Some((target_export_table, _resolved_index)) = try_resolve_module_export_table(
+        let Some((target_export_table, _resolved_index)) = try_resolve_module_export_table_in_mode(
             module_specifier,
+            ParsedResolutionModeAttribute::resolution_override(*resolution_mode),
             ctx,
             parsed_files,
             local_module_export_tables,

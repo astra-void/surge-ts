@@ -34,6 +34,8 @@ pub struct ResolverOptions {
     /// Base directory `paths` targets resolve against: `baseUrl` when set,
     /// else the config directory.
     pub path_mapping_base: Option<std::path::PathBuf>,
+    /// tsgo's `GetEmitModuleKind`, which decides a file's resolution mode.
+    pub emit_module: surge_ts_config::ModuleKind,
 }
 
 impl Default for ResolverOptions {
@@ -45,6 +47,7 @@ impl Default for ResolverOptions {
             custom_conditions: Vec::new(),
             path_mappings: Vec::new(),
             path_mapping_base: None,
+            emit_module: surge_ts_config::ModuleKind::ES2022,
         }
     }
 }
@@ -53,20 +56,19 @@ impl ResolverOptions {
     /// The condition names that are "on" for declaration resolution, besides the
     /// always-matching `default`. Mirrors TypeScript's `getConditions`:
     ///
-    /// * the mode condition (`import` for ESM contexts / bundler, `require` for
-    ///   CJS contexts under node16/nodenext),
+    /// * the mode condition (`import` for an ESM-mode resolution, `require`
+    ///   otherwise; bundler reads an unset mode as ESM before this point),
     /// * `types` (declaration resolution always opts in),
     /// * `node` for node16/nodenext (never under bundler),
     /// * then `customConditions` in configured order.
     ///
     /// Priority between branches of a conditional object is decided by the
     /// *package author's key order* (Node semantics), not by this list — this is
-    /// only the membership set. `importer_is_esm` reflects the importing file's
-    /// module format; bundler ignores it and always behaves as ESM.
+    /// only the membership set.
     pub fn active_conditions(&self, importer_is_esm: bool) -> Vec<String> {
         let mut conditions = Vec::new();
         let is_bundler = self.module_resolution == ModuleResolutionKind::Bundler;
-        if is_bundler || importer_is_esm {
+        if importer_is_esm {
             conditions.push("import".to_string());
         } else {
             conditions.push("require".to_string());
@@ -385,11 +387,10 @@ mod tests {
     }
 
     #[test]
-    fn active_conditions_bundler_prefers_import_no_node() {
+    fn active_conditions_bundler_follows_the_mode_without_node() {
         let opts = ResolverOptions::default();
         assert_eq!(opts.active_conditions(true), vec!["import", "types"]);
-        // bundler ignores importer module format.
-        assert_eq!(opts.active_conditions(false), vec!["import", "types"]);
+        assert_eq!(opts.active_conditions(false), vec!["require", "types"]);
     }
 
     #[test]

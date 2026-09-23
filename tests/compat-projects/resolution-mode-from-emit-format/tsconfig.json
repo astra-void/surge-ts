@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "module": "commonjs",
+    "moduleResolution": "bundler"
+  },
+  "include": ["src/**/*"]
+}

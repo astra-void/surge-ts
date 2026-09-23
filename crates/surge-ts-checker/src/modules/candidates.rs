@@ -156,6 +156,22 @@ pub fn directory_index_candidates(base: &str) -> Vec<String> {
     ]
 }
 
+/// The importer-scoped resolution key of a specifier whose usage picked the
+/// mode it resolves in (`import x = require()`, a `resolution-mode`
+/// attribute): tsc keys resolutions by name and mode, and the loader records
+/// that resolution beside the one the importer's own mode gives the same
+/// text. The NUL keeps it apart from any written specifier.
+pub fn resolution_mode_override_key(
+    specifier: &str,
+    mode: surge_ts_syntax::ResolutionModeOverride,
+) -> String {
+    let mode = match mode {
+        surge_ts_syntax::ResolutionModeOverride::Import => "import",
+        surge_ts_syntax::ResolutionModeOverride::Require => "require",
+    };
+    format!("{specifier}\0{mode}")
+}
+
 fn substitution_candidates_js(stem: &str) -> Vec<String> {
     vec![
         format!("{stem}.ts"),

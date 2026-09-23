@@ -189,7 +189,9 @@ impl CheckerOptions {
 
     /// Resolve `specifier` from `importer_file`, preferring the importer-scoped
     /// map. Falls back to the project-wide map so paths/baseUrl mappings and
-    /// flat-map callers keep working.
+    /// flat-map callers keep working. An empty importer-scoped entry is a
+    /// resolution the loader ran and lost, which no other importer's answer
+    /// may stand in for.
     pub(crate) fn resolved_module_for(
         &self,
         importer_file: &str,
@@ -197,7 +199,7 @@ impl CheckerOptions {
     ) -> Option<&String> {
         if let Some(per_importer) = self.resolved_modules_by_importer.get(importer_file) {
             if let Some(resolved) = per_importer.get(specifier) {
-                return Some(resolved);
+                return (!resolved.is_empty()).then_some(resolved);
             }
         }
         self.resolved_modules.get(specifier)

@@ -156,6 +156,7 @@ pub(super) fn resolve_type_directive_in_node_modules(
     name: &str,
     lookup_dir: &Path,
     root_dir: &Path,
+    import_condition: bool,
     opts: &ResolverOptions,
     cache: &mut PackageDeclarationResolverCache,
 ) -> Option<PathBuf> {
@@ -171,9 +172,11 @@ pub(super) fn resolve_type_directive_in_node_modules(
         importer_dir: lookup_dir.to_path_buf(),
         importer_file: lookup_dir.to_path_buf(),
         is_imports: false,
+        usage: ImportUsage::Declaration,
+        import_condition,
     };
 
-    let resolution = resolve_package_entrypoint(&req, opts, true, cache, root_dir)?;
+    let resolution = resolve_package_entrypoint(&req, opts, import_condition, cache, root_dir)?;
     match resolution.kind {
         PackageEntrypointKind::Declaration => Some(prefer_declaration_sibling(resolution.path)),
         PackageEntrypointKind::RuntimeOnly => None,
@@ -652,34 +655,6 @@ pub(super) fn nearest_package_json(
     None
 }
 
-/// Whether the importing file is treated as ESM for condition selection. Bundler
-/// always behaves as ESM; node16/nodenext consult the file extension and the
-/// nearest `package.json` `"type"`.
-pub(super) fn importer_is_esm(
-    importer_file: &Path,
-    opts: &ResolverOptions,
-    cache: &mut PackageDeclarationResolverCache,
-) -> bool {
-    use surge_ts_config::ModuleResolutionKind;
-    if opts.module_resolution == ModuleResolutionKind::Bundler {
-        return true;
-    }
-
-    let lower = importer_file.to_string_lossy().to_ascii_lowercase();
-    if lower.ends_with(".mts") || lower.ends_with(".mjs") || lower.ends_with(".d.mts") {
-        return true;
-    }
-    if lower.ends_with(".cts") || lower.ends_with(".cjs") || lower.ends_with(".d.cts") {
-        return false;
-    }
-
-    let start = importer_file.parent().unwrap_or(importer_file);
-    match nearest_package_json(start, cache) {
-        Some((_, json)) => json.get("type").and_then(|t| t.as_str()) == Some("module"),
-        None => false,
-    }
-}
-
 pub(super) fn resolve_at_types_fallback_in_directory(
     req: &PackageDeclarationRequest,
     current_dir: &Path,
@@ -937,20 +912,30 @@ pub(super) fn runtime_javascript_candidates(path: PathBuf) -> Vec<PathBuf> {
 }
 
 pub(super) fn extract_packages_from_source(
-    specifiers: &[String],
+    usages: &[crate::specifier_scan::ModuleUsage],
     file_name: &str,
     importer_dir: &Path,
     opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
     packages_to_resolve: &mut VecDeque<PackageDeclarationRequest>,
-    queued_specifiers: &mut HashSet<(String, String)>,
+    queued_specifiers: &mut HashSet<(String, String, ImportUsage)>,
 ) {
     let importer_file = PathBuf::from(file_name);
-    for specifier in specifiers {
+    for module_usage in usages {
+        let usage = if let Some(mode) = module_usage.resolution_mode {
+            ImportUsage::ModeOverride(mode)
+        } else if module_usage.import_equals {
+            ImportUsage::ImportEquals
+        } else {
+            ImportUsage::Declaration
+        };
         queue_specifier(
-            specifier,
+            &module_usage.specifier,
+            usage,
             importer_dir,
             &importer_file,
             opts,
+            cache,
             packages_to_resolve,
             queued_specifiers,
         );
@@ -998,56 +983,56 @@ fn resolved_by_path_mapping(specifier: &str, opts: &ResolverOptions) -> bool {
 /// `node_modules` and `#imports` scopes stay isolated.
 pub(super) fn queue_specifier(
     specifier: &str,
+    usage: ImportUsage,
     importer_dir: &Path,
     importer_file: &Path,
     opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
     packages_to_resolve: &mut VecDeque<PackageDeclarationRequest>,
-    queued_specifiers: &mut HashSet<(String, String)>,
+    queued_specifiers: &mut HashSet<(String, String, ImportUsage)>,
 ) {
     let queue_key = (
         canonicalize_if_exists_string(importer_file),
         specifier.to_string(),
+        usage,
     );
     if queued_specifiers.contains(&queue_key) {
         return;
     }
 
-    if let Some(rest) = specifier.strip_prefix('#') {
+    let is_imports = if let Some(rest) = specifier.strip_prefix('#') {
         // `#` alone or `#/...` is not a valid imports key.
         if rest.is_empty() || !opts.resolve_imports {
             return;
         }
-        queued_specifiers.insert(queue_key);
-        packages_to_resolve.push_back(PackageDeclarationRequest {
-            specifier: specifier.to_string(),
-            package_name: specifier.to_string(),
-            subpath: None,
-            importer_dir: importer_dir.to_path_buf(),
-            importer_file: importer_file.to_path_buf(),
-            is_imports: true,
-        });
-        return;
-    }
+        true
+    } else {
+        if !is_external_specifier(specifier) || resolved_by_path_mapping(specifier, opts) {
+            return;
+        }
+        false
+    };
+    let (package_name, subpath) = if is_imports {
+        (specifier.to_string(), None)
+    } else {
+        let Some(parsed) = parse_package_specifier(specifier) else {
+            return;
+        };
+        parsed
+    };
 
-    if !is_external_specifier(specifier) {
-        return;
-    }
-
-    if resolved_by_path_mapping(specifier, opts) {
-        return;
-    }
-
-    if let Some((package_name, subpath)) = parse_package_specifier(specifier) {
-        queued_specifiers.insert(queue_key);
-        packages_to_resolve.push_back(PackageDeclarationRequest {
-            specifier: specifier.to_string(),
-            package_name,
-            subpath,
-            importer_dir: importer_dir.to_path_buf(),
-            importer_file: importer_file.to_path_buf(),
-            is_imports: false,
-        });
-    }
+    let mode = usage_resolution_mode(importer_file, usage, opts, cache);
+    queued_specifiers.insert(queue_key);
+    packages_to_resolve.push_back(PackageDeclarationRequest {
+        specifier: specifier.to_string(),
+        package_name,
+        subpath,
+        importer_dir: importer_dir.to_path_buf(),
+        importer_file: importer_file.to_path_buf(),
+        is_imports,
+        usage,
+        import_condition: resolves_with_import_condition(mode, opts),
+    });
 }
 
 #[cfg(test)]

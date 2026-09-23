@@ -33,7 +33,7 @@ thread_local! {
     // `canonicalize` (realpath syscalls), so caching removes both the recompute
     // and the syscalls on passes after the first. Resolved indices are
     // run-specific, so the cache is cleared at the start of each check.
-    static RELATIVE_MODULE_CACHE: RefCell<HashMap<(String, String), Option<ModuleResolution>>> =
+    static RELATIVE_MODULE_CACHE: RefCell<HashMap<(String, String, bool), Option<ModuleResolution>>> =
         RefCell::new(HashMap::new());
 }
 
@@ -47,16 +47,6 @@ pub(crate) fn set_node_esm_files(files: Option<Arc<std::collections::HashSet<Str
     if let Ok(mut policy) = NODE_ESM_FILES.write() {
         *policy = files;
     }
-}
-
-/// tsc's ESM-mode rule under node16/nodenext: a relative import whose last
-/// segment has no extension does not resolve (TS2834/TS2835 report it).
-pub(crate) fn is_unresolvable_extensionless_esm_import(importer_file_name: &str, specifier: &str) -> bool {
-    let last_segment = specifier.rsplit(['/', '\\']).next().unwrap_or(specifier);
-    if last_segment.contains('.') {
-        return false;
-    }
-    resolves_in_node_esm_mode(importer_file_name)
 }
 
 /// Whether node16/nodenext resolves this file's imports in ESM mode, where a
@@ -75,19 +65,100 @@ pub(crate) fn clear_relative_module_cache() {
     RELATIVE_MODULE_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
+/// The loader's resolution of `specifier` from `importer_file`: in the mode
+/// the usage picked (`import x = require()`, a `resolution-mode` attribute)
+/// when the loader recorded one, else in the importer's own mode.
+pub(crate) fn resolved_module_in_mode<'a>(
+    ctx: &'a crate::context::CheckerContext,
+    importer_file: &str,
+    specifier: &str,
+    resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
+) -> Option<&'a String> {
+    if let Some(mode) = resolution_mode
+        && let Some(resolved) = ctx
+            .options
+            .resolved_modules_by_importer
+            .get(importer_file)
+            .and_then(|per_importer| {
+                per_importer.get(&super::candidates::resolution_mode_override_key(specifier, mode))
+            })
+    {
+        return (!resolved.is_empty()).then_some(resolved);
+    }
+    ctx.options.resolved_module_for(importer_file, specifier)
+}
+
+/// The mode an import declaration's specifier resolves in when the usage,
+/// not the file, decides it: `import x = require()` is CommonJS, and an
+/// `import type`'s `resolution-mode` attribute names its own.
+pub(crate) fn import_resolution_mode(
+    import: &surge_ts_syntax::ParsedImportDeclaration,
+) -> Option<surge_ts_syntax::ResolutionModeOverride> {
+    if matches!(import.kind, surge_ts_syntax::ParsedImportKind::Equals { .. }) {
+        return Some(surge_ts_syntax::ResolutionModeOverride::Require);
+    }
+    surge_ts_syntax::ParsedResolutionModeAttribute::resolution_override(import.resolution_mode)
+}
+
+/// Whether a relative specifier resolves in node16/nodenext ESM mode, which
+/// appends no extension and looks in no directory: the mode a usage names
+/// (`import x = require()` is CommonJS, a `resolution-mode` attribute names
+/// its own), else the importer's.
+pub(crate) fn relative_resolution_is_esm(
+    importer_file_name: &str,
+    resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
+) -> bool {
+    match resolution_mode {
+        None => resolves_in_node_esm_mode(importer_file_name),
+        Some(surge_ts_syntax::ResolutionModeOverride::Require) => false,
+        Some(surge_ts_syntax::ResolutionModeOverride::Import) => NODE_ESM_FILES
+            .read()
+            .ok()
+            .is_some_and(|policy| policy.is_some()),
+    }
+}
+
+/// tsc's `isExtensionlessRelativePathImport`. Its `HasExtension` reads the
+/// base name with trailing separators dropped, so `./` and `.` have one.
+pub(crate) fn is_extensionless_relative_specifier(specifier: &str) -> bool {
+    let trimmed = specifier.trim_end_matches(['/', '\\']);
+    let base = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
+    !base.contains('.')
+}
+
 pub(crate) fn resolve_relative_module(
     importer_file_name: &str,
     specifier: &str,
     program_files: &[ParsedProgramFile],
     file_index_by_identity: &surge_ts_types::fx::FxHashMap<Arc<str>, usize>,
 ) -> Option<ModuleResolution> {
-    if !is_relative_specifier(specifier)
-        || is_unresolvable_extensionless_esm_import(importer_file_name, specifier)
-    {
+    resolve_relative_module_in_mode(
+        importer_file_name,
+        specifier,
+        None,
+        program_files,
+        file_index_by_identity,
+    )
+}
+
+/// [`resolve_relative_module`] in the mode a usage names (see
+/// [`relative_resolution_is_esm`]).
+pub(crate) fn resolve_relative_module_in_mode(
+    importer_file_name: &str,
+    specifier: &str,
+    resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
+    program_files: &[ParsedProgramFile],
+    file_index_by_identity: &surge_ts_types::fx::FxHashMap<Arc<str>, usize>,
+) -> Option<ModuleResolution> {
+    if !is_relative_specifier(specifier) {
+        return None;
+    }
+    let esm = relative_resolution_is_esm(importer_file_name, resolution_mode);
+    if esm && is_extensionless_relative_specifier(specifier) {
         return None;
     }
 
-    let cache_key = (importer_file_name.to_string(), specifier.to_string());
+    let cache_key = (importer_file_name.to_string(), specifier.to_string(), esm);
     if let Some(cached) =
         RELATIVE_MODULE_CACHE.with(|cache| cache.borrow().get(&cache_key).cloned())
     {

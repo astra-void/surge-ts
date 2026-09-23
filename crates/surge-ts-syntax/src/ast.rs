@@ -245,6 +245,16 @@ pub struct ReferenceTypeDirective {
     pub value: String,
     /// Byte span of the specifier inside its quotes, used for TS2688 locations.
     pub value_span: TextSpan,
+    /// A valid `resolution-mode` attribute.
+    pub resolution_mode: Option<ResolutionModeOverride>,
+}
+
+/// A `resolution-mode` value: the package face a reference resolves against
+/// in place of its file's own mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResolutionModeOverride {
+    Import,
+    Require,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1042,6 +1052,27 @@ pub struct ParsedImportDeclaration {
     pub module_specifier: String,
     pub module_specifier_span: Option<TextSpan>,
     pub span: Option<TextSpan>,
+    pub resolution_mode: Option<ParsedResolutionModeAttribute>,
+}
+
+/// A valid `resolution-mode` import attribute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParsedResolutionModeAttribute {
+    pub mode: ResolutionModeOverride,
+    /// The declaration is `import type`/`export type` as a whole, the only
+    /// form whose resolution the attribute selects (tsc's
+    /// `IsExclusivelyTypeOnlyImportOrExport`).
+    pub selects_resolution: bool,
+}
+
+impl ParsedResolutionModeAttribute {
+    /// The mode the declaration's specifier resolves in, when the attribute
+    /// decides it.
+    pub fn resolution_override(attribute: Option<Self>) -> Option<ResolutionModeOverride> {
+        attribute
+            .filter(|attribute| attribute.selects_resolution)
+            .map(|attribute| attribute.mode)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1112,6 +1143,7 @@ pub enum ParsedExportDeclaration {
         module_specifier: Option<String>,
         module_specifier_span: Option<TextSpan>,
         span: Option<TextSpan>,
+        resolution_mode: Option<ParsedResolutionModeAttribute>,
     },
     Default {
         declaration: ParsedDefaultExportDeclaration,
@@ -1125,6 +1157,7 @@ pub enum ParsedExportDeclaration {
         /// its values too would invent names the module does not have, masking
         /// the TS2304 a consumer should get.
         is_type_only: bool,
+        resolution_mode: Option<ParsedResolutionModeAttribute>,
     },
     Namespace {
         exported_name: String,

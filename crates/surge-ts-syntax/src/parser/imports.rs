@@ -1,10 +1,13 @@
 use oxc_ast::ast::{
-    ImportDeclaration, ImportDeclarationSpecifier, ImportOrExportKind, ImportSpecifier,
-    ModuleExportName, TSImportEqualsDeclaration, TSModuleReference,
+    ImportAttributeKey, ImportDeclaration, ImportDeclarationSpecifier, ImportOrExportKind,
+    ImportSpecifier, ModuleExportName, TSImportEqualsDeclaration, TSModuleReference, WithClause,
 };
 use oxc_span::GetSpan;
 
-use crate::{ParsedImportDeclaration, ParsedImportKind, ParsedImportSpecifier};
+use crate::{
+    ParsedImportDeclaration, ParsedImportKind, ParsedImportSpecifier,
+    ParsedResolutionModeAttribute, ResolutionModeOverride,
+};
 
 use super::spans::text_span_from_oxc_span;
 
@@ -12,6 +15,44 @@ use super::spans::text_span_from_oxc_span;
 /// (`import { type A, b }`) split off into an `import type` of their own: they
 /// bind no value, exactly as if written that way.
 pub(crate) fn parse_import_declarations(
+    declaration: &ImportDeclaration<'_>,
+) -> Option<Vec<ParsedImportDeclaration>> {
+    let resolution_mode = resolution_mode_attribute(
+        declaration.with_clause.as_deref(),
+        matches!(declaration.import_kind, ImportOrExportKind::Type),
+    );
+    let mut parsed = parse_import_declaration_parts(declaration)?;
+    for import in &mut parsed {
+        import.resolution_mode = resolution_mode;
+    }
+    Some(parsed)
+}
+
+/// tsc's `GetResolutionModeOverride`: the first attribute keyed
+/// `resolution-mode`, when its value is `import` or `require`.
+pub(crate) fn resolution_mode_attribute(
+    with_clause: Option<&WithClause<'_>>,
+    type_only: bool,
+) -> Option<ParsedResolutionModeAttribute> {
+    let attribute = with_clause?.with_entries.iter().find(|attribute| {
+        let key = match &attribute.key {
+            ImportAttributeKey::Identifier(identifier) => identifier.name.as_str(),
+            ImportAttributeKey::StringLiteral(literal) => literal.value.as_str(),
+        };
+        key == "resolution-mode"
+    })?;
+    let mode = match attribute.value.value.as_str() {
+        "import" => ResolutionModeOverride::Import,
+        "require" => ResolutionModeOverride::Require,
+        _ => return None,
+    };
+    Some(ParsedResolutionModeAttribute {
+        mode,
+        selects_resolution: type_only,
+    })
+}
+
+fn parse_import_declaration_parts(
     declaration: &ImportDeclaration<'_>,
 ) -> Option<Vec<ParsedImportDeclaration>> {
     // `import d, * as ns from "m"` binds the module's default and its
@@ -28,6 +69,7 @@ pub(crate) fn parse_import_declarations(
             module_specifier: declaration.source.value.to_string(),
             module_specifier_span: Some(text_span_from_oxc_span(declaration.source.span)),
             span: Some(text_span_from_oxc_span(declaration.span)),
+            resolution_mode: None,
         };
         let default_name = default.local.name.to_string();
         let default_span = Some(text_span_from_oxc_span(default.local.span));
@@ -77,6 +119,7 @@ pub(crate) fn parse_import_declarations(
             module_specifier: declaration.source.value.to_string(),
             module_specifier_span: Some(text_span_from_oxc_span(declaration.source.span)),
             span: Some(text_span_from_oxc_span(declaration.span)),
+            resolution_mode: None,
         });
     }
     Some(parsed)
@@ -95,6 +138,7 @@ fn parse_import_declaration(
             module_specifier,
             module_specifier_span,
             span,
+            resolution_mode: None,
         });
     };
 
@@ -115,6 +159,7 @@ fn parse_import_declaration(
                         module_specifier,
                         module_specifier_span,
                         span,
+                        resolution_mode: None,
                     });
                 };
 
@@ -127,6 +172,7 @@ fn parse_import_declaration(
                         module_specifier,
                         module_specifier_span,
                         span,
+                        resolution_mode: None,
                     });
                 }
 
@@ -145,6 +191,7 @@ fn parse_import_declaration(
                         module_specifier,
                         module_specifier_span,
                         span,
+                        resolution_mode: None,
                     });
                 }
 
@@ -173,6 +220,7 @@ fn parse_import_declaration(
             module_specifier,
             module_specifier_span,
             span,
+            resolution_mode: None,
         });
     }
 
@@ -196,6 +244,7 @@ fn parse_import_declaration(
                 module_specifier,
                 module_specifier_span,
                 span,
+                resolution_mode: None,
             });
         }
 
@@ -204,6 +253,7 @@ fn parse_import_declaration(
             module_specifier,
             module_specifier_span,
             span,
+            resolution_mode: None,
         });
     }
 
@@ -226,6 +276,7 @@ fn parse_import_declaration(
             module_specifier,
             module_specifier_span,
             span,
+            resolution_mode: None,
         });
     }
 
@@ -237,6 +288,7 @@ fn parse_import_declaration(
         module_specifier,
         module_specifier_span,
         span,
+        resolution_mode: None,
     })
 }
 
@@ -261,6 +313,7 @@ pub(crate) fn parse_import_equals_declaration(
             module_specifier: String::new(),
             module_specifier_span: span,
             span,
+            resolution_mode: None,
         });
     };
 
@@ -276,6 +329,7 @@ pub(crate) fn parse_import_equals_declaration(
         module_specifier,
         module_specifier_span,
         span,
+        resolution_mode: None,
     })
 }
 
