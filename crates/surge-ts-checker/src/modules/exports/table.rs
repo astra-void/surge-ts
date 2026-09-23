@@ -175,6 +175,7 @@ pub(crate) fn build_module_export_table(
     let mut symbols = SymbolTable::new();
     let mut default_symbol = None;
     let mut export_assignment_symbol = None;
+    let mut type_only_exports = surge_ts_types::fx::FxHashMap::default();
     let imported_names = crate::program::import_bound_names(&parsed_file.statements);
     for statement in &parsed_file.statements {
         collect_exports_from_statement(
@@ -191,6 +192,7 @@ pub(crate) fn build_module_export_table(
             &mut symbols,
             &mut default_symbol,
             &mut export_assignment_symbol,
+            &mut type_only_exports,
             ctx,
         );
     }
@@ -205,6 +207,7 @@ pub(crate) fn build_module_export_table(
         has_unresolved_star_export: false,
         has_incomplete_declaration_surface: module_has_incomplete_declaration_surface(parsed_file),
         shorthand: false,
+        type_only_exports: Arc::new(type_only_exports),
     }
 }
 
@@ -243,6 +246,7 @@ fn build_json_module_export_table(
         namespace_export_object_type: Some(value_type),
         has_incomplete_declaration_surface: false,
         shorthand: false,
+        type_only_exports: Default::default(),
     }
 }
 
@@ -810,8 +814,28 @@ pub(crate) fn resolve_module_export_table(
                         lookup_type_export(&target_export_table, &specifier.local_name);
                     let value_export =
                         lookup_value_export(&target_export_table, &specifier.local_name);
+                    let target_type_only_kind = target_export_table
+                        .type_only_exports
+                        .get(specifier.local_name.as_str())
+                        .copied();
 
                     if specifier_is_type_only {
+                        // `export type` re-exports every meaning of the name
+                        // (tsc's alias resolves them all); it only keeps an
+                        // importer from using the value.
+                        let republishes_value = value_export.is_some();
+                        if let Some(value_export) = value_export {
+                            republish_value_export(
+                                &mut resolved_export_table,
+                                &specifier.exported_name,
+                                value_export,
+                            );
+                            resolved_export_table.mark_type_only_export(
+                                &specifier.exported_name,
+                                TypeOnlyAliasKind::Export,
+                            );
+                        }
+
                         if let Some(type_export) = type_export {
                             export_local_type_declaration(
                                 type_export,
@@ -836,14 +860,9 @@ pub(crate) fn resolve_module_export_table(
                         }
 
                         // `export type { f } from './m'` over a value-only
-                        // export republishes the symbol: the name is legal in
-                        // type position through `typeof f`.
-                        if let Some(value_export) = value_export {
-                            republish_value_export(
-                                &mut resolved_export_table,
-                                &specifier.exported_name,
-                                value_export,
-                            );
+                        // export: the name is legal in type position through
+                        // `typeof f`.
+                        if republishes_value {
                             continue;
                         }
 
@@ -880,6 +899,10 @@ pub(crate) fn resolve_module_export_table(
                             &specifier.exported_name,
                             value_export,
                         );
+                        if let Some(kind) = target_type_only_kind {
+                            resolved_export_table
+                                .mark_type_only_export(&specifier.exported_name, kind);
+                        }
                         found = true;
                     }
 
@@ -1081,6 +1104,10 @@ pub(crate) fn resolve_module_export_table(
     }
 
     let re_export_start = Instant::now();
+    // `getExportsOfModuleWorker`: a name some `export *` reaches without a
+    // type-only star is not made type-only by another star, so the values an
+    // `export type *` carries are taken after every other star's.
+    let mut type_only_star_targets = Vec::new();
     for statement in &parsed_file.statements {
         let ParsedStatement::ExportDeclaration(export) = statement else {
             continue;
@@ -1132,14 +1159,30 @@ pub(crate) fn resolve_module_export_table(
             }
         }
 
-        if !*is_type_only {
-            for (name, symbol) in target_export_table.symbols.iter_shared() {
-                if resolved_export_table.symbols.get(name).is_none() {
-                    crate::program::record_module_export_symbol_handle_copy_count(1);
-                    resolved_export_table
-                        .symbols
-                        .insert_shared(name.clone(), symbol.clone());
+        if *is_type_only {
+            type_only_star_targets.push(target_export_table);
+            continue;
+        }
+        for (name, symbol) in target_export_table.symbols.iter_shared() {
+            if resolved_export_table.symbols.get(name).is_none() {
+                crate::program::record_module_export_symbol_handle_copy_count(1);
+                resolved_export_table
+                    .symbols
+                    .insert_shared(name.clone(), symbol.clone());
+                if let Some(kind) = target_export_table.type_only_exports.get(name.as_ref()) {
+                    resolved_export_table.mark_type_only_export(name, *kind);
                 }
+            }
+        }
+    }
+    for target_export_table in type_only_star_targets {
+        for (name, symbol) in target_export_table.symbols.iter_shared() {
+            if resolved_export_table.symbols.get(name).is_none() {
+                crate::program::record_module_export_symbol_handle_copy_count(1);
+                resolved_export_table
+                    .symbols
+                    .insert_shared(name.clone(), symbol.clone());
+                resolved_export_table.mark_type_only_export(name, TypeOnlyAliasKind::Export);
             }
         }
     }

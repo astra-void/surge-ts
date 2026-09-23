@@ -22,6 +22,7 @@ pub(crate) fn collect_exports_from_statement(
     symbols: &mut SymbolTable,
     default_symbol: &mut Option<Arc<SymbolInfo>>,
     export_assignment_symbol: &mut Option<Arc<SymbolInfo>>,
+    type_only_exports: &mut surge_ts_types::fx::FxHashMap<Arc<str>, TypeOnlyAliasKind>,
     ctx: &mut CheckerContext,
 ) {
     match statement {
@@ -65,6 +66,7 @@ pub(crate) fn collect_exports_from_statement(
                     symbols,
                     default_symbol,
                     export_assignment_symbol,
+                    type_only_exports,
                     ctx,
                 )
             }
@@ -184,32 +186,11 @@ pub(crate) fn collect_exports_from_statement(
                 }
 
                 for specifier in specifiers {
-                    let specifier_is_type_only = *is_type_only || specifier.is_type_only;
-
                     // tsc's `checkExportSpecifier` resolves every meaning of the
                     // name; `type` only keeps an importer from reading a value
                     // through it, so a type-only specifier naming a value is
-                    // resolved as any other.
-                    if specifier_is_type_only
-                        && local_type_declarations
-                            .get_handle(&specifier.local_name)
-                            .or_else(|| {
-                                resolution_scope
-                                    .and_then(|scope| scope.get_handle(&specifier.local_name))
-                            })
-                            .is_some()
-                    {
-                        export_local_type_name(
-                            &specifier.local_name,
-                            &specifier.exported_name,
-                            &specifier.name_span,
-                            local_type_declarations,
-                            resolution_scope,
-                            type_declarations,
-                            ctx,
-                        );
-                        continue;
-                    }
+                    // resolved as any other and its value marked.
+                    let specifier_is_type_only = *is_type_only || specifier.is_type_only;
 
                     let mut found = false;
 
@@ -246,6 +227,11 @@ pub(crate) fn collect_exports_from_statement(
                             }
                         } else if symbols.get(&specifier.exported_name).is_none() {
                             symbols.insert_shared(specifier.exported_name.clone(), symbol);
+                        }
+                        if specifier_is_type_only {
+                            type_only_exports
+                                .entry(Arc::from(specifier.exported_name.as_str()))
+                                .or_insert(TypeOnlyAliasKind::Export);
                         }
                         found = true;
                     }

@@ -104,6 +104,10 @@ pub(crate) fn compute_namespace_export_object_type(export_table: &ModuleExportTa
     let mut property_count = 0u64;
 
     for (name, symbol) in export_table.symbols.iter() {
+        // `export type` keeps a name off the module object.
+        if export_table.type_only_exports.contains_key(name.as_ref()) {
+            continue;
+        }
         property_count += 1;
         properties.insert(
             name.clone(),

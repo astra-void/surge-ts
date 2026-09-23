@@ -39,6 +39,16 @@ pub(crate) fn is_export_assignment_key(key: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
 }
 
+/// The kind of type-only declaration an alias chain passes through (tsc's
+/// `typeOnlyDeclaration`), which picks the diagnostic for a use of its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TypeOnlyAliasKind {
+    /// `import type` — TS1361.
+    Import,
+    /// `export type { … }` or `export type *` — TS1362.
+    Export,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ModuleResolution {
     pub(crate) resolved_file_index: usize,
@@ -63,6 +73,11 @@ pub(crate) struct ModuleExportTable {
     /// declaration made it: every binding imported from it is the module
     /// itself (tsc's `isShorthandAmbientModuleSymbol`).
     pub(crate) shorthand: bool,
+    /// Exports whose alias chain passes through a type-only declaration. Their
+    /// values stay in `symbols` — tsc's alias still resolves to them, so a use
+    /// of one is reported rather than unresolved — but the module namespace
+    /// object leaves them out.
+    pub(crate) type_only_exports: Arc<surge_ts_types::fx::FxHashMap<Arc<str>, TypeOnlyAliasKind>>,
 }
 
 impl Clone for ModuleExportTable {
@@ -84,6 +99,7 @@ impl Clone for ModuleExportTable {
             has_unresolved_star_export: self.has_unresolved_star_export,
             has_incomplete_declaration_surface: self.has_incomplete_declaration_surface,
             shorthand: self.shorthand,
+            type_only_exports: self.type_only_exports.clone(),
         }
     }
 }
@@ -91,6 +107,14 @@ impl Clone for ModuleExportTable {
 impl ModuleExportTable {
     pub(crate) fn clone_with_reason(&self, reason: TypeCopyReason) -> Self {
         with_type_copy_reason(reason, || self.clone())
+    }
+
+    /// Records that `name`'s alias chain passes through a type-only
+    /// declaration; the nearest one to the export decides the kind.
+    pub(crate) fn mark_type_only_export(&mut self, name: &str, kind: TypeOnlyAliasKind) {
+        Arc::make_mut(&mut self.type_only_exports)
+            .entry(Arc::from(name))
+            .or_insert(kind);
     }
 
     pub(crate) fn get_shared_value(&self, name: &str) -> Option<Arc<SymbolInfo>> {
@@ -122,6 +146,9 @@ pub(crate) struct ModuleImportBindings {
     /// `type_declarations`) keeps `import * as` of a large barrel O(1) per importer
     /// instead of O(exports).
     pub(crate) namespace_alias_layers: Vec<Arc<TypeDeclarationTable>>,
+    /// Local names whose import reaches a type-only export (`export type`
+    /// upstream of a plain `import { A }`), with that declaration's kind.
+    pub(crate) type_only_aliases: Vec<(Arc<str>, TypeOnlyAliasKind)>,
 }
 
 impl ModuleImportBindings {

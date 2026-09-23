@@ -1154,6 +1154,12 @@ pub(super) fn check_program_file(
                 .into_iter()
                 .filter(|name| !module_declared.contains(name)),
         );
+        ctx.set_file_type_only_alias_names(
+            imported_bindings
+                .into_iter()
+                .flat_map(|bindings| bindings.type_only_aliases.iter().cloned())
+                .filter(|(name, _)| !module_declared.contains(name.as_ref())),
+        );
         ctx.set_file_import_names(
             crate::program::ambient::import_bound_names(&parsed_file.statements)
                 .into_iter()

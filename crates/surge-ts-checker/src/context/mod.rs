@@ -432,6 +432,11 @@ pub(crate) struct CheckerContext {
     /// TS1361 — including the implicit factory reference every JSX tag makes
     /// under `jsx: react`.
     pub(crate) file_type_only_import_names: FxHashSet<Arc<str>>,
+    /// Local names the file under check imports through an export whose alias
+    /// chain passes through a type-only declaration (`export type { A }`
+    /// upstream of a plain `import { A }`), with that declaration's kind.
+    /// Owned like `file_type_only_import_names`.
+    pub(crate) file_type_only_alias_names: FxHashMap<Arc<str>, crate::modules::TypeOnlyAliasKind>,
     /// Every name the current file's imports bind, for TS2632. Owned by the
     /// file that set it, like `file_type_only_import_names`.
     pub(crate) file_import_names: FxHashSet<Arc<str>>,
@@ -781,6 +786,7 @@ impl CheckerContext {
             inherited_never_initialized: Vec::new(),
             never_initialized_constraint_exempt: HashSet::new(),
             file_type_only_import_names: FxHashSet::default(),
+            file_type_only_alias_names: FxHashMap::default(),
             file_import_names: FxHashSet::default(),
             file_namespace_import_names: FxHashSet::default(),
             checked_function_declaration_names: FxHashSet::default(),
@@ -952,6 +958,7 @@ impl CheckerContext {
             inherited_never_initialized: Vec::new(),
             never_initialized_constraint_exempt: HashSet::new(),
             file_type_only_import_names: FxHashSet::default(),
+            file_type_only_alias_names: FxHashMap::default(),
             file_import_names: FxHashSet::default(),
             file_namespace_import_names: FxHashSet::default(),
             checked_function_declaration_names: FxHashSet::default(),
@@ -1377,6 +1384,22 @@ impl CheckerContext {
             }
     }
 
+    /// tsc's `getTypeOnlyAliasDeclarationEx` for a value use of `name`: the
+    /// kind of type-only declaration its import passes through, the file's own
+    /// `import type` first.
+    pub(crate) fn type_only_value_reference(
+        &self,
+        name: &str,
+    ) -> Option<crate::modules::TypeOnlyAliasKind> {
+        if self.is_type_only_import_value_reference(name) {
+            return Some(crate::modules::TypeOnlyAliasKind::Import);
+        }
+        if self.file_type_only_import_names_owner.as_deref() != Some(self.file_name.as_str()) {
+            return None;
+        }
+        self.file_type_only_alias_names.get(name).copied()
+    }
+
     /// `Some(instantiated)` when `name` is a namespace visible here, looking
     /// through the namespaces whose members are being resolved.
     pub(crate) fn namespace_meaning(&self, name: &str) -> Option<bool> {
@@ -1450,6 +1473,14 @@ impl CheckerContext {
         }
     }
 
+    pub(crate) fn set_file_type_only_alias_names(
+        &mut self,
+        names: impl IntoIterator<Item = (Arc<str>, crate::modules::TypeOnlyAliasKind)>,
+    ) {
+        self.file_type_only_alias_names.clear();
+        self.file_type_only_alias_names.extend(names);
+    }
+
     pub(crate) fn set_file_umd_global_names(
         &mut self,
         is_module: bool,
@@ -1512,6 +1543,7 @@ impl CheckerContext {
         self.file_umd_global_names.clear();
         self.file_umd_global_names_owner = None;
         self.file_type_only_import_names.clear();
+        self.file_type_only_alias_names.clear();
         self.file_type_only_import_names_owner = None;
         self.checked_function_declaration_names.clear();
         self.grammar_answered_spans.clear();

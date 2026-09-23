@@ -95,6 +95,16 @@ pub const TS1361: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1362: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1362",
+    number: Some(1362),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' cannot be used as a value because it was exported using 'export type'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2302: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2302",
     number: Some(2302),
@@ -4105,6 +4115,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS5108,
     TS1360,
     TS1361,
+    TS1362,
     TS2302,
     TS2304,
     TS2300,
@@ -4611,6 +4622,15 @@ impl Diagnostic {
     pub fn ts1361(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS1361,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1362(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1362,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )

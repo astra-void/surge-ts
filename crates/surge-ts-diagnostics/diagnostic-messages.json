@@ -72,6 +72,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS1362",
+    "category": "Error",
+    "message": "'{0}' cannot be used as a value because it was exported using 'export type'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2302",
     "category": "Error",
     "message": "Static members cannot reference class type parameters.",

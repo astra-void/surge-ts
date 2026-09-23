@@ -252,6 +252,7 @@ pub(crate) fn resolve_module_imports(
     let mut type_declarations = TypeDeclarationTable::new();
     let mut symbols = SymbolTable::new();
     let mut namespace_alias_layers = Vec::new();
+    let mut type_only_aliases = Vec::new();
 
     for statement in &parsed_file.statements {
         let ParsedStatement::ImportDeclaration(import) = statement else {
@@ -267,6 +268,7 @@ pub(crate) fn resolve_module_imports(
             &mut type_declarations,
             &mut symbols,
             &mut namespace_alias_layers,
+            &mut type_only_aliases,
             ctx,
         );
     }
@@ -292,6 +294,7 @@ pub(crate) fn resolve_module_imports(
         type_declarations: Arc::new(type_declarations),
         symbols,
         namespace_alias_layers,
+        type_only_aliases,
     }
 }
 
@@ -512,6 +515,7 @@ pub(crate) fn resolve_import_declaration(
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
     namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
+    type_only_aliases: &mut Vec<(Arc<str>, TypeOnlyAliasKind)>,
     ctx: &mut CheckerContext,
 ) {
     report_ts_extension_import(import, program_files, ctx);
@@ -545,6 +549,7 @@ pub(crate) fn resolve_import_declaration(
             type_declarations,
             symbols,
             namespace_alias_layers,
+            type_only_aliases,
             ctx,
         ),
         ParsedImportKind::Default { .. } => resolve_default_import(
@@ -610,6 +615,7 @@ pub(crate) fn resolve_import_declaration(
             module_resolution_scopes,
             type_declarations,
             symbols,
+            type_only_aliases,
             ctx,
         ),
     };
@@ -711,6 +717,7 @@ fn resolve_default_and_named_import(
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
     namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
+    type_only_aliases: &mut Vec<(Arc<str>, TypeOnlyAliasKind)>,
     ctx: &mut CheckerContext,
 ) {
     let ParsedImportKind::DefaultAndNamed {
@@ -990,6 +997,12 @@ fn resolve_default_and_named_import(
             if symbols.get(&specifier.local_name).is_none() {
                 symbols.insert_shared(specifier.local_name.clone(), value_export);
             }
+            record_type_only_alias(
+                &export_table,
+                &specifier.imported_name,
+                &specifier.local_name,
+                type_only_aliases,
+            );
             found = true;
         }
 
@@ -1543,6 +1556,20 @@ fn resolve_namespace_import(
     }
 }
 
+/// tsc's `resolveIndirectionAlias`: an import of an export whose alias chain
+/// passes through a type-only declaration inherits it, so the import's own
+/// value uses are reported against that declaration.
+fn record_type_only_alias(
+    export_table: &ModuleExportTable,
+    imported_name: &str,
+    local_name: &str,
+    type_only_aliases: &mut Vec<(Arc<str>, TypeOnlyAliasKind)>,
+) {
+    if let Some(kind) = export_table.type_only_exports.get(imported_name) {
+        type_only_aliases.push((Arc::from(local_name), *kind));
+    }
+}
+
 fn resolve_named_import(
     import: &ParsedImportDeclaration,
     program_files: &[ParsedProgramFile],
@@ -1550,6 +1577,7 @@ fn resolve_named_import(
     module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
+    type_only_aliases: &mut Vec<(Arc<str>, TypeOnlyAliasKind)>,
     ctx: &mut CheckerContext,
 ) {
     let ParsedImportKind::Named {
@@ -1827,6 +1855,12 @@ fn resolve_named_import(
 
         if let Some(value_export) = value_export {
             symbols.insert_shared(specifier.local_name.clone(), value_export);
+            record_type_only_alias(
+                &export_table,
+                &specifier.imported_name,
+                &specifier.local_name,
+                type_only_aliases,
+            );
             found = true;
         }
 
