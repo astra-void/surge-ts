@@ -113,6 +113,7 @@ pub struct CheckerOptions {
     pub no_property_access_from_index_signature: bool,
     pub no_unchecked_indexed_access: bool,
     pub allow_importing_ts_extensions: bool,
+    pub allow_arbitrary_extensions: bool,
     pub no_unused_locals: bool,
     pub no_unused_parameters: bool,
     /// `allowUnreachableCode: true`; unset and `false` both leave it off.
@@ -213,6 +214,7 @@ impl Default for CheckerOptions {
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
             allow_importing_ts_extensions: false,
+            allow_arbitrary_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,

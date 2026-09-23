@@ -98,6 +98,11 @@ pub(crate) fn normalize_compiler_options(
                     parse_bool_option(key, value, config_dir, diagnostics)
                         .unwrap_or(normalized.rewrite_relative_import_extensions);
             }
+            "allowArbitraryExtensions" => {
+                normalized.allow_arbitrary_extensions =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.allow_arbitrary_extensions);
+            }
             "noUnusedLocals" => {
                 normalized.no_unused_locals =
                     parse_bool_option(key, value, config_dir, diagnostics)

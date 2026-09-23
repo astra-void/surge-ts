@@ -513,6 +513,7 @@ fn run_single_file_mode(
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
             allow_importing_ts_extensions: false,
+            allow_arbitrary_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,

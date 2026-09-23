@@ -2700,3 +2700,9 @@ status = "emitted"
 oracle = [
   "explicit-ts-extension-imports",
 ]
+
+[TS6263]
+status = "emitted"
+oracle = [
+  "arbitrary-extension-imports",
+]

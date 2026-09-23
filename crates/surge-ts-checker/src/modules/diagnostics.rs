@@ -46,6 +46,13 @@ fn unresolved_module_diagnostic(ctx: &CheckerContext, module_specifier: &str) ->
     }
 
     if is_relative_specifier(module_specifier)
+        && !arbitrary_extension_resolution_allowed(&ctx.file_name)
+        && let Some(declaration) = arbitrary_extension_declaration_on_disk(ctx, module_specifier)
+    {
+        return Diagnostic::ts6263(module_specifier, &declaration, ctx.file_name.clone());
+    }
+
+    if is_relative_specifier(module_specifier)
         && is_unresolvable_extensionless_esm_import(&ctx.file_name, module_specifier)
     {
         return match suggested_import_extension(ctx, module_specifier) {
@@ -58,6 +65,22 @@ fn unresolved_module_diagnostic(ctx: &CheckerContext, module_specifier: &str) ->
 
     cannot_resolve_module_name_error_for_specific_module(ctx, module_specifier)
         .unwrap_or_else(|| Diagnostic::ts2307(module_specifier, ctx.file_name.clone()))
+}
+
+/// The `.d.{extension}.ts` file tsc resolves `./x.{extension}` to, when it
+/// exists.
+fn arbitrary_extension_declaration_on_disk(ctx: &CheckerContext, module_specifier: &str) -> Option<String> {
+    let importer_dir = module_directory(&ctx.file_name);
+    let specifier = normalize_path_string(module_specifier);
+    let joined = if importer_dir.is_empty() {
+        specifier.clone()
+    } else {
+        normalize_path_string(&format!("{importer_dir}/{specifier}"))
+    };
+    let declaration = arbitrary_extension_declaration(&joined, &specifier)?;
+    Path::new(&declaration)
+        .is_file()
+        .then(|| canonicalize_if_exists_string(Path::new(&declaration)))
 }
 
 /// tsc's `getSuggestedImportExtension`: the output extension of the file the

@@ -928,6 +928,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS6263",
+    "category": "Error",
+    "message": "Module '{0}' was resolved to '{1}', but '--allowArbitraryExtensions' is not set.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS6192",
     "category": "Error",
     "message": "All imports in import declaration are unused.",

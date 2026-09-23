@@ -426,6 +426,7 @@ fn start_program_run(
             .node_module_resolution
             .then(|| Arc::new(options.esm_module_files.clone())),
     );
+    crate::modules::set_allow_arbitrary_extensions(options.allow_arbitrary_extensions);
 
     let parse_start = Instant::now();
     let parsed_files = parse_program_files(files, prescanned, jobs, timings.as_ref());
@@ -1280,6 +1281,7 @@ fn finish_program_run(
         crate::modules::clear_star_export_unresolved_cache();
         crate::modules::clear_namespace_alias_table_cache();
         crate::modules::set_node_esm_files(None);
+        crate::modules::set_allow_arbitrary_extensions(false);
         crate::metrics::release_free_memory();
     }
     emit_type_graph_census("after_cache_cleanup", Some(&ctx), &store, census_external);

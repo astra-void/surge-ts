@@ -47,6 +47,9 @@ pub struct NormalizedCompilerOptions {
     /// permits TypeScript-extension imports as `allowImportingTsExtensions`
     /// does (tsc's `GetAllowImportingTsExtensions`).
     pub rewrite_relative_import_extensions: bool,
+    /// `compilerOptions.allowArbitraryExtensions`. Defaults off; without it an
+    /// import of `./x.html` resolving to `./x.d.html.ts` is TS6263.
+    pub allow_arbitrary_extensions: bool,
     /// `compilerOptions.noUnusedLocals`. Independent of `strict`; defaults off.
     pub no_unused_locals: bool,
     /// `compilerOptions.noUnusedParameters`. Independent of `strict`; defaults off.
@@ -125,6 +128,7 @@ impl Default for NormalizedCompilerOptions {
             no_unchecked_indexed_access: false,
             allow_importing_ts_extensions: false,
             rewrite_relative_import_extensions: false,
+            allow_arbitrary_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,

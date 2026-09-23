@@ -929,6 +929,14 @@ message = "A declaration file cannot be imported without 'import type'. Did you 
 arity = 1
 
 [[diagnostic]]
+code = "TS6263"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Module '{0}' was resolved to '{1}', but '--allowArbitraryExtensions' is not set."
+arity = 2
+
+[[diagnostic]]
 code = "TS6192"
 category = "Error"
 source = "typescript"

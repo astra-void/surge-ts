@@ -101,6 +101,7 @@ fn header_options(source: &str) -> CheckerOptions {
             }
             "nouncheckedindexedaccess" => options.no_unchecked_indexed_access = flag,
             "allowimportingtsextensions" => options.allow_importing_ts_extensions = flag,
+            "allowarbitraryextensions" => options.allow_arbitrary_extensions = flag,
             "skiplibcheck" => options.skip_lib_check = flag,
             "resolvejsonmodule" => options.resolve_json_module = flag,
             "allowumdglobalaccess" => options.allow_umd_global_access = flag,

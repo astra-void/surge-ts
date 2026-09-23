@@ -780,6 +780,8 @@ export const fixturePresets: Record<string, string> = {
   'explicit-ts-extension-imports-disallowed': path.join(workspaceRoot, 'tests/compat-projects/explicit-ts-extension-imports-disallowed/tsconfig.json'),
   'explicit-ts-extension-imports-rewrite': path.join(workspaceRoot, 'tests/compat-projects/explicit-ts-extension-imports-rewrite/tsconfig.json'),
   'arbitrary-extension-declaration-file': path.join(workspaceRoot, 'tests/compat-projects/arbitrary-extension-declaration-file/tsconfig.json'),
+  'arbitrary-extension-imports': path.join(workspaceRoot, 'tests/compat-projects/arbitrary-extension-imports/tsconfig.json'),
+  'arbitrary-extension-imports-allowed': path.join(workspaceRoot, 'tests/compat-projects/arbitrary-extension-imports-allowed/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
