@@ -110,10 +110,21 @@ pub(crate) fn evaluate_logical_expression(
             crate::infer::truthy_part(left_ty),
             right_ty.clone(),
         ]),
-        surge_ts_syntax::ParsedLogicalOperator::And => surge_ts_types::union_type(vec![
-            crate::infer::falsy_part(left_ty),
-            right_ty.clone(),
-        ]),
+        // tsc's `checkBinaryLikeExpression`: the falsy part comes from the
+        // left under `strictNullChecks` and from the right's base type
+        // without it, and a left that is never truthy is the whole result.
+        surge_ts_syntax::ParsedLogicalOperator::And => {
+            if matches!(crate::infer::truthy_part(left_ty), Type::Never) {
+                left_ty.clone()
+            } else {
+                let falsy_source = if surge_ts_types::strict_null_checks() {
+                    left_ty.clone()
+                } else {
+                    crate::checks::expr::widen_type(right_ty)
+                };
+                surge_ts_types::union_type(vec![crate::infer::falsy_part(&falsy_source), right_ty.clone()])
+            }
+        }
     };
     InferredExpression::Known(result)
 }
