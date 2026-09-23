@@ -1411,10 +1411,20 @@ pub(crate) fn collect_namespace_member_value_symbols(
 /// `export = <namespace>` value so `import * as Ns` exposes `Ns.member`.
 /// Merges a later block of a namespace into the value object an earlier block
 /// produced. Nested namespaces merge member by member at every depth, so
-/// `namespace M { namespace N { … } }` written twice keeps both `N` bodies.
+/// `namespace M { namespace N { … } }` written twice keeps both `N` bodies. A
+/// namespace following the class or function it merges with adds its members
+/// to that value (tsc's declaration merging keeps the constructor and call
+/// signatures): a permissive class is `any`, which already has every member.
 fn merge_namespace_value_objects(previous: &Type, current: &Type) -> Type {
     let (Type::Object(previous), Type::Object(current)) = (previous, current) else {
-        return current.clone();
+        return match (previous, current) {
+            (Type::Any, _) => Type::Any,
+            (Type::Function(function), Type::Object(current)) => Type::Object(
+                crate::metrics::alloc_object_type(current.properties.as_ref().clone(), None)
+                    .with_call_signature(function.clone()),
+            ),
+            _ => current.clone(),
+        };
     };
     let mut properties = previous.properties.as_ref().clone();
     for (name, property) in current.properties.iter() {
@@ -1510,13 +1520,19 @@ fn resolve_namespace_value_annotations(
                 let inner_prefix = format!("{prefix}.{member_name}");
                 // Seeded with whatever a sibling block of the same namespace
                 // already contributed, so the merge `fill_namespace_value_properties`
-                // performed is not thrown away when the annotations resolve.
-                let mut inner_properties = match properties
+                // performed is not thrown away when the annotations resolve —
+                // the call signature of a function it merged into included.
+                let (mut inner_properties, call_signature) = match properties
                     .get(member_name)
                     .map(|property| &property.ty)
                 {
-                    Some(Type::Object(previous)) => previous.properties.as_ref().clone(),
-                    _ => surge_ts_types::PropertyMap::default(),
+                    // The class it merged into, whose `any` value stands.
+                    Some(Type::Any) => continue,
+                    Some(Type::Object(previous)) => (
+                        previous.properties.as_ref().clone(),
+                        previous.call_signature.clone(),
+                    ),
+                    _ => (surge_ts_types::PropertyMap::default(), None),
                 };
                 fill_namespace_value_properties(inner, &mut inner_properties);
                 resolve_namespace_value_annotations(
@@ -1525,11 +1541,11 @@ fn resolve_namespace_value_annotations(
                     &mut inner_properties,
                     ctx,
                 );
+                let mut object = crate::metrics::alloc_object_type(inner_properties, None);
+                object.call_signature = call_signature;
                 properties.insert(
                     member_name.into(),
-                    surge_ts_types::ObjectProperty::required(Type::Object(
-                        crate::metrics::alloc_object_type(inner_properties, None),
-                    )),
+                    surge_ts_types::ObjectProperty::required(Type::Object(object)),
                 );
             }
             _ => {}
