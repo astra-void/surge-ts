@@ -951,6 +951,7 @@ fn check_namespace_body(
             }
         }
     }
+    bind_namespace_require_aliases(&namespace.statements, &mut body_values, ctx);
     let saved_fallback = ctx.module_value_fallback.take();
     let body_values = match saved_fallback.clone() {
         Some(outer) => body_values.with_parent_fallback(outer),
@@ -973,6 +974,96 @@ fn check_namespace_body(
     ctx.set_symbols(saved_symbols);
     ctx.module_value_fallback = saved_fallback;
     ctx.namespace_member_prefix_stack.pop();
+}
+
+/// tsc never collects a namespace's `import x = require("m")` (it is TS1147),
+/// so resolving the alias finds only an ambient `declare module "m"`
+/// (`tryFindAmbientModule`) and otherwise reports the module unresolved at the
+/// specifier — once something names the alias, which is when tsc resolves it.
+/// The alias is declared either way, error-typed when unresolved.
+fn bind_namespace_require_aliases(
+    statements: &[ParsedStatement],
+    body_values: &mut crate::symbols::SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    for statement in statements {
+        let import = match statement {
+            ParsedStatement::ImportDeclaration(import) => import,
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => match declaration.as_ref() {
+                    ParsedStatement::ImportDeclaration(import) => import,
+                    _ => continue,
+                },
+                _ => continue,
+            },
+            _ => continue,
+        };
+        let surge_ts_syntax::ParsedImportKind::Equals { local_name, .. } = &import.kind else {
+            continue;
+        };
+        if body_values.get_own(local_name).is_some() {
+            continue;
+        }
+        let symbol = crate::modules::ambient_module_export_table(ctx, &import.module_specifier).map(
+            |table| match table.export_assignment_symbol.clone() {
+                Some(symbol) => (*symbol).clone(),
+                None => crate::symbols::SymbolInfo {
+                    ty: crate::modules::namespace_export_object_type(table),
+                    kind: crate::symbols::SymbolKind::Var,
+                    function_signature: None,
+                },
+            },
+        );
+        match symbol {
+            Some(symbol) => {
+                let _ = body_values.insert(local_name.clone(), symbol);
+            }
+            None => {
+                if ctx
+                    .namespace_require_reads
+                    .as_ref()
+                    .is_some_and(|reads| reads.contains(local_name.as_str()))
+                {
+                    crate::modules::emit_unresolvable_module_reference(
+                        ctx,
+                        &import.module_specifier,
+                        import.module_specifier_span.or(import.span),
+                    );
+                }
+                crate::modules::insert_error_typed_value_import(local_name, body_values);
+            }
+        }
+    }
+}
+
+/// The file's referenced names, when some namespace in it holds an
+/// `import x = require()` (see [`bind_namespace_require_aliases`]).
+pub(crate) fn namespace_require_reads(
+    statements: &[ParsedStatement],
+    module_reads: &[String],
+) -> Option<std::sync::Arc<surge_ts_types::fx::FxHashSet<String>>> {
+    fn has_namespace_require(statements: &[ParsedStatement], in_namespace: bool) -> bool {
+        statements.iter().any(|statement| {
+            let statement = match statement {
+                ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                    ParsedExportDeclaration::Statement { declaration, .. } => declaration.as_ref(),
+                    _ => return false,
+                },
+                other => other,
+            };
+            match statement {
+                ParsedStatement::NamespaceDeclaration(namespace) => {
+                    has_namespace_require(&namespace.statements, true)
+                }
+                ParsedStatement::ImportDeclaration(import) => {
+                    in_namespace && matches!(import.kind, surge_ts_syntax::ParsedImportKind::Equals { .. })
+                }
+                _ => false,
+            }
+        })
+    }
+    has_namespace_require(statements, false)
+        .then(|| std::sync::Arc::new(module_reads.iter().cloned().collect()))
 }
 
 /// A `declare namespace` makes every declaration in it ambient, nested

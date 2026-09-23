@@ -789,6 +789,7 @@ export const fixturePresets: Record<string, string> = {
   'missing-return-bare-return': path.join(workspaceRoot, 'tests/compat-projects/missing-return-bare-return/tsconfig.json'),
   'ambient-initializer-constants': path.join(workspaceRoot, 'tests/compat-projects/ambient-initializer-constants/tsconfig.json'),
   'jsx-this-tag-value': path.join(workspaceRoot, 'tests/compat-projects/jsx-this-tag-value/tsconfig.json'),
+  'namespace-require-alias': path.join(workspaceRoot, 'tests/compat-projects/namespace-require-alias/tsconfig.json'),
   'readonly-array-assignment-code': path.join(workspaceRoot, 'tests/compat-projects/readonly-array-assignment-code/tsconfig.json'),
   'union-accessor-element-write': path.join(workspaceRoot, 'tests/compat-projects/union-accessor-element-write/tsconfig.json'),
 };

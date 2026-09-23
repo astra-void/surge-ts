@@ -160,6 +160,20 @@ fn push_untyped_javascript_module_diagnostic(
     true
 }
 
+/// The unresolved-module diagnostic for a specifier the program never
+/// resolved, with no untyped-JavaScript reading of it.
+pub(crate) fn emit_unresolvable_module_reference(
+    ctx: &mut CheckerContext,
+    module_specifier: &str,
+    span: Option<TextSpan>,
+) {
+    let mut diagnostic = unresolved_module_diagnostic(ctx, module_specifier);
+    if let Some(span) = span {
+        diagnostic = diagnostic.with_span(convert_span(span));
+    }
+    ctx.push(diagnostic);
+}
+
 pub(crate) fn emit_unresolved_export_module_diagnostic(
     ctx: &mut CheckerContext,
     module_specifier: &str,

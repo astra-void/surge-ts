@@ -1265,12 +1265,15 @@ pub(super) fn check_program_file(
             &parsed_file.definite_writes,
             ctx,
         );
+        ctx.namespace_require_reads =
+            super::namespace_require_reads(&parsed_file.statements, &parsed_file.module_reads);
         check_program_file_statements(
             &parsed_file.statements,
             file_index,
             &final_function_signatures,
             ctx,
         );
+        ctx.namespace_require_reads = None;
         ctx.module_value_fallback = None;
 
         if ctx.options.no_unused_locals && ctx.current_file_kind == FileKind::RootSource {
@@ -1376,12 +1379,15 @@ pub(super) fn check_program_file(
             &parsed_file.definite_writes,
             ctx,
         );
+        ctx.namespace_require_reads =
+            super::namespace_require_reads(&parsed_file.statements, &parsed_file.module_reads);
         check_program_file_statements(
             &parsed_file.statements,
             file_index,
             &shared_state.function_signatures,
             ctx,
         );
+        ctx.namespace_require_reads = None;
         ctx.module_value_fallback = None;
         record_program_timing(timings, |timings| {
             timings.per_file_statement_checking += statement_check_start.elapsed()

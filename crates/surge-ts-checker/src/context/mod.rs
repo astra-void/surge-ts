@@ -605,6 +605,10 @@ pub(crate) struct CheckerContext {
     /// expectation (the right operand of `&&`, `||`, `??`), so a return that
     /// does not fit is no error of the arrow's own. Taken by that arrow's check.
     pub(crate) next_arrow_context_only: bool,
+    /// The names the file being checked references anywhere, installed only
+    /// while a file with a namespace-local `import x = require()` is checked:
+    /// tsc resolves (and reports) such an alias only once something names it.
+    pub(crate) namespace_require_reads: Option<Arc<FxHashSet<String>>>,
     /// Set by a return-value check whose value is a conditional, consumed by
     /// that conditional: tsc checks each branch of a returned conditional
     /// against the return type on its own (`checkReturnExpression`).
@@ -815,6 +819,7 @@ impl CheckerContext {
             in_async_body: false,
             next_arrow_is_argument: false,
             next_arrow_context_only: false,
+            namespace_require_reads: None,
             split_returned_conditional: false,
             allow_missing_tuple_element: false,
             non_exhaustive_switches: Vec::new(),
@@ -986,6 +991,7 @@ impl CheckerContext {
             in_async_body: false,
             next_arrow_is_argument: false,
             next_arrow_context_only: false,
+            namespace_require_reads: None,
             split_returned_conditional: false,
             allow_missing_tuple_element: false,
             non_exhaustive_switches: Vec::new(),
@@ -1540,6 +1546,7 @@ impl CheckerContext {
         self.let_assignments = Default::default();
         self.module_declared_only_depth = 0;
         self.module_export_depth = 0;
+        self.namespace_require_reads = None;
         debug_assert!(
             self.diagnostics.is_empty(),
             "begin_file_check: previous file's diagnostics were not taken"
