@@ -363,9 +363,15 @@ impl Type {
             // (`includes`, `map`, …) over the union of its element types — not just
             // `length`. `["get","post"] as const` must answer `.includes`.
             Type::Tuple(elements) => tuple_property_access_type(name, elements),
+            // `createTupleTargetType` stops naming element properties at the
+            // first variable element, and a rest element makes `length` a
+            // plain `number`.
             Type::OpenTuple(tuple) => {
                 if name == "length" {
                     return Some(Type::Number);
+                }
+                if let Some(element) = tuple_element_property(name, &tuple.leading) {
+                    return Some(element.clone());
                 }
                 array_property_access_type(name, &tuple.element_union())
             }
@@ -721,17 +727,65 @@ fn symbol_property_access_type(name: &str) -> Option<Type> {
 
 fn tuple_property_access_type(name: &str, elements: &[Type]) -> Option<Type> {
     if name == "length" {
-        return Some(Type::Number);
+        return Some(tuple_length_type(elements));
     }
-    let element = if elements.is_empty() {
+    if let Some(element) = tuple_element_property(name, elements) {
+        return Some(element.clone());
+    }
+    array_property_access_type(name, &tuple_element_union(elements))
+}
+
+/// The union of a fixed tuple's element types, `never` for `[]`: its number
+/// index type and the `T` of the `Array<T>` members it carries.
+pub fn tuple_element_union(elements: &[Type]) -> Type {
+    if elements.is_empty() {
         Type::Never
     } else {
         // Flatten and dedup (a tuple element may itself be a union, and
         // repeated literals are common in `as const` tables); a raw nested
         // union fails member-wise assignability against its flat equivalent.
         crate::union_type(elements.to_vec())
-    };
-    array_property_access_type(name, &element)
+    }
+}
+
+/// The element property `createTupleTargetType` names by position (`"0"`,
+/// `"1"`, …); a non-canonical spelling such as `"01"` names nothing.
+fn tuple_element_property<'a>(name: &str, elements: &'a [Type]) -> Option<&'a Type> {
+    let index = name.parse::<usize>().ok()?;
+    if index.to_string() != name {
+        return None;
+    }
+    elements.get(index)
+}
+
+/// tsc's `minLength` of a fixed tuple. surge lowers an optional element
+/// (`[A, B?]`) to a slot whose type carries `undefined`, and optional elements
+/// can only trail the required ones, so the elements that may be absent are
+/// the trailing run of such slots.
+pub fn tuple_min_length(elements: &[Type]) -> usize {
+    let optional = elements
+        .iter()
+        .rev()
+        .take_while(|element| match element {
+            Type::Undefined => true,
+            Type::Union(union) => union.types().contains(&Type::Undefined),
+            _ => false,
+        })
+        .count();
+    elements.len() - optional
+}
+
+/// The `length` member `createTupleTargetType` gives a fixed tuple: the union
+/// of the number literals from its `minLength` to its arity.
+pub fn tuple_length_type(elements: &[Type]) -> Type {
+    let lengths = (tuple_min_length(elements)..=elements.len())
+        .map(|length| {
+            Type::NumberLiteral(NumberLiteralType {
+                value: length.to_string(),
+            })
+        })
+        .collect();
+    crate::union_type(lengths)
 }
 
 /// The members every function value carries via `Function`/`CallableFunction`
@@ -1124,12 +1178,52 @@ mod tests {
         );
     }
 
+    fn number_literal(value: usize) -> Type {
+        Type::NumberLiteral(NumberLiteralType {
+            value: value.to_string(),
+        })
+    }
+
     #[test]
-    fn tuple_length_property_is_number() {
+    fn tuple_length_property_is_its_arity() {
         assert_eq!(
             Type::Tuple(vec![Type::String, Type::Number]).get_property_access_type("length"),
-            Some(Type::Number)
+            Some(number_literal(2))
         );
+        assert_eq!(
+            Type::Tuple(vec![]).get_property_access_type("length"),
+            Some(number_literal(0))
+        );
+    }
+
+    #[test]
+    fn tuple_length_counts_trailing_optional_elements_as_absent() {
+        let optional = crate::union_type(vec![Type::Number, Type::Undefined]);
+        assert_eq!(
+            Type::Tuple(vec![Type::String, optional]).get_property_access_type("length"),
+            Some(crate::union_type(vec![number_literal(1), number_literal(2)]))
+        );
+    }
+
+    #[test]
+    fn tuple_elements_are_properties_by_position() {
+        let tuple = Type::Tuple(vec![Type::String, Type::Number]);
+        assert_eq!(tuple.get_property_access_type("0"), Some(Type::String));
+        assert_eq!(tuple.get_property_access_type("1"), Some(Type::Number));
+        assert_eq!(tuple.get_property_access_type("2"), None);
+        assert_eq!(tuple.get_property_access_type("01"), None);
+    }
+
+    #[test]
+    fn open_tuple_names_only_its_leading_elements() {
+        let tuple = Type::OpenTuple(OpenTupleType {
+            leading: vec![Type::String],
+            rest: Box::new(Type::Number),
+            trailing: vec![Type::Boolean],
+        });
+        assert_eq!(tuple.get_property_access_type("0"), Some(Type::String));
+        assert_eq!(tuple.get_property_access_type("1"), None);
+        assert_eq!(tuple.get_property_access_type("length"), Some(Type::Number));
     }
 
     #[test]
@@ -1147,7 +1241,6 @@ mod tests {
         // A tuple is an array, so array methods resolve over the element union.
         assert!(tuple.get_property_access_type("includes").is_some());
         assert!(tuple.get_property_access_type("map").is_some());
-        assert_eq!(tuple.get_property_access_type("length"), Some(Type::Number));
     }
 
     #[test]
