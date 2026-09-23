@@ -1021,6 +1021,7 @@ export const fixturePresets: Record<string, string> = {
   'use-strict-parameter-list-es2015': path.join(workspaceRoot, 'tests/compat-projects/use-strict-parameter-list-es2015/tsconfig.json'),
   'object-literal-predicate-members': path.join(workspaceRoot, 'tests/compat-projects/object-literal-predicate-members/tsconfig.json'),
   'property-reference-discriminant-narrowing': path.join(workspaceRoot, 'tests/compat-projects/property-reference-discriminant-narrowing/tsconfig.json'),
+  'property-reference-nullish-union-base': path.join(workspaceRoot, 'tests/compat-projects/property-reference-nullish-union-base/tsconfig.json'),
   'class-property-arrow-signature': path.join(workspaceRoot, 'tests/compat-projects/class-property-arrow-signature/tsconfig.json'),
 };
 
