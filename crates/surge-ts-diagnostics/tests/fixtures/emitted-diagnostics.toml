@@ -2589,36 +2589,66 @@ oracle = [
 status = "emitted"
 oracle = [
   "invalid-write-target-basic",
+  "invalid-write-target-recovery-basic",
 ]
 
 [TS2357]
 status = "emitted"
 oracle = [
   "invalid-write-target-basic",
+  "invalid-write-target-recovery-basic",
 ]
 
 [TS2779]
 status = "emitted"
 oracle = [
   "invalid-write-target-basic",
+  "invalid-write-target-recovery-basic",
 ]
 
 [TS2777]
 status = "emitted"
 oracle = [
   "invalid-write-target-basic",
+  "invalid-write-target-recovery-basic",
 ]
 
 [TS1014]
 status = "emitted"
 oracle = [
   "invalid-write-target-basic",
+  "invalid-write-target-recovery-basic",
 ]
 
 [TS2462]
 status = "emitted"
 oracle = [
   "invalid-write-target-basic",
+  "invalid-write-target-recovery-basic",
+]
+
+[TS1011]
+status = "emitted"
+oracle = [
+  "element-access-argument-basic",
+]
+
+[TS1162]
+status = "emitted"
+oracle = [
+  "object-member-optional-basic",
+]
+
+[TS1191]
+status = "emitted"
+oracle = [
+  "import-declaration-modifiers-basic",
+]
+
+[TS1221]
+status = "emitted"
+oracle = [
+  "ambient-generator-basic",
 ]
 
 [TS1166]
@@ -3285,14 +3315,6 @@ status = "emitted"
 oracle = [
   "setter-implicit-any-basic",
 ]
-
-[TS1162]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
-
-[TS1191]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
 
 [TS18013]
 status = "catalog-only"

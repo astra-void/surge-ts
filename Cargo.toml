@@ -10,6 +10,7 @@ members = [
   "crates/surge-ts-config",
 ]
 resolver = "2"
+exclude = ["crates/surge-ts-parser"]
 
 [workspace.package]
 version = "0.1.0"
@@ -23,3 +24,7 @@ authors = ["astra-void"]
 [profile.release]
 lto = "fat"
 codegen-units = 1
+
+# Vendored oxc_parser 0.128.0 so parser-fatal errors can be turned into recoverable ones. See crates/surge-ts-parser/VENDORED.md.
+[patch.crates-io]
+oxc_parser = { path = "crates/surge-ts-parser" }

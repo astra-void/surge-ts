@@ -3236,7 +3236,7 @@ arity = 1
 code = "TS1191"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "An import declaration cannot have modifiers."
 arity = 0
 
@@ -3380,7 +3380,7 @@ arity = 0
 code = "TS1162"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "An object member cannot be declared optional."
 arity = 0
 
@@ -4086,5 +4086,21 @@ category = "Error"
 source = "typescript"
 support = "emitted"
 message = "The left-hand side of a 'for...in' statement must be of type 'string' or 'any'."
+arity = 0
+
+[[diagnostic]]
+code = "TS1011"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An element access expression should take an argument."
+arity = 0
+
+[[diagnostic]]
+code = "TS1221"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Generators are not allowed in an ambient context."
 arity = 0
 

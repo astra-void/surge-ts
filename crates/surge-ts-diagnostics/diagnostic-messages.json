@@ -3237,7 +3237,7 @@
     "message": "An import declaration cannot have modifiers.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1319",
@@ -3381,7 +3381,7 @@
     "message": "An object member cannot be declared optional.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2754",
@@ -4083,6 +4083,22 @@
     "code": "TS2405",
     "category": "Error",
     "message": "The left-hand side of a 'for...in' statement must be of type 'string' or 'any'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1011",
+    "category": "Error",
+    "message": "An element access expression should take an argument.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1221",
+    "category": "Error",
+    "message": "Generators are not allowed in an ambient context.",
     "source": "typescript",
     "arity": 0,
     "support": "emitted"

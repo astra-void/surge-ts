@@ -493,8 +493,6 @@ dependencies = [
 [[package]]
 name = "oxc_parser"
 version = "0.128.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ad27270e0ef6b957eeda354a9a4c3ba2b42a055d4d3f2311bc72735cefaac5f"
 dependencies = [
  "bitflags",
  "cow-utils",

@@ -21,6 +21,7 @@ mod grammar;
 mod grammar_context;
 mod grammar_modifiers;
 mod grammar_merges;
+mod grammar_recovered;
 mod import_calls;
 mod imports;
 mod interfaces;
