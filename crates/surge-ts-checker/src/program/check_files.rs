@@ -875,9 +875,38 @@ pub(crate) fn unclaimed_parser_errors<'a>(
         })
         .map(|finding| finding.span)
         .collect();
+    // tsc names the misplaced modifier's own error (TS1242 `abstract`,
+    // TS1275 `accessor`, TS1433 on a `this` parameter) where oxc reports the
+    // generic TS1090, and TS18041 for a `return` in a static block where oxc
+    // reports TS1108.
+    let spans_of = |codes: &[u32]| -> Vec<surge_ts_syntax::TextSpan> {
+        findings
+            .iter()
+            .filter(|finding| {
+                matches!(finding.kind, surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(code) if codes.contains(&code))
+            })
+            .map(|finding| finding.span)
+            .collect()
+    };
+    let parameter_modifiers = spans_of(&[1242, 1275, 1433]);
+    let static_block_returns = spans_of(&[18041]);
+    let overlaps = |spans: &[surge_ts_syntax::TextSpan], span: surge_ts_syntax::TextSpan| {
+        spans.iter().any(|finding| {
+            (finding.start <= span.start && span.start < finding.end.max(finding.start + 1))
+                || (span.start <= finding.start && finding.start < span.end.max(span.start + 1))
+        })
+    };
     errors.iter().filter(move |error| {
         if error.code.is_some_and(|code| claimed.contains(&code)) {
             return false;
+        }
+        if let Some(span) = error.span {
+            if error.code == Some(1090) && overlaps(&parameter_modifiers, span) {
+                return false;
+            }
+            if error.code == Some(1108) && overlaps(&static_block_returns, span) {
+                return false;
+            }
         }
         !(error.code == Some(1030)
             && error.span.is_some_and(|span| {

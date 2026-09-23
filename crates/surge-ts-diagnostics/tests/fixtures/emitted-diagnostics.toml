@@ -1271,6 +1271,7 @@ oracle = [
 [TS1049]
 status = "emitted"
 oracle = [
+  "accessor-parameter-grammar-basic",
   "grammar-member-modifier-hardening",
 ]
 
@@ -1760,8 +1761,11 @@ oracle = [
 ]
 
 [TS1051]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "accessor-parameter-grammar-basic",
+]
+
 [TS1098]
 status = "emitted"
 oracle = [
@@ -1873,8 +1877,11 @@ reason = "oxc classifies this failure and surge now carries its code, but no fix
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
 [TS2784]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "accessor-parameter-grammar-basic",
+]
+
 [TS5085]
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
@@ -2636,4 +2643,172 @@ oracle = [
 status = "emitted"
 oracle = [
   "node-esm-relative-extension-basic",
+]
+
+[TS1052]
+status = "emitted"
+oracle = [
+  "accessor-parameter-grammar-basic",
+]
+
+[TS1053]
+status = "emitted"
+oracle = [
+  "accessor-parameter-grammar-basic",
+]
+
+[TS1054]
+status = "emitted"
+oracle = [
+  "accessor-parameter-grammar-basic",
+]
+
+[TS2408]
+status = "emitted"
+oracle = [
+  "accessor-parameter-grammar-basic",
+]
+
+[TS1275]
+status = "emitted"
+oracle = [
+  "class-member-modifier-placement-basic",
+]
+
+[TS1242]
+status = "emitted"
+oracle = [
+  "class-member-modifier-placement-basic",
+]
+
+[TS1267]
+status = "emitted"
+oracle = [
+  "class-member-modifier-placement-basic",
+]
+
+[TS18006]
+status = "emitted"
+oracle = [
+  "class-member-modifier-placement-basic",
+]
+
+[TS1317]
+status = "emitted"
+oracle = [
+  "class-member-modifier-placement-basic",
+]
+
+[TS2680]
+status = "emitted"
+oracle = [
+  "class-member-modifier-placement-basic",
+]
+
+[TS2463]
+status = "emitted"
+oracle = [
+  "class-member-modifier-placement-basic",
+]
+
+[TS1433]
+status = "emitted"
+oracle = [
+  "this-parameter-modifier-grammar-basic",
+]
+
+[TS18016]
+status = "emitted"
+oracle = [
+  "private-name-placement-basic",
+]
+
+[TS2815]
+status = "emitted"
+oracle = [
+  "arguments-in-initializer-basic",
+]
+
+[TS18041]
+status = "emitted"
+oracle = [
+  "static-block-return-basic",
+]
+
+[TS2491]
+status = "emitted"
+oracle = [
+  "for-in-destructuring-target-basic",
+]
+
+[TS2780]
+status = "emitted"
+oracle = [
+  "optional-chain-write-targets-basic",
+]
+
+[TS2781]
+status = "emitted"
+oracle = [
+  "optional-chain-write-targets-basic",
+]
+
+[TS2778]
+status = "emitted"
+oracle = [
+  "optional-chain-write-targets-basic",
+]
+
+[TS2406]
+status = "emitted"
+oracle = [
+  "optional-chain-write-targets-basic",
+]
+
+[TS1358]
+status = "emitted"
+oracle = [
+  "tagged-template-optional-chain-basic",
+]
+
+[TS17005]
+status = "emitted"
+oracle = [
+  "super-call-extends-null-basic",
+]
+
+[TS1034]
+status = "emitted"
+oracle = [
+  "super-follower-grammar-basic",
+]
+
+[TS1225]
+status = "emitted"
+oracle = [
+  "type-predicate-parameter-basic",
+]
+
+[TS1230]
+status = "emitted"
+oracle = [
+  "type-predicate-parameter-basic",
+]
+
+[TS1228]
+status = "emitted"
+oracle = [
+  "type-predicate-parameter-basic",
+]
+
+[TS2467]
+status = "emitted"
+oracle = [
+  "computed-name-type-parameter-basic",
+]
+
+[TS1196]
+status = "emitted"
+oracle = [
+  "catch-clause-annotation-basic",
 ]
