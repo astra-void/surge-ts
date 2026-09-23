@@ -822,6 +822,7 @@ export const fixturePresets: Record<string, string> = {
   'parameter-nullish-initializer': path.join(workspaceRoot, 'tests/compat-projects/parameter-nullish-initializer/tsconfig.json'),
   'computed-name-index-contextual-type': path.join(workspaceRoot, 'tests/compat-projects/computed-name-index-contextual-type/tsconfig.json'),
   'assignment-contextual-callback': path.join(workspaceRoot, 'tests/compat-projects/assignment-contextual-callback/tsconfig.json'),
+  'loose-null-widening': path.join(workspaceRoot, 'tests/compat-projects/loose-null-widening/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

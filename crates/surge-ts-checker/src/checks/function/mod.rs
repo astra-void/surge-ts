@@ -274,8 +274,10 @@ fn infer_member_type(
         },
     );
     match &member.source {
+        // tsc's `getReturnTypeFromBody` widens what the body returns.
         surge_ts_syntax::ParsedInferredMemberSource::GetterBody(body) => {
             infer_statements_return(body, scope, ctx)
+                .map(|ty| crate::checks::var::widen_nullable_type(&ty))
         }
         surge_ts_syntax::ParsedInferredMemberSource::Initializer(initializer) => {
             let mut shadow = body_inference_shadow_context(ctx);
@@ -289,6 +291,7 @@ fn infer_member_type(
             } else {
                 crate::checks::expr::widen_type(&ty)
             };
+            let ty = crate::checks::var::widen_nullable_type(&ty);
             type_is_deeply_concrete(&ty).then_some(ty)
         }
         // tsc's `getWidenedTypeForAssignmentDeclaration` for `this.x = v`: the

@@ -660,20 +660,37 @@ pub(crate) fn widen_nullable_type(ty: &Type) -> Type {
     if surge_ts_types::strict_null_checks() {
         return ty.clone();
     }
+    widen_nullish_members(ty)
+}
+
+/// tsc's `getWidenedType` without strictNullChecks: `null` and `undefined`
+/// widen to `any` wherever an inferred type holds them, and a union absorbs
+/// them (`getUnionType`), leaving `any` when nothing else is left.
+fn widen_nullish_members(ty: &Type) -> Type {
     match ty {
         Type::Null | Type::Undefined => Type::Any,
-        Type::Array(element) => Type::Array(Box::new(widen_nullable_type(element))),
-        Type::Tuple(elements) => Type::Tuple(elements.iter().map(widen_nullable_type).collect()),
+        Type::Array(element) => Type::Array(Box::new(widen_nullish_members(element))),
+        Type::Tuple(elements) => Type::Tuple(elements.iter().map(widen_nullish_members).collect()),
+        Type::Union(union) if union.types().iter().any(contains_nullish) => {
+            let rest: Vec<Type> = union
+                .types()
+                .iter()
+                .filter(|member| !matches!(member, Type::Null | Type::Undefined))
+                .map(widen_nullish_members)
+                .collect();
+            if rest.is_empty() {
+                Type::Any
+            } else {
+                surge_ts_types::union_type(rest)
+            }
+        }
         Type::Object(object)
             if object.alias_name.is_none()
-                && object
-                    .properties
-                    .values()
-                    .any(|property| matches!(property.ty, Type::Null | Type::Undefined)) =>
+                && object.properties.values().any(|property| contains_nullish(&property.ty)) =>
         {
             let mut properties = (*object.properties).clone();
             for property in properties.values_mut() {
-                property.ty = widen_nullable_type(&property.ty);
+                property.ty = widen_nullish_members(&property.ty);
             }
             let mut widened = crate::metrics::alloc_object_type(
                 properties,
@@ -691,6 +708,19 @@ pub(crate) fn widen_nullable_type(ty: &Type) -> Type {
             Type::Object(widened)
         }
         _ => ty.clone(),
+    }
+}
+
+fn contains_nullish(ty: &Type) -> bool {
+    match ty {
+        Type::Null | Type::Undefined => true,
+        Type::Array(element) => contains_nullish(element),
+        Type::Tuple(elements) => elements.iter().any(contains_nullish),
+        Type::Union(union) => union.types().iter().any(contains_nullish),
+        Type::Object(object) if object.alias_name.is_none() => {
+            object.properties.values().any(|property| contains_nullish(&property.ty))
+        }
+        _ => false,
     }
 }
 
