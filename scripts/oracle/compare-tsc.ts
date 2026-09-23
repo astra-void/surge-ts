@@ -764,6 +764,7 @@ export const fixturePresets: Record<string, string> = {
   'import-require-in-namespace-grammar': path.join(workspaceRoot, 'tests/compat-projects/import-require-in-namespace-grammar/tsconfig.json'),
   'annotated-destructuring-declaration': path.join(workspaceRoot, 'tests/compat-projects/annotated-destructuring-declaration/tsconfig.json'),
   'catch-annotation-resolved-type': path.join(workspaceRoot, 'tests/compat-projects/catch-annotation-resolved-type/tsconfig.json'),
+  'unresolved-import-type-arguments': path.join(workspaceRoot, 'tests/compat-projects/unresolved-import-type-arguments/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

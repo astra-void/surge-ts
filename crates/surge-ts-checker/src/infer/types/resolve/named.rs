@@ -297,7 +297,19 @@ fn resolve_named_type_inner(
         TypeDeclarationInfo::Interface(interface) => !interface.body.type_parameters.is_empty(),
     };
 
+    // An import from a module that did not resolve is tsc's `unknownSymbol`,
+    // whose type is the error type whatever arguments it is written with.
+    let is_unresolved_import = matches!(
+        declaration,
+        TypeDeclarationInfo::Alias(alias) if matches!(alias.body.ty, ParsedType::ErrorType)
+    );
     if has_type_arguments && !is_generic_declaration {
+        if is_unresolved_import {
+            return ResolvedType {
+                ty: Type::ErrorType,
+                had_error: true,
+            };
+        }
         let name = match declaration {
             TypeDeclarationInfo::Alias(alias) => &alias.name,
             TypeDeclarationInfo::Interface(interface) => &interface.name,
