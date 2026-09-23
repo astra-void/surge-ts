@@ -594,6 +594,26 @@ fn module_resolution_nodenext_is_valid() {
 }
 
 #[test]
+fn module_resolution_follows_the_module_kind_when_unwritten() {
+    for (module, expected) in [
+        ("node16", ModuleResolutionKind::Node16),
+        ("node18", ModuleResolutionKind::Node16),
+        ("node20", ModuleResolutionKind::Node16),
+        ("nodenext", ModuleResolutionKind::NodeNext),
+        ("commonjs", ModuleResolutionKind::Bundler),
+    ] {
+        let root = temp_dir(&format!("module-resolution-from-{module}"));
+        write_file(
+            &root,
+            "tsconfig.json",
+            &format!(r#"{{ "compilerOptions": {{ "module": "{module}" }} }}"#),
+        );
+        let loaded = load(root.join("tsconfig.json"));
+        assert_eq!(loaded.compiler_options.module_resolution, expected, "{module}");
+    }
+}
+
+#[test]
 fn ts6_node20_and_newer_options_are_recognized() {
     let root = temp_dir("ts6-node20-options");
     write_file(
