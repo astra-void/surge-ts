@@ -2506,7 +2506,13 @@ fn evaluate_object_literal_with_expected_type(
     // Taken, not read: it describes this literal only, and the properties
     // evaluated below are literals of their own.
     let union_target = ctx.union_literal_target.take();
-    crate::checks::expr::check_computed_property_keys(properties, fallback_span, symbols, ctx);
+    crate::checks::expr::check_computed_property_keys(
+        properties,
+        fallback_span,
+        Some(expected_object_type),
+        symbols,
+        ctx,
+    );
     let properties =
         &*crate::infer::expression::resolve_computed_property_names(properties, symbols, ctx);
     let object_start = Instant::now();

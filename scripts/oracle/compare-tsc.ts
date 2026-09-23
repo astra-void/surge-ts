@@ -820,6 +820,7 @@ export const fixturePresets: Record<string, string> = {
   'no-check-skips-type-checking': path.join(workspaceRoot, 'tests/compat-projects/no-check-skips-type-checking/tsconfig.json'),
   'call-first-failing-argument': path.join(workspaceRoot, 'tests/compat-projects/call-first-failing-argument/tsconfig.json'),
   'parameter-nullish-initializer': path.join(workspaceRoot, 'tests/compat-projects/parameter-nullish-initializer/tsconfig.json'),
+  'computed-name-index-contextual-type': path.join(workspaceRoot, 'tests/compat-projects/computed-name-index-contextual-type/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

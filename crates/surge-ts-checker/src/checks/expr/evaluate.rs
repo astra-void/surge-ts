@@ -6,19 +6,54 @@ use surge_ts_syntax::{ParsedLogicalOperator, ParsedType, ParsedUnaryOperator};
 pub(crate) fn check_computed_property_keys(
     properties: &[surge_ts_syntax::ParsedObjectProperty],
     fallback_span: Option<SyntaxTextSpan>,
+    contextual: Option<&surge_ts_types::ObjectType>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
     for property in properties {
+        let mut key_type = None;
         if let Some(key) = property.computed_key.as_deref() {
             let key_span = property.name_span.or(property.span).or(fallback_span);
             let key_result = evaluate_expression(key, key_span, symbols, ctx);
             report_invalid_computed_key(&key_result, key_span, ctx);
+            if let InferredExpression::Known(ty) = key_result {
+                key_type = Some(ty);
+            }
         }
         if let Some(value) = property.unnamed_key_value.as_deref() {
-            let _ = evaluate_expression(value, property.span.or(fallback_span), symbols, ctx);
+            let span = property.span.or(fallback_span);
+            // tsc's `getContextualTypeForObjectLiteralElement`: a member whose
+            // name is no literal is contextually typed by the index signature
+            // its key applies to.
+            let index_type = contextual
+                .zip(key_type.as_ref())
+                .and_then(|(contextual, key)| applicable_index_type(contextual, key));
+            let _ = match index_type {
+                Some(index_type) => crate::checks::expected::evaluate_expression_with_expected_type(
+                    value,
+                    span,
+                    Some(&index_type),
+                    crate::checks::expected::ExpectedTypeDiagnostic::ContextOnly,
+                    symbols,
+                    ctx,
+                ),
+                None => evaluate_expression(value, span, symbols, ctx),
+            };
         }
     }
+}
+
+/// tsc's `findApplicableIndexInfo`: a numeric key reads the number index
+/// signature, falling back to the string one, and a string key the string one.
+fn applicable_index_type(object: &surge_ts_types::ObjectType, key: &Type) -> Option<Type> {
+    let is_number = matches!(key, Type::Number | Type::NumberLiteral(_));
+    if is_number && let Some(index) = object.number_index_type.as_deref() {
+        return Some(index.clone());
+    }
+    if is_number || matches!(key, Type::String | Type::StringLiteral(_)) {
+        return object.string_index_type.as_deref().cloned();
+    }
+    None
 }
 
 /// tsc's `checkComputedPropertyName`: a key must be `null`/`undefined`-free
@@ -159,7 +194,7 @@ fn evaluate_expression_unsettled(
         ParsedExpression::ObjectLiteral { properties, .. } => {
             let inferred_expression = infer_expression(expression, symbols, ctx);
 
-            check_computed_property_keys(properties, fallback_span, symbols, ctx);
+            check_computed_property_keys(properties, fallback_span, None, symbols, ctx);
             let mut explicit_properties: Vec<(&str, Option<SyntaxTextSpan>)> = Vec::new();
             for property in properties {
                 if !property.is_spread && !property.is_accessor && property.computed_key.is_none() {
