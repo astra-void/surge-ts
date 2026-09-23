@@ -17,6 +17,7 @@ mod facts;
 mod guards;
 mod module_scope;
 mod never_initialized;
+mod unassigned_reads;
 
 pub(crate) use assigned::assigned_bindings;
 pub(crate) use branch::*;
@@ -30,6 +31,8 @@ pub(crate) use never_initialized::{
     begin_file as begin_never_initialized_file, enter_container, excludes_undefined,
     expression_container_flow, is_plainly_defined,
 };
+pub(crate) use unassigned_reads::is_unassigned_read;
+use unassigned_reads::record_unassigned_read;
 
 /// Marks what `condition` proves defined on its `when` edge, for the code the
 /// edge leads to.

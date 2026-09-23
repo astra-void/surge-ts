@@ -625,6 +625,7 @@ pub(crate) fn report_read_flow_positioned(
             }
 
             ctx.push(diagnostic);
+            record_unassigned_read(span);
             FlowCheck::Blocked
         }
         FlowReadOutcome::UseBeforeDeclaration {
@@ -647,6 +648,7 @@ pub(crate) fn report_read_flow_positioned(
                     diagnostic = diagnostic.with_span(convert_span(span));
                 }
                 ctx.push(diagnostic);
+                record_unassigned_read(span);
             }
 
             if let Some(declaration_span) = circular_at

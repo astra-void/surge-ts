@@ -165,10 +165,13 @@ fn infer_expression_unsettled(
             };
             resolved
                 .map(|symbol| {
-                    InferredExpression::Known(clone_type_with_metrics(
-                        &symbol.ty,
-                        CopySource::Identifier,
-                    ))
+                    // tsc types a read it reports as used before being assigned
+                    // as the declared type, not what a guard narrowed it to.
+                    let ty = crate::flow::is_unassigned_read(*span, &ctx.file_name)
+                        .then(|| symbols.declared_type(name))
+                        .flatten()
+                        .unwrap_or(&symbol.ty);
+                    InferredExpression::Known(clone_type_with_metrics(ty, CopySource::Identifier))
                 })
                 .unwrap_or_else(|| InferredExpression::UnresolvedIdentifier {
                     name: name.clone(),

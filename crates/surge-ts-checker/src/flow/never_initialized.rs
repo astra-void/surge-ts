@@ -55,6 +55,7 @@ pub(crate) fn begin_file(
     } else {
         Vec::new()
     };
+    super::unassigned_reads::record_module_unassigned_reads(statements, ctx);
 }
 
 /// Enters a nested flow container: seeds `flow` with the inherited bindings its
