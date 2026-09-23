@@ -268,7 +268,7 @@ fn narrow_single_guard_for_identifier(
         parse_nullish_equality_condition(condition)
         && name == var_name
     {
-        return narrow_union_by_nullish(ty, branch_is_true == eq, test);
+        return narrow_binding_by_nullish(ty, branch_is_true == eq, test);
     }
     if let Some((name, literal, eq)) =
         parse_identifier_literal_equality(condition, scopes.visible_symbols())
@@ -1038,6 +1038,10 @@ fn narrow_condition_symbol_table_by_guard(
     if let Some((inner, flip)) = strip_boolean_literal_comparison(condition) {
         return narrow_condition_symbol_table(inner, symbols, branch_is_true != flip);
     }
+    // tsc's `narrowType` reads through `satisfies`.
+    if let ParsedExpression::SatisfiesExpression { expression, .. } = condition {
+        return narrow_condition_symbol_table(expression, symbols, branch_is_true);
+    }
 
     // Every operand of an `&&` holds in its true branch, so a chain narrows by
     // all of them (`a !== undefined && b !== undefined && a <= b`). The false
@@ -1307,6 +1311,10 @@ fn narrow_value_guards_in_scope(
     }
     if let Some((inner, flip)) = strip_boolean_literal_comparison(condition) {
         narrow_value_guards_in_scope(inner, scopes, branch_is_true != flip, ctx);
+        return;
+    }
+    if let ParsedExpression::SatisfiesExpression { expression, .. } = condition {
+        narrow_value_guards_in_scope(expression, scopes, branch_is_true, ctx);
         return;
     }
 

@@ -1472,13 +1472,13 @@ pub(crate) fn function_declaration_signature_info(
     function: &surge_ts_syntax::ParsedFunctionDeclaration,
     function_type: &FunctionType,
     symbols: &SymbolTable,
-    declaring_file: &str,
+    ctx: &mut CheckerContext,
 ) -> Arc<FunctionSignatureInfo> {
     let info = function_signature_info(
         &function.type_parameters,
         &function.parameters,
         function.return_type.as_ref(),
-        declaring_file,
+        &ctx.file_name.clone(),
     );
     if function.return_type.is_some()
         || function.is_async
@@ -1487,15 +1487,13 @@ pub(crate) fn function_declaration_signature_info(
     {
         return info;
     }
-    let inferred = crate::checks::function::single_returned_statement_expression(&function.body)
-        .and_then(|returned| {
-            crate::checks::function::infer_predicate_from_body(
-                &function.parameters,
-                function_type.parameters(),
-                returned,
-                symbols,
-            )
-        });
+    let inferred = crate::checks::function::infer_predicate_from_function_body(
+        &function.parameters,
+        function_type.parameters(),
+        &function.body,
+        symbols,
+        ctx,
+    );
     with_inferred_predicate(info, inferred)
 }
 

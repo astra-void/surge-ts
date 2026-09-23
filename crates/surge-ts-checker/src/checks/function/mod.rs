@@ -815,15 +815,12 @@ pub(crate) fn collect_function_declaration_signature(
     *symbols = std::mem::take(&mut ctx.symbols);
     ctx.set_symbols(outer_symbols);
 
+    let signature_info =
+        function_declaration_signature_info(function, &function_type, symbols, ctx);
     let duplicate = register_function_signature(
         function.name.clone(),
         with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || function_type.clone()),
-        Some(function_declaration_signature_info(
-            function,
-            &function_type,
-            symbols,
-            &ctx.file_name,
-        )),
+        Some(signature_info),
         symbols,
         false,
         function.has_body,

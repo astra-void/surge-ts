@@ -451,7 +451,7 @@ fn hoist_nested_functions(
             function,
             &function_type,
             scopes.visible_symbols(),
-            &ctx.file_name,
+            ctx,
         );
         scopes.insert_current_handle(
             function.name.as_str(),

@@ -108,6 +108,46 @@ pub(crate) fn narrow_union_by_nullish(
     Some(union_type(kept))
 }
 
+/// [`narrow_union_by_nullish`] for a whole binding, which one that can never
+/// be `null` or `undefined` leaves `never` where the test holds
+/// (`getAdjustedTypeWithFacts` with `EQUndefinedOrNull`, which only
+/// `strictNullChecks` keeps apart).
+pub(crate) fn narrow_binding_by_nullish(
+    ty: &Type,
+    keep_matching: bool,
+    test: NullishTest,
+) -> Option<Type> {
+    if keep_matching && surge_ts_types::strict_null_checks() && is_never_nullish(ty) {
+        return Some(Type::Never);
+    }
+    narrow_union_by_nullish(ty, keep_matching, test)
+}
+
+/// Whether no value of `ty` is `null` or `undefined`: a primitive, a literal,
+/// or an object, function, array or tuple type.
+fn is_never_nullish(ty: &Type) -> bool {
+    let peeled = ty.peeled();
+    match &peeled {
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::Function(_)
+        | Type::Array(_)
+        | Type::Tuple(_)
+        | Type::OpenTuple(_) => true,
+        Type::Object(_) => {
+            !surge_ts_types::type_variable::is_nullish_type_variable_intersection(&peeled)
+                && !surge_ts_types::type_variable::is_narrowed_type_variable(&peeled)
+        }
+        _ => false,
+    }
+}
+
 /// Symbol-table counterpart of the `ScopeStack` nullish-equality narrowing, for
 /// the operands of `&&`/`||` and the arms of a conditional expression
 /// (`x !== undefined && x <= y`). Handles a bare identifier or one property of
@@ -123,7 +163,7 @@ pub(crate) fn narrow_nullish_equality_symbol_table(
     match subject {
         ParsedExpression::Identifier { name, .. } => {
             let symbol = symbols.get(name)?;
-            let narrowed = narrow_union_by_nullish(&symbol.ty, keep_matching, test)?;
+            let narrowed = narrow_binding_by_nullish(&symbol.ty, keep_matching, test)?;
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
             narrowed_symbols.insert_narrowed(
                 name.clone(),

@@ -1,7 +1,7 @@
 use surge_ts_syntax::{ParsedBinaryOperator, ParsedExpression};
 use surge_ts_types::{Type, is_comparable_to, union_type};
 
-use super::{NullishTest, narrow_union_by_nullish};
+use super::{NullishTest, narrow_binding_by_nullish};
 
 /// An `==`, `!=`, `===` or `!==` test, read the way `narrowTypeByBinaryExpression`
 /// reads it: whichever operand is the narrowed reference, the other one is the
@@ -73,7 +73,7 @@ pub(crate) fn narrow_type_by_equality(
             null,
             undefined: double_equals || matches!(value, Type::Undefined),
         };
-        return narrow_union_by_nullish(ty, assume_true, test).unwrap_or_else(|| ty.clone());
+        return narrow_binding_by_nullish(ty, assume_true, test).unwrap_or_else(|| ty.clone());
     }
     if assume_true {
         if !double_equals

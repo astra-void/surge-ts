@@ -30,6 +30,9 @@ pub(super) fn property_presence_of(member: &Type, property: &str) -> PropertyPre
             }
             None => PropertyPresence::Absent,
         },
+        // No key is present on `null` or `undefined` (`isTypePresencePossible`
+        // finds neither a property nor an index signature).
+        Type::Null | Type::Undefined | Type::Void => PropertyPresence::Absent,
         _ => PropertyPresence::Undecidable,
     }
 }
@@ -244,14 +247,15 @@ pub(crate) fn narrow_property_presence_symbol_table(
     branch_is_true: bool,
 ) -> Option<SymbolTable> {
     let (object, property) = parse_in_condition(condition)?;
-    let ParsedExpression::Identifier { name, .. } = object else {
+    let (name, path) = super::super::reference_path(object)?;
+    if !path.is_empty() {
         return None;
-    };
-    let symbol = symbols.get(name)?;
+    }
+    let symbol = symbols.get(&name)?;
     let narrowed = narrow_union_by_property_presence(&symbol.ty, property, branch_is_true)?;
     let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
     narrowed_symbols.insert_narrowed(
-        name.clone(),
+        name,
         SymbolInfo {
             ty: narrowed,
             kind: symbol.kind,

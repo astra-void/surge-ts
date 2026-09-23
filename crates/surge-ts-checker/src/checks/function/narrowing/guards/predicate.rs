@@ -263,6 +263,16 @@ pub(crate) fn narrow_by_predicate(
     {
         return Some(predicate.clone());
     }
+    // `getNarrowedTypeWorker`'s false branch keeps what the true branch would
+    // not: a subject the predicate already covers is left with nothing.
+    if !keep_matching
+        && !peeled.is_unknown()
+        && !matches!(peeled, Type::Any | Type::Never)
+        && !predicate.is_unmodelled()
+        && surge_ts_types::is_assignable_to(&peeled, predicate)
+    {
+        return Some(Type::Never);
+    }
     // tsc narrows a non-union subject the predicate does not refine to the
     // intersection of the two (`getNarrowedTypeWorker`'s last resort, flow.go):
     // `conn: Connection` under `this is { ws: WebSocket }` reads `conn.ws` as

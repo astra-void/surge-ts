@@ -495,12 +495,13 @@ pub(super) fn property_path_leaf_type(ty: &Type, path: &[String]) -> Option<Type
 /// The narrowed type of `base` under `guard` applied at `path`, or `None` when
 /// nothing changes. An empty `path` guards the binding itself.
 pub(super) fn narrowed_reference_type(ty: &Type, path: &[String], guard: ReferenceGuard<'_>) -> Option<Type> {
-    let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-        if path.is_empty() {
-            guard.narrow_leaf(ty, false).map(|(narrowed, _)| narrowed)
-        } else {
-            narrow_property_path(ty, path, guard)
-        }
+    let narrowed = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || match guard {
+        ReferenceGuard::Nullish {
+            keep_matching,
+            test,
+        } if path.is_empty() => narrow_binding_by_nullish(ty, keep_matching, test),
+        _ if path.is_empty() => guard.narrow_leaf(ty, false).map(|(narrowed, _)| narrowed),
+        _ => narrow_property_path(ty, path, guard),
     })?;
     (narrowed != *ty).then_some(narrowed)
 }
