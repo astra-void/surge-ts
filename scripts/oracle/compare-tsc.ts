@@ -715,6 +715,22 @@ export const fixturePresets: Record<string, string> = {
   'script-global-values-across-files-basic': path.join(workspaceRoot, 'tests/compat-projects/script-global-values-across-files-basic/tsconfig.json'),
   'var-redeclaration-identity-basic': path.join(workspaceRoot, 'tests/compat-projects/var-redeclaration-identity-basic/tsconfig.json'),
   'tagged-template-generic-call-basic': path.join(workspaceRoot, 'tests/compat-projects/tagged-template-generic-call-basic/tsconfig.json'),
+  'modifier-ambient-and-async-placement-basic': path.join(workspaceRoot, 'tests/compat-projects/modifier-ambient-and-async-placement-basic/tsconfig.json'),
+  'modifier-combinations-basic': path.join(workspaceRoot, 'tests/compat-projects/modifier-combinations-basic/tsconfig.json'),
+  'const-type-parameter-owner-basic': path.join(workspaceRoot, 'tests/compat-projects/const-type-parameter-owner-basic/tsconfig.json'),
+  'module-element-context-basic': path.join(workspaceRoot, 'tests/compat-projects/module-element-context-basic/tsconfig.json'),
+  'export-assignment-context-basic': path.join(workspaceRoot, 'tests/compat-projects/export-assignment-context-basic/tsconfig.json'),
+  'namespace-default-export-basic': path.join(workspaceRoot, 'tests/compat-projects/namespace-default-export-basic/tsconfig.json'),
+  'ambient-module-nesting-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-module-nesting-basic/tsconfig.json'),
+  'module-keyword-namespace-basic': path.join(workspaceRoot, 'tests/compat-projects/module-keyword-namespace-basic/tsconfig.json'),
+  'global-augmentation-placement-basic': path.join(workspaceRoot, 'tests/compat-projects/global-augmentation-placement-basic/tsconfig.json'),
+  'ambient-module-export-modifier-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-module-export-modifier-basic/tsconfig.json'),
+  'declaration-file-declare-modifier-basic': path.join(workspaceRoot, 'tests/compat-projects/declaration-file-declare-modifier-basic/tsconfig.json'),
+  'use-strict-parameter-list-basic': path.join(workspaceRoot, 'tests/compat-projects/use-strict-parameter-list-basic/tsconfig.json'),
+  'super-type-arguments-basic': path.join(workspaceRoot, 'tests/compat-projects/super-type-arguments-basic/tsconfig.json'),
+  'instanceof-instantiation-expression-basic': path.join(workspaceRoot, 'tests/compat-projects/instanceof-instantiation-expression-basic/tsconfig.json'),
+  'mapped-type-member-in-body-basic': path.join(workspaceRoot, 'tests/compat-projects/mapped-type-member-in-body-basic/tsconfig.json'),
+  'enum-computed-member-name-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-computed-member-name-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

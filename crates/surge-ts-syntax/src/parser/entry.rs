@@ -104,8 +104,9 @@ fn classify_uncoded_parser_error(
 
 /// Where tsc anchors a failure oxc labels elsewhere: the name after a
 /// `const` class member modifier (TS1248), the `<` of an instantiation
-/// expression (TS1477), the second of the `u`/`v` flags (TS1502), and the
-/// first keyword of an ambient `using` or `await using` (TS1545/TS1546).
+/// expression (TS1477), the second of the `u`/`v` flags (TS1502), the
+/// bracketed computed name of an enum member (TS1164), and the first keyword
+/// of an ambient `using` or `await using` (TS1545/TS1546).
 fn tsc_anchor_for_parser_error(
     code: Option<u32>,
     span: crate::TextSpan,
@@ -128,6 +129,10 @@ fn tsc_anchor_for_parser_error(
             None => span,
         },
         Some(1502) if span.end > span.start => at(span.end - 1, 1),
+        Some(1164) => match text(0, span.start).rfind('[') {
+            Some(start) => crate::TextSpan { start, end: span.end + 1 },
+            None => span,
+        },
         Some(1545) => match text(0, span.start).rfind("using") {
             Some(start) => at(start, 5),
             None => span,
@@ -246,11 +251,16 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     let import_call_specifiers =
         super::import_calls::collect_import_call_specifiers(&parsed.program, source_text);
 
-    // Grammar findings are reported for hand-written TypeScript only: surge
-    // suppresses every declaration-file diagnostic, and a `.js` file is not
-    // type-checked the way `checkJs` would need.
+    // Grammar findings are reported for hand-written TypeScript only: a
+    // declaration file gets just the top-level `declare` requirement (which
+    // `skipLibCheck` then suppresses), and a `.js` file is not type-checked
+    // the way `checkJs` would need.
     let (grammar_diagnostics, parenthesized_expressions) = if collects_grammar_diagnostics(file_name) {
         super::grammar::collect_grammar_diagnostics(&parsed.program)
+    } else if is_declaration_file_name(file_name) {
+        let mut diagnostics = Vec::new();
+        super::grammar_modifiers::collect_declaration_file_diagnostics(&parsed.program, &mut diagnostics);
+        (diagnostics, Vec::new())
     } else {
         (Vec::new(), Vec::new())
     };
@@ -274,11 +284,12 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     }
 }
 
+fn is_declaration_file_name(file_name: &str) -> bool {
+    file_name.ends_with(".d.ts") || file_name.ends_with(".d.mts") || file_name.ends_with(".d.cts")
+}
+
 fn collects_grammar_diagnostics(file_name: &str) -> bool {
-    if file_name.ends_with(".d.ts")
-        || file_name.ends_with(".d.mts")
-        || file_name.ends_with(".d.cts")
-    {
+    if is_declaration_file_name(file_name) {
         return false;
     }
     [".ts", ".tsx", ".mts", ".cts"]
