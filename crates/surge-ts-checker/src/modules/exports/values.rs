@@ -673,11 +673,103 @@ pub(crate) fn collect_exportable_value_symbols(
             module_file,
         );
     }
+    for hoisted in hoisted_nested_vars(statements) {
+        if let ParsedStatement::VariableDeclaration(variable) = &hoisted
+            && exportable_values.get_own_shared(&variable.name).is_none()
+        {
+            collect_exportable_value_symbols_from_statement(
+                &hoisted,
+                &mut exportable_values,
+                &mut shadow_ctx,
+                !library_file,
+                module_file,
+            );
+        }
+    }
     apply_merging_namespace_value_members(&merging_namespaces, &mut exportable_values);
     apply_expando_members(statements, &mut exportable_values, &mut shadow_ctx);
     inherit_base_statics(statements, &mut exportable_values, imported_symbols);
 
     exportable_values
+}
+
+/// The `var`s nested in the top-level blocks, loops, `if`s, `switch`es and
+/// `try`s of `statements`. tsc's binder declares a `var` in its function-like
+/// container — the file or the namespace here — so it is in scope throughout
+/// it, in a function declared ahead of it too. A `for…in` key is a `string`; a
+/// `for…of` element is left unmodelled.
+fn hoisted_nested_vars(statements: &[ParsedStatement]) -> Vec<ParsedStatement> {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+    fn walk(body: &[Statement], out: &mut Vec<ParsedStatement>) {
+        for statement in body {
+            match statement {
+                Statement::VariableDeclaration(variable)
+                    if variable.kind == surge_ts_syntax::ParsedVariableKind::Var =>
+                {
+                    out.push(ParsedStatement::VariableDeclaration(variable.clone()));
+                }
+                Statement::Block(block) => walk(block, out),
+                Statement::If(if_statement) => {
+                    walk(&if_statement.then_body, out);
+                    walk(&if_statement.else_body, out);
+                }
+                Statement::While(while_statement) => walk(&while_statement.body, out),
+                Statement::ForOf(for_of_statement) => {
+                    if for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::Var
+                        && let surge_ts_syntax::ParsedBindingName::Identifier { name, span } =
+                            &for_of_statement.binding_name
+                    {
+                        out.push(ParsedStatement::VariableDeclaration(Box::new(
+                            surge_ts_syntax::ParsedVariableDeclaration {
+                                is_declare: false,
+                                kind: surge_ts_syntax::ParsedVariableKind::Var,
+                                from_binding_pattern: false,
+                                has_definite_assertion: false,
+                                array_pattern_span: None,
+                                is_enum_object: false,
+                                name: name.clone(),
+                                name_span: *span,
+                                declared_type: Some(if for_of_statement.keys_only {
+                                    surge_ts_syntax::ParsedType::String
+                                } else {
+                                    surge_ts_syntax::ParsedType::Unknown
+                                }),
+                                initializer: None,
+                                initializer_span: None,
+                                declaration_list: None,
+                            },
+                        )));
+                    }
+                    walk(&for_of_statement.body, out)
+                }
+                Statement::Switch(switch_statement) => {
+                    for case in &switch_statement.cases {
+                        walk(&case.consequent, out);
+                    }
+                }
+                Statement::Try(try_statement) => {
+                    walk(&try_statement.block, out);
+                    if let Some(handler) = &try_statement.handler {
+                        walk(&handler.body, out);
+                    }
+                    walk(&try_statement.finalizer, out);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut hoisted = Vec::new();
+    for statement in statements {
+        match statement {
+            ParsedStatement::Block(body) => walk(body, &mut hoisted),
+            ParsedStatement::If(if_statement) => {
+                walk(&if_statement.then_body, &mut hoisted);
+                walk(&if_statement.else_body, &mut hoisted);
+            }
+            _ => {}
+        }
+    }
+    hoisted
 }
 
 /// A derived class's static side starts from its base's, which the binding
