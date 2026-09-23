@@ -365,6 +365,7 @@ export const fixturePresets: Record<string, string> = {
   'tuple-union-destructure-basic': path.join(workspaceRoot, 'tests/compat-projects/tuple-union-destructure-basic/tsconfig.json'),
   'intersection-two-union-operands-basic': path.join(workspaceRoot, 'tests/compat-projects/intersection-two-union-operands-basic/tsconfig.json'),
   'void-parameter-arity-basic': path.join(workspaceRoot, 'tests/compat-projects/void-parameter-arity-basic/tsconfig.json'),
+  'type-literal-call-overloads-basic': path.join(workspaceRoot, 'tests/compat-projects/type-literal-call-overloads-basic/tsconfig.json'),
   'parameter-initializer-scope': path.join(workspaceRoot, 'tests/compat-projects/parameter-initializer-scope/tsconfig.json'),
   'function-name-in-own-signature': path.join(workspaceRoot, 'tests/compat-projects/function-name-in-own-signature/tsconfig.json'),
   'block-scoped-self-reference': path.join(workspaceRoot, 'tests/compat-projects/block-scoped-self-reference/tsconfig.json'),

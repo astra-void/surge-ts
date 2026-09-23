@@ -1913,6 +1913,20 @@ fn last_candidate_rejected_argument(
         })
 }
 
+/// The arguments a call must pass: the declared minimum, less the trailing
+/// parameters a call may omit.
+fn call_site_required_count(signature: &FunctionType) -> usize {
+    let parameters = signature.parameters();
+    let mut required = signature.required_parameter_count();
+    while required > 0
+        && (parameter_is_void_optional(&parameters[required - 1])
+            || names_open_parameter(&parameters[required - 1]))
+    {
+        required -= 1;
+    }
+    required
+}
+
 fn overload_arity_fits(candidate: &FunctionType, argument_count: usize) -> bool {
     let parameters = candidate.parameters();
     let mut required = candidate.required_parameter_count();
@@ -2043,14 +2057,13 @@ pub(crate) fn check_function_type_call(
     // A trailing parameter surge could not type (`unknown | PromiseLike<T>`
     // with `T` still open — a Promise executor read through a polluted
     // instantiation) may well be that `void`, so it cannot count as required.
-    let parameters = function_type.parameters();
-    let mut required = function_type.required_parameter_count();
-    while required > 0
-        && (parameter_is_void_optional(&parameters[required - 1])
-            || names_open_parameter(&parameters[required - 1]))
-    {
-        required -= 1;
-    }
+    // An overload group's minimum is its candidates' smallest
+    // (`getArgumentArityError`), not its fold's, whose slot the overloads
+    // disagree on may be the sentinel.
+    let required = match function_type.overloads() {
+        Some(members) => members.iter().map(call_site_required_count).min().unwrap_or(0),
+        None => call_site_required_count(function_type),
+    };
 
     // `f(...xs)` supplies as many arguments as the spread's type has elements,
     // which is one for a tuple of one and any number for an array. Counting the
