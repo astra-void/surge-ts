@@ -7,8 +7,7 @@
 //! program report its syntactic diagnostics alone.
 
 use oxc_ast::ast::{
-    BinaryExpression, CallExpression, ComputedMemberExpression, Expression, JSDocUnknownType,
-    NewExpression, NumericLiteral, Program, PrivateFieldExpression, StaticMemberExpression, Super,
+    BinaryExpression, CallExpression, Expression, JSDocUnknownType, NumericLiteral, Program, Super,
     UnaryExpression,
 };
 use oxc_ast_visit::{Visit, walk};
@@ -20,7 +19,6 @@ pub(crate) fn collect_missing_parser_errors(program: &Program<'_>, source_text: 
     let mut collector = Collector {
         source_text,
         after_minus: Vec::new(),
-        followed_super: Vec::new(),
         errors: Vec::new(),
     };
     collector.visit_program(program);
@@ -32,9 +30,6 @@ struct Collector<'s> {
     /// Literals whose previous token is `-`, which the scanner folds into an
     /// octal's suggested spelling and span.
     after_minus: Vec<u32>,
-    /// `super`s followed by an argument list or member access. A `?.` is
-    /// neither to `parseSuperExpression`, which looks only at the next token.
-    followed_super: Vec<u32>,
     errors: Vec<ParserError>,
 }
 
@@ -57,51 +52,19 @@ impl<'a> Visit<'a> for Collector<'_> {
         walk::walk_binary_expression(self, expression);
     }
 
-    fn visit_new_expression(&mut self, new: &NewExpression<'a>) {
-        if let Expression::Super(callee) = &new.callee {
-            self.followed_super.push(callee.span.start);
-        }
-        walk::walk_new_expression(self, new);
-    }
-
-    fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
-        if let Expression::Super(object) = &member.object
-            && !member.optional
-        {
-            self.followed_super.push(object.span.start);
-        }
-        walk::walk_static_member_expression(self, member);
-    }
-
-    fn visit_computed_member_expression(&mut self, member: &ComputedMemberExpression<'a>) {
-        if let Expression::Super(object) = &member.object
-            && !member.optional
-        {
-            self.followed_super.push(object.span.start);
-        }
-        walk::walk_computed_member_expression(self, member);
-    }
-
-    fn visit_private_field_expression(&mut self, member: &PrivateFieldExpression<'a>) {
-        if let Expression::Super(object) = &member.object
-            && !member.optional
-        {
-            self.followed_super.push(object.span.start);
-        }
-        walk::walk_private_field_expression(self, member);
-    }
-
     fn visit_super(&mut self, keyword: &Super) {
-        if self.followed_super.contains(&keyword.span.start) {
-            return;
-        }
-        // Reported on the token after the keyword (`parseErrorAtCurrentToken`).
+        // `parseSuperExpression` reads only the next token: `(`, `.` or `[`,
+        // or `<` for type arguments (TS2754), and anything else — `?.`
+        // included — is TS1034 on that token (`parseErrorAtCurrentToken`).
         let after = keyword.span.end as usize;
         let start = after
             + self.source_text[after..]
                 .char_indices()
                 .find(|(_, c)| !c.is_whitespace())
                 .map_or(self.source_text.len() - after, |(offset, _)| offset);
+        if matches!(self.source_text[start..].chars().next(), Some('(' | '.' | '[' | '<')) {
+            return;
+        }
         let end = super::grammar_context::first_token_end(self.source_text, start);
         self.push(1034, "'super' must be followed by an argument list or member access.".to_string(), start, end);
     }
@@ -122,11 +85,6 @@ impl<'a> Visit<'a> for Collector<'_> {
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-        if let Expression::Super(callee) = &call.callee
-            && !call.optional
-        {
-            self.followed_super.push(callee.span.start);
-        }
         if matches!(call.callee, Expression::Super(_))
             && let Some(type_arguments) = &call.type_arguments
         {
