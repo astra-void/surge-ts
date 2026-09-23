@@ -238,3 +238,36 @@ pub(crate) fn drop_suppressed_diagnostics(
             .any(|range| span.start >= range.start && span.start <= range.end)
     });
 }
+
+/// [`drop_suppressed_diagnostics`] for the semantic diagnostics reported
+/// against a file outside its own check — import binding runs first — which
+/// tsc's directive filter covers all the same. Syntax errors are never
+/// suppressed.
+pub(crate) fn drop_suppressed_program_diagnostics(
+    diagnostics: &mut Vec<surge_ts_diagnostics::Diagnostic>,
+    parsed_files: &[ParsedProgramFile],
+) {
+    let suppressed_ranges_by_file: std::collections::HashMap<&str, &[surge_ts_syntax::TextSpan]> =
+        parsed_files
+            .iter()
+            .filter(|file| !file.suppressed_ranges.is_empty())
+            .map(|file| (file.file_name.as_str(), file.suppressed_ranges.as_slice()))
+            .collect();
+    if suppressed_ranges_by_file.is_empty() {
+        return;
+    }
+    diagnostics.retain(|diagnostic| {
+        let (Some(span), Some(suppressed_ranges)) = (
+            diagnostic.span.as_ref(),
+            suppressed_ranges_by_file.get(diagnostic.file_name.as_str()),
+        ) else {
+            return true;
+        };
+        if is_syntactic_diagnostic(diagnostic) {
+            return true;
+        }
+        !suppressed_ranges
+            .iter()
+            .any(|range| span.start >= range.start && span.start <= range.end)
+    });
+}

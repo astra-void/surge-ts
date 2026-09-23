@@ -1253,6 +1253,7 @@ fn run_check_phase(
         ctx.stats.suppressed_rust_only_diagnostics_total +=
             result.stats.suppressed_rust_only_diagnostics_total;
     }
+    diagnostics::drop_suppressed_program_diagnostics(&mut ctx.diagnostics, parsed_files);
 }
 
 fn finish_program_run(
