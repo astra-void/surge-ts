@@ -586,7 +586,7 @@ pub(crate) fn resolve_import_declaration(
     }
     match &import.kind {
         ParsedImportKind::EntityAlias { .. } => return,
-        ParsedImportKind::Unsupported | ParsedImportKind::TypeOnlyDefault { .. } => {
+        ParsedImportKind::Unsupported => {
             if !is_declaration_file_name(&ctx.file_name) {
                 emit_unsupported_module_syntax_diagnostic(ctx, import);
             }
@@ -604,7 +604,7 @@ pub(crate) fn resolve_import_declaration(
             type_only_aliases,
             ctx,
         ),
-        ParsedImportKind::Default { .. } => resolve_default_import(
+        ParsedImportKind::Default { .. } | ParsedImportKind::TypeOnlyDefault { .. } => resolve_default_import(
             import,
             program_files,
             module_export_tables,
@@ -1106,12 +1106,18 @@ fn resolve_default_import(
     namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
     ctx: &mut CheckerContext,
 ) {
-    let ParsedImportKind::Default {
-        local_name,
-        name_span,
-    } = &import.kind
-    else {
-        return;
+    // `import type D from "m"` binds the same alias in type space only; a
+    // value use of it is TS1361, reported where the value is read.
+    let (local_name, name_span, type_only) = match &import.kind {
+        ParsedImportKind::Default {
+            local_name,
+            name_span,
+        } => (local_name, name_span, false),
+        ParsedImportKind::TypeOnlyDefault {
+            local_name,
+            name_span,
+        } => (local_name, name_span, true),
+        _ => return,
     };
     let Some((export_table, scope, resolved_index)) = try_resolve_import_module(
         import,
@@ -1144,7 +1150,11 @@ fn resolve_default_import(
                 program_files,
             );
         }
-        insert_unresolved_import_binding(local_name, ctx, import, symbols);
+        if type_only {
+            insert_error_type_import(type_declarations, local_name, ctx.file_name_arc(), *name_span);
+        } else {
+            insert_unresolved_import_binding(local_name, ctx, import, symbols);
+        }
         return;
     };
 
@@ -1168,12 +1178,16 @@ fn resolve_default_import(
                 scope.as_ref(),
                 resolved_index,
             ));
-            bind_synthetic_default_import(local_name, local_symbol_exists, symbols);
+            if !type_only {
+                bind_synthetic_default_import(local_name, local_symbol_exists, symbols);
+            }
             return;
         }
 
         if should_bind_unknown_for_missing_export(&export_table, resolved_index, program_files) {
-            insert_unknown_value_import(local_name, symbols);
+            if !type_only {
+                insert_unknown_value_import(local_name, symbols);
+            }
             return;
         }
 
@@ -1184,13 +1198,15 @@ fn resolve_default_import(
             resolved_index,
             program_files,
         );
-        insert_unknown_value_import(local_name, symbols);
+        if !type_only {
+            insert_unknown_value_import(local_name, symbols);
+        }
         return;
     };
 
     bind_default_type_import(&export_table, scope.as_ref(), local_name, type_declarations);
 
-    if !local_symbol_exists(local_name) {
+    if !type_only && !local_symbol_exists(local_name) {
         symbols.insert_shared(local_name.clone(), default_symbol);
     }
     return;
