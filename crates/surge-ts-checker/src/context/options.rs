@@ -165,6 +165,8 @@ pub struct CheckerOptions {
 impl CheckerOptions {
     pub const ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL: &'static str =
         "\0allowSyntheticDefaultImports";
+    /// Present when `compilerOptions.lib` lists `dom`.
+    pub const LIB_DOM_SENTINEL: &'static str = "\0lib.dom.d.ts";
 
     /// Whether `compilerOptions.types` contained the `"*"` wildcard. Selects the
     /// node install-hint variant (TS2580 with a wildcard, TS2591 without),
@@ -176,6 +178,13 @@ impl CheckerOptions {
     pub(crate) fn allow_synthetic_default_imports(&self) -> bool {
         self.resolved_modules
             .contains_key(Self::ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL)
+    }
+
+    /// tsc's `slices.Contains(compilerOptions.Lib, "lib.dom.d.ts")`: the DOM
+    /// lib is written in `lib`. A DOM lib loaded as part of the target's
+    /// default set, or by `/// <reference lib>`, does not count.
+    pub(crate) fn lib_lists_dom(&self) -> bool {
+        self.resolved_modules.contains_key(Self::LIB_DOM_SENTINEL)
     }
 
     /// Resolve `specifier` from `importer_file`, preferring the importer-scoped

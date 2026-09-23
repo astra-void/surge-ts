@@ -741,7 +741,7 @@ pub(crate) fn check_property_call_like(
                         property_name,
                         &Type::Union(union_type.clone()),
                         symbols,
-                        ctx.file_name.clone(),
+                        ctx,
                     ),
                     crate::spans::choose_span(property_span, object_span),
                 ));
@@ -944,9 +944,12 @@ pub(crate) fn check_property_call_like(
                         suggestion,
                         ctx.file_name.clone(),
                     ),
-                    None => {
-                        Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone())
-                    }
+                    None => crate::checks::expr::nonexistent_property_diagnostic(
+                        property_name,
+                        &object_ty,
+                        &object_type_name,
+                        ctx,
+                    ),
                 };
                 ctx.push(diagnostic_with_syntax_span(
                     diagnostic,
@@ -1489,7 +1492,12 @@ pub(crate) fn check_optional_property_call(
                         suggestion,
                         ctx.file_name.clone(),
                     ),
-                    None => Diagnostic::ts2339(property_name, &base_type_name, ctx.file_name.clone()),
+                    None => crate::checks::expr::nonexistent_property_diagnostic(
+                        property_name,
+                        &base_type,
+                        &base_type_name,
+                        ctx,
+                    ),
                 };
                 ctx.push(diagnostic_with_syntax_span(
                     diagnostic,

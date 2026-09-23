@@ -988,7 +988,7 @@ fn check_member_assignment_itself(
                 property_name,
                 receiver,
                 &visible_symbols,
-                ctx.file_name.clone(),
+                ctx,
             );
             let span = property_span.or(assignment.target_span);
             ctx.push(match span {
@@ -1014,7 +1014,7 @@ fn check_member_assignment_itself(
                     &property_name,
                     &object_type,
                     &visible_symbols,
-                    ctx.file_name.clone(),
+                    ctx,
                 )),
             };
             if let Some(diagnostic) = diagnostic
@@ -1145,7 +1145,7 @@ pub(crate) fn check_this_property_assignment(
                     &property_name,
                     &object_type,
                     &visible_symbols,
-                    ctx.file_name.clone(),
+                    ctx,
                 )),
             };
             if let Some(diagnostic) = diagnostic {

@@ -1145,7 +1145,7 @@ fn evaluate_optional_property_access(
                 property_name,
                 object_type,
                 symbols,
-                ctx.file_name.clone(),
+                ctx,
             )),
         };
         if let Some(diagnostic) = diagnostic {

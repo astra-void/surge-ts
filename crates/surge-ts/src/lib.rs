@@ -538,6 +538,14 @@ impl Project {
                 String::new(),
             );
         }
+        if loaded
+            .compiler_options
+            .lib
+            .iter()
+            .any(|lib| lib.eq_ignore_ascii_case("dom"))
+        {
+            resolved_modules.insert(CheckerOptions::LIB_DOM_SENTINEL.to_string(), String::new());
+        }
 
         surge_ts_checker::set_fast_process_exit(options.fast_process_exit);
         let node_module_resolution = matches!(

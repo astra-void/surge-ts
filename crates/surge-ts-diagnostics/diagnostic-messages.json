@@ -608,6 +608,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2812",
+    "category": "Error",
+    "message": "Property '{0}' does not exist on type '{1}'. Try changing the 'lib' compiler option to include 'dom'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS2552",
     "category": "Error",
     "message": "Cannot find name '{0}'. Did you mean '{1}'?",

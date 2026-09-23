@@ -609,6 +609,14 @@ message = "Property '{0}' does not exist on type '{1}'. Did you mean '{2}'?"
 arity = 3
 
 [[diagnostic]]
+code = "TS2812"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' does not exist on type '{1}'. Try changing the 'lib' compiler option to include 'dom'."
+arity = 2
+
+[[diagnostic]]
 code = "TS2552"
 category = "Error"
 source = "typescript"

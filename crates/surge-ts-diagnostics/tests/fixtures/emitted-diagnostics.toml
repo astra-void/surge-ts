@@ -797,6 +797,15 @@ oracle = [
   "property-spelling-suggestion-basic",
 ]
 
+[TS2812]
+status = "emitted"
+fixtures = [
+  "tests/compat-projects/missing-dom-property-message-basic/src/index.ts",
+]
+oracle = [
+  "missing-dom-property-message-basic",
+]
+
 [TS2552]
 status = "emitted"
 fixtures = [

@@ -765,6 +765,16 @@ pub const TS2551: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2812: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2812",
+    number: Some(2812),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Property '{0}' does not exist on type '{1}'. Try changing the 'lib' compiler option to include 'dom'.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2552: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2552",
     number: Some(2552),
@@ -4192,6 +4202,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2538,
     TS2550,
     TS2551,
+    TS2812,
     TS2552,
     TS2554,
     TS2555,
@@ -5283,6 +5294,18 @@ impl Diagnostic {
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),
                 DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2812(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2812,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
             ],
             file_name,
         )
