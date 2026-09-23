@@ -316,6 +316,7 @@ pub(super) fn parse_member_assignment(
                     property_name: member.property.name.to_string(),
                     property_span: Some(text_span_from_oxc_span(member.property.span)),
                     is_bracketed: false,
+                    binding_element: false,
                 },
                 member.span,
             )
@@ -389,6 +390,7 @@ fn parse_this_property_assignment(
         property_name: property_name.clone(),
         property_span,
         is_bracketed,
+        binding_element: false,
     };
     let value = super::logical_assignment_value(
         assignment.operator,

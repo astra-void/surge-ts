@@ -358,6 +358,7 @@ fn build_component_value_expression(
             property_name: (*segment).to_string(),
             property_span,
             is_bracketed: false,
+            binding_element: false,
         };
     }
 

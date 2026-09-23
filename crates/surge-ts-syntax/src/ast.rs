@@ -1320,6 +1320,11 @@ pub enum ParsedExpression {
         /// access for lookup reuse) rather than `obj.key`. Only dotted accesses
         /// are subject to TS4111 (`noPropertyAccessFromIndexSignature`).
         is_bracketed: bool,
+        /// A read a destructuring element makes of its source (tsc's
+        /// `getIndexedAccessType` at the element's name, with no access
+        /// expression): a missing property is TS2339 on the name, as for a
+        /// dotted access, while the rest of it behaves as bracketed.
+        binding_element: bool,
     },
     IndexAccess {
         object_name: String,

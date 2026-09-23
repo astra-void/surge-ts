@@ -1570,6 +1570,7 @@ pub(crate) fn parse_static_member_expression(
         property_name: member_expression.property.name.to_string(),
         property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
         is_bracketed: false,
+        binding_element: false,
     })
 }
 
@@ -1669,6 +1670,7 @@ pub(super) fn parse_computed_member_expression(
                 property_name,
                 property_span,
                 is_bracketed: true,
+                binding_element: false,
             });
         }
     }

@@ -709,13 +709,14 @@ fn evaluate_expression_unsettled(
             property_name,
             property_span,
             is_bracketed,
-            ..
+            binding_element,
         } => evaluate_property_access(
             object,
             object_span,
             property_name,
             property_span,
             is_bracketed,
+            *binding_element,
             expression,
             fallback_span,
             symbols,
@@ -1433,6 +1434,7 @@ fn evaluate_property_access(
     property_name: &String,
     property_span: &Option<SyntaxTextSpan>,
     is_bracketed: &bool,
+    binding_element: bool,
     expression: &ParsedExpression,
     fallback_span: Option<SyntaxTextSpan>,
     symbols: &SymbolTable,
@@ -1469,6 +1471,7 @@ fn evaluate_property_access(
     }
     let inferred_expression = infer_expression(expression, symbols, ctx);
     if *is_bracketed
+        && !binding_element
         && let InferredExpression::MissingProperty { object_type, .. } = &inferred_expression
     {
         report_missing_element(

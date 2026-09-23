@@ -1103,6 +1103,7 @@ pub(crate) fn check_this_property_assignment(
             property_name: assignment.property_name.clone(),
             property_span: assignment.property_span,
             is_bracketed: false,
+            binding_element: false,
         };
         if let InferredExpression::MissingProperty {
             property_name,
@@ -1180,6 +1181,7 @@ pub(crate) fn check_this_property_assignment(
         property_name: assignment.property_name.clone(),
         property_span: assignment.property_span,
         is_bracketed: false,
+        binding_element: false,
     };
     if target_unresolved || value_type.is_unmodelled() || property_type.is_unmodelled() {
         crate::checks::function::narrowing::narrow_assignment_target_in_scope(&target, &value_type, scopes);

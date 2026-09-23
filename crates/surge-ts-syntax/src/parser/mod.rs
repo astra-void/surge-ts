@@ -548,19 +548,31 @@ fn lower_assignment_pattern(
             }
         }
         AssignmentTarget::ObjectAssignmentTarget(pattern) => {
-            let property_read = |name: &str, span| ParsedExpression::PropertyAccess {
-                object: Box::new(source.clone()),
-                object_span: source_span,
-                property_name: name.to_string(),
-                property_span: span,
-                is_bracketed: false,
+            // A defaulted element of an object-literal source that lacks it
+            // reads `undefined` (tsc's `AccessFlags.AllowMissing`); anything
+            // else missing is TS2339 on the element.
+            let literal_properties = static_object_literal(source);
+            let property_read = |name: &str, span, has_default: bool| {
+                if has_default
+                    && literal_properties.is_some_and(|properties| literal_lacks_property(properties, name))
+                {
+                    return ParsedExpression::UndefinedLiteral;
+                }
+                ParsedExpression::PropertyAccess {
+                    object: Box::new(source.clone()),
+                    object_span: source_span,
+                    property_name: name.to_string(),
+                    property_span: span,
+                    is_bracketed: true,
+                    binding_element: true,
+                }
             };
             for property in &pattern.properties {
                 match property {
                     AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(shorthand) => {
                         let identifier = &shorthand.binding;
                         let span = Some(text_span_from_oxc_span(identifier.span));
-                        let read = property_read(&identifier.name, span);
+                        let read = property_read(&identifier.name, span, shorthand.init.is_some());
                         let value = with_default(read, shorthand.init.as_ref());
                         assign_identifier(identifier, value, assignments);
                     }
@@ -572,7 +584,7 @@ fn lower_assignment_pattern(
                             continue;
                         };
                         let span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(target)));
-                        let value = with_default(property_read(&name, span), default);
+                        let value = with_default(property_read(&name, span, default.is_some()), default);
                         assign(target, value, assignments);
                     }
                 }
@@ -823,6 +835,7 @@ fn parse_object_binding_property_declarations(
         property_name: identifier.name.to_string(),
         property_span: Some(text_span_from_oxc_span(identifier.span)),
         is_bracketed: true,
+        binding_element: true,
     };
 
     parse_binding_pattern_declarations(
@@ -861,6 +874,31 @@ fn static_object_literal(expression: &ParsedExpression) -> Option<&[crate::Parse
     }
 }
 
+/// The elements of the array literal `expression` statically evaluates to, as
+/// [`static_object_literal`] finds an object literal.
+fn static_array_literal(expression: &ParsedExpression) -> Option<&[crate::ParsedArrayElement]> {
+    match expression {
+        ParsedExpression::ArrayLiteral { elements, .. } => Some(elements),
+        ParsedExpression::ConstAssertion { expression, .. } => static_array_literal(expression),
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } => {
+            let properties = static_object_literal(object)?;
+            let property = properties
+                .iter()
+                .find(|property| property.name == *property_name && !property.is_spread)?;
+            static_array_literal(&property.value)
+        }
+        ParsedExpression::NullishCoalescing { left, right, .. } => match left.as_ref() {
+            ParsedExpression::UndefinedLiteral => static_array_literal(right),
+            left => static_array_literal(left),
+        },
+        _ => None,
+    }
+}
+
 /// Whether a literal certainly does not write `name`: a spread or a computed key
 /// could supply it.
 fn literal_lacks_property(properties: &[crate::ParsedObjectProperty], name: &str) -> bool {
@@ -889,7 +927,14 @@ fn parse_array_pattern_declarations(
 
         // tsc reports an element the source lacks on the binding element itself.
         let element_span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(element)));
-        let element_initializer = match &initializer {
+        // An array literal initializer is contextually typed by the pattern as
+        // a tuple (`getTypeFromArrayBindingPattern`), so each element reads its
+        // own entry rather than the union of all of them.
+        let literal_element = static_array_literal(&initializer).and_then(|elements| {
+            (index < elements.len() && elements.iter().take(index + 1).all(|element| !element.spread))
+                .then(|| elements[index].expression.clone())
+        });
+        let element_initializer = literal_element.unwrap_or_else(|| match &initializer {
             ParsedExpression::Identifier { name, .. } => ParsedExpression::IndexAccess {
                 object_name: name.clone(),
                 object_span: initializer_span,
@@ -905,7 +950,7 @@ fn parse_array_pattern_declarations(
                 index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
                 index_span: element_span,
             },
-        };
+        });
 
         declarations.extend(parse_binding_pattern_declarations(
             element,
