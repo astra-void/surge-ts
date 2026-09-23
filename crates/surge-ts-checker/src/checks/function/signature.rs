@@ -722,6 +722,14 @@ pub(crate) fn map_function_signature(
             );
 
             match inferred_initializer {
+                // Only a variable initialized with `null` or `undefined` is
+                // auto-typed; a parameter keeps the initializer's type, which
+                // widens to `any` only without strictNullChecks.
+                InferredExpression::Known(ty @ (Type::Null | Type::Undefined))
+                    if ctx.options.strict_null_checks =>
+                {
+                    ty
+                }
                 InferredExpression::Known(ty) => widen_implicit_variable_initializer_type(
                     SymbolKind::Let,
                     initializer,
