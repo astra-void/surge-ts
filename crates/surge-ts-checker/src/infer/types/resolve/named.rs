@@ -48,7 +48,7 @@ fn signature_context_cache_enabled() -> bool {
 /// the genuine `unknown` keyword stays eligible. References are keyed by
 /// (id, arguments) and never peeled, so their arguments are screened too.
 /// Budget exhaustion means "cannot prove safe" and makes the site ineligible.
-fn signature_cache_safe_argument(ty: &Type, depth: usize, budget: &mut usize) -> bool {
+pub(crate) fn signature_cache_safe_argument(ty: &Type, depth: usize, budget: &mut usize) -> bool {
     if depth >= 16 || *budget == 0 {
         return false;
     }
@@ -1151,7 +1151,7 @@ fn wrap_named_object_reference(
     }
 }
 
-fn declaration_file_is_library_scoped(
+pub(crate) fn declaration_file_is_library_scoped(
     declaration: &TypeDeclarationInfo,
     ctx: &CheckerContext,
 ) -> bool {
