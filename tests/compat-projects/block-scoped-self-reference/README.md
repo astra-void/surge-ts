@@ -13,3 +13,7 @@ TS2454 goes with it (TS7022 under `noImplicitAny`); an annotated one reads at
 its declared type, which is unassigned there unless it admits `undefined`. A
 read from a nested function is deferred and legal, and a `var` has no
 temporal dead zone.
+
+A write is positional too: an assignment expression whose target is in its
+temporal dead zone is TS2448 as well, and tsc still checks the write itself —
+`const c = (c = 1)` is TS2588 beside it.

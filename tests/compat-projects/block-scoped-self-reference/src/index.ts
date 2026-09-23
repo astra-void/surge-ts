@@ -23,6 +23,16 @@ namespace Container {
     export const member = member;
 }
 
+// A write is positional too, and the write itself is still checked.
+let reassigned = (reassigned = 1);
+const constant = (constant = 1);
+let typedWrite: number = (typedWrite = 1);
+export function writes() {
+    record((pending = 3));
+    let pending = 0;
+}
+declare function record(value: unknown): void;
+
 // Accepted: a deferred read, and a `var`, which has no temporal dead zone.
 let lazy = () => lazy;
 let viaFunction = function () { return viaFunction; };

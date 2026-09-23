@@ -31,14 +31,31 @@ pub(crate) fn check_expression_flow_impl(
     let mut blocked = false;
     let result = match expression {
         // The target is written, not read; the statement marks it assigned
-        // once the expression has run.
-        ParsedExpression::Assignment { value, value_span, .. } => check_expression_flow_impl(
+        // once the expression has run. The write is still positional, so one in
+        // the binding's temporal dead zone is TS2448, which blocks nothing:
+        // tsc goes on to check the write itself (`const c = (c = 1)` is TS2588
+        // too).
+        ParsedExpression::Assignment {
+            target_name,
+            target_span,
             value,
-            value_span.or(fallback_span),
-            flow_state,
-            statement_index,
-            ctx,
-        ),
+            value_span,
+        } => {
+            let _ = check_assignment_target_flow(
+                target_name,
+                flow_state,
+                statement_index,
+                ctx,
+                target_span.or(fallback_span),
+            );
+            check_expression_flow_impl(
+                value,
+                value_span.or(fallback_span),
+                flow_state,
+                statement_index,
+                ctx,
+            )
+        }
         ParsedExpression::Identifier { name, span } => report_read_flow(
             name,
             span.or(fallback_span),
@@ -528,7 +545,7 @@ pub(crate) fn check_assignment_target_flow(
         return FlowCheck::Clear;
     }
 
-    let FlowReadOutcome::UseBeforeDeclaration { .. } =
+    let FlowReadOutcome::UseBeforeDeclaration { circular_at, .. } =
         flow_state.read_identifier(target_name, statement_index)
     else {
         return FlowCheck::Clear;
@@ -540,6 +557,16 @@ pub(crate) fn check_assignment_target_flow(
     }
 
     ctx.push(diagnostic);
+    // Checking the write needs the target's type, which is what is being
+    // resolved.
+    if let Some(declaration_span) = circular_at
+        && ctx.options.no_implicit_any
+    {
+        ctx.push(
+            Diagnostic::ts7022(target_name, ctx.file_name.clone())
+                .with_span(convert_span(declaration_span)),
+        );
+    }
     FlowCheck::Blocked
 }
 
