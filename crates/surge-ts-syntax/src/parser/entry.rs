@@ -246,11 +246,16 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     let import_call_specifiers =
         super::import_calls::collect_import_call_specifiers(&parsed.program, source_text);
 
-    // Grammar findings are reported for hand-written TypeScript only: surge
-    // suppresses every declaration-file diagnostic, and a `.js` file is not
-    // type-checked the way `checkJs` would need.
+    // Grammar findings are reported for hand-written TypeScript only: a
+    // declaration file gets just the top-level `declare` requirement (which
+    // `skipLibCheck` then suppresses), and a `.js` file is not type-checked
+    // the way `checkJs` would need.
     let (grammar_diagnostics, parenthesized_expressions) = if collects_grammar_diagnostics(file_name) {
         super::grammar::collect_grammar_diagnostics(&parsed.program)
+    } else if is_declaration_file_name(file_name) {
+        let mut diagnostics = Vec::new();
+        super::grammar_modifiers::collect_declaration_file_diagnostics(&parsed.program, &mut diagnostics);
+        (diagnostics, Vec::new())
     } else {
         (Vec::new(), Vec::new())
     };
@@ -274,11 +279,12 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     }
 }
 
+fn is_declaration_file_name(file_name: &str) -> bool {
+    file_name.ends_with(".d.ts") || file_name.ends_with(".d.mts") || file_name.ends_with(".d.cts")
+}
+
 fn collects_grammar_diagnostics(file_name: &str) -> bool {
-    if file_name.ends_with(".d.ts")
-        || file_name.ends_with(".d.mts")
-        || file_name.ends_with(".d.cts")
-    {
+    if is_declaration_file_name(file_name) {
         return false;
     }
     [".ts", ".tsx", ".mts", ".cts"]

@@ -875,8 +875,21 @@ pub(crate) fn unclaimed_parser_errors<'a>(
         })
         .map(|finding| finding.span)
         .collect();
+    // tsc's parser reports `super<T>` as TS2754 and still builds the
+    // expression with its type arguments, so a `.member` after it is not the
+    // instantiation-expression access oxc reports as TS1477.
+    let super_type_arguments: Vec<usize> = findings
+        .iter()
+        .filter(|finding| matches!(finding.kind, surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2754)))
+        .map(|finding| finding.span.start)
+        .collect();
     errors.iter().filter(move |error| {
         if error.code.is_some_and(|code| claimed.contains(&code)) {
+            return false;
+        }
+        if error.code == Some(1477)
+            && error.span.is_some_and(|span| super_type_arguments.contains(&span.start))
+        {
             return false;
         }
         !(error.code == Some(1030)
@@ -1071,6 +1084,7 @@ pub(super) fn check_program_file(
     }
 
     if parsed_file.file_kind.is_declaration() {
+        emit_grammar_diagnostics(&parsed_file.grammar_diagnostics, ctx);
         emit_unsupported_declaration_diagnostics(&parsed_file.statements, ctx);
         let diagnostics = std::mem::take(&mut ctx.diagnostics);
         let stats = std::mem::take(&mut ctx.stats);

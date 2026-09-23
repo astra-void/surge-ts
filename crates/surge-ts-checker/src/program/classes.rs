@@ -1697,7 +1697,9 @@ fn check_override_modifiers(class: &ParsedClassDeclaration, ctx: &mut CheckerCon
             ParsedClassMember::Method(method) if method.is_override => {
                 Some((&method.name, method.name_span, method.is_static))
             }
-            ParsedClassMember::Property(property) if property.is_override => {
+            // An ambient (`declare`) member is skipped, as in tsc's
+            // `checkMembersForOverrideModifier`.
+            ParsedClassMember::Property(property) if property.is_override && !property.is_declare => {
                 Some((&property.name, property.name_span, property.is_static))
             }
             ParsedClassMember::Accessor(accessor) if accessor.is_override => {
