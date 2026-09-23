@@ -341,17 +341,27 @@ pub(crate) fn emit_type_is_not_generic(
     ctx.push_utility_diagnostic_once(diagnostic);
 }
 
+/// tsc's wrong-argument-count error on a generic type reference: TS2314 when
+/// every type parameter is required, TS2707 when some have defaults. It is
+/// reported on the reference; a lookup surge synthesized has none, and a
+/// report there would land on whatever declaration it named.
 pub(crate) fn emit_generic_arity(
     name: &str,
-    arity: usize,
+    min_type_argument_count: usize,
+    type_parameter_count: usize,
     name_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
 ) {
-    let mut diagnostic = Diagnostic::ts2314(name, arity, ctx.file_name.clone());
-    if let Some(span) = name_span {
-        diagnostic = diagnostic.with_span(convert_span(span));
-    }
-    ctx.push_utility_diagnostic_once(diagnostic);
+    let Some(span) = name_span else {
+        return;
+    };
+    let file_name = ctx.file_name.clone();
+    let diagnostic = if min_type_argument_count == type_parameter_count {
+        Diagnostic::ts2314(name, type_parameter_count, file_name)
+    } else {
+        Diagnostic::ts2707(name, min_type_argument_count, type_parameter_count, file_name)
+    };
+    ctx.push_utility_diagnostic_once(diagnostic.with_span(convert_span(span)));
 }
 
 /// `Foo<Bad>` where `Foo`'s parameter is constrained. Only reported when both the

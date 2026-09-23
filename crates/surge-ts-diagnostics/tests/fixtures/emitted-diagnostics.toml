@@ -480,6 +480,12 @@ span_tests = [
   "crates/surge-ts-checker/tests/generics_spans.rs",
 ]
 
+[TS2707]
+status = "emitted"
+oracle = [
+  "tests/compat-projects/generic-reference-type-argument-range/tsconfig.json",
+]
+
 [TS2315]
 status = "emitted"
 fixtures = [

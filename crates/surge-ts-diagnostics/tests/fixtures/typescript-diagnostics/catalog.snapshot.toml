@@ -241,6 +241,14 @@ message = "Generic type '{0}' requires {1} type argument(s)."
 arity = 2
 
 [[diagnostic]]
+code = "TS2707"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Generic type '{0}' requires between {1} and {2} type arguments."
+arity = 3
+
+[[diagnostic]]
 code = "TS2315"
 category = "Error"
 source = "typescript"

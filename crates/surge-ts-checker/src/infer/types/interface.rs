@@ -343,13 +343,14 @@ pub(crate) fn resolve_interface(
         ctx.namespace_member_prefix_stack.push(prefix);
     }
     // `getTypeFromClassOrInterfaceReference` reports a wrong argument count on
-    // the reference, naming the generic type with its parameters (`C<T>`).
+    // the reference, naming the generic type with its parameters (`C<T>`); a
+    // lookup surge synthesized has no reference to report it on.
     let generic_display_name = generic_interface_display_name(interface);
     let bound = bind_type_arguments(
         &interface.body.type_parameters,
         type_arguments,
         &generic_display_name,
-        reference_span.or(interface.name_span),
+        reference_span,
         ctx,
         resolving,
         substitution,

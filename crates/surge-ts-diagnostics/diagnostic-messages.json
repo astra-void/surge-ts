@@ -240,6 +240,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2707",
+    "category": "Error",
+    "message": "Generic type '{0}' requires between {1} and {2} type arguments.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
     "code": "TS2315",
     "category": "Error",
     "message": "Type '{0}' is not generic.",
