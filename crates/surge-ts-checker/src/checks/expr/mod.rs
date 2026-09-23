@@ -204,6 +204,7 @@ fn missing_required_properties(source: &Type, target: &Type) -> Option<Vec<Strin
     if let Type::Array(_) = &target {
         return missing_array_members(&source);
     }
+    if let Type::Tuple(elements) = &target { return surge_ts_types::tuple_target_missing_property(&source, elements).map(|name| vec![name]); }
     let Type::Object(target_object) = &target else {
         return None;
     };

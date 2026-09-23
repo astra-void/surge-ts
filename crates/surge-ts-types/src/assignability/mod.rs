@@ -68,6 +68,14 @@ thread_local! {
     /// answer the cap gives.
     static ASSIGNABILITY_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 
+    /// Apparent shapes built for one comparison (see
+    /// [`array_like_apparent_object`]). Their member types key the relation
+    /// memo by payload address, so they are held until the outermost query
+    /// ends: a freed member could otherwise hand its address to the next
+    /// shape's and be answered from the stale entry.
+    static SYNTHESIZED_TARGETS: std::cell::RefCell<Vec<Type>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+
     /// The relation the current outermost query is being decided under. Constant
     /// for the duration of one query; [`is_comparable_to`] sets and restores it.
     static CURRENT_RELATION: std::cell::Cell<Relation> =
@@ -319,6 +327,7 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
                     OBJECT_ASSIGNABILITY_IN_PROGRESS.with(|set| set.borrow_mut().clear());
                     ASSIGNABILITY_RELATION_CACHE.with(|cache| cache.borrow_mut().clear());
                     ASSIGNABILITY_STEPS.with(|steps| steps.set(0));
+                    SYNTHESIZED_TARGETS.with(|targets| targets.borrow_mut().clear());
                 }
             });
         }
@@ -1087,6 +1096,23 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             return true;
         }
         let resolved = reference.resolve_arc();
+        // A readonly target's apparent members are `ReadonlyArray<T>`'s, which
+        // the mutable shape it resolves to would overstate.
+        if reference.is_readonly_array()
+            && let Type::Object(source) = from
+        {
+            return match resolved.as_ref() {
+                Type::Array(element) => object_related_to_array_like(source, from, element, None, true),
+                Type::Tuple(elements) => object_related_to_array_like(
+                    source,
+                    from,
+                    &crate::tuple_element_union(elements),
+                    Some(elements),
+                    true,
+                ),
+                _ => false,
+            };
+        }
         return is_assignable_to(from, &resolved);
     }
 
@@ -1170,6 +1196,22 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
                 .chain(std::iter::once(target.rest.as_ref()))
                 .all(|slot| is_assignable_to(source, slot))
         }
+        // relater.go `structuredTypeRelatedToWorker`: an object that is not an
+        // array or tuple reaches an array or fixed-tuple target through the
+        // structural comparison, so `interface StrNum extends Array<string |
+        // number> { 0: string; 1: number; length: 2 }` satisfies `[string,
+        // number]`. A tuple with a rest element admits no such source
+        // (`propertiesRelatedTo`'s `ElementFlagsVariable` check).
+        (Type::Object(source), Type::Array(element)) => {
+            object_related_to_array_like(source, from, element, None, false)
+        }
+        (Type::Object(source), Type::Tuple(elements)) => object_related_to_array_like(
+            source,
+            from,
+            &crate::tuple_element_union(elements),
+            Some(elements),
+            false,
+        ),
         (Type::Union(from_union), Type::Union(_)) => {
             // Check each source member against the whole target union rather
             // than `any` single target member: a source member that is itself a
@@ -1942,6 +1984,124 @@ fn object_assignable(from_obj: &ObjectType, to_obj: &ObjectType, from: &Type, to
         set.borrow_mut().remove(&key);
     });
     result
+}
+
+/// An object source against an array or fixed-tuple target, related as
+/// against the object type the target's apparent type is (see
+/// [`array_like_apparent_object`]). Most objects lack the array surface, so
+/// the member names are checked before any member type is built.
+fn object_related_to_array_like(
+    source: &ObjectType,
+    from: &Type,
+    element: &Type,
+    tuple: Option<&[Type]>,
+    readonly: bool,
+) -> bool {
+    let has_array_members = crate::array_property_names()
+        .iter()
+        .filter(|name| !readonly || !crate::MUTATING_ARRAY_MEMBERS.contains(name))
+        .all(|name| supplies_required_member(source, name));
+    let has_elements = tuple.is_none_or(|elements| {
+        (0..crate::tuple_min_length(elements)).all(|index| supplies_required_member(source, &index.to_string()))
+    });
+    if !has_array_members || !has_elements {
+        return false;
+    }
+    let target = Type::Object(array_like_apparent_object(element, tuple, readonly));
+    let Type::Object(target_object) = &target else {
+        return false;
+    };
+    let related = object_assignable(source, target_object, from, &target);
+    SYNTHESIZED_TARGETS.with(|targets| targets.borrow_mut().push(target));
+    related
+}
+
+/// The members of an array's or a fixed tuple's apparent type: `Array<T>`'s
+/// over the element type (`ReadonlyArray<T>`'s for a readonly one, which lacks
+/// the mutators), and for a tuple the element properties and the `length`
+/// `createTupleTargetType` declares, beside the number index signature.
+fn array_like_apparent_object(element: &Type, tuple: Option<&[Type]>, readonly: bool) -> ObjectType {
+    let mut properties = crate::PropertyMap::default();
+    for name in crate::array_property_names() {
+        if readonly && crate::MUTATING_ARRAY_MEMBERS.contains(name) {
+            continue;
+        }
+        let property = if *name == "length" {
+            crate::ObjectProperty::required(tuple.map_or(Type::Number, crate::tuple_length_type))
+        } else {
+            let Some(member) = crate::array_member_type(name, element) else {
+                continue;
+            };
+            crate::ObjectProperty::required(member).with_method(true)
+        };
+        properties.insert((*name).into(), property);
+    }
+    if let Some(elements) = tuple {
+        let min_length = crate::tuple_min_length(elements);
+        for (index, element) in elements.iter().enumerate() {
+            let property = if index < min_length {
+                crate::ObjectProperty::required(element.clone())
+            } else {
+                crate::ObjectProperty::optional(element.clone())
+            };
+            properties.insert(index.to_string().into(), property);
+        }
+    }
+    // Built directly rather than through `ObjectType::new`: this shape lives
+    // for one comparison and has no business in the canonical property-map
+    // store.
+    ObjectType {
+        properties: Arc::new(properties),
+        property_map_id: None,
+        string_index_type: None,
+        number_index_type: Some(Arc::new(element.clone())),
+        alias_name: None,
+        alias_id: None,
+        construct_signature: None,
+        call_signature: None,
+        is_intersection: false,
+        synthetic_open_index: false,
+        non_primitive: false,
+        without_inferable_index: false,
+        intersection_operands: None,
+    }
+}
+
+/// Whether `source` answers a required target member `name` the way
+/// [`object_assignability_failure`] looks it up: a property, an index
+/// signature standing for members surge could not enumerate, the `Function`
+/// surface of a callable object, or the global `Object` members.
+fn supplies_required_member(source: &ObjectType, name: &str) -> bool {
+    source.properties.contains_key(name)
+        || source
+            .applicable_index_type(crate::object::is_numeric_key(name))
+            .is_some_and(|index| source.synthetic_open_index || index.is_unknown())
+        || callable_object_function_member(source, name).is_some()
+        || object_prototype_member(name).is_some()
+}
+
+/// relater.go `reportUnmatchedProperty` for an object source against a fixed
+/// tuple target: the one member the source lacks, which TS2741 names. With
+/// more than one missing, `tryElaborateArrayLikeErrors` declines to list them
+/// for a source that is not an array, so the plain assignability head stands.
+pub fn tuple_target_missing_property(source: &Type, elements: &[Type]) -> Option<String> {
+    let Type::Object(source) = source else {
+        return None;
+    };
+    // `shouldReportUnmatchedPropertyError`: a source that is only a signature
+    // is not reported by its members.
+    if source.properties.is_empty()
+        && (source.call_signature().is_some() || source.construct_signature().is_some())
+    {
+        return None;
+    }
+    let target = array_like_apparent_object(&crate::tuple_element_union(elements), Some(elements), false);
+    let mut missing = target
+        .required_properties()
+        .filter(|(name, _)| !supplies_required_member(source, name))
+        .map(|(name, _)| name.to_string());
+    let first = missing.next()?;
+    missing.next().is_none().then_some(first)
 }
 
 /// tsc's `indexSignaturesRelatedTo`. A target index signature is satisfied by
