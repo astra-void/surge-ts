@@ -119,6 +119,21 @@ fn collect<'e>(
                     operator,
                     ParsedBinaryOperator::StrictEquals | ParsedBinaryOperator::StrictNotEquals
                 );
+                // tsc's `narrowTypeByConstructor`: `x.constructor === C` keeps
+                // what `C` constructs on its equal edge, which is never
+                // `undefined` — unless `C` is `Object` or `Function`, whose
+                // prototypes narrow nothing.
+                if let Some((name, constructor)) = constructor_comparison(left, right) {
+                    let narrows = !matches!(
+                        constructor,
+                        ParsedExpression::Identifier { name: constructor, .. }
+                            if constructor == "Object" || constructor == "Function"
+                    );
+                    if equal_edge && narrows {
+                        out.push(name);
+                    }
+                    return;
+                }
                 if let Some((name, tag)) = typeof_comparison(left, right) {
                     // `typeof x === "undefined"` keeps only `undefined`; any
                     // other tag excludes it.
@@ -212,6 +227,36 @@ fn typeof_comparison<'e>(
     typeof_operand(left)
         .zip(tag(right))
         .or_else(|| typeof_operand(right).zip(tag(left)))
+}
+
+/// `x.constructor` compared with a constructor reference, in either operand
+/// order.
+fn constructor_comparison<'e>(
+    left: &'e ParsedExpression,
+    right: &'e ParsedExpression,
+) -> Option<(&'e str, &'e ParsedExpression)> {
+    let constructor_of = |expression: &'e ParsedExpression| match expression {
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } if property_name == "constructor" => match object.as_ref() {
+            ParsedExpression::Identifier { name, .. } => Some(name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    };
+    let is_reference = |expression: &ParsedExpression| {
+        matches!(
+            expression,
+            ParsedExpression::Identifier { .. } | ParsedExpression::PropertyAccess { .. }
+        )
+    };
+    match (constructor_of(left), constructor_of(right)) {
+        (Some(name), _) if is_reference(right) => Some((name, right)),
+        (_, Some(name)) if is_reference(left) => Some((name, left)),
+        _ => None,
+    }
 }
 
 /// A local compared with some other expression, in either operand order.
