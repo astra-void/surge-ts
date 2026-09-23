@@ -218,29 +218,37 @@ fn parameter_property_modifiers_start(source_text: &str, position: usize) -> Opt
         .then_some(start)
 }
 
-/// Where tsc's parser stops at an update expression (`x++`, `--x`) written
-/// as a write target, and with what. tsc parses an assignment's target and a
-/// prefix `++`/`--` operand as a left-hand-side expression only, so the update
-/// expression ends the statement, and the next token — the assignment
-/// operator, or the trailing `++`/`--` of `--x--` — is TS1005 `';' expected`
-/// (`parseExpressionStatement`'s `parseSemicolon`); a prefix operand that is
-/// itself a prefix update (`++ ++x`) has no left-hand-side expression to
-/// begin with, TS1109 on its operator. Parenthesized, the update expression is
-/// a left-hand-side expression and the checker's to judge.
+/// Where tsc's parser stops at a write target it cannot take, and with what.
+/// tsc parses an assignment's target and a prefix `++`/`--` operand as a
+/// left-hand-side expression only. A prefix operand that cannot begin one —
+/// another update, a unary operator, `await` (`++ ++x`, `++await x`) — is
+/// TS1109 `Expression expected` on its first token (`parsePrimaryExpression`).
+/// An update expression that ends where the statement must end is TS1005
+/// `';' expected` on the next token (`parseExpressionStatement`'s
+/// `parseSemicolon`): the assignment operator after it, or the trailing
+/// `++`/`--` of `--x--`. Parenthesized, the operand is a left-hand-side
+/// expression and the checker's to judge.
 fn update_target_stop(text: &str, span: crate::TextSpan, source_text: &str) -> Option<(u32, crate::TextSpan)> {
+    let before = source_text.get(..span.start)?.trim_end();
+    let under_prefix = before.ends_with("++") || before.ends_with("--");
+    let missing_operand = |start: usize| {
+        let end = super::grammar_context::first_token_end(source_text, start);
+        Some((1109, crate::TextSpan { start, end }))
+    };
+    // oxc starts a prefix update nested in another at the outer operator.
+    if let Some(rest) = text.strip_prefix("++").or_else(|| text.strip_prefix("--")) {
+        let inner = rest.trim_start();
+        if begins_no_left_hand_side(inner) {
+            return missing_operand(span.start + (text.len() - inner.len()));
+        }
+    }
+    if under_prefix && begins_no_left_hand_side(text) {
+        return missing_operand(span.start);
+    }
     let postfix = text.ends_with("++") || text.ends_with("--");
     let prefix = text.starts_with("++") || text.starts_with("--");
     if !postfix && !prefix {
         return None;
-    }
-    // oxc starts a prefix update nested in another at the outer operator.
-    if prefix {
-        let rest = &text[2..];
-        let inner = rest.trim_start();
-        if inner.starts_with("++") || inner.starts_with("--") {
-            let start = span.start + 2 + (rest.len() - inner.len());
-            return Some((1109, crate::TextSpan { start, end: start + 2 }));
-        }
     }
     let after = source_text.get(span.end..)?.trim_start();
     let after_start = source_text.len() - after.len();
@@ -251,9 +259,19 @@ fn update_target_stop(text: &str, span: crate::TextSpan, source_text: &str) -> O
     if let Some(operator) = assignment {
         return Some((1005, crate::TextSpan { start: after_start, end: after_start + operator.len() }));
     }
-    let before = source_text.get(..span.start)?.trim_end();
-    (postfix && (before.ends_with("++") || before.ends_with("--")))
-        .then(|| (1005, crate::TextSpan { start: span.end - 2, end: span.end }))
+    (postfix && under_prefix).then(|| (1005, crate::TextSpan { start: span.end - 2, end: span.end }))
+}
+
+/// Whether `text` begins with a token no left-hand-side expression starts
+/// with: an update or unary operator, or a keyword operator.
+fn begins_no_left_hand_side(text: &str) -> bool {
+    if text.starts_with(['+', '-', '!', '~']) {
+        return true;
+    }
+    ["typeof", "void", "delete", "await", "yield"].iter().any(|keyword| {
+        text.strip_prefix(keyword)
+            .is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$'))
+    })
 }
 
 const ASSIGNMENT_OPERATORS: [&str; 16] = [

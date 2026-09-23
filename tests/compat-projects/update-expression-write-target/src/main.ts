@@ -8,4 +8,7 @@ count-- += 1;
 ++list[0]--;
 --count++ ;
 ++ ++count;
+async function awaited() {
+    ++await count;
+}
 export const gated: number = "not reported once the program has a parse error";
