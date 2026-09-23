@@ -325,6 +325,15 @@ pub(crate) fn export_assignment_target_is_exempt(
     expression: &surge_ts_syntax::ParsedExpression,
     ctx: &CheckerContext,
 ) -> bool {
+    // `IsValidTypeOnlyAliasUseSite`: the bare identifier of an export
+    // assignment is not an expression node, so naming a type-only alias there
+    // is not a use of its value (TS1361/TS1362). Parenthesized, it is one.
+    if let surge_ts_syntax::ParsedExpression::Identifier { name, span } = expression
+        && span.is_none_or(|span| ctx.parenthesized_outer_span(span).is_none())
+        && ctx.type_only_value_reference(name).is_some()
+    {
+        return true;
+    }
     let mut root = expression;
     let name = loop {
         match root {
