@@ -197,6 +197,16 @@ impl CheckerContext {
                 _ => false,
             }
         }
+        // An async body returns the awaited value of what it `return`s: tsc's
+        // `getReturnTypeFromBody` awaits each return expression, and
+        // `isUnwrappedReturnTypeUndefinedVoidOrAny` tests that awaited type.
+        let awaited;
+        let ty = if self.in_async_body {
+            awaited = crate::checks::call::awaited_type(ty);
+            &awaited
+        } else {
+            ty
+        };
         if let Some(frame) = self.contextual_return_frames.last_mut() {
             if admits_undefined(ty) {
                 frame.returned_void_like = true;
