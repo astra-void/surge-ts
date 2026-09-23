@@ -40,7 +40,7 @@ pub(crate) fn unwritable_binding_diagnostic(
 
 pub(crate) fn check_assignment(assignment: ParsedAssignment, ctx: &mut CheckerContext) {
     let symbols = ctx.symbols.clone();
-    check_assignment_with_symbols(assignment, &symbols, false, ctx);
+    let _ = check_assignment_with_symbols(assignment, &symbols, false, ctx);
 }
 
 pub(crate) fn check_assignment_with_symbols(
@@ -48,9 +48,9 @@ pub(crate) fn check_assignment_with_symbols(
     symbols: &SymbolTable,
     shadowed_locally: bool,
     ctx: &mut CheckerContext,
-) {
+) -> bool {
     let Some(target_span) = assignment.target_span else {
-        return;
+        return false;
     };
 
     let Some(target) = symbols.get(&assignment.target_name) else {
@@ -60,13 +60,13 @@ pub(crate) fn check_assignment_with_symbols(
             let diagnostic = Diagnostic::ts2539("undefined", ctx.file_name.clone())
                 .with_span(convert_span(target_span));
             ctx.push(diagnostic);
-            return;
+            return false;
         }
         if ctx.namespace_meaning(&assignment.target_name) == Some(true) {
             let diagnostic = Diagnostic::ts2631(&assignment.target_name, ctx.file_name.clone())
                 .with_span(convert_span(target_span));
             ctx.push(diagnostic);
-            return;
+            return false;
         }
         crate::checks::expr::report_unresolved_value_name(
             &assignment.target_name,
@@ -75,21 +75,21 @@ pub(crate) fn check_assignment_with_symbols(
             symbols,
             ctx,
         );
-        return;
+        return false;
     };
 
     if !shadowed_locally && ctx.is_import_binding(&assignment.target_name) {
         let diagnostic = Diagnostic::ts2632(&assignment.target_name, ctx.file_name.clone())
             .with_span(convert_span(target_span));
         ctx.push(diagnostic);
-        return;
+        return false;
     }
 
     if let Some(diagnostic) =
         unwritable_binding_diagnostic(&assignment.target_name, target, ctx.file_name.clone())
     {
         ctx.push(diagnostic.with_span(convert_span(target_span)));
-        return;
+        return false;
     }
 
     // An assignment is checked against the *declared* type, not the type flow
@@ -170,6 +170,7 @@ pub(crate) fn check_assignment_with_symbols(
         crate::infer::InferredExpression::MissingProperty { .. } => {}
         crate::infer::InferredExpression::Unknown => {}
     }
+    true
 }
 
 /// Whether calling or constructing `source` yields something assignable to

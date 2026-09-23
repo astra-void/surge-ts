@@ -833,7 +833,7 @@ fn evaluate_expression_unsettled(
                 value_span: *value_span,
             };
             let shadowed_locally = symbols.get_own(target_name).is_some();
-            crate::checks::assign::check_assignment_with_symbols(
+            let _ = crate::checks::assign::check_assignment_with_symbols(
                 assignment,
                 symbols,
                 shadowed_locally,

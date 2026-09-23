@@ -51,18 +51,24 @@ pub(crate) fn check_function_assignment(
 
     if !target_blocked.is_blocked() && !value_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);
-        let inferred_value = evaluate_expression(
-            &assignment.value,
-            assignment.value_span,
-            &visible_symbols,
-            ctx,
-        );
         let shadowed_locally = scopes.declares_locally(&target_name);
         let assigns_empty_array = matches!(
             &assignment.value,
             ParsedExpression::ArrayLiteral { elements, .. } if elements.is_empty()
         );
-        check_assignment_with_symbols(assignment, &visible_symbols, shadowed_locally, ctx);
+        let value = assignment.value.clone();
+        let value_span = assignment.value_span;
+        // The value is checked in its target's context (tsc's
+        // `getContextualTypeForAssignmentExpression`), which types a callback's
+        // parameters; what it narrows the target to is read again without
+        // that context, and reports nothing the checked value did not.
+        let checked =
+            check_assignment_with_symbols(assignment, &visible_symbols, shadowed_locally, ctx);
+        let checkpoint = ctx.diagnostics().len();
+        let inferred_value = evaluate_expression(&value, value_span, &visible_symbols, ctx);
+        if checked {
+            ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+        }
         if !super::evolving_arrays::assign_evolving_array(
             &target_name,
             assigns_empty_array,
