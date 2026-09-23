@@ -858,6 +858,10 @@ pub struct ParsedClassDeclaration {
     /// See [`ParsedInterfaceDeclaration::string_index_span`].
     pub string_index_span: Option<TextSpan>,
     pub number_index_span: Option<TextSpan>,
+    /// The static side's index signatures (`static [key: string]: T`), which
+    /// the class value answers every other key with.
+    pub static_string_index_type: Option<ParsedType>,
+    pub static_number_index_type: Option<ParsedType>,
     pub span: Option<TextSpan>,
     /// Every member's computed key (`[expr]`), with the bracketed name's span:
     /// each is checked as an expression (tsc's `checkComputedPropertyName`)

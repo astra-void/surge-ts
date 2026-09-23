@@ -30,17 +30,17 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
             .collect(),
     );
 
-    // The last instance signature of each key kind wins, as for an interface.
+    // The last signature of each key kind and side wins, as for an interface.
     // A `symbol` or pattern key answers no named member (Prisma's client class
     // declares `[K: symbol]`), so only `string` and `number` keys are kept.
-    let index_signature_of = |numeric: bool| {
+    let index_signature_of = |numeric: bool, is_static: bool| {
         class
             .body
             .body
             .iter()
             .filter_map(|element| match element {
                 ClassElement::TSIndexSignature(index_signature)
-                    if !index_signature.r#static
+                    if index_signature.r#static == is_static
                         && index_signature.parameters.first().is_some_and(|parameter| {
                             matches!(
                                 parameter.type_annotation.type_annotation,
@@ -57,14 +57,18 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
             })
             .next_back()
     };
-    let (string_index_type, string_index_span) = index_signature_of(false).unzip();
-    let (number_index_type, number_index_span) = index_signature_of(true).unzip();
+    let (string_index_type, string_index_span) = index_signature_of(false, false).unzip();
+    let (number_index_type, number_index_span) = index_signature_of(true, false).unzip();
+    let static_string_index_type = index_signature_of(false, true).map(|(ty, _)| ty);
+    let static_number_index_type = index_signature_of(true, true).map(|(ty, _)| ty);
 
     Some(ParsedClassDeclaration {
         string_index_type,
         number_index_type,
         string_index_span,
         number_index_span,
+        static_string_index_type,
+        static_number_index_type,
         is_declare: class.declare,
         is_abstract: class.r#abstract,
         name: id.name.to_string(),

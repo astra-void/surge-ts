@@ -597,7 +597,18 @@ pub(crate) fn build_class_value_symbol_with_scope(
     );
     collect_static_members(class, &mut properties, ctx);
 
-    let static_type = ObjectType::new(properties, None)
+    // tsc's `resolveAnonymousTypeMembers`: the class symbol's static
+    // `__index` member is the constructor type's index signatures.
+    let static_string_index = class
+        .static_string_index_type
+        .clone()
+        .map(|ty| map_parsed_type(ty, ctx));
+    let static_number_index = class
+        .static_number_index_type
+        .clone()
+        .map(|ty| map_parsed_type(ty, ctx));
+    let static_type = ObjectType::new(properties, static_string_index)
+        .with_number_index_type(static_number_index)
         .with_construct_signature(construct_signature)
         .with_alias_name(format!("typeof {}", class.name));
     // tsc's `getBaseTypeVariableOfClass`: a class extending a value typed by a

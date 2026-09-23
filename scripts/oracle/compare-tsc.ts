@@ -740,6 +740,7 @@ export const fixturePresets: Record<string, string> = {
   'var-case-narrowing-scope': path.join(workspaceRoot, 'tests/compat-projects/var-case-narrowing-scope/tsconfig.json'),
   'array-literal-omitted-elements': path.join(workspaceRoot, 'tests/compat-projects/array-literal-omitted-elements/tsconfig.json'),
   'numeric-literal-property-names': path.join(workspaceRoot, 'tests/compat-projects/numeric-literal-property-names/tsconfig.json'),
+  'class-static-index-signature': path.join(workspaceRoot, 'tests/compat-projects/class-static-index-signature/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
