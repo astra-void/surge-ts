@@ -35,8 +35,7 @@ fn quoted_module_specifier(module_specifier: &str) -> String {
 /// Diagnostic for an unresolved module specifier, mirroring tsc: a Node
 /// built-in name gets the install-@types/node hint via
 /// `cannot_resolve_module_name_error_for_specific_module`; anything else falls
-/// back to the generic TS2307. Side-effect imports never reach here — they use
-/// TS2882.
+/// back to the generic TS2307.
 fn unresolved_module_diagnostic(ctx: &CheckerContext, module_specifier: &str) -> Diagnostic {
     unresolved_module_diagnostic_in_mode(ctx, module_specifier, None)
 }
@@ -48,27 +47,39 @@ fn unresolved_module_diagnostic_in_mode(
     module_specifier: &str,
     resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
 ) -> Diagnostic {
+    unresolved_module_resolution_diagnostic(ctx, module_specifier, resolution_mode)
+        .or_else(|| cannot_resolve_module_name_error_for_specific_module(ctx, module_specifier))
+        .unwrap_or_else(|| Diagnostic::ts2307(module_specifier, ctx.file_name.clone()))
+}
+
+/// What tsc's `resolveExternalModule` reports for an unresolved module ahead
+/// of the not-found message its caller chose (TS2307, the Node built-in hint,
+/// or a side-effect import's TS2882).
+fn unresolved_module_resolution_diagnostic(
+    ctx: &CheckerContext,
+    module_specifier: &str,
+    resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
+) -> Option<Diagnostic> {
     // A `.json` specifier under `resolveJsonModule: false` is not a missing
     // module — it is a module the option refuses to resolve, and tsc says so
     // with its own code and hint.
     if !ctx.options.resolve_json_module && surge_ts_syntax::is_json_file_name(module_specifier) {
-        return Diagnostic::ts2732(module_specifier, ctx.file_name.clone());
+        return Some(Diagnostic::ts2732(module_specifier, ctx.file_name.clone()));
     }
 
     if is_relative_specifier(module_specifier)
         && relative_resolution_is_esm(&ctx.file_name, resolution_mode)
         && is_extensionless_relative_specifier(module_specifier)
     {
-        return match suggested_import_extension(ctx, module_specifier) {
+        return Some(match suggested_import_extension(ctx, module_specifier) {
             Some(extension) => {
                 Diagnostic::ts2835(&format!("{module_specifier}{extension}"), ctx.file_name.clone())
             }
             None => Diagnostic::ts2834(ctx.file_name.clone()),
-        };
+        });
     }
 
-    cannot_resolve_module_name_error_for_specific_module(ctx, module_specifier)
-        .unwrap_or_else(|| Diagnostic::ts2307(module_specifier, ctx.file_name.clone()))
+    None
 }
 
 /// tsc's `getSuggestedImportExtension`: the output extension of the file the
@@ -192,7 +203,10 @@ pub(crate) fn emit_unresolved_module_diagnostic(
     }
     let mut diagnostic = match &import.kind {
         ParsedImportKind::SideEffect => {
-            Diagnostic::ts2882(&import.module_specifier, ctx.file_name.clone())
+            unresolved_module_resolution_diagnostic(ctx, &import.module_specifier, resolution_mode)
+                .unwrap_or_else(|| {
+                    Diagnostic::ts2882(&import.module_specifier, ctx.file_name.clone())
+                })
         }
         _ => unresolved_module_diagnostic_in_mode(ctx, &import.module_specifier, resolution_mode),
     };

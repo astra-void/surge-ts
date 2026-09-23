@@ -259,6 +259,7 @@ export const fixturePresets: Record<string, string> = {
   'relative-directory-specifier': path.join(workspaceRoot, 'tests/compat-projects/relative-directory-specifier/tsconfig.json'),
   'lib-replacement-package': path.join(workspaceRoot, 'tests/compat-projects/lib-replacement-package/tsconfig.json'),
   'cjs-extension-directory-fallback': path.join(workspaceRoot, 'tests/compat-projects/cjs-extension-directory-fallback/tsconfig.json'),
+  'side-effect-import-resolution-diagnostics': path.join(workspaceRoot, 'tests/compat-projects/side-effect-import-resolution-diagnostics/tsconfig.json'),
   'module-forms': path.join(workspaceRoot, 'tests/compat-projects/module-forms/tsconfig.json'),
   'relative-deep': path.join(workspaceRoot, 'tests/compat-projects/relative-deep/tsconfig.json'),
   'private-types': path.join(workspaceRoot, 'tests/compat-projects/private-types/tsconfig.json'),
