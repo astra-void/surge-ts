@@ -438,6 +438,22 @@ impl Project {
                 .saturating_sub(canonicalize_baseline.miss_io);
         }
 
+        for (importer, specifier, resolved_file) in
+            package_declarations::resolve_module_augmentation_specifiers(
+                &sources,
+                &loaded.root_dir,
+                &resolver_options,
+                &mut package_resolution_cache,
+                &specifier_scanner,
+            )
+        {
+            resolved_modules_by_importer
+                .entry(importer)
+                .or_default()
+                .entry(specifier)
+                .or_insert(resolved_file);
+        }
+
         // Path mapping reuses the scanner's cached per-file specifier lists,
         // so it must run against the pre-splice `sources` order the scanner
         // was indexed by (default libs contribute no external specifiers).

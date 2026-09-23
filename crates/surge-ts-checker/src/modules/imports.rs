@@ -141,7 +141,10 @@ fn report_unresolved_module_augmentations(
             }
             continue;
         }
-        if ctx.options.resolved_module_for(&ctx.file_name, specifier).is_some()
+        // A target that resolves but is not in the program is still TS2664:
+        // tsc never loads a file for an augmentation name alone. An untyped
+        // JavaScript target is tsc's TS2665 instead, which surge does not port.
+        if crate::driver::is_runtime_js_only_module(specifier, ctx)
             || (ctx.options.stub_external_modules && is_external_specifier(specifier))
         {
             continue;

@@ -3117,6 +3117,7 @@ oracle = [
 status = "emitted"
 oracle = [
   "module-augmentation-target-basic",
+  "module-augmentation-subpath-resolution-basic",
 ]
 
 [TS2671]

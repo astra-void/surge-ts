@@ -159,24 +159,7 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
             continue;
         }
 
-        let importer_is_esm = importer_is_esm(&req.importer_file, opts, cache);
-        let cache_key = PackageEntrypointCacheKey {
-            importer_dir: canonicalize_if_exists_string(&req.importer_dir),
-            package_name: req.package_name.clone(),
-            subpath: req.subpath.clone(),
-            is_imports: req.is_imports,
-            importer_is_esm,
-        };
-
-        let resolution = if let Some(cached) = cache.entrypoint_cache.get(&cache_key) {
-            cached.clone()
-        } else {
-            let resolved = resolve_package_entrypoint(&req, opts, importer_is_esm, cache, root_dir);
-            cache.entrypoint_cache.insert(cache_key, resolved.clone());
-            resolved
-        };
-
-        let Some(resolution) = resolution else {
+        let Some(resolution) = cached_package_entrypoint(&req, opts, cache, root_dir) else {
             continue;
         };
 
@@ -244,6 +227,77 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
     // from here.
     cache.scanned_sources = sources.len();
 
+    resolutions
+}
+
+fn cached_package_entrypoint(
+    req: &PackageDeclarationRequest,
+    opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
+    root_dir: &Path,
+) -> Option<PackageEntrypointResolution> {
+    let importer_is_esm = importer_is_esm(&req.importer_file, opts, cache);
+    let cache_key = PackageEntrypointCacheKey {
+        importer_dir: canonicalize_if_exists_string(&req.importer_dir),
+        package_name: req.package_name.clone(),
+        subpath: req.subpath.clone(),
+        is_imports: req.is_imports,
+        importer_is_esm,
+    };
+    if let Some(cached) = cache.entrypoint_cache.get(&cache_key) {
+        return cached.clone();
+    }
+    let resolved = resolve_package_entrypoint(req, opts, importer_is_esm, cache, root_dir);
+    cache.entrypoint_cache.insert(cache_key, resolved.clone());
+    resolved
+}
+
+/// Resolves each source module file's bare `declare module "m"` augmentation
+/// names the way an import of `m` from that file resolves, without loading
+/// anything: tsc resolves augmentation names alongside imports but adds only
+/// the imports' targets to the program, so an augmentation whose target
+/// nothing imports is TS2664.
+pub(crate) fn resolve_module_augmentation_specifiers(
+    sources: &[(PathBuf, String, String)],
+    root_dir: &Path,
+    opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
+    scanner: &crate::specifier_scan::ModuleSpecifierScanner,
+) -> PackageResolutions {
+    let mut requests: VecDeque<PackageDeclarationRequest> = VecDeque::new();
+    let mut queued_specifiers: HashSet<(String, String)> = HashSet::new();
+    for (index, specifiers) in scanner.augmentation_specifiers() {
+        let Some((file_path, file_name, _)) = sources.get(index) else {
+            continue;
+        };
+        if is_declaration_file_path_str(file_name) {
+            continue;
+        }
+        let importer_dir = file_path.parent().unwrap_or(root_dir).to_path_buf();
+        extract_packages_from_source(
+            specifiers,
+            &file_path.to_string_lossy(),
+            &importer_dir,
+            opts,
+            &mut requests,
+            &mut queued_specifiers,
+        );
+    }
+
+    let mut resolutions: PackageResolutions = Vec::new();
+    for req in requests {
+        let Some(resolution) = cached_package_entrypoint(&req, opts, cache, root_dir) else {
+            continue;
+        };
+        let Ok(path) = resolution.path.canonicalize() else {
+            continue;
+        };
+        resolutions.push((
+            canonicalize_if_exists_string(&req.importer_file),
+            req.specifier,
+            canonicalize_if_exists_string(&path),
+        ));
+    }
     resolutions
 }
 

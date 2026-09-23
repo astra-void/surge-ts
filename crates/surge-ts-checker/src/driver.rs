@@ -1498,7 +1498,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
     }
 }
 
-fn is_runtime_js_only_module(module_specifier: &str, ctx: &CheckerContext) -> bool {
+pub(crate) fn is_runtime_js_only_module(module_specifier: &str, ctx: &CheckerContext) -> bool {
     let Some(resolved_path) = ctx
         .options
         .resolved_module_for(&ctx.file_name, module_specifier)

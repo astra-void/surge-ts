@@ -476,7 +476,16 @@ pub(super) fn resolve_legacy_entrypoint_in_directory(
             }
         }
 
-        try_candidate!(&pkg_dir.join(subpath));
+        if let Some(resolution) = resolve_subpath_candidate(&pkg_dir.join(subpath)) {
+            match resolution.kind {
+                PackageEntrypointKind::Declaration => return Some(resolution),
+                PackageEntrypointKind::RuntimeOnly => {
+                    if runtime_fallback.is_none() {
+                        runtime_fallback = Some(resolution);
+                    }
+                }
+            }
+        }
         try_candidate!(&pkg_dir.join(subpath).join("index"));
     } else {
         // Root: apply `typesVersions` to the declared types field, then fall back
@@ -536,7 +545,7 @@ pub(super) fn resolve_legacy_file_probe(
     pkg_dir: &Path,
 ) -> Option<PackageEntrypointResolution> {
     if let Some(subpath) = &req.subpath {
-        if let Some(resolution) = resolve_declaration_or_runtime_candidate(&pkg_dir.join(subpath)) {
+        if let Some(resolution) = resolve_subpath_candidate(&pkg_dir.join(subpath)) {
             return Some(resolution);
         }
         resolve_declaration_or_runtime_candidate(&pkg_dir.join(subpath).join("index"))
@@ -750,6 +759,24 @@ pub(super) fn read_package_json(
         .package_json_cache
         .insert(pkg_json_path.to_path_buf(), parsed.clone());
     parsed
+}
+
+/// A specifier's own subpath takes tsc's `tryAddingExtensions`: an explicit
+/// `.ts` also finds the `.tsx` or `.d.ts` beside it (`knex/types/tables.ts`
+/// is `tables.d.ts`). A `package.json` field target stays exact.
+fn resolve_subpath_candidate(path: &Path) -> Option<PackageEntrypointResolution> {
+    if !path_ends_with_ignore_ascii_case(path, ".ts") || is_declaration_file_path(path) {
+        return resolve_declaration_or_runtime_candidate(path);
+    }
+    let base = strip_trailing_extension(path, ".ts")?;
+    ["ts", "tsx", "d.ts"]
+        .into_iter()
+        .map(|extension| append_extension(&base, extension))
+        .find(|candidate| crate::probe::is_existing_file(candidate))
+        .map(|path| PackageEntrypointResolution {
+            path,
+            kind: PackageEntrypointKind::Declaration,
+        })
 }
 
 pub(super) fn resolve_declaration_or_runtime_candidate(

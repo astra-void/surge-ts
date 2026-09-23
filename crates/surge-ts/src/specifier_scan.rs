@@ -8,6 +8,7 @@ use surge_ts_syntax::{ParsedExportDeclaration, ParsedSource, ParsedStatement, Pa
 /// [`ModuleSpecifierScanner::take_parsed_sources`] hands it over instead.
 struct ScannedSource {
     specifiers: Arc<[String]>,
+    augmentation_specifiers: Box<[String]>,
     parsed: Option<ParsedSource>,
 }
 
@@ -89,6 +90,7 @@ impl ModuleSpecifierScanner {
                             index,
                             ScannedSource {
                                 specifiers: source_specifiers(&parsed),
+                                augmentation_specifiers: module_augmentation_specifiers(&parsed),
                                 parsed: retain_parses.then_some(parsed),
                             },
                         ));
@@ -125,9 +127,19 @@ impl ModuleSpecifierScanner {
         let specifiers = source_specifiers(&parsed);
         self.scanned[index] = Some(ScannedSource {
             specifiers: specifiers.clone(),
+            augmentation_specifiers: module_augmentation_specifiers(&parsed),
             parsed: self.retain_parses.then_some(parsed),
         });
         specifiers
+    }
+
+    /// `(sources index, names)` of every scanned module file's top-level
+    /// `declare module "name"` augmentations.
+    pub(crate) fn augmentation_specifiers(&self) -> impl Iterator<Item = (usize, &[String])> {
+        self.scanned.iter().enumerate().filter_map(|(index, slot)| {
+            let names = &slot.as_ref()?.augmentation_specifiers;
+            (!names.is_empty()).then_some((index, &names[..]))
+        })
     }
 
     /// Hand the scanned parses to the checker, which would otherwise parse the
@@ -155,6 +167,26 @@ fn source_specifiers(parsed: &ParsedSource) -> Arc<[String]> {
         .map(str::to_owned)
         .collect::<Vec<_>>()
         .into()
+}
+
+/// Kept apart from [`source_specifiers`]: tsc resolves an augmentation's name
+/// but never loads a file for it, so these must not grow the program.
+fn module_augmentation_specifiers(parsed: &ParsedSource) -> Box<[String]> {
+    if !parsed.is_module {
+        return Box::default();
+    }
+    parsed
+        .statements
+        .iter()
+        .filter_map(|statement| match statement {
+            ParsedStatement::DeclareModuleDeclaration(module)
+                if module.module_specifier != "global" =>
+            {
+                Some(module.module_specifier.clone())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn statement_module_specifier(statement: &ParsedStatement) -> Option<&str> {

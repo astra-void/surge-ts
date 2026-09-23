@@ -496,6 +496,7 @@ export const fixturePresets: Record<string, string> = {
   'unused-expect-error-directive-basic': path.join(workspaceRoot, 'tests/compat-projects/unused-expect-error-directive-basic/tsconfig.json'),
   'export-global-name-basic': path.join(workspaceRoot, 'tests/compat-projects/export-global-name-basic/tsconfig.json'),
   'module-augmentation-target-basic': path.join(workspaceRoot, 'tests/compat-projects/module-augmentation-target-basic/tsconfig.json'),
+  'module-augmentation-subpath-resolution-basic': path.join(workspaceRoot, 'tests/compat-projects/module-augmentation-subpath-resolution-basic/tsconfig.json'),
   'relative-ambient-module-name-basic': path.join(workspaceRoot, 'tests/compat-projects/relative-ambient-module-name-basic/tsconfig.json'),
   'enum-merge-and-const-rules-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-merge-and-const-rules-basic/tsconfig.json'),
   'jsx-flag-missing-basic': path.join(workspaceRoot, 'tests/compat-projects/jsx-flag-missing-basic/tsconfig.json'),

@@ -1,0 +1,2 @@
+{ "compilerOptions": { "strict": true, "noEmit": true, "module": "esnext", "moduleResolution": "bundler", "allowImportingTsExtensions": true, "target": "es2022", "types": [] },
+  "files": ["src/ts-ext.ts", "src/no-ext.ts", "src/not-in-program.ts", "src/missing.ts", "src/import-ts-ext.ts"] }
