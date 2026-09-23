@@ -459,6 +459,14 @@ pub(super) fn resolve_package_entrypoint_in_directory(
     importer_is_esm: bool,
     cache: &mut PackageDeclarationResolverCache,
 ) -> Option<PackageEntrypointResolution> {
+    let nested = resolve_nested_package_subpath(req, pkg_dir, opts, cache);
+    if nested
+        .as_ref()
+        .is_some_and(|resolution| resolution.kind == PackageEntrypointKind::Declaration)
+    {
+        return nested;
+    }
+
     let pkg_json_path = pkg_dir.join("package.json");
     let json = if crate::probe::is_existing_file(&pkg_json_path) {
         read_package_json(&pkg_json_path, cache)
@@ -579,6 +587,72 @@ pub(super) fn resolve_legacy_entrypoint_in_directory(
         }
     }
 
+    runtime_fallback
+}
+
+/// tsc's `loadModuleFromSpecificNodeModulesDirectory` for a subpath whose
+/// own directory holds a package.json (`node_modules/foo/bar/package.json`):
+/// unless the package root's `exports` redirects around it, the subpath loads
+/// as a file, then as that nested package's directory — its `typings`,
+/// `types` or `main`, then its `index`.
+fn resolve_nested_package_subpath(
+    req: &PackageDeclarationRequest,
+    pkg_dir: &Path,
+    opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<PackageEntrypointResolution> {
+    let subpath = req.subpath.as_ref()?;
+    let candidate = pkg_dir.join(subpath);
+    let nested_json_path = candidate.join("package.json");
+    if !crate::probe::is_existing_file(&nested_json_path) {
+        return None;
+    }
+    if opts.resolve_exports {
+        let root_json_path = pkg_dir.join("package.json");
+        if crate::probe::is_existing_file(&root_json_path)
+            && read_package_json(&root_json_path, cache)
+                .is_some_and(|root| root.get("exports").is_some())
+        {
+            return None;
+        }
+    }
+
+    let mut runtime_fallback = None;
+    let mut consider = |resolution: Option<PackageEntrypointResolution>| match resolution {
+        Some(resolution) if resolution.kind == PackageEntrypointKind::Declaration => {
+            Some(resolution)
+        }
+        Some(resolution) => {
+            runtime_fallback.get_or_insert(resolution);
+            None
+        }
+        None => None,
+    };
+    if let Some(resolution) = consider(resolve_declaration_or_runtime_candidate(&candidate)) {
+        return Some(resolution);
+    }
+    if let Some(nested) = read_package_json(&nested_json_path, cache) {
+        for field in ["typings", "types", "main"] {
+            let Some(value) = nested.get(field).and_then(|value| value.as_str()) else {
+                continue;
+            };
+            if value.is_empty() {
+                continue;
+            }
+            let entry = candidate.join(value);
+            let resolution = resolve_declaration_or_runtime_candidate(&entry)
+                .or_else(|| resolve_declaration_or_runtime_candidate(&entry.join("index")));
+            if let Some(resolution) = consider(resolution) {
+                return Some(resolution);
+            }
+            break;
+        }
+    }
+    if let Some(resolution) =
+        consider(resolve_declaration_or_runtime_candidate(&candidate.join("index")))
+    {
+        return Some(resolution);
+    }
     runtime_fallback
 }
 

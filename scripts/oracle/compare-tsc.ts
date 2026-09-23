@@ -253,6 +253,7 @@ export const fixturePresets: Record<string, string> = {
   'reference-types-resolution-mode': path.join(workspaceRoot, 'tests/compat-projects/reference-types-resolution-mode/tsconfig.json'),
   'import-attribute-resolution-mode': path.join(workspaceRoot, 'tests/compat-projects/import-attribute-resolution-mode/tsconfig.json'),
   'package-imports-module-target': path.join(workspaceRoot, 'tests/compat-projects/package-imports-module-target/tsconfig.json'),
+  'nested-package-json-subpath': path.join(workspaceRoot, 'tests/compat-projects/nested-package-json-subpath/tsconfig.json'),
   'module-forms': path.join(workspaceRoot, 'tests/compat-projects/module-forms/tsconfig.json'),
   'relative-deep': path.join(workspaceRoot, 'tests/compat-projects/relative-deep/tsconfig.json'),
   'private-types': path.join(workspaceRoot, 'tests/compat-projects/private-types/tsconfig.json'),
