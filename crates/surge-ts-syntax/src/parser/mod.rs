@@ -19,6 +19,7 @@ mod function_types;
 mod functions;
 mod grammar;
 mod grammar_context;
+mod import_aliases;
 mod import_calls;
 mod imports;
 mod interfaces;

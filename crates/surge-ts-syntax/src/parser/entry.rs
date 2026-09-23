@@ -169,7 +169,8 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
 
     let source_type = SourceType::from_path(file_name).unwrap_or_else(|_| SourceType::ts());
     let parser = Parser::new(allocator, source_text, source_type);
-    let parsed = parser.parse();
+    let mut parsed = parser.parse();
+    super::import_aliases::expand_import_aliases(allocator, &mut parsed.program);
 
     let reference_type_directives = super::extract_reference_type_directives(source_text);
     let suppressed_ranges =
