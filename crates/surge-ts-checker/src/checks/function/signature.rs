@@ -1938,6 +1938,16 @@ pub(crate) fn check_function_body_with_signature_and_this(
         .then(|| body_has_defaultless_switch(&body).then(|| body.clone()))
         .flatten();
     let tail_call = crate::checks::expr::tail_call_key(&body);
+    // tsc's `checkReturnStatement`: without `strictNullChecks`, a bare `return;`
+    // is TS7030 under `noImplicitReturns` unless the (unwrapped) return type is
+    // `undefined`, `void` or `any`.
+    let bare_returns = (has_explicit_return_type
+        && !is_constructor
+        && !is_generator
+        && !ctx.options.strict_null_checks
+        && ctx.options.no_implicit_returns)
+        .then(|| super::body::bare_return_spans(&body))
+        .unwrap_or_default();
 
     let root = match ctx.nested_function_scope.take() {
         Some(enclosing) => SymbolTable::with_parent(enclosing),
@@ -2079,6 +2089,11 @@ pub(crate) fn check_function_body_with_signature_and_this(
     } else {
         function_type.return_type().clone()
     };
+    if !super::body::is_undefined_void_or_any(&unwrapped_return_type) {
+        for span in bare_returns {
+            emit_implicit_return_diagnostic(Some(span), ctx);
+        }
+    }
     if has_explicit_return_type && should_check_missing_return(&unwrapped_return_type) {
         emit_missing_return_diagnostic(
             body_flow,

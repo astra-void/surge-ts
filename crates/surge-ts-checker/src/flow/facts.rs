@@ -336,6 +336,7 @@ pub(crate) fn summarize_function_body_flow(
         let statement_summary = summarize_function_statement_flow(statement);
         summary.contains_value_return |= statement_summary.contains_value_return;
         summary.contains_return_with_value |= statement_summary.contains_return_with_value;
+        summary.contains_return |= statement_summary.contains_return;
         summary.contains_throw |= statement_summary.contains_throw;
         summary.guarantees_value_return |= statement_summary.guarantees_value_return;
         summary.guarantees_exit |= statement_summary.guarantees_exit;
@@ -355,6 +356,7 @@ pub(crate) fn summarize_function_statement_flow(
         ParsedFunctionBodyStatement::Return(return_statement) => ReturnFlowSummary {
             contains_value_return: return_statement.expression.is_some(),
             contains_return_with_value: return_statement.expression.is_some(),
+            contains_return: true,
             contains_throw: false,
             guarantees_value_return: return_statement.expression.is_some(),
             guarantees_exit: true,
@@ -362,6 +364,7 @@ pub(crate) fn summarize_function_statement_flow(
         ParsedFunctionBodyStatement::Throw(_) => ReturnFlowSummary {
             contains_value_return: true,
             contains_return_with_value: false,
+            contains_return: false,
             contains_throw: true,
             guarantees_value_return: true,
             guarantees_exit: true,
@@ -370,6 +373,7 @@ pub(crate) fn summarize_function_statement_flow(
             ReturnFlowSummary {
                 contains_value_return: false,
                 contains_return_with_value: false,
+                contains_return: false,
                 contains_throw: false,
                 guarantees_value_return: false,
                 guarantees_exit: true,
@@ -397,6 +401,7 @@ pub(crate) fn summarize_function_statement_flow(
                     || else_summary.contains_value_return,
                 contains_return_with_value: then_summary.contains_return_with_value
                     || else_summary.contains_return_with_value,
+                contains_return: then_summary.contains_return || else_summary.contains_return,
                 contains_throw: then_summary.contains_throw || else_summary.contains_throw,
                 guarantees_value_return: !if_statement.else_body.is_empty()
                     && then_summary.guarantees_value_return
@@ -418,6 +423,7 @@ pub(crate) fn summarize_function_statement_flow(
             ReturnFlowSummary {
                 contains_value_return: body_summary.contains_value_return,
                 contains_return_with_value: body_summary.contains_return_with_value,
+                contains_return: body_summary.contains_return,
                 contains_throw: body_summary.contains_throw,
                 guarantees_value_return: never_falls_through,
                 guarantees_exit: never_falls_through,
@@ -428,6 +434,7 @@ pub(crate) fn summarize_function_statement_flow(
             ReturnFlowSummary {
                 contains_value_return: body_summary.contains_value_return,
                 contains_return_with_value: body_summary.contains_return_with_value,
+                contains_return: body_summary.contains_return,
                 contains_throw: body_summary.contains_throw,
                 guarantees_value_return: false,
                 guarantees_exit: false,
@@ -436,6 +443,7 @@ pub(crate) fn summarize_function_statement_flow(
         ParsedFunctionBodyStatement::Switch(switch_statement) => {
             let mut contains_value_return = false;
             let mut contains_return_with_value = false;
+            let mut contains_return = false;
             let mut contains_throw = false;
             // An empty clause falls through to the next one, so only the
             // clauses with a body (and the last, which has nowhere to fall) count.
@@ -448,6 +456,7 @@ pub(crate) fn summarize_function_statement_flow(
                 let case_summary = summarize_function_body_flow(&case.consequent);
                 contains_value_return |= case_summary.contains_value_return;
                 contains_return_with_value |= case_summary.contains_return_with_value;
+                contains_return |= case_summary.contains_return;
                 contains_throw |= case_summary.contains_throw;
                 if !case.consequent.is_empty() {
                     guarantees_value_return &= case_summary.guarantees_value_return;
@@ -492,6 +501,7 @@ pub(crate) fn summarize_function_statement_flow(
             ReturnFlowSummary {
                 contains_value_return,
                 contains_return_with_value,
+                contains_return,
                 contains_throw,
                 guarantees_value_return,
                 guarantees_exit,
@@ -530,6 +540,11 @@ pub(crate) fn summarize_function_statement_flow(
                         .as_ref()
                         .is_some_and(|summary| summary.contains_return_with_value)
                     || finalizer_summary.contains_return_with_value,
+                contains_return: block_summary.contains_return
+                    || handler_summary
+                        .as_ref()
+                        .is_some_and(|summary| summary.contains_return)
+                    || finalizer_summary.contains_return,
                 contains_throw: block_summary.contains_throw
                     || handler_summary
                         .as_ref()

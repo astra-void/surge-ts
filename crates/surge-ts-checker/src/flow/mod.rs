@@ -81,6 +81,9 @@ pub(crate) fn check_expression_flow(
 pub(crate) struct FunctionBodyFlow {
     pub(crate) contains_value_return: bool,
     pub(crate) contains_return_with_value: bool,
+    /// tsc's `hasExplicitReturn`: some `return` statement, with or without a
+    /// value; a `throw` does not set it.
+    pub(crate) contains_return: bool,
     pub(crate) guarantees_value_return: bool,
     pub(crate) guarantees_exit: bool,
 }
@@ -242,6 +245,7 @@ pub(crate) fn analyze_function_body_flow(body: &[ParsedFunctionBodyStatement]) -
     FunctionBodyFlow {
         contains_value_return: summary.contains_value_return,
         contains_return_with_value: summary.contains_return_with_value,
+        contains_return: summary.contains_return,
         guarantees_value_return: summary.guarantees_value_return,
         guarantees_exit: summary.guarantees_exit,
     }
@@ -697,6 +701,7 @@ pub(crate) struct ReturnFlowSummary {
     /// returns a value (subject to `noImplicitReturns`/TS7030) from one that only
     /// throws (whose inferred return type is `void`).
     contains_return_with_value: bool,
+    contains_return: bool,
     contains_throw: bool,
     guarantees_value_return: bool,
     /// Every path through the body leaves the current straight-line flow without
