@@ -153,22 +153,64 @@ pub(super) fn extend_diagnostics_dedup(
     DiagnosticDeduper::with_existing(diagnostics).extend(diagnostics, new_diagnostics);
 }
 
-/// Drops the diagnostics an `@ts-expect-error`/`@ts-ignore` directive suppresses:
-/// every one whose span starts on the directive's following line. A diagnostic
-/// with no span cannot be attributed to a line and is kept.
-pub(crate) fn drop_suppressed_diagnostics(
+/// tsc's `getDiagnosticsWithPrecedingDirectives` plus the unused-directive
+/// report that follows it: a diagnostic starting on a directive's suppressed
+/// line is dropped and marks the nearest directive above it used; every
+/// `@ts-expect-error` left unused is TS2578 at the directive. An `@ts-ignore`
+/// never reports. Runs only for files surge checks in full: a declaration
+/// file returns before it, since its statements are never checked and every
+/// directive there would read as unused. A file with parse errors reports no
+/// unused directive either: tsc skips semantic diagnostics once any syntax
+/// error exists, and surge's checker may not have seen the file's statements.
+pub(crate) fn apply_comment_directives(
     diagnostics: &mut Vec<surge_ts_diagnostics::Diagnostic>,
-    suppressed_ranges: &[surge_ts_syntax::TextSpan],
+    directives: &[surge_ts_syntax::CommentDirective],
+    has_parse_errors: bool,
+    file_name: &str,
 ) {
-    if suppressed_ranges.is_empty() || diagnostics.is_empty() {
+    if directives.is_empty() {
         return;
     }
+    let mut used = vec![false; directives.len()];
     diagnostics.retain(|diagnostic| {
         let Some(span) = diagnostic.span.as_ref() else {
             return true;
         };
-        !suppressed_ranges
+        let nearest = directives
             .iter()
-            .any(|range| span.start >= range.start && span.start <= range.end)
+            .enumerate()
+            .filter(|(_, directive)| {
+                directive
+                    .suppressed_line
+                    .is_some_and(|line| span.start >= line.start && span.start <= line.end)
+            })
+            .max_by_key(|(_, directive)| directive.span.start);
+        match nearest {
+            Some((index, _)) => {
+                used[index] = true;
+                false
+            }
+            None => true,
+        }
     });
+    for (directive, used) in directives.iter().zip(used) {
+        if used
+            || has_parse_errors
+            || directive.kind != surge_ts_syntax::CommentDirectiveKind::ExpectError
+        {
+            continue;
+        }
+        let diagnostic = Diagnostic::ts2578(file_name.to_string())
+            .with_span(crate::context::convert_span(directive.span));
+        let position = diagnostics
+            .iter()
+            .position(|existing| {
+                existing
+                    .span
+                    .as_ref()
+                    .is_some_and(|span| span.start > directive.span.start)
+            })
+            .unwrap_or(diagnostics.len());
+        diagnostics.insert(position, diagnostic);
+    }
 }

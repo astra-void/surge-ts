@@ -91,9 +91,8 @@ pub(crate) struct ParsedProgramFile {
     pub(crate) module_reads: Vec<String>,
     /// See [`surge_ts_syntax::ParsedSource::definite_writes`].
     pub(crate) definite_writes: Vec<String>,
-    /// Byte ranges of the lines an `@ts-expect-error`/`@ts-ignore` directive
-    /// suppresses (see [`surge_ts_syntax::ParsedSource::suppressed_ranges`]).
-    pub(crate) suppressed_ranges: Vec<surge_ts_syntax::TextSpan>,
+    /// See [`surge_ts_syntax::ParsedSource::comment_directives`].
+    pub(crate) comment_directives: Vec<surge_ts_syntax::CommentDirective>,
     /// Grammar findings from the parser's AST walk (see
     /// [`surge_ts_syntax::ParsedSource::grammar_diagnostics`]), turned into
     /// diagnostics at the start of the file's check.

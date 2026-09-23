@@ -150,7 +150,7 @@ mod tests {
                     file_kind: FileKind::RootSource,
                     module_reads: parsed.module_reads,
                 definite_writes: parsed.definite_writes,
-                    suppressed_ranges: parsed.suppressed_ranges,
+                    comment_directives: parsed.comment_directives,
                     grammar_diagnostics: parsed.grammar_diagnostics,
                     parenthesized_expressions: parsed.parenthesized_expressions.into(),
                     let_assignments: parsed.let_assignments.into(),

@@ -16,7 +16,7 @@ use super::{
     FileCheckResult, ParsedProgramFile, ProgramCheckSharedState, census_check_milestone,
     check_program_file_statements, clone_type_declaration_table,
     collect_function_signatures_from_statements, count_local_type_declarations_in_statements,
-    drop_suppressed_diagnostics, emit_unsupported_declaration_diagnostics,
+    apply_comment_directives, emit_unsupported_declaration_diagnostics,
     extend_diagnostics_dedup, module_scope_declared_names, unused_locals,
 };
 use crate::context::{CheckerContext, CompatibilityStats, FileKind};
@@ -1369,7 +1369,12 @@ pub(super) fn check_program_file(
     }
 
     let mut diagnostics = std::mem::take(&mut ctx.diagnostics);
-    drop_suppressed_diagnostics(&mut diagnostics, &parsed_file.suppressed_ranges);
+    apply_comment_directives(
+        &mut diagnostics,
+        &parsed_file.comment_directives,
+        !parsed_file.parser_errors.is_empty(),
+        &parsed_file.file_name,
+    );
     let stats = std::mem::take(&mut ctx.stats);
 
     FileCheckResult {

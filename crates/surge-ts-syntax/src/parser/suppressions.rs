@@ -4,19 +4,20 @@
 //! carries code: tsc walks *backwards* from a diagnostic's line over blank and
 //! `//`-comment lines looking for a directive, so an
 //! `// @ts-expect-error` followed by an `// eslint-disable-next-line` still
-//! suppresses the statement below both. Only the *suppressing* half is modelled: TypeScript also reports TS2578
-//! for an `@ts-expect-error` that suppressed nothing, but surge under-reports,
-//! so an unused directive here means "surge missed the error", not "the source
-//! is wrong".
+//! suppresses the statement below both. The checker reports an
+//! `@ts-expect-error` that suppressed nothing as TS2578 at the directive.
 
-use oxc_ast::Comment;
+use oxc_ast::{Comment, CommentKind};
 
-use crate::TextSpan;
+use crate::{CommentDirective, CommentDirectiveKind, TextSpan};
 
-/// Byte ranges of the lines suppressed by a file's directives, in source order.
-pub(crate) fn collect_suppressed_ranges(source_text: &str, comments: &[Comment]) -> Vec<TextSpan> {
+/// A file's directives, in source order.
+pub(crate) fn collect_comment_directives(
+    source_text: &str,
+    comments: &[Comment],
+) -> Vec<CommentDirective> {
     let bytes = source_text.as_bytes();
-    let mut ranges: Vec<TextSpan> = Vec::new();
+    let mut directives: Vec<CommentDirective> = Vec::new();
 
     for comment in comments {
         let start = comment.span.start as usize;
@@ -24,21 +25,77 @@ pub(crate) fn collect_suppressed_ranges(source_text: &str, comments: &[Comment])
         if start >= end {
             continue;
         }
-        let text = &source_text[start..end];
-        if !text.contains("@ts-expect-error") && !text.contains("@ts-ignore") {
-            continue;
-        }
-        let Some(range) = next_line_range(bytes, end) else {
+        let Some(directive) = comment_directive(bytes, start, end, comment.kind) else {
             continue;
         };
-        if ranges.last() != Some(&range) {
-            ranges.push(range);
+        if directives.last().is_some_and(|last| last.span == directive.span) {
+            continue;
         }
+        directives.push(directive);
     }
 
-    ranges.sort_by_key(|range| range.start);
-    ranges.dedup();
-    ranges
+    directives.sort_by_key(|directive| directive.span.start);
+    directives.dedup();
+    directives
+}
+
+/// tsc's `processCommentDirective`: the directive must be the first thing in
+/// the comment after its delimiters — for a block comment, the first thing on
+/// its last line — and the location tsc reports is the comment for a `//`
+/// comment and that last line for a block comment.
+fn comment_directive(
+    bytes: &[u8],
+    start: usize,
+    end: usize,
+    kind: CommentKind,
+) -> Option<CommentDirective> {
+    let mut position = start;
+    let location_start = match kind {
+        CommentKind::Line => {
+            position += 2;
+            while position < end && bytes[position] == b'/' {
+                position += 1;
+            }
+            start
+        }
+        CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => {
+            let last_line_start = bytes[start..end]
+                .iter()
+                .rposition(|byte| *byte == b'\n')
+                .map_or(start, |offset| start + offset + 1);
+            position = last_line_start;
+            while position < end && (bytes[position] == b' ' || bytes[position] == b'\t') {
+                position += 1;
+            }
+            while position < end && (bytes[position] == b'/' || bytes[position] == b'*') {
+                position += 1;
+            }
+            last_line_start
+        }
+    };
+    while position < end && (bytes[position] == b' ' || bytes[position] == b'\t') {
+        position += 1;
+    }
+    if position >= end || bytes[position] != b'@' {
+        return None;
+    }
+    position += 1;
+    let rest = &bytes[position..end];
+    let kind = if rest.starts_with(b"ts-expect-error") {
+        CommentDirectiveKind::ExpectError
+    } else if rest.starts_with(b"ts-ignore") {
+        CommentDirectiveKind::Ignore
+    } else {
+        return None;
+    };
+    Some(CommentDirective {
+        kind,
+        span: TextSpan {
+            start: location_start,
+            end,
+        },
+        suppressed_line: next_line_range(bytes, end),
+    })
 }
 
 /// The byte range of the first line after `offset` that is neither blank nor a

@@ -34,10 +34,10 @@ pub struct ParsedSource {
     /// Where each `let` tsc may type by control flow is assigned, sorted by
     /// the binding's name position (see [`LetAssignmentSummary`]).
     pub let_assignments: Vec<LetAssignmentSummary>,
-    /// Byte ranges of lines suppressed by an `@ts-expect-error`/`@ts-ignore`
-    /// directive on the preceding line. Diagnostics starting inside one are
-    /// dropped, matching tsc.
-    pub suppressed_ranges: Vec<TextSpan>,
+    /// The file's `@ts-expect-error`/`@ts-ignore` directives in source order.
+    /// Diagnostics starting on a directive's suppressed line are dropped, and
+    /// an `@ts-expect-error` that dropped nothing is TS2578, matching tsc.
+    pub comment_directives: Vec<CommentDirective>,
     /// Module specifiers written as `import("...")` — type-position import
     /// types and dynamic import expressions — deduplicated in source order.
     /// They belong to the module graph exactly like declaration specifiers do,
@@ -1576,6 +1576,23 @@ pub enum ParsedUnaryOperator {
 pub struct TextSpan {
     pub start: usize,
     pub end: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommentDirectiveKind {
+    ExpectError,
+    Ignore,
+}
+
+/// tsc's `CommentDirective`: `span` is where tsc reports the directive (the
+/// whole `//` comment, or the last line of a block comment), `suppressed_line`
+/// the line whose diagnostics it drops — the next line that is neither blank
+/// nor a `//` comment, or `None` when no such line follows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentDirective {
+    pub kind: CommentDirectiveKind,
+    pub span: TextSpan,
+    pub suppressed_line: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
