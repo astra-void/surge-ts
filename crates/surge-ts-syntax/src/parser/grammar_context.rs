@@ -3237,7 +3237,8 @@ impl<'a> ContextCollector<'a, '_> {
     /// tsc's `checkGrammarForUseStrictSimpleParameterList`: a `"use strict"`
     /// prologue in a function whose parameter list is not simple — TS1346
     /// on each such parameter and TS1347 on the directive. tsc skips this
-    /// below target ES2016, which this pass does not see.
+    /// below target ES2016, which this pass does not see: the driver drops
+    /// them there.
     fn check_use_strict_parameters(
         &mut self,
         parameters: &oxc_ast::ast::FormalParameters<'_>,

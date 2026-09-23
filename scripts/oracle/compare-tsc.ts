@@ -1018,6 +1018,7 @@ export const fixturePresets: Record<string, string> = {
   'super-type-arguments-follower': path.join(workspaceRoot, 'tests/compat-projects/super-type-arguments-follower/tsconfig.json'),
   'update-expression-write-target': path.join(workspaceRoot, 'tests/compat-projects/update-expression-write-target/tsconfig.json'),
   'update-operand-arithmetic-first': path.join(workspaceRoot, 'tests/compat-projects/update-operand-arithmetic-first/tsconfig.json'),
+  'use-strict-parameter-list-es2015': path.join(workspaceRoot, 'tests/compat-projects/use-strict-parameter-list-es2015/tsconfig.json'),
   'class-property-arrow-signature': path.join(workspaceRoot, 'tests/compat-projects/class-property-arrow-signature/tsconfig.json'),
 };
 

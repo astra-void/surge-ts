@@ -791,6 +791,13 @@ impl Project {
                     ),
                 );
             }
+            // tsc's `checkGrammarForUseStrictSimpleParameterList` runs from
+            // ES2016 on, a target the grammar pass that finds these cannot see.
+            if loaded.compiler_options.target < ScriptTarget::ES2016 {
+                diagnostics.retain(|diagnostic| {
+                    !matches!(diagnostic.code, surge_ts_diagnostics::DiagnosticCode::TypeScript(1346 | 1347))
+                });
+            }
             for unresolved in &reference_type_resolution.unresolved_paths {
                 if loaded.compiler_options.skip_lib_check && unresolved.from_declaration_file {
                     continue;
