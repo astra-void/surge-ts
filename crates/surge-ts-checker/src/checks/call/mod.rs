@@ -828,34 +828,65 @@ pub(crate) fn check_new_like(
         }
     }
 
-    // An `abstract class` has a construct signature like any other class — the
-    // instance type is still what `new` produces, and tsc reports the
-    // instantiation without cascading.
-    if let ParsedExpression::Identifier { name, .. } = callee
-        && let Some(crate::symbols::TypeDeclarationInfo::Interface(info)) =
-            ctx.lookup_type_declaration(name)
-        && info.is_abstract_class
-        // tsc resolves the *value* and looks at its construct signatures. This
-        // lookup is by name over the type table, so a binding that shadows the
-        // class — zod's `partial(Class: SchemaClass<…>, …)` beside its own
-        // `export abstract class Class` — otherwise reported every `new Class()`
-        // in the function as an abstract instantiation. A binding that can hold
-        // any value no longer denotes the declaration; a `const` does (that is
-        // what a class declaration itself binds).
-        && !matches!(
-            symbols.get(name).map(|symbol| symbol.kind),
-            Some(
-                crate::symbols::SymbolKind::Parameter
-                    | crate::symbols::SymbolKind::Let
-                    | crate::symbols::SymbolKind::Var
-            )
-        )
-    {
-        // tsc underlines the whole `new` expression, not the class name.
-        ctx.push(diagnostic_with_syntax_span(
-            Diagnostic::ts2511(ctx.file_name.clone()),
-            call_span.or(callee_span),
-        ));
+    // tsc resolves the *value* and looks at its construct signatures. This
+    // lookup is by name over the type table, so a binding that shadows the
+    // class — zod's `partial(Class: SchemaClass<…>, …)` beside its own
+    // `export abstract class Class` — otherwise reported every `new Class()`
+    // in the function as an abstract instantiation. A binding that can hold
+    // any value no longer denotes the declaration; a `const` does (that is
+    // what a class declaration itself binds).
+    let class_info = match callee {
+        ParsedExpression::Identifier { name, .. }
+            if !matches!(
+                symbols.get(name).map(|symbol| symbol.kind),
+                Some(
+                    crate::symbols::SymbolKind::Parameter
+                        | crate::symbols::SymbolKind::Let
+                        | crate::symbols::SymbolKind::Var
+                )
+            ) =>
+        {
+            match ctx.lookup_type_declaration(name) {
+                Some(crate::symbols::TypeDeclarationInfo::Interface(info))
+                    if info.is_class_instance =>
+                {
+                    Some(info.clone())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    if let Some(info) = &class_info {
+        // `resolveNewExpression` checks the constructor's modifier first, then
+        // whether the class is abstract; each stops the resolution. tsc
+        // underlines the whole `new` expression for both.
+        if let Some((declaring, accessibility)) =
+            crate::checks::expr::constructor_accessibility_error(info, true, ctx)
+        {
+            let class_name = declaring
+                .declared_name
+                .as_deref()
+                .unwrap_or(&declaring.name)
+                .to_string();
+            let diagnostic = match accessibility {
+                surge_ts_syntax::ParsedMemberAccessibility::Private => {
+                    Diagnostic::ts2673(class_name, ctx.file_name.clone())
+                }
+                surge_ts_syntax::ParsedMemberAccessibility::Protected => {
+                    Diagnostic::ts2674(class_name, ctx.file_name.clone())
+                }
+            };
+            ctx.push(diagnostic_with_syntax_span(diagnostic, call_span.or(callee_span)));
+        } else if info.is_abstract_class {
+            // An `abstract class` has a construct signature like any other
+            // class — the instance type is still what `new` produces, and tsc
+            // reports the instantiation without cascading.
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2511(ctx.file_name.clone()),
+                call_span.or(callee_span),
+            ));
+        }
     }
 
     // Physical-lib mode: `new Foo<Args>()` produces an instance of the `Foo`

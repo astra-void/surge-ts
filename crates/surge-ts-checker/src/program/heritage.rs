@@ -13,9 +13,11 @@
 //! whole rule and tsc reports it as TS2430 on the interface name.
 
 use surge_ts_syntax::{
-    ParsedClassDeclaration, ParsedClassMember, ParsedInterfaceDeclaration, ParsedNamedType,
-    ParsedType, TextSpan,
+    ParsedClassDeclaration, ParsedClassMember, ParsedInterfaceDeclaration,
+    ParsedMemberAccessibility, ParsedNamedType, ParsedType, TextSpan,
 };
+
+use crate::symbols::{InterfaceInfo, TypeDeclarationInfo};
 use surge_ts_types::{Type, is_assignable_to};
 
 use surge_ts_diagnostics::Diagnostic;
@@ -193,5 +195,156 @@ pub(crate) fn check_interface_heritage(
             Some(span) => diagnostic.with_span(convert_span(span)),
             None => diagnostic,
         });
+    }
+}
+
+/// The `extends` relation tsc checks once the member walk found nothing:
+/// `typeWithThis` against `baseWithThis` (TS2415), then, only when that
+/// holds, the static sides (TS2417). Two of `propertyRelatedTo`'s failures
+/// are visible without types — a `private` or `protected` member on one side
+/// that is not on the other — and the static side adds the type comparison
+/// the instance walk already did. What is not modelled here: an inherited
+/// index signature the class's own members violate, and `#private` names,
+/// which the parser drops.
+pub(crate) fn check_base_class_relation(
+    class: &ParsedClassDeclaration,
+    base_name: &str,
+    ctx: &mut CheckerContext,
+) {
+    if class.is_declare || !class.type_parameters.is_empty() {
+        return;
+    }
+    let Some(TypeDeclarationInfo::Interface(base)) = ctx.lookup_type_declaration(base_name) else {
+        return;
+    };
+    if !base.is_class_instance {
+        return;
+    }
+    let base = base.clone();
+    let base_display = base
+        .declared_name
+        .as_deref()
+        .unwrap_or(&base.name)
+        .to_string();
+
+    let own_accessibility = |name: &str, is_static: bool| {
+        class
+            .restricted_members
+            .iter()
+            .find(|member| member.name == name && member.is_static == is_static)
+            .map(|member| member.accessibility)
+    };
+    let instance_members: Vec<String> = class_instance_members(class)
+        .into_iter()
+        .map(|member| member.name)
+        .chain(
+            super::classes::constructor_parameter_property_members(class)
+                .into_iter()
+                .map(|member| member.name),
+        )
+        .collect();
+    let instance_incompatible = instance_members.iter().any(|name| {
+        let Some(base_accessibility) = base_member_accessibility(&base, name, false, ctx) else {
+            return false;
+        };
+        !accessibility_related(own_accessibility(name, false), base_accessibility)
+    });
+    if instance_incompatible {
+        let diagnostic = Diagnostic::ts2415(&class.name, &base_display, ctx.file_name.clone());
+        ctx.push(match class.name_span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        });
+        return;
+    }
+
+    let static_members: Vec<String> = class
+        .members
+        .iter()
+        .filter_map(|member| match member {
+            ParsedClassMember::Property(property) if property.is_static => Some(property.name.clone()),
+            ParsedClassMember::Method(method) if method.is_static => Some(method.name.clone()),
+            ParsedClassMember::Accessor(accessor) if accessor.is_static => Some(accessor.name.clone()),
+            _ => None,
+        })
+        .collect();
+    if static_members.is_empty() {
+        return;
+    }
+    let static_type = |name: &str| ctx.symbols.get(name).map(|symbol| symbol.ty.peeled());
+    let (own_static, base_static) = (static_type(&class.name), static_type(base_name));
+    let static_incompatible = static_members.iter().any(|name| {
+        let Some(base_accessibility) = base_member_accessibility(&base, name, true, ctx) else {
+            return false;
+        };
+        if !accessibility_related(own_accessibility(name, true), base_accessibility) {
+            return true;
+        }
+        let (Some(own), Some(base)) = (
+            own_static.as_ref().and_then(|ty| property_type(ty, name)),
+            base_static.as_ref().and_then(|ty| property_type(ty, name)),
+        ) else {
+            return false;
+        };
+        comparable(&own, &base) && !is_assignable_to(&own, &base)
+    });
+    if static_incompatible {
+        let diagnostic = Diagnostic::ts2417(
+            format!("typeof {}", class.name),
+            format!("typeof {base_display}"),
+            ctx.file_name.clone(),
+        );
+        ctx.push(match class.name_span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        });
+    }
+}
+
+/// The modifier the base side of the relation sees for `name`: `Some(None)`
+/// for a public member the base chain declares, `None` when no class in the
+/// chain declares it at all.
+fn base_member_accessibility(
+    base: &InterfaceInfo,
+    name: &str,
+    is_static: bool,
+    ctx: &CheckerContext,
+) -> Option<Option<ParsedMemberAccessibility>> {
+    let mut current = base.clone();
+    for _ in 0..32 {
+        if let Some(restricted) = current
+            .body
+            .restricted_members
+            .iter()
+            .find(|member| member.name == name && member.is_static == is_static)
+        {
+            return Some(Some(restricted.accessibility));
+        }
+        if !is_static && current.body.members.iter().any(|member| member.name == name) {
+            return Some(None);
+        }
+        if is_static && ctx.symbols.get(&current.name).is_some_and(|symbol| {
+            matches!(symbol.ty.peeled(), Type::Object(object) if object.properties.get(name).is_some())
+        }) {
+            return Some(None);
+        }
+        current = crate::checks::expr::base_interface(&current, ctx)?;
+    }
+    None
+}
+
+/// tsc's `propertyRelatedTo` on modifiers, for a derived class against its
+/// base: a private member must be the very same declaration on both sides,
+/// which a redeclaration never is; a protected base member may be widened by
+/// the subclass; a protected derived member may not hide a public one.
+fn accessibility_related(
+    own: Option<ParsedMemberAccessibility>,
+    base: Option<ParsedMemberAccessibility>,
+) -> bool {
+    match (own, base) {
+        (Some(ParsedMemberAccessibility::Private), _) | (_, Some(ParsedMemberAccessibility::Private)) => false,
+        (_, Some(ParsedMemberAccessibility::Protected)) => true,
+        (Some(ParsedMemberAccessibility::Protected), None) => false,
+        (None, None) => true,
     }
 }

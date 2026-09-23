@@ -23,6 +23,8 @@ use oxc_syntax::operator::UnaryOperator;
 use super::spans::text_span_from_oxc_span;
 use crate::{ParenthesizedExpressionSpan, ParsedGrammarDiagnostic, ParsedGrammarDiagnosticKind as Kind};
 
+mod super_call;
+
 pub(crate) fn collect_grammar_diagnostics(
     program: &Program<'_>,
 ) -> (Vec<ParsedGrammarDiagnostic>, Vec<ParenthesizedExpressionSpan>) {
@@ -1276,6 +1278,7 @@ impl GrammarCollector {
                     self.push(Kind::MissingSuperCall, method.key.span(), None);
                 } else {
                     self.report_this_before_super(body);
+                    self.check_super_call_placement(class, method.key.span(), &method.value.params, body);
                 }
             }
         }

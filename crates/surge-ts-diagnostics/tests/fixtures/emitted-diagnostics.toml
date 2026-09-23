@@ -537,10 +537,6 @@ span_tests = [
   "crates/surge-ts-checker/tests/spans.rs",
 ]
 
-[TS2351]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
-
 [TS2352]
 status = "emitted"
 oracle = [
@@ -2959,4 +2955,136 @@ oracle = [
 status = "emitted"
 oracle = [
   "catch-clause-annotation-basic",
+]
+
+[TS2351]
+status = "emitted"
+oracle = [
+  "new-non-constructable-basic",
+]
+
+[TS2415]
+status = "emitted"
+oracle = [
+  "class-extends-base-relation-basic",
+]
+
+[TS2417]
+status = "emitted"
+oracle = [
+  "class-extends-base-relation-basic",
+]
+
+[TS2507]
+status = "emitted"
+oracle = [
+  "class-heritage-non-constructor-basic",
+]
+
+[TS2863]
+status = "emitted"
+oracle = [
+  "class-heritage-non-constructor-basic",
+]
+
+[TS2864]
+status = "emitted"
+oracle = [
+  "class-heritage-non-constructor-basic",
+]
+
+[TS2446]
+status = "emitted"
+oracle = [
+  "restricted-constructor-access-basic",
+]
+
+[TS2673]
+status = "emitted"
+oracle = [
+  "restricted-constructor-access-basic",
+]
+
+[TS2674]
+status = "emitted"
+oracle = [
+  "restricted-constructor-access-basic",
+]
+
+[TS2675]
+status = "emitted"
+oracle = [
+  "restricted-constructor-access-basic",
+]
+
+[TS4105]
+status = "emitted"
+oracle = [
+  "restricted-constructor-access-basic",
+]
+
+[TS2376]
+status = "emitted"
+oracle = [
+  "super-call-placement-basic",
+]
+
+[TS2401]
+status = "emitted"
+oracle = [
+  "super-call-placement-basic",
+]
+
+[TS2301]
+status = "emitted"
+oracle = [
+  "property-initializer-constructor-locals-basic",
+]
+
+[TS2803]
+status = "emitted"
+oracle = [
+  "private-name-writes-basic",
+]
+
+[TS2806]
+status = "emitted"
+oracle = [
+  "private-name-writes-basic",
+]
+
+[TS2725]
+status = "emitted"
+oracle = [
+  "commonjs-class-and-import-names-basic",
+]
+
+[TS2438]
+status = "emitted"
+oracle = [
+  "commonjs-class-and-import-names-basic",
+]
+
+[TS2397]
+status = "emitted"
+oracle = [
+  "builtin-global-name-conflicts-basic",
+]
+
+[TS2441]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-checker/tests/program/compiler_flags.rs",
+]
+
+[TS2818]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-checker/tests/program/compiler_flags.rs",
+]
+
+[TS1216]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-checker/tests/program/compiler_flags.rs",
 ]

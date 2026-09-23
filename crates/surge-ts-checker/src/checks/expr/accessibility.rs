@@ -16,17 +16,39 @@ use super::diagnostic_with_syntax_span;
 
 /// A class declaration's identity: its file and the offset of its name. Names
 /// alone are not enough — an import can rename a class, and two files can
-/// declare the same one.
-pub(crate) type ClassIdentity = (Arc<str>, usize);
+/// declare the same one — so the name rides along for messages only.
+#[derive(Clone, Debug)]
+pub(crate) struct ClassIdentity {
+    file: Arc<str>,
+    start: usize,
+    pub(crate) name: String,
+}
+
+impl PartialEq for ClassIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.file == other.file && self.start == other.start
+    }
+}
 
 /// Inheritance chains are short; the bound only guards a malformed cycle.
 const MAX_HERITAGE_DEPTH: usize = 32;
 
 fn identity(info: &InterfaceInfo) -> Option<ClassIdentity> {
-    Some((info.file_name.clone(), info.name_span?.start))
+    Some(ClassIdentity {
+        file: info.file_name.clone(),
+        start: info.name_span?.start,
+        name: display_name(info),
+    })
 }
 
-fn base_interface(info: &InterfaceInfo, ctx: &CheckerContext) -> Option<InterfaceInfo> {
+fn display_name(info: &InterfaceInfo) -> String {
+    info.declared_name
+        .as_deref()
+        .unwrap_or(&info.name)
+        .to_string()
+}
+
+pub(crate) fn base_interface(info: &InterfaceInfo, ctx: &CheckerContext) -> Option<InterfaceInfo> {
     let base = info.body.extends.first()?;
     // The declaration's own scope answers first, but it carries only the layer
     // it was bound in: a base imported into the subclass's file is not in it,
@@ -53,10 +75,15 @@ pub(crate) fn enclosing_class_lineage(
     let Some(span) = class.name_span else {
         return lineage;
     };
+    let own_identity = ClassIdentity {
+        file: ctx.file_name_arc(),
+        start: span.start,
+        name: class.name.clone(),
+    };
     let mut current = match ctx.lookup_type_declaration(&class.name) {
         Some(TypeDeclarationInfo::Interface(info)) => info.clone(),
         _ => {
-            lineage.push((ctx.file_name_arc(), span.start));
+            lineage.push(own_identity);
             return lineage;
         }
     };
@@ -65,8 +92,8 @@ pub(crate) fn enclosing_class_lineage(
     // first fragment's name — the class's own span would never match it.
     lineage.push(
         identity(&current)
-            .filter(|(file, _)| **file == *ctx.file_name)
-            .unwrap_or_else(|| (ctx.file_name_arc(), span.start)),
+            .filter(|identity| *identity.file == *ctx.file_name)
+            .unwrap_or(own_identity),
     );
     for _ in 0..MAX_HERITAGE_DEPTH {
         let Some(base) = base_interface(&current, ctx) else {
@@ -83,7 +110,7 @@ pub(crate) fn enclosing_class_lineage(
 /// The class that declares `member` restricted, found by walking up from the
 /// receiver's class. A class along the way that declares the member without a
 /// modifier makes it public from there on.
-fn restricted_member_owner(
+pub(crate) fn restricted_member_owner(
     receiver_class: &InterfaceInfo,
     member: &str,
     is_static: bool,
@@ -213,13 +240,12 @@ pub(crate) fn check_member_accessibility(
         ParsedMemberAccessibility::Protected => lineage.contains(&declaring_identity),
     });
     if accessible {
+        if accessibility == ParsedMemberAccessibility::Protected && !is_static {
+            check_protected_instance_receiver(object, &class, &declaring_identity, member, member_span, ctx);
+        }
         return;
     }
-    let class_name = declaring
-        .declared_name
-        .as_deref()
-        .unwrap_or(&declaring.name)
-        .to_string();
+    let class_name = display_name(&declaring);
     let diagnostic = match accessibility {
         ParsedMemberAccessibility::Private => {
             Diagnostic::ts2341(member, class_name, ctx.file_name.clone())
@@ -229,4 +255,99 @@ pub(crate) fn check_member_accessibility(
         }
     };
     ctx.push(diagnostic_with_syntax_span(diagnostic, member_span));
+}
+
+/// tsc's instance rule for a protected member: from inside a class, it may be
+/// read only off an instance of that class (or a subclass), never off a
+/// plain instance of the base (TS2446). `super.x` is exempt, and so is a
+/// static member, which the caller already excludes.
+fn check_protected_instance_receiver(
+    object: &ParsedExpression,
+    receiver: &InterfaceInfo,
+    declaring_identity: &ClassIdentity,
+    member: &str,
+    member_span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if matches!(object, ParsedExpression::Identifier { name, .. } if name == "super") {
+        return;
+    }
+    // The innermost enclosing class deriving from the declaring class.
+    let Some(enclosing) = ctx
+        .enclosing_classes
+        .iter()
+        .rev()
+        .find(|lineage| lineage.contains(declaring_identity))
+        .and_then(|lineage| lineage.first())
+    else {
+        return;
+    };
+    if class_lineage(receiver, ctx).contains(enclosing) {
+        return;
+    }
+    let diagnostic = Diagnostic::ts2446(
+        member,
+        &enclosing.name,
+        display_name(receiver),
+        ctx.file_name.clone(),
+    );
+    ctx.push(diagnostic_with_syntax_span(diagnostic, member_span));
+}
+
+/// A class and every class it extends.
+fn class_lineage(class: &InterfaceInfo, ctx: &CheckerContext) -> Vec<ClassIdentity> {
+    let mut lineage = Vec::new();
+    let mut current = class.clone();
+    for _ in 0..MAX_HERITAGE_DEPTH {
+        if let Some(identity) = identity(&current) {
+            lineage.push(identity);
+        }
+        let Some(base) = base_interface(&current, ctx) else {
+            break;
+        };
+        current = base;
+    }
+    lineage
+}
+
+/// The declaring class and modifier of the constructor `new C()` or
+/// `class D extends C` would reach, when the current position may not: tsc's
+/// `getConstructorAccessibilityError`. A class without a constructor inherits
+/// its base's, so the walk goes up to the first class that writes one.
+/// `protected_allowed_from_subclass` is the `new` rule; `extends` only refuses
+/// a private constructor.
+pub(crate) fn constructor_accessibility_error(
+    class: &InterfaceInfo,
+    protected_allowed_from_subclass: bool,
+    ctx: &CheckerContext,
+) -> Option<(InterfaceInfo, ParsedMemberAccessibility)> {
+    let mut current = class.clone();
+    for _ in 0..MAX_HERITAGE_DEPTH {
+        if current.declares_constructor {
+            break;
+        }
+        current = base_interface(&current, ctx)?;
+    }
+    let accessibility = current.constructor_accessibility?;
+    let declaring_identity = identity(&current)?;
+    let within_class = ctx
+        .enclosing_classes
+        .iter()
+        .any(|lineage| lineage.first() == Some(&declaring_identity));
+    if within_class {
+        return None;
+    }
+    match accessibility {
+        ParsedMemberAccessibility::Private => Some((current, accessibility)),
+        ParsedMemberAccessibility::Protected => {
+            if !protected_allowed_from_subclass {
+                return None;
+            }
+            let from_subclass = ctx
+                .enclosing_classes
+                .last()
+                .is_some_and(|lineage| lineage.contains(&declaring_identity));
+            (!from_subclass).then_some((current, accessibility))
+        }
+    }
 }

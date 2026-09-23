@@ -319,6 +319,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             match method.kind {
                 MethodDefinitionKind::Constructor => {
                     Some(ParsedClassMember::Constructor(ParsedClassConstructor {
+                        accessibility: restricted_accessibility(method.accessibility),
                         parameters,
                         body,
                         body_reads,

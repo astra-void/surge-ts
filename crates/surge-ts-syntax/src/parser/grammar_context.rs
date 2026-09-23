@@ -21,7 +21,9 @@ use super::grammar_modifiers::{self as modifiers, ModifierContext, NodeKind, Par
 use super::spans::text_span_from_oxc_span;
 use crate::{ParsedGrammarDiagnostic, ParsedGrammarDiagnosticKind as Kind};
 
+mod class_emit;
 mod members;
+mod reflect_collision;
 
 pub(crate) fn collect_context_grammar_diagnostics(
     program: &Program<'_>,
@@ -1864,11 +1866,22 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 if let AssignmentTarget::AssignmentTargetIdentifier(identifier) = &assignment.left {
                     self.check_eval_or_arguments(&identifier.name, identifier.span);
                 }
+                self.check_private_method_assignment(&assignment.left);
             }
             AstKind::UpdateExpression(update) => {
                 if let SimpleAssignmentTarget::AssignmentTargetIdentifier(identifier) = &update.argument {
                     self.check_eval_or_arguments(&identifier.name, identifier.span);
                 }
+                self.check_private_method_update(&update.argument);
+            }
+            AstKind::PrivateFieldExpression(access) => self.check_private_setter_read(access),
+            // Outside a module or ambient module, `declare global` is TS2669
+            // and contributes nothing to the globals.
+            AstKind::TSGlobalDeclaration(global)
+                if self.external_module
+                    || self.stack.iter().any(|kind| matches!(kind, AstKind::TSModuleDeclaration(_))) =>
+            {
+                self.check_global_augmentation_names(&global.body.body);
             }
             AstKind::MetaProperty(meta) => self.check_new_target(meta),
             AstKind::TSThisType(this_type) => self.check_this_type(this_type.span),
@@ -1882,7 +1895,10 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             AstKind::TSEnumDeclaration(declaration) => {
                 self.check_reserved_type_name(2431, &declaration.id);
             }
-            AstKind::Class(class) => check_class_name(self, class),
+            AstKind::Class(class) => {
+                check_class_name(self, class);
+                self.check_object_class_name(class);
+            }
             AstKind::CatchClause(clause) => self.check_catch_clause(clause),
             AstKind::VariableDeclarator(declarator) => {
                 self.check_let_name(declarator);
@@ -1895,6 +1911,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 if property.computed && !self.check_mapped_type_member(&property.key) {
                     self.check_dynamic_property_name(1166, &property.key);
                 }
+                self.check_property_initializer_constructor_locals(property);
             }
             AstKind::AccessorProperty(property) if property.computed => {
                 self.check_mapped_type_member(&property.key);
@@ -1909,6 +1926,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 }
             }
             AstKind::VariableDeclaration(declaration) => {
+                self.check_es_module_marker(declaration);
                 self.check_single_statement_declaration(declaration);
                 if declaration.declare && !self.at_module_element_level() {
                     let start = declaration.span.start;
@@ -1922,8 +1940,12 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     self.check_for_await(statement);
                 }
                 self.check_for_in_or_of_declaration(&statement.left, false);
+                self.check_private_method_for_target(&statement.left);
             }
-            AstKind::ForInStatement(statement) => self.check_for_in_or_of_declaration(&statement.left, true),
+            AstKind::ForInStatement(statement) => {
+                self.check_for_in_or_of_declaration(&statement.left, true);
+                self.check_private_method_for_target(&statement.left);
+            }
             AstKind::FormalParameterRest(rest) => self.check_rest_parameter_type(rest),
             AstKind::BindingProperty(property) => self.check_renamed_binding_in_signature(property),
             AstKind::FormalParameters(parameters) => self.check_parameter_initializer_references(parameters),
@@ -1962,6 +1984,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     self.push(1232, span, &[]);
                 } else {
                     self.check_import_require_in_namespace(declaration);
+                    self.check_import_alias_name(declaration);
                     // Gated on `module` by the checker: ES2015..ESNext cannot emit it.
                     // Inside a namespace it is TS1147 instead, and tsc stops there.
                     if !matches!(self.stack.last(), Some(AstKind::TSModuleBlock(_)))
@@ -2049,6 +2072,8 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     self.check_merged_export_visibility(&program.body);
                     self.check_export_assignment_conflicts(program);
                 }
+                self.check_top_level_names(program);
+                self.check_reflect_collisions(program);
             }
             AstKind::FunctionBody(body) => {
                 self.check_enum_merges(&body.statements);
