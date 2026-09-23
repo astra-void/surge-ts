@@ -14,6 +14,43 @@ use super::spans::text_span_from_oxc_span;
 pub(crate) fn parse_import_declarations(
     declaration: &ImportDeclaration<'_>,
 ) -> Option<Vec<ParsedImportDeclaration>> {
+    // `import d, * as ns from "m"` binds the module's default and its
+    // namespace, as the two imports written apart would.
+    if let Some(specifiers) = declaration.specifiers.as_ref()
+        && let [
+            ImportDeclarationSpecifier::ImportDefaultSpecifier(default),
+            ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace),
+        ] = specifiers.as_slice()
+    {
+        let is_type_only = matches!(declaration.import_kind, ImportOrExportKind::Type);
+        let import = |kind| ParsedImportDeclaration {
+            kind,
+            module_specifier: declaration.source.value.to_string(),
+            module_specifier_span: Some(text_span_from_oxc_span(declaration.source.span)),
+            span: Some(text_span_from_oxc_span(declaration.span)),
+        };
+        let default_name = default.local.name.to_string();
+        let default_span = Some(text_span_from_oxc_span(default.local.span));
+        let default_kind = if is_type_only {
+            ParsedImportKind::TypeOnlyDefault {
+                local_name: default_name,
+                name_span: default_span,
+            }
+        } else {
+            ParsedImportKind::Default {
+                local_name: default_name,
+                name_span: default_span,
+            }
+        };
+        return Some(vec![
+            import(default_kind),
+            import(ParsedImportKind::Namespace {
+                local_name: namespace.local.name.to_string(),
+                name_span: Some(text_span_from_oxc_span(namespace.local.span)),
+                is_type_only,
+            }),
+        ]);
+    }
     let mut parsed = vec![parse_import_declaration(declaration)?];
     if matches!(declaration.import_kind, ImportOrExportKind::Type) {
         return Some(parsed);

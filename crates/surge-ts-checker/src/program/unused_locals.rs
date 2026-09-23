@@ -36,8 +36,8 @@ pub(crate) fn emit_unused_module_bindings(
 
     // tsc's `reportUnusedImports`: the bindings of one import declaration are
     // reported together — as TS6192 on the declaration when it has more than
-    // one and none is used. The parser splits type-only specifiers into
-    // several declarations that share the statement's span.
+    // one and none is used. The parser splits `import d, * as ns` and type-only
+    // specifiers into several declarations that share the statement's span.
     let mut import_groups: Vec<(Option<TextSpan>, usize, Vec<(&str, Option<TextSpan>)>)> = Vec::new();
     for statement in statements {
         match statement {

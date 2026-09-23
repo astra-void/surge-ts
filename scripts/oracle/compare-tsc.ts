@@ -744,6 +744,7 @@ export const fixturePresets: Record<string, string> = {
   'numeric-enum-reverse-mapping': path.join(workspaceRoot, 'tests/compat-projects/numeric-enum-reverse-mapping/tsconfig.json'),
   'iife-contextual-parameters': path.join(workspaceRoot, 'tests/compat-projects/iife-contextual-parameters/tsconfig.json'),
   'unused-import-declaration-grouping': path.join(workspaceRoot, 'tests/compat-projects/unused-import-declaration-grouping/tsconfig.json'),
+  'default-and-namespace-import': path.join(workspaceRoot, 'tests/compat-projects/default-and-namespace-import/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
