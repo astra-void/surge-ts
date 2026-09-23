@@ -715,6 +715,21 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
+    /// tsc's `checkModuleDeclaration`: an ambient module at the top of a
+    /// script file may not use a relative name — TS2436. In a module file the
+    /// same declaration is an augmentation, which the checker resolves.
+    fn check_relative_ambient_module_name(&mut self, module: &oxc_ast::ast::TSModuleDeclaration<'_>) {
+        let oxc_ast::ast::TSModuleDeclarationName::StringLiteral(name) = &module.id else {
+            return;
+        };
+        if self.external_module || !matches!(self.stack.last(), Some(AstKind::Program(_))) {
+            return;
+        }
+        if is_external_module_name_relative(name.value.as_str()) {
+            self.push(2436, name.span, &[]);
+        }
+    }
+
     /// tsc's `checkTypeParameterListsIdentical` over the class and interface
     /// declarations of one name in one scope — TS2428 on each. Constraints are
     /// compared only where both are a keyword, which is identity without types.
@@ -1822,6 +1837,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_let_name(declarator);
                 self.check_definite_assertion(declarator);
             }
+            AstKind::TSModuleDeclaration(module) => self.check_relative_ambient_module_name(module),
             AstKind::PropertyDefinition(property) => {
                 if property.definite && property.value.is_some() {
                     self.push_at_exclamation(1263, property.key.span());
@@ -2242,4 +2258,16 @@ fn is_entity_name_expression(expression: &oxc_ast::ast::Expression<'_>) -> bool 
         E::StaticMemberExpression(member) => is_entity_name_expression(&member.object),
         _ => false,
     }
+}
+
+/// tsc's `IsExternalModuleNameRelative`: `./`, `../`, or a rooted path.
+fn is_external_module_name_relative(name: &str) -> bool {
+    let relative = name == "." || name == ".." || name.starts_with("./") || name.starts_with("../")
+        || name.starts_with(".\\") || name.starts_with("..\\");
+    let rooted = name.starts_with('/')
+        || name.starts_with('\\')
+        || (name.len() >= 2
+            && name.as_bytes()[0].is_ascii_alphabetic()
+            && name.as_bytes()[1] == b':');
+    relative || rooted
 }

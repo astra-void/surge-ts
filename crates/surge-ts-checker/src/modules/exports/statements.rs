@@ -19,6 +19,7 @@ pub(crate) fn collect_exports_from_statement(
     symbols: &mut SymbolTable,
     default_symbol: &mut Option<Arc<SymbolInfo>>,
     export_assignment_symbol: &mut Option<Arc<SymbolInfo>>,
+    module_scope_names: Option<&std::collections::HashSet<&str>>,
     ctx: &mut CheckerContext,
 ) {
     match statement {
@@ -35,6 +36,7 @@ pub(crate) fn collect_exports_from_statement(
                     symbols,
                     default_symbol,
                     export_assignment_symbol,
+                    module_scope_names,
                     ctx,
                 )
             }
@@ -109,6 +111,18 @@ pub(crate) fn collect_exports_from_statement(
 
                 for specifier in specifiers {
                     let specifier_is_type_only = *is_type_only || specifier.is_type_only;
+
+                    if module_scope_names
+                        .is_some_and(|names| !names.contains(specifier.local_name.as_str()))
+                        && is_global_scope_name(ctx, &specifier.local_name)
+                    {
+                        push_unresolved_export_diagnostic(
+                            ctx,
+                            &specifier.local_name,
+                            specifier.name_span,
+                        );
+                        continue;
+                    }
 
                     if specifier_is_type_only {
                         export_local_type_name(

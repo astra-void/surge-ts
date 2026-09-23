@@ -18,7 +18,7 @@ use crate::modules::{ModuleExportTable, ModuleImportBindings, resolve_module_exp
 use crate::paths::canonicalize_if_exists_string;
 use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
 
-mod ambient;
+pub(crate) mod ambient;
 pub(crate) mod binding;
 mod check_files;
 mod classes;

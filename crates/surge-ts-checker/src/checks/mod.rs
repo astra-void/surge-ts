@@ -27,7 +27,11 @@ pub(crate) fn emit_value_position_reference_diagnostic(
     ctx: &mut CheckerContext,
 ) -> bool {
     if ctx.is_type_only_import_value_reference(name) {
-        let mut diagnostic = Diagnostic::ts1361(name, ctx.file_name.clone());
+        let mut diagnostic = if ctx.is_type_only_export_import_value_reference(name) {
+            Diagnostic::ts1362(name, ctx.file_name.clone())
+        } else {
+            Diagnostic::ts1361(name, ctx.file_name.clone())
+        };
         if let Some(span) = span {
             diagnostic = diagnostic.with_span(convert_span(span));
         }
