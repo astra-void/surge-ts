@@ -462,31 +462,12 @@ fn collect_static_members(
                 );
             }
             ParsedClassMember::Method(method) if method.is_static => {
-                let mut function_type = map_function_signature(
+                let function_type = static_signature_type(
+                    &method.type_parameters,
                     &method.parameters,
                     method.return_type.as_ref(),
-                    &method.type_parameters,
-                    None,
                     ctx,
                 );
-                // A generic or predicate static (`static assert(v): asserts v is
-                // E`) keeps its written signature on the handle, so a call can
-                // instantiate it and a guard can read the predicate.
-                if !method.type_parameters.is_empty()
-                    || matches!(method.return_type, Some(ParsedType::Predicate(_)))
-                {
-                    function_type = function_type.with_declaration(Arc::new(
-                        crate::checks::call::DeclaredMemberSignature {
-                            signature: crate::checks::function::function_signature_info(
-                                &method.type_parameters,
-                                &method.parameters,
-                                method.return_type.as_ref(),
-                                &ctx.file_name,
-                            ),
-                            outer_type_arguments: Vec::new(),
-                        },
-                    ));
-                }
                 properties.insert(
                     method.name.as_str().into(),
                     ObjectProperty::required(Type::Function(function_type)),
@@ -689,10 +670,50 @@ fn inherited_construct_signature(base: &FunctionType, instance_type: &Type) -> F
 }
 
 fn static_property_type(property: &ParsedClassProperty, ctx: &mut CheckerContext) -> Type {
-    match property.declared_type.clone() {
-        Some(declared_type) => map_parsed_type(declared_type, ctx),
-        None => map_parsed_type(initializer_property_type(property), ctx),
+    if let Some(declared_type) = property.declared_type.clone() {
+        return map_parsed_type(declared_type, ctx);
     }
+    // tsc types an unannotated property by checking its initializer
+    // (`getTypeForVariableLikeDeclaration`), and a function-valued one checks to
+    // its own declaration's signature (`getSignatureFromDeclaration`) — the same
+    // signature a static method with those parameters and return type has.
+    if let Some(surge_ts_syntax::ParsedExpression::ArrowFunction(function)) =
+        property.initializer.as_ref()
+    {
+        return Type::Function(static_signature_type(
+            &function.type_parameters,
+            &function.parameters,
+            function.return_type.as_ref(),
+            ctx,
+        ));
+    }
+    map_parsed_type(initializer_property_type(property), ctx)
+}
+
+/// A static member's call signature from its declaration. A generic or
+/// predicate one (`static assert(v): asserts v is E`) keeps its written
+/// signature on the handle, so a call can instantiate it and a guard can read
+/// the predicate.
+fn static_signature_type(
+    type_parameters: &[surge_ts_syntax::ParsedTypeParameter],
+    parameters: &[ParsedFunctionParameter],
+    return_type: Option<&ParsedType>,
+    ctx: &mut CheckerContext,
+) -> FunctionType {
+    let function_type =
+        map_function_signature(parameters, return_type, type_parameters, None, ctx);
+    if type_parameters.is_empty() && !matches!(return_type, Some(ParsedType::Predicate(_))) {
+        return function_type;
+    }
+    function_type.with_declaration(Arc::new(crate::checks::call::DeclaredMemberSignature {
+        signature: crate::checks::function::function_signature_info(
+            type_parameters,
+            parameters,
+            return_type,
+            &ctx.file_name,
+        ),
+        outer_type_arguments: Vec::new(),
+    }))
 }
 
 /// The type an unannotated property takes from its initializer, as tsc's
