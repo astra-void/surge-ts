@@ -138,12 +138,41 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
         return_type
     };
 
-    alloc_function_type(
-        parameters,
-        return_type,
-        false,
-        required_parameter_count(arrow_function.parameters.as_slice()),
+    with_written_predicate(
+        alloc_function_type(
+            parameters,
+            return_type,
+            false,
+            required_parameter_count(arrow_function.parameters.as_slice()),
+        ),
+        arrow_function,
+        ctx,
     )
+}
+
+/// A function expression — an object-literal method among them — whose
+/// written return type is a type predicate keeps its written signature on
+/// the handle, as a declared member does (`DeclaredMemberSignature`), so a
+/// guard that calls it through a property (`Utils.isA(node)`) can narrow.
+pub(crate) fn with_written_predicate(
+    function_type: surge_ts_types::FunctionType,
+    arrow_function: &ParsedArrowFunction,
+    ctx: &CheckerContext,
+) -> surge_ts_types::FunctionType {
+    if !matches!(arrow_function.return_type, Some(surge_ts_syntax::ParsedType::Predicate(_)))
+        || function_type.declaration().is_some()
+    {
+        return function_type;
+    }
+    function_type.with_declaration(std::sync::Arc::new(crate::checks::call::DeclaredMemberSignature {
+        signature: crate::checks::function::function_signature_info(
+            &arrow_function.type_parameters,
+            &arrow_function.parameters,
+            arrow_function.return_type.as_ref(),
+            &ctx.file_name,
+        ),
+        outer_type_arguments: Vec::new(),
+    }))
 }
 
 /// tsc widens the *fresh* literal a body expression returns, so `() => ''`

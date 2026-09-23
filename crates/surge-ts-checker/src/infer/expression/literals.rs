@@ -497,7 +497,7 @@ fn infer_object_property_type(
         if property.is_accessor {
             return function_type.parameters().first().cloned().unwrap_or(Type::Any);
         }
-        return Type::Function(function_type);
+        return Type::Function(super::with_written_predicate(function_type, arrow, ctx));
     }
 
     infer_object_property_value(&property.value, symbols, ctx)

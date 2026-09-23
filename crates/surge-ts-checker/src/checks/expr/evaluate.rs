@@ -728,6 +728,8 @@ fn evaluate_expression_unsettled(
             let function_type = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
                 check_arrow_function_expression(arrow_function.as_ref().clone(), symbols, ctx)
             });
+            let function_type =
+                crate::infer::expression::with_written_predicate(function_type, arrow_function, ctx);
             InferredExpression::Known(Type::Function(function_type))
         }
         ParsedExpression::NonNullAssertion {
