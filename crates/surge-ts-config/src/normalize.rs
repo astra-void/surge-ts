@@ -284,7 +284,7 @@ fn parse_target_option(
     };
 
     match raw.to_ascii_lowercase().as_str() {
-        "es2015" => ScriptTarget::ES2015,
+        "es6" | "es2015" => ScriptTarget::ES2015,
         "es2016" => ScriptTarget::ES2016,
         "es2017" => ScriptTarget::ES2017,
         "es2018" => ScriptTarget::ES2018,
@@ -330,7 +330,7 @@ fn parse_module_option(
 
     match raw.to_ascii_lowercase().as_str() {
         "commonjs" => ModuleKind::CommonJS,
-        "es2015" => ModuleKind::ES2015,
+        "es6" | "es2015" => ModuleKind::ES2015,
         "es2020" => ModuleKind::ES2020,
         "es2022" => ModuleKind::ES2022,
         "esnext" => ModuleKind::ESNext,

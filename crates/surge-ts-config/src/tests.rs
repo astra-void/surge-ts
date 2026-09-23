@@ -890,6 +890,21 @@ fn target_es5_is_legacy_and_falls_back_to_es2015() {
 }
 
 #[test]
+fn es6_is_an_alias_of_es2015_for_target_and_module() {
+    let root = temp_dir("target-module-es6");
+    write_file(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "target": "es6", "module": "es6" } }"#,
+    );
+
+    let loaded = load(root.join("tsconfig.json"));
+    assert_eq!(loaded.compiler_options.target, ScriptTarget::ES2015);
+    assert_eq!(loaded.compiler_options.module, ModuleKind::ES2015);
+    assert!(loaded.diagnostics.is_empty());
+}
+
+#[test]
 fn base_url_is_supported_and_resolved_against_config_dir() {
     let root = temp_dir("base-url");
     write_file(
