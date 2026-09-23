@@ -14,8 +14,17 @@ pub(crate) fn narrow_optional_chain_base(
     literal: &Type,
     keep_matching: bool,
 ) -> Option<Type> {
-    let ParsedExpression::Binary { left, right, .. } = condition else {
+    if !optional_chain_excludes_nullish(condition, literal, keep_matching) {
         return None;
+    }
+    let narrowed = surge_ts_types::remove_nullish(subject_ty);
+    (narrowed != *subject_ty && !narrowed.is_unknown()).then_some(narrowed)
+}
+
+/// Whether `condition` holds only for a non-nullish optional-chain base.
+fn optional_chain_excludes_nullish(condition: &ParsedExpression, literal: &Type, keep_matching: bool) -> bool {
+    let ParsedExpression::Binary { left, right, .. } = condition else {
+        return false;
     };
     let optional_access = matches!(
         left.as_ref(),
@@ -24,11 +33,15 @@ pub(crate) fn narrow_optional_chain_base(
         right.as_ref(),
         ParsedExpression::OptionalPropertyAccess { .. }
     );
-    if !optional_access || !keep_matching || *literal == Type::Undefined {
-        return None;
+    optional_access && keep_matching && *literal != Type::Undefined
+}
+
+fn is_nullish_only(ty: &Type) -> bool {
+    match ty {
+        Type::Null | Type::Undefined | Type::Void => true,
+        Type::Union(union) => union.types().iter().all(is_nullish_only),
+        _ => false,
     }
-    let narrowed = surge_ts_types::remove_nullish(subject_ty);
-    (narrowed != *subject_ty && !narrowed.is_unknown()).then_some(narrowed)
 }
 
 /// A discriminant test through an optional chain narrows twice: the union by
@@ -47,6 +60,79 @@ pub(crate) fn narrow_discriminant_through_optional_chain(
                 .unwrap_or(narrowed),
         ),
         None => narrow_optional_chain_base(condition, subject_ty, literal, keep_matching),
+    }
+}
+
+/// `base.prop?.kind === "a"` narrows the reference `base.prop` by the
+/// discriminant and by the chain's non-nullishness
+/// (`narrow_discriminant_through_optional_chain`). tsc narrows the reference
+/// itself; surge rewrites the property on the base's type instead, and on a
+/// union base (`VariableDeclarator` is `LetOrConstOrVarDeclarator |
+/// UsingDeclarator`) in every member, so a read of the reference sees the
+/// same type.
+pub(crate) fn narrow_base_property_by_discriminant(
+    base_ty: &Type,
+    base_property: &str,
+    condition: &ParsedExpression,
+    property: &str,
+    literal: &Type,
+    keep_matching: bool,
+) -> Option<Type> {
+    let narrow_object = |object_type: &surge_ts_types::ObjectType| {
+        let base_property_type = object_type.properties.get(base_property)?;
+        // A property that is only nullish cannot pass `x?.k === lit`: in that
+        // member the reference is `never`.
+        let narrowed_property = match narrow_discriminant_through_optional_chain(
+            condition,
+            &base_property_type.ty,
+            property,
+            literal,
+            keep_matching,
+        ) {
+            Some(narrowed) => narrowed,
+            None if is_nullish_only(&base_property_type.ty)
+                && optional_chain_excludes_nullish(condition, literal, keep_matching) =>
+            {
+                Type::Never
+            }
+            None => return None,
+        };
+        let mut new_object = object_type.clone();
+        let properties = std::sync::Arc::make_mut(&mut new_object.properties);
+        properties.insert(
+            base_property.into(),
+            surge_ts_types::ObjectProperty {
+                ty: narrowed_property,
+                optional: base_property_type.optional,
+                method: base_property_type.method,
+                readonly: base_property_type.readonly,
+                restriction: base_property_type.restriction.clone(),
+                index_slot: base_property_type.index_slot,
+            },
+        );
+        Some(new_object)
+    };
+    match base_ty.peeled() {
+        Type::Object(object_type) => narrow_object(&object_type).map(Type::Object),
+        Type::Union(union) => {
+            let mut changed = false;
+            let members: Vec<Type> = union
+                .types()
+                .iter()
+                .map(|member| match member.peeled() {
+                    Type::Object(object_type) => match narrow_object(&object_type) {
+                        Some(narrowed) => {
+                            changed = true;
+                            Type::Object(narrowed)
+                        }
+                        None => member.clone(),
+                    },
+                    _ => member.clone(),
+                })
+                .collect();
+            changed.then(|| surge_ts_types::union_type(members))
+        }
+        _ => None,
     }
 }
 
@@ -196,37 +282,20 @@ pub(crate) fn narrow_discriminant_symbol_table(
             };
             let symbol = symbols.get(name)?;
             // `draft` may be typed by a named declaration (nominal reference);
-            // peel it to narrow its discriminant property (`draft.identity`).
-            let symbol_ty = symbol.ty.peeled();
-            let Type::Object(object_type) = &symbol_ty else {
-                return None;
-            };
-            let base_property_type = object_type.properties.get(base_property.as_str())?;
-            let narrowed_property = narrow_union_by_discriminant(
-                &base_property_type.ty,
+            // the helper peels it to narrow its property (`draft.identity`).
+            let narrowed = narrow_base_property_by_discriminant(
+                &symbol.ty,
+                base_property,
+                condition,
                 property,
                 &literal,
                 keep_matching,
             )?;
-
-            let mut new_object = object_type.clone();
-            let properties = std::sync::Arc::make_mut(&mut new_object.properties);
-            properties.insert(
-                base_property.as_str().into(),
-                surge_ts_types::ObjectProperty {
-                    ty: narrowed_property,
-                    optional: base_property_type.optional,
-                    method: base_property_type.method,
-                    readonly: base_property_type.readonly,
-                    restriction: base_property_type.restriction.clone(),
-                    index_slot: base_property_type.index_slot,
-                },
-            );
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
             narrowed_symbols.insert_narrowed(
                 name.clone(),
                 SymbolInfo {
-                    ty: Type::Object(new_object),
+                    ty: narrowed,
                     kind: symbol.kind,
                     function_signature: symbol.function_signature.clone(),
                 },
