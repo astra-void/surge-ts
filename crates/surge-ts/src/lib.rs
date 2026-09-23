@@ -25,6 +25,7 @@ mod package_declarations;
 mod package_resolution;
 mod path_mapping;
 mod probe;
+mod semver;
 mod specifier;
 mod specifier_scan;
 
