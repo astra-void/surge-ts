@@ -793,6 +793,8 @@ export const fixturePresets: Record<string, string> = {
   'readonly-array-assignment-code': path.join(workspaceRoot, 'tests/compat-projects/readonly-array-assignment-code/tsconfig.json'),
   'union-accessor-element-write': path.join(workspaceRoot, 'tests/compat-projects/union-accessor-element-write/tsconfig.json'),
   'never-call-statement-exits': path.join(workspaceRoot, 'tests/compat-projects/never-call-statement-exits/tsconfig.json'),
+  'destructuring-assignment-computed-key': path.join(workspaceRoot, 'tests/compat-projects/destructuring-assignment-computed-key/tsconfig.json'),
+  'destructuring-declaration-computed-key': path.join(workspaceRoot, 'tests/compat-projects/destructuring-declaration-computed-key/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

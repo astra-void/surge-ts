@@ -574,6 +574,9 @@ fn lower_assignment_pattern(
                 {
                     return ParsedExpression::UndefinedLiteral;
                 }
+                if is_numeric_literal_name(name) {
+                    return numeric_name_read(source.clone(), source_span, name, span);
+                }
                 ParsedExpression::PropertyAccess {
                     object: Box::new(source.clone()),
                     object_span: source_span,
@@ -593,14 +596,25 @@ fn lower_assignment_pattern(
                         assign_identifier(identifier, value, assignments);
                     }
                     AssignmentTargetProperty::AssignmentTargetPropertyProperty(property) => {
-                        let Some(name) = property.name.static_name() else {
-                            continue;
-                        };
                         let Some((target, default)) = split_default(&property.binding) else {
                             continue;
                         };
                         let span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(target)));
-                        let value = with_default(property_read(&name, span, default.is_some()), default);
+                        let read = match property.name.static_name() {
+                            Some(name) => property_read(&name, span, default.is_some()),
+                            // A computed key's target reads the source indexed by
+                            // the key, evaluated where the pattern reaches it.
+                            None => match property.name.as_expression() {
+                                Some(key) => ParsedExpression::ElementAccess {
+                                    object: Box::new(source.clone()),
+                                    object_span: source_span,
+                                    index: Box::new(parse_expression(key).0),
+                                    index_span: Some(text_span_from_oxc_span(oxc_span::GetSpan::span(key))),
+                                },
+                                None => continue,
+                            },
+                        };
+                        let value = with_default(read, default);
                         assign(target, value, assignments);
                     }
                 }
@@ -819,49 +833,95 @@ fn parse_object_binding_property_declarations(
     is_declare: bool,
     kind: ParsedVariableKind,
 ) -> Vec<ParsedStatement> {
-    let PropertyKey::StaticIdentifier(identifier) = &property.key else {
-        return Vec::new();
-    };
-
-    // An object literal initializer is contextually typed by the pattern, whose
-    // defaulted elements are optional properties (`getTypeFromBindingPattern`),
-    // so a defaulted name the literal does not write reads `undefined` rather
-    // than a missing property.
-    if matches!(property.value, BindingPattern::AssignmentPattern(_))
-        && static_object_literal(&source_initializer).is_some_and(|properties| {
-            literal_lacks_property(properties, identifier.name.as_str())
-        })
-    {
-        return parse_binding_pattern_declarations(
-            &property.value,
-            Some(ParsedExpression::UndefinedLiteral),
-            Some(text_span_from_oxc_span(identifier.span)),
-            is_declare,
-            kind,
-            None,
-        );
-    }
-
-    // Marked bracketed: this access is synthesized from a binding pattern, and
-    // tsc does not apply `noPropertyAccessFromIndexSignature` (TS4111) to
-    // destructuring — only to written dotted accesses.
-    let property_initializer = ParsedExpression::PropertyAccess {
-        object: Box::new(source_initializer),
-        object_span: source_initializer_span,
-        property_name: identifier.name.to_string(),
-        property_span: Some(text_span_from_oxc_span(identifier.span)),
-        is_bracketed: true,
-        binding_element: true,
+    let key_span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(&property.key)));
+    let property_initializer = match property.key.static_name() {
+        Some(name) => {
+            // An object literal initializer is contextually typed by the
+            // pattern, whose defaulted elements are optional properties
+            // (`getTypeFromBindingPattern`), so a defaulted name the literal
+            // does not write reads `undefined` rather than a missing property.
+            if matches!(property.value, BindingPattern::AssignmentPattern(_))
+                && static_object_literal(&source_initializer)
+                    .is_some_and(|properties| literal_lacks_property(properties, &name))
+            {
+                return parse_binding_pattern_declarations(
+                    &property.value,
+                    Some(ParsedExpression::UndefinedLiteral),
+                    key_span,
+                    is_declare,
+                    kind,
+                    None,
+                );
+            }
+            // A numeric name indexes like an element (`isNumericLiteralName`),
+            // so a string or array source answers it through its index.
+            if is_numeric_literal_name(&name) {
+                numeric_name_read(source_initializer, source_initializer_span, &name, key_span)
+            } else {
+                // Marked bracketed: this access is synthesized from a binding
+                // pattern, and tsc does not apply
+                // `noPropertyAccessFromIndexSignature` (TS4111) to destructuring —
+                // only to written dotted accesses.
+                ParsedExpression::PropertyAccess {
+                    object: Box::new(source_initializer),
+                    object_span: source_initializer_span,
+                    property_name: name.to_string(),
+                    property_span: key_span,
+                    is_bracketed: true,
+                    binding_element: true,
+                }
+            }
+        }
+        // A computed key's element reads the source indexed by the key.
+        None => match property.key.as_expression() {
+            Some(key) => ParsedExpression::ElementAccess {
+                object: Box::new(source_initializer),
+                object_span: source_initializer_span,
+                index: Box::new(parse_expression(key).0),
+                index_span: key_span,
+            },
+            None => return Vec::new(),
+        },
     };
 
     parse_binding_pattern_declarations(
         &property.value,
         Some(property_initializer),
-        Some(text_span_from_oxc_span(identifier.span)),
+        key_span,
         is_declare,
         kind,
         None,
     )
+}
+
+/// A numeric name read from `source`. An array literal source is
+/// contextually a tuple under a pattern with numeric names (tsc's
+/// `isTupleLikeType`), so the name takes its own element.
+fn numeric_name_read(
+    source: ParsedExpression,
+    source_span: Option<crate::TextSpan>,
+    name: &str,
+    span: Option<crate::TextSpan>,
+) -> ParsedExpression {
+    if let ParsedExpression::ArrayLiteral { elements, .. } = &source
+        && let Ok(index) = name.parse::<usize>()
+        && index < elements.len()
+        && elements.iter().take(index + 1).all(|element| !element.spread)
+    {
+        return elements[index].expression.clone();
+    }
+    ParsedExpression::ElementAccess {
+        object: Box::new(source),
+        object_span: source_span,
+        index: Box::new(ParsedExpression::NumberLiteral(name.to_string())),
+        index_span: span,
+    }
+}
+
+/// tsc's `isNumericLiteralName`: the name is the canonical text of a number.
+fn is_numeric_literal_name(name: &str) -> bool {
+    name.parse::<f64>()
+        .is_ok_and(|value| number_text::js_number_to_string(value) == name)
 }
 
 /// The properties of the object literal `expression` statically evaluates to:
