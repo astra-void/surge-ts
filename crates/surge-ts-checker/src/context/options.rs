@@ -130,6 +130,10 @@ pub struct CheckerOptions {
     pub no_unused_parameters: bool,
     /// `allowUnreachableCode: true`; unset and `false` both leave it off.
     pub allow_unreachable_code: bool,
+    /// `allowUnreachableCode: false` written explicitly: tsc reports TS7027 as
+    /// an error only then, and as a suggestion (which surge does not emit)
+    /// when the option is unset.
+    pub report_unreachable_code: bool,
     pub stub_external_modules: bool,
     pub resolved_modules: FxHashMap<String, String>,
     /// Importer-scoped module resolutions: canonical importer file name →
@@ -158,6 +162,9 @@ pub struct CheckerOptions {
     /// `preserve` and `react-native` resolve it silently, and the automatic
     /// runtime never names it.
     pub jsx_classic_react: bool,
+    /// No `jsx` option at all: every JSX opening element or fragment is
+    /// TS17004.
+    pub jsx_emit_none: bool,
     /// `compilerOptions.allowUmdGlobalAccess`: suppresses TS2686 entirely.
     /// tsc downgrades the diagnostic to a suggestion, a channel surge does not
     /// emit on, so the option reads as full suppression here.
@@ -231,6 +238,7 @@ impl Default for CheckerOptions {
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,
+            report_unreachable_code: false,
             stub_external_modules: false,
             resolved_modules: FxHashMap::default(),
             resolved_modules_by_importer: FxHashMap::default(),
@@ -239,6 +247,7 @@ impl Default for CheckerOptions {
             skip_lib_check: false,
             jsx_automatic_runtime: false,
             jsx_classic_react: false,
+            jsx_emit_none: false,
             allow_umd_global_access: false,
             resolve_json_module: true,
             diagnostic_profile: DiagnosticProfile::default(),

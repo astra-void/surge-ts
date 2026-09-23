@@ -37,6 +37,20 @@ pub(crate) fn build_module_export_table(
     let mut symbols = SymbolTable::new();
     let mut default_symbol = None;
     let mut export_assignment_symbol = None;
+    // A statement surge lowers opaquely may declare any name, so only a file
+    // whose every top-level binding is known can tell a global from a local.
+    let module_scope_names = (parsed_file.is_module
+        && !parsed_file
+            .statements
+            .iter()
+            .any(|statement| match statement {
+                ParsedStatement::UnsupportedDeclaration { .. } => true,
+                ParsedStatement::ImportDeclaration(import) => {
+                    matches!(import.kind, surge_ts_syntax::ParsedImportKind::Unsupported)
+                }
+                _ => false,
+            }))
+    .then(|| crate::program::ambient::module_scope_declared_names(&parsed_file.statements));
     for statement in &parsed_file.statements {
         collect_exports_from_statement(
             statement,
@@ -49,6 +63,7 @@ pub(crate) fn build_module_export_table(
             &mut symbols,
             &mut default_symbol,
             &mut export_assignment_symbol,
+            module_scope_names.as_ref(),
             ctx,
         );
     }

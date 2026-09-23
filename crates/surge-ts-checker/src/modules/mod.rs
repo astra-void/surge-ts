@@ -103,6 +103,9 @@ pub(crate) struct ModuleImportBindings {
     /// `type_declarations`) keeps `import * as` of a large barrel O(1) per importer
     /// instead of O(exports).
     pub(crate) namespace_alias_layers: Vec<Arc<TypeDeclarationTable>>,
+    /// Local names bound by a value import of a name the target publishes
+    /// with `export type`; a value use of one is TS1362.
+    pub(crate) type_only_export_import_names: Vec<String>,
 }
 
 impl ModuleImportBindings {
@@ -150,7 +153,7 @@ mod tests {
                     file_kind: FileKind::RootSource,
                     module_reads: parsed.module_reads,
                 definite_writes: parsed.definite_writes,
-                    suppressed_ranges: parsed.suppressed_ranges,
+                    comment_directives: parsed.comment_directives,
                     grammar_diagnostics: parsed.grammar_diagnostics,
                     parenthesized_expressions: parsed.parenthesized_expressions.into(),
                     let_assignments: parsed.let_assignments.into(),

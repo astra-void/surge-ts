@@ -324,13 +324,20 @@ pub(crate) fn emit_type_is_not_generic(
     ctx.push_utility_diagnostic_once(diagnostic);
 }
 
+/// tsc's type-argument count error: TS2314 when every parameter is required,
+/// TS2707 with the range when some have defaults.
 pub(crate) fn emit_generic_arity(
     name: &str,
-    arity: usize,
+    min_arity: usize,
+    max_arity: usize,
     name_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
 ) {
-    let mut diagnostic = Diagnostic::ts2314(name, arity, ctx.file_name.clone());
+    let mut diagnostic = if min_arity == max_arity {
+        Diagnostic::ts2314(name, max_arity, ctx.file_name.clone())
+    } else {
+        Diagnostic::ts2707(name, min_arity, max_arity, ctx.file_name.clone())
+    };
     if let Some(span) = name_span {
         diagnostic = diagnostic.with_span(convert_span(span));
     }

@@ -18,7 +18,7 @@ use crate::modules::{ModuleExportTable, ModuleImportBindings, resolve_module_exp
 use crate::paths::canonicalize_if_exists_string;
 use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
 
-mod ambient;
+pub(crate) mod ambient;
 pub(crate) mod binding;
 mod check_files;
 mod classes;
@@ -91,9 +91,8 @@ pub(crate) struct ParsedProgramFile {
     pub(crate) module_reads: Vec<String>,
     /// See [`surge_ts_syntax::ParsedSource::definite_writes`].
     pub(crate) definite_writes: Vec<String>,
-    /// Byte ranges of the lines an `@ts-expect-error`/`@ts-ignore` directive
-    /// suppresses (see [`surge_ts_syntax::ParsedSource::suppressed_ranges`]).
-    pub(crate) suppressed_ranges: Vec<surge_ts_syntax::TextSpan>,
+    /// See [`surge_ts_syntax::ParsedSource::comment_directives`].
+    pub(crate) comment_directives: Vec<surge_ts_syntax::CommentDirective>,
     /// Grammar findings from the parser's AST walk (see
     /// [`surge_ts_syntax::ParsedSource::grammar_diagnostics`]), turned into
     /// diagnostics at the start of the file's check.
@@ -288,6 +287,7 @@ fn check_program_with_stats_and_jobs_inner(
         mut parsed_files,
         mut ctx,
     } = start_program_run(files, prescanned, options, jobs, &store);
+    namespaces::report_cross_file_namespace_merges(&mut parsed_files);
     let globals = collect_program_globals(&parsed_files, &mut ctx, &timings, program_start);
     let preliminary = run_preliminary_pass(
         &mut parsed_files,

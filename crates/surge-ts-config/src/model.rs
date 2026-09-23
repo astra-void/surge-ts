@@ -49,6 +49,9 @@ pub struct NormalizedCompilerOptions {
     pub no_unused_parameters: bool,
     /// `compilerOptions.allowUnreachableCode`, set only when written `true`.
     pub allow_unreachable_code: bool,
+    /// `compilerOptions.allowUnreachableCode` written `false`, which is the
+    /// only setting under which tsc reports unreachable code as an error.
+    pub report_unreachable_code: bool,
     pub target: ScriptTarget,
     pub module: ModuleKind,
     /// tsgo's `GetEmitModuleKind`: the written `module`, or the kind its
@@ -117,6 +120,7 @@ impl Default for NormalizedCompilerOptions {
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,
+            report_unreachable_code: false,
             target: ScriptTarget::ES2024,
             module: ModuleKind::Preserve,
             emit_module: ModuleKind::ES2022,

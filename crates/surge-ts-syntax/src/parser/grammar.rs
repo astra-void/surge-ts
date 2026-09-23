@@ -31,6 +31,7 @@ pub(crate) fn collect_grammar_diagnostics(
     let mut collector = GrammarCollector::default();
     collector.visit_program(program);
     super::grammar_context::collect_context_grammar_diagnostics(program, &mut collector.diagnostics);
+    super::reachability::collect_unreachable_code(program, &mut collector.diagnostics);
     let mut parenthesized = collector.parenthesized_expressions;
     parenthesized.sort_unstable_by_key(|span| (span.inner.start, span.inner.end));
     (collector.diagnostics, parenthesized)
@@ -138,6 +139,76 @@ fn enum_constant(
     }
 }
 
+/// The number a constant initializer evaluates to, where tsc's `evaluate`
+/// can be followed without name resolution: literals, arithmetic, and the
+/// numeric members declared before it in the same enum (bare or as
+/// `Enum.Member`). `None` for anything else, which is never reported.
+fn enum_numeric_value(
+    expression: &Expression<'_>,
+    members: &std::collections::HashMap<String, f64>,
+    enum_name: &str,
+) -> Option<f64> {
+    use oxc_syntax::operator::BinaryOperator;
+    match expression {
+        Expression::NumericLiteral(literal) => Some(literal.value),
+        Expression::ParenthesizedExpression(parenthesized) => {
+            enum_numeric_value(&parenthesized.expression, members, enum_name)
+        }
+        Expression::UnaryExpression(unary) => {
+            let value = enum_numeric_value(&unary.argument, members, enum_name)?;
+            match unary.operator {
+                UnaryOperator::UnaryPlus => Some(value),
+                UnaryOperator::UnaryNegation => Some(-value),
+                UnaryOperator::BitwiseNot => Some(f64::from(!to_int32(value))),
+                _ => None,
+            }
+        }
+        Expression::BinaryExpression(binary) => {
+            let left = enum_numeric_value(&binary.left, members, enum_name)?;
+            let right = enum_numeric_value(&binary.right, members, enum_name)?;
+            Some(match binary.operator {
+                BinaryOperator::Addition => left + right,
+                BinaryOperator::Subtraction => left - right,
+                BinaryOperator::Multiplication => left * right,
+                BinaryOperator::Division => left / right,
+                BinaryOperator::Remainder => left % right,
+                BinaryOperator::Exponential => left.powf(right),
+                BinaryOperator::ShiftLeft => f64::from(to_int32(left).wrapping_shl(to_uint32(right) & 31)),
+                BinaryOperator::ShiftRight => f64::from(to_int32(left) >> (to_uint32(right) & 31)),
+                BinaryOperator::ShiftRightZeroFill => {
+                    f64::from(to_uint32(left) >> (to_uint32(right) & 31))
+                }
+                BinaryOperator::BitwiseOR => f64::from(to_int32(left) | to_int32(right)),
+                BinaryOperator::BitwiseXOR => f64::from(to_int32(left) ^ to_int32(right)),
+                BinaryOperator::BitwiseAnd => f64::from(to_int32(left) & to_int32(right)),
+                _ => return None,
+            })
+        }
+        Expression::Identifier(identifier) => members.get(identifier.name.as_str()).copied(),
+        Expression::StaticMemberExpression(member) => match &member.object {
+            Expression::Identifier(object) if object.name == enum_name => {
+                members.get(member.property.name.as_str()).copied()
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// ECMAScript `ToInt32`/`ToUint32`.
+fn to_uint32(value: f64) -> u32 {
+    if !value.is_finite() {
+        return 0;
+    }
+    let truncated = value.trunc();
+    let modulo = truncated.rem_euclid(4_294_967_296.0);
+    modulo as u32
+}
+
+fn to_int32(value: f64) -> i32 {
+    to_uint32(value) as i32
+}
+
 impl GrammarCollector {
     /// tsc's `computeEnumMemberValues`: a member without an initializer takes
     /// the previous numeric value plus one, so it needs one after a string or
@@ -153,8 +224,11 @@ impl GrammarCollector {
             .contains(&(declaration.span.start, declaration.span.end))
             .then_some(&top_level_constants);
         let mut members = std::collections::HashMap::new();
+        let mut numeric_values: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
         let mut previous = EnumConstant::Number;
+        let mut next_auto_value = Some(0.0);
         for member in &declaration.body.members {
+            let mut numeric_value = None;
             let value = match &member.initializer {
                 Some(initializer) => {
                     let value = enum_constant(initializer, &members, top_level);
@@ -165,6 +239,17 @@ impl GrammarCollector {
                             self.push(Kind::AmbientEnumInitializerNotConstant, initializer.span(), None);
                         }
                     }
+                    if matches!(value, EnumConstant::Number | EnumConstant::Unknown) {
+                        numeric_value =
+                            enum_numeric_value(initializer, &numeric_values, declaration.id.name.as_str());
+                        if declaration.r#const
+                            && let Some(number) = numeric_value
+                            && !number.is_finite()
+                        {
+                            let code = if number.is_nan() { 2478 } else { 2477 };
+                            self.push(Kind::Ts(code), initializer.span(), None);
+                        }
+                    }
                     previous = value;
                     value
                 }
@@ -172,6 +257,7 @@ impl GrammarCollector {
                     if !ambient && matches!(previous, EnumConstant::String | EnumConstant::NonConstant) {
                         self.push(Kind::EnumMemberInitializerRequired, member.id.span(), None);
                     }
+                    numeric_value = next_auto_value;
                     if previous == EnumConstant::Unknown {
                         EnumConstant::Unknown
                     } else {
@@ -179,8 +265,12 @@ impl GrammarCollector {
                     }
                 }
             };
+            next_auto_value = numeric_value.map(|number| number + 1.0);
             if let Some(name) = property_key_name_of_enum_member(&member.id) {
-                members.insert(name, value);
+                members.insert(name.clone(), value);
+                if let Some(number) = numeric_value {
+                    numeric_values.insert(name, number);
+                }
             }
         }
         self.top_level_constants = top_level_constants;

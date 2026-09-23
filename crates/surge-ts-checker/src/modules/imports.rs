@@ -60,6 +60,208 @@ pub(crate) fn report_unresolved_module(ctx: &mut CheckerContext, import: &Parsed
     }
 }
 
+/// The program file an import specifier resolves to, through the loader's
+/// resolution or the relative fallback.
+fn resolved_program_file_index(
+    ctx: &CheckerContext,
+    module_specifier: &str,
+    program_files: &[ParsedProgramFile],
+) -> Option<usize> {
+    ctx.options
+        .resolved_module_for(&ctx.file_name, module_specifier)
+        .and_then(|resolved| {
+            ctx.module_file_index_by_identity
+                .get(canonical_file_identity(resolved).as_str())
+                .copied()
+        })
+        .or_else(|| {
+            resolve_relative_module(
+                &ctx.file_name,
+                module_specifier,
+                program_files,
+                &ctx.module_file_index_by_identity,
+            )
+            .map(|resolution| resolution.resolved_file_index)
+        })
+}
+
+/// tsc's `File '{0}' is not a module`: the specifier resolves to a program
+/// file that is a script. Reported at the specifier; the import then binds
+/// nothing usable, as tsc's alias resolves to no symbol.
+fn report_non_module_import(
+    ctx: &mut CheckerContext,
+    import: &ParsedImportDeclaration,
+    program_files: &[ParsedProgramFile],
+) -> bool {
+    let Some(file) = resolved_program_file_index(ctx, &import.module_specifier, program_files)
+        .and_then(|index| program_files.get(index))
+    else {
+        return false;
+    };
+    if file.is_module || file.file_kind == crate::context::FileKind::DependencyDeclaration {
+        return false;
+    }
+    let mut diagnostic = Diagnostic::ts2306(&file.file_name, ctx.file_name.clone());
+    if let Some(span) = import.module_specifier_span {
+        diagnostic = diagnostic.with_span(convert_span(span));
+    }
+    ctx.push(diagnostic);
+    true
+}
+
+/// tsc's `mergeModuleAugmentation`: a `declare module "m"` in a module file
+/// augments `m`, which must resolve — TS2664 at the name — to a module or a
+/// namespace-like `export =` target — TS2671. A declaration file's
+/// augmentations are ambient and never validated.
+fn report_unresolved_module_augmentations(
+    parsed_file: &ParsedProgramFile,
+    program_files: &[ParsedProgramFile],
+    ctx: &mut CheckerContext,
+) {
+    if !parsed_file.is_module || is_declaration_file_name(&parsed_file.file_name) {
+        return;
+    }
+    for statement in &parsed_file.statements {
+        let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
+            continue;
+        };
+        let specifier = module.module_specifier.as_str();
+        if specifier == "global" || ambient_module_export_table(ctx, specifier).is_some() {
+            continue;
+        }
+        if let Some(target) = resolved_program_file_index(ctx, specifier, program_files)
+            .and_then(|index| program_files.get(index))
+        {
+            if export_assignment_targets_non_module_entity(target) {
+                let mut diagnostic = Diagnostic::ts2671(specifier, ctx.file_name.clone());
+                if let Some(span) = module.module_specifier_span {
+                    diagnostic = diagnostic.with_span(convert_span(span));
+                }
+                ctx.push(diagnostic);
+            }
+            continue;
+        }
+        if ctx.options.resolved_module_for(&ctx.file_name, specifier).is_some()
+            || (ctx.options.stub_external_modules && is_external_specifier(specifier))
+        {
+            continue;
+        }
+        let mut diagnostic = Diagnostic::ts2664(specifier, ctx.file_name.clone());
+        if let Some(span) = module.module_specifier_span {
+            diagnostic = diagnostic.with_span(convert_span(span));
+        }
+        ctx.push(diagnostic);
+    }
+}
+
+/// Whether `file`'s `export = name` resolves to a local declaration without
+/// tsc's namespace meaning (a namespace or an enum), which an augmentation
+/// cannot merge into. A name the file does not declare itself (an import) is
+/// not followed.
+fn export_assignment_targets_non_module_entity(file: &ParsedProgramFile) -> bool {
+    let Some(name) = file.statements.iter().find_map(|statement| match statement {
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Equals { exported_name, .. } => Some(exported_name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }) else {
+        return false;
+    };
+    let mut declared = false;
+    for statement in &file.statements {
+        let statement = match statement {
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => declaration.as_ref(),
+                _ => continue,
+            },
+            other => other,
+        };
+        match statement {
+            ParsedStatement::NamespaceDeclaration(namespace)
+                if namespace.name.split('.').next() == Some(name) =>
+            {
+                return false;
+            }
+            ParsedStatement::VariableDeclaration(variable) if variable.name == name => {
+                if variable.is_enum_object {
+                    return false;
+                }
+                declared = true;
+            }
+            ParsedStatement::FunctionDeclaration(function) if function.name == name => declared = true,
+            ParsedStatement::ClassDeclaration(class) if class.name == name => declared = true,
+            ParsedStatement::InterfaceDeclaration(interface) if interface.name == name => {
+                declared = true;
+            }
+            ParsedStatement::TypeAliasDeclaration(alias) if alias.name == name => declared = true,
+            ParsedStatement::UnsupportedDeclaration { .. } => return false,
+            _ => {}
+        }
+    }
+    declared
+}
+
+/// Whether `file` publishes `name` only through `export type`, locally or as a
+/// re-export.
+fn file_exports_name_type_only(file: &ParsedProgramFile, name: &str) -> bool {
+    file.statements.iter().any(|statement| {
+        let ParsedStatement::ExportDeclaration(export) = statement else {
+            return false;
+        };
+        let ParsedExportDeclaration::Named {
+            is_type_only,
+            specifiers,
+            ..
+        } = export.as_ref()
+        else {
+            return false;
+        };
+        specifiers.iter().any(|specifier| {
+            specifier.exported_name == name && (*is_type_only || specifier.is_type_only)
+        })
+    })
+}
+
+/// The local names this file's value imports bind to a name their target
+/// exports with `export type`: tsc resolves such an alias to a type-only
+/// declaration, so a value use of it is TS1362 rather than TS1361.
+fn type_only_export_import_names(
+    parsed_file: &ParsedProgramFile,
+    program_files: &[ParsedProgramFile],
+    ctx: &CheckerContext,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    for statement in &parsed_file.statements {
+        let ParsedStatement::ImportDeclaration(import) = statement else {
+            continue;
+        };
+        let specifiers = match &import.kind {
+            ParsedImportKind::Named {
+                is_type_only: false,
+                specifiers,
+            }
+            | ParsedImportKind::DefaultAndNamed {
+                is_type_only: false,
+                specifiers,
+                ..
+            } => specifiers,
+            _ => continue,
+        };
+        let Some(target) = resolved_program_file_index(ctx, &import.module_specifier, program_files)
+            .and_then(|index| program_files.get(index))
+        else {
+            continue;
+        };
+        for specifier in specifiers {
+            if file_exports_name_type_only(target, &specifier.imported_name) {
+                names.push(specifier.local_name.clone());
+            }
+        }
+    }
+    names
+}
+
 pub(crate) const MEANING_VALUE: u8 = 1 << 0;
 pub(crate) const MEANING_TYPE: u8 = 1 << 1;
 pub(crate) const MEANING_NAMESPACE: u8 = 1 << 2;
@@ -287,10 +489,13 @@ pub(crate) fn resolve_module_imports(
         ctx,
     );
 
+    report_unresolved_module_augmentations(parsed_file, program_files, ctx);
+
     ModuleImportBindings {
         type_declarations: Arc::new(type_declarations),
         symbols,
         namespace_alias_layers,
+        type_only_export_import_names: type_only_export_import_names(parsed_file, program_files, ctx),
     }
 }
 
@@ -635,7 +840,7 @@ fn resolve_default_and_named_import(
         .is_none()
         {
             report_unresolved_module(ctx, import);
-        } else {
+        } else if !report_non_module_import(ctx, import, program_files) {
             emit_no_default_export_diagnostic(
                 ctx,
                 local_name,
@@ -961,7 +1166,7 @@ fn resolve_default_import(
         .is_none()
         {
             report_unresolved_module(ctx, import);
-        } else {
+        } else if !report_non_module_import(ctx, import, program_files) {
             emit_no_default_export_diagnostic(
                 ctx,
                 local_name,
@@ -1076,6 +1281,8 @@ fn resolve_import_equals(
         .is_none()
         {
             report_unresolved_module(ctx, import);
+        } else {
+            report_non_module_import(ctx, import, program_files);
         }
         insert_unresolved_import_binding(local_name, ctx, import, symbols);
         return;
@@ -1341,6 +1548,8 @@ fn resolve_namespace_import(
             .is_none()
             {
                 report_unresolved_module(ctx, import);
+            } else {
+                report_non_module_import(ctx, import, program_files);
             }
             insert_unresolved_import_binding(local_name, ctx, import, symbols);
             return;
@@ -1429,6 +1638,21 @@ fn resolve_named_import(
             }
             return;
         };
+
+        if report_non_module_import(ctx, import, program_files) {
+            for specifier in specifiers {
+                insert_error_type_import(
+                    type_declarations,
+                    &specifier.local_name,
+                    ctx.file_name_arc(),
+                    specifier.name_span,
+                );
+                if !*is_type_only {
+                    insert_unresolved_import_binding(&specifier.local_name, ctx, import, symbols);
+                }
+            }
+            return;
+        }
 
         let local_scope = module_resolution_scopes
             .get(resolved.resolved_file_index)

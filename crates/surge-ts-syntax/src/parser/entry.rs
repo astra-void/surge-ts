@@ -286,7 +286,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             module_reads: Vec::new(),
             definite_writes: Vec::new(),
             let_assignments: Vec::new(),
-            suppressed_ranges: Vec::new(),
+            comment_directives: Vec::new(),
             import_call_specifiers: Vec::new(),
             grammar_diagnostics: Vec::new(),
             parenthesized_expressions: Vec::new(),
@@ -304,8 +304,8 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     let parsed = parser.parse();
 
     let reference_type_directives = super::extract_reference_type_directives(source_text);
-    let suppressed_ranges =
-        super::suppressions::collect_suppressed_ranges(source_text, &parsed.program.comments);
+    let comment_directives =
+        super::suppressions::collect_comment_directives(source_text, &parsed.program.comments);
 
     let collect_statements = || -> Vec<crate::ParsedStatement> {
         let mut statements: Vec<crate::ParsedStatement> = parsed
@@ -404,7 +404,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         module_reads,
         definite_writes: super::writes::collect_definite_writes(&parsed.program),
         let_assignments,
-        suppressed_ranges,
+        comment_directives,
         import_call_specifiers,
         grammar_diagnostics,
         parenthesized_expressions,

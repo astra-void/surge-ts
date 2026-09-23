@@ -45,6 +45,23 @@ pub(crate) fn check_jsx_factory_reference(
     );
 }
 
+/// tsc's `checkJsxPreconditions`: with no `jsx` option at all, every opening
+/// element, self-closing element, and opening fragment is TS17004 at its `<`.
+pub(crate) fn check_jsx_preconditions(
+    span: Option<SyntaxTextSpan>,
+    fallback_span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if !ctx.options.jsx_emit_none {
+        return;
+    }
+    let mut diagnostic = Diagnostic::ts17004(ctx.file_name.clone());
+    if let Some(span) = span.or(fallback_span) {
+        diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+    }
+    ctx.push(diagnostic);
+}
+
 /// Checks a JSX element: resolves the tag to an intrinsic element or function
 /// component, lowers attributes into a props object, and reports missing,
 /// excess, and mistyped props plus basic `children` mismatches. Attribute and

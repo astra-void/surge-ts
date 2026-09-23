@@ -35,6 +35,7 @@ pub(crate) fn collect_context_grammar_diagnostics(
         source_text: program.source_text,
         external_module: is_external_module(program),
         ambient_depth: 0,
+        const_enum_names: unshadowed_const_enum_names(program),
     };
     collector.visit_program(program);
 }
@@ -69,6 +70,58 @@ struct ContextCollector<'a, 'o> {
     external_module: bool,
     /// How many enclosing nodes carry tsc's `NodeFlagsAmbient`.
     ambient_depth: usize,
+    /// Top-level `const enum` names no other binding in the file reuses, so
+    /// an identifier reference to one is the const enum object and nothing
+    /// else — what tsc's `isConstEnumObjectType` sees on the expression.
+    const_enum_names: Vec<String>,
+}
+
+/// The top-level `const enum` names whose every binding in the file is such a
+/// declaration.
+fn unshadowed_const_enum_names(program: &Program<'_>) -> Vec<String> {
+    let enum_names: Vec<&str> = program
+        .body
+        .iter()
+        .filter_map(|statement| {
+            let declaration = match statement {
+                Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+                other => other.as_declaration(),
+            };
+            match declaration {
+                Some(oxc_ast::ast::Declaration::TSEnumDeclaration(declaration)) if declaration.r#const => {
+                    Some(declaration.id.name.as_str())
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    if enum_names.is_empty() {
+        return Vec::new();
+    }
+    let mut bindings = BindingNames::default();
+    bindings.visit_program(program);
+    let mut names: Vec<String> = Vec::new();
+    for name in &enum_names {
+        let bound = bindings.names.iter().filter(|bound| **bound == *name).count();
+        let declared = enum_names.iter().filter(|other| **other == *name).count();
+        if bound == declared {
+            names.push((*name).to_string());
+        }
+    }
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+#[derive(Default)]
+struct BindingNames<'a> {
+    names: Vec<&'a str>,
+}
+
+impl<'a> Visit<'a> for BindingNames<'a> {
+    fn visit_binding_identifier(&mut self, identifier: &oxc_ast::ast::BindingIdentifier<'a>) {
+        self.names.push(identifier.name.as_str());
+    }
 }
 
 fn is_ambient_marker(kind: &AstKind<'_>) -> bool {
@@ -673,19 +726,42 @@ impl<'a> ContextCollector<'a, '_> {
     }
 
     /// tsc's `checkExportsOnMergedDeclarations` for the declarations that
-    /// merge (interfaces, namespaces, classes, enums): exported and local
-    /// declarations of one name sharing a declaration space — TS2395 on each.
+    /// merge (interfaces, namespaces, classes, enums, and a named default
+    /// export of one): a default-exported declaration sharing a space with
+    /// any other is TS2652; exported and local declarations sharing one are
+    /// TS2395. Each declaration reports at most one, TS2652 first.
     fn check_merged_export_visibility(&mut self, statements: &[Statement<'_>]) {
         const TYPE: u8 = 1;
         const VALUE: u8 = 2;
         const NAMESPACE: u8 = 4;
-        let mut declarations: Vec<(&str, Span, bool, u8)> = Vec::new();
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Visibility {
+            Local,
+            Exported,
+            Default,
+        }
+        let mut declarations: Vec<(&str, Span, Visibility, u8)> = Vec::new();
         for statement in statements {
-            let (declaration, exported) = match statement {
-                Statement::ExportNamedDeclaration(export) => (export.declaration.as_ref(), true),
-                other => (other.as_declaration(), false),
-            };
             use oxc_ast::ast::Declaration as D;
+            let (declaration, visibility) = match statement {
+                Statement::ExportNamedDeclaration(export) => (export.declaration.as_ref(), Visibility::Exported),
+                Statement::ExportDefaultDeclaration(export) => {
+                    let entry = match &export.declaration {
+                        oxc_ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(d) => {
+                            d.id.as_ref().map(|id| (id.name.as_str(), id.span, TYPE | VALUE))
+                        }
+                        oxc_ast::ast::ExportDefaultDeclarationKind::TSInterfaceDeclaration(d) => {
+                            Some((d.id.name.as_str(), d.id.span, TYPE))
+                        }
+                        _ => None,
+                    };
+                    if let Some((name, span, spaces)) = entry {
+                        declarations.push((name, span, Visibility::Default, spaces));
+                    }
+                    continue;
+                }
+                other => (other.as_declaration(), Visibility::Local),
+            };
             let entry = match declaration {
                 Some(D::TSInterfaceDeclaration(d)) => Some((d.id.name.as_str(), d.id.span, TYPE)),
                 Some(D::ClassDeclaration(d)) => d.id.as_ref().map(|id| (id.name.as_str(), id.span, TYPE | VALUE)),
@@ -700,22 +776,144 @@ impl<'a> ContextCollector<'a, '_> {
                 _ => None,
             };
             if let Some((name, span, spaces)) = entry {
-                declarations.push((name, span, exported, spaces));
+                declarations.push((name, span, visibility, spaces));
             }
         }
         for (name, span, _, spaces) in &declarations {
-            let (mut exported_spaces, mut local_spaces) = (0u8, 0u8);
-            for (other, _, exported, other_spaces) in &declarations {
+            let (mut exported_spaces, mut local_spaces, mut default_spaces) = (0u8, 0u8, 0u8);
+            for (other, _, visibility, other_spaces) in &declarations {
                 if other == name {
-                    if *exported {
-                        exported_spaces |= other_spaces;
-                    } else {
-                        local_spaces |= other_spaces;
+                    match visibility {
+                        Visibility::Local => local_spaces |= other_spaces,
+                        Visibility::Exported => exported_spaces |= other_spaces,
+                        Visibility::Default => default_spaces |= other_spaces,
                     }
                 }
             }
-            if spaces & exported_spaces & local_spaces != 0 {
+            if spaces & default_spaces & (exported_spaces | local_spaces) != 0 {
+                self.push(2652, *span, &[name]);
+            } else if spaces & exported_spaces & local_spaces != 0 {
                 self.push(2395, *span, &[name]);
+            }
+        }
+    }
+
+    /// tsc's `checkConstEnumAccess`: the const enum object may only be the
+    /// object of a property or element access, the right side of an import
+    /// or export assignment, a `typeof` query, or an export specifier —
+    /// TS2475 anywhere else. A type-position name is not an expression and is
+    /// never checked.
+    fn check_const_enum_reference(&mut self, identifier: &oxc_ast::ast::IdentifierReference<'_>) {
+        if !self.const_enum_names.iter().any(|name| name == identifier.name.as_str()) {
+            return;
+        }
+        let allowed = match self.stack.last() {
+            Some(AstKind::StaticMemberExpression(member)) => member.object.span() == identifier.span,
+            Some(AstKind::ComputedMemberExpression(member)) => member.object.span() == identifier.span,
+            Some(
+                AstKind::ExportDefaultDeclaration(_)
+                | AstKind::TSExportAssignment(_)
+                | AstKind::TSImportEqualsDeclaration(_)
+                | AstKind::ExportSpecifier(_)
+                | AstKind::TSTypeQuery(_)
+                | AstKind::TSTypeReference(_)
+                | AstKind::TSQualifiedName(_)
+                | AstKind::TSClassImplements(_),
+            ) => true,
+            _ => false,
+        };
+        if !allowed {
+            self.push(2475, identifier.span, &[]);
+        }
+    }
+
+    /// tsc's `checkElementAccessExpression` on a const enum object: the index
+    /// must be a string literal or an untemplated template — TS2476 at it.
+    fn check_const_enum_element_access(&mut self, member: &oxc_ast::ast::ComputedMemberExpression<'_>) {
+        let oxc_ast::ast::Expression::Identifier(object) = &member.object else {
+            return;
+        };
+        if !self.const_enum_names.iter().any(|name| name == object.name.as_str()) {
+            return;
+        }
+        let is_string_literal_like = match &member.expression {
+            oxc_ast::ast::Expression::StringLiteral(_) => true,
+            oxc_ast::ast::Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+            _ => false,
+        };
+        if !is_string_literal_like {
+            self.push(2476, member.expression.span(), &[]);
+        }
+    }
+
+    fn check_merged_declarations(&mut self, statements: &[Statement<'_>]) {
+        super::grammar_merges::check_merged_declarations(
+            statements,
+            self.ambient_depth > 0,
+            self.source_text,
+            self.out,
+        );
+    }
+
+    /// tsc's `checkModuleDeclaration`: an ambient module at the top of a
+    /// script file may not use a relative name — TS2436. In a module file the
+    /// same declaration is an augmentation, which the checker resolves.
+    fn check_relative_ambient_module_name(&mut self, module: &oxc_ast::ast::TSModuleDeclaration<'_>) {
+        let oxc_ast::ast::TSModuleDeclarationName::StringLiteral(name) = &module.id else {
+            return;
+        };
+        if self.external_module || !matches!(self.stack.last(), Some(AstKind::Program(_))) {
+            return;
+        }
+        if is_external_module_name_relative(name.value.as_str()) {
+            self.push(2436, name.span, &[]);
+        }
+    }
+
+    /// tsc's `checkVarDeclaredNamesNotShadowed`: a `var` hoists past the
+    /// block-scoped declaration of the same name in any enclosing scope short
+    /// of its own function, namespace, or file, which at run time is a
+    /// syntax error — TS2481 at the declarator. A block-scoped declaration in
+    /// the hoisting scope itself is the binder's redeclaration error instead.
+    fn check_var_declared_name_not_shadowed(&mut self, declarator: &oxc_ast::ast::VariableDeclarator<'_>) {
+        if declarator.kind != VariableDeclarationKind::Var {
+            return;
+        }
+        let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+            return;
+        };
+        let name = id.name.as_str();
+        for kind in self.stack.iter().rev() {
+            let shadowed = match kind {
+                AstKind::BlockStatement(block) => statements_declare_block_scoped(&block.body, name),
+                AstKind::SwitchStatement(statement) => statement
+                    .cases
+                    .iter()
+                    .any(|case| statements_declare_block_scoped(&case.consequent, name)),
+                AstKind::ForStatement(statement) => matches!(
+                    &statement.init,
+                    Some(oxc_ast::ast::ForStatementInit::VariableDeclaration(declaration))
+                        if variable_declaration_declares_block_scoped(declaration, name)
+                ),
+                AstKind::ForInStatement(statement) => matches!(
+                    &statement.left,
+                    oxc_ast::ast::ForStatementLeft::VariableDeclaration(declaration)
+                        if variable_declaration_declares_block_scoped(declaration, name)
+                ),
+                AstKind::ForOfStatement(statement) => matches!(
+                    &statement.left,
+                    oxc_ast::ast::ForStatementLeft::VariableDeclaration(declaration)
+                        if variable_declaration_declares_block_scoped(declaration, name)
+                ),
+                AstKind::FunctionBody(_)
+                | AstKind::StaticBlock(_)
+                | AstKind::TSModuleBlock(_)
+                | AstKind::Program(_) => return,
+                _ => false,
+            };
+            if shadowed {
+                self.push(2481, declarator.span, &[name, name]);
+                return;
             }
         }
     }
@@ -1858,7 +2056,9 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             }
             AstKind::IdentifierReference(identifier) => {
                 self.check_contextual_identifier(&identifier.name, identifier.span);
+                self.check_const_enum_reference(identifier);
             }
+            AstKind::ComputedMemberExpression(member) => self.check_const_enum_element_access(member),
             AstKind::LabelIdentifier(identifier) => {
                 self.check_contextual_identifier(&identifier.name, identifier.span);
             }
@@ -1903,7 +2103,9 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             AstKind::VariableDeclarator(declarator) => {
                 self.check_let_name(declarator);
                 self.check_definite_assertion(declarator);
+                self.check_var_declared_name_not_shadowed(declarator);
             }
+            AstKind::TSModuleDeclaration(module) => self.check_relative_ambient_module_name(module),
             AstKind::PropertyDefinition(property) => {
                 if property.definite && property.value.is_some() {
                     self.push_at_exclamation(1263, property.key.span());
@@ -2058,11 +2260,13 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_self_referencing_annotations(&block.body);
                 self.check_type_parameter_lists_identical(&block.body);
                 self.check_merged_export_visibility(&block.body);
+                self.check_merged_declarations(&block.body);
             }
             AstKind::BlockStatement(block) => {
                 self.check_statements_in_ambient_context(&block.body);
                 self.check_enum_merges(&block.body);
                 self.check_self_referencing_annotations(&block.body);
+                self.check_merged_declarations(&block.body);
             }
             AstKind::Program(program) => {
                 self.check_enum_merges(&program.body);
@@ -2074,10 +2278,12 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 }
                 self.check_top_level_names(program);
                 self.check_reflect_collisions(program);
+                self.check_merged_declarations(&program.body);
             }
             AstKind::FunctionBody(body) => {
                 self.check_enum_merges(&body.statements);
                 self.check_self_referencing_annotations(&body.statements);
+                self.check_merged_declarations(&body.statements);
             }
             _ => {}
         }
@@ -2843,4 +3049,44 @@ fn is_entity_name_expression(expression: &oxc_ast::ast::Expression<'_>) -> bool 
         E::StaticMemberExpression(member) => is_entity_name_expression(&member.object),
         _ => false,
     }
+}
+
+fn statements_declare_block_scoped(statements: &[Statement<'_>], name: &str) -> bool {
+    statements.iter().any(|statement| {
+        let declaration = match statement {
+            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            other => other.as_declaration(),
+        };
+        matches!(
+            declaration,
+            Some(oxc_ast::ast::Declaration::VariableDeclaration(declaration))
+                if variable_declaration_declares_block_scoped(declaration, name)
+        )
+    })
+}
+
+fn variable_declaration_declares_block_scoped(
+    declaration: &oxc_ast::ast::VariableDeclaration<'_>,
+    name: &str,
+) -> bool {
+    declaration.kind != VariableDeclarationKind::Var
+        && declaration.declarations.iter().any(|declarator| {
+            declarator
+                .id
+                .get_binding_identifiers()
+                .iter()
+                .any(|identifier| identifier.name == name)
+        })
+}
+
+/// tsc's `IsExternalModuleNameRelative`: `./`, `../`, or a rooted path.
+fn is_external_module_name_relative(name: &str) -> bool {
+    let relative = name == "." || name == ".." || name.starts_with("./") || name.starts_with("../")
+        || name.starts_with(".\\") || name.starts_with("..\\");
+    let rooted = name.starts_with('/')
+        || name.starts_with('\\')
+        || (name.len() >= 2
+            && name.as_bytes()[0].is_ascii_alphabetic()
+            && name.as_bytes()[1] == b':');
+    relative || rooted
 }

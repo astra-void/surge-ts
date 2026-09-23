@@ -16,7 +16,7 @@ use super::{
     FileCheckResult, ParsedProgramFile, ProgramCheckSharedState, census_check_milestone,
     check_program_file_statements, clone_type_declaration_table,
     collect_function_signatures_from_statements, count_local_type_declarations_in_statements,
-    drop_suppressed_diagnostics, emit_unsupported_declaration_diagnostics,
+    apply_comment_directives, emit_unsupported_declaration_diagnostics,
     extend_diagnostics_dedup, module_scope_declared_names, unused_locals,
 };
 use crate::context::{CheckerContext, CompatibilityStats, FileKind};
@@ -996,6 +996,9 @@ fn grammar_finding_diagnostic(
         Kind::Ts(2725) => {
             Diagnostic::ts2725(ctx.options.module_emit.option_name(), ctx.file_name.clone())
         }
+        // tsc reports unreachable code as an error only under an explicit
+        // `allowUnreachableCode: false`; unset makes it a suggestion.
+        Kind::Ts(7027) if !ctx.options.report_unreachable_code => return None,
         Kind::TsUnderStrictNullChecks(_) if !ctx.options.strict_null_checks => return None,
         Kind::Ts(number) | Kind::TsUnderStrictNullChecks(number) => {
             let args: Vec<surge_ts_diagnostics::DiagnosticArg> = finding
@@ -1230,6 +1233,14 @@ pub(super) fn check_program_file(
                 .into_iter()
                 .filter(|name| !module_declared.contains(name)),
         );
+        ctx.set_file_type_only_export_import_names(
+            imported_bindings
+                .map(|bindings| bindings.type_only_export_import_names.as_slice())
+                .unwrap_or_default()
+                .iter()
+                .map(String::as_str)
+                .filter(|name| !module_declared.contains(name)),
+        );
         ctx.set_file_import_names(
             crate::program::ambient::import_bound_names(&parsed_file.statements)
                 .into_iter()
@@ -1453,7 +1464,12 @@ pub(super) fn check_program_file(
     }
 
     let mut diagnostics = std::mem::take(&mut ctx.diagnostics);
-    drop_suppressed_diagnostics(&mut diagnostics, &parsed_file.suppressed_ranges);
+    apply_comment_directives(
+        &mut diagnostics,
+        &parsed_file.comment_directives,
+        !parsed_file.parser_errors.is_empty(),
+        &parsed_file.file_name,
+    );
     let stats = std::mem::take(&mut ctx.stats);
 
     FileCheckResult {

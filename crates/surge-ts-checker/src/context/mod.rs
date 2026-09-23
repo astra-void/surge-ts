@@ -432,6 +432,10 @@ pub(crate) struct CheckerContext {
     /// TS1361 — including the implicit factory reference every JSX tag makes
     /// under `jsx: react`.
     pub(crate) file_type_only_import_names: FxHashSet<Arc<str>>,
+    /// Names a value import of this file binds to a target's `export type`
+    /// (see `ModuleImportBindings::type_only_export_import_names`); a value
+    /// use is TS1362. Owned like `file_type_only_import_names`.
+    pub(crate) file_type_only_export_import_names: FxHashSet<Arc<str>>,
     /// Every name the current file's imports bind, for TS2632. Owned by the
     /// file that set it, like `file_type_only_import_names`.
     pub(crate) file_import_names: FxHashSet<Arc<str>>,
@@ -777,6 +781,7 @@ impl CheckerContext {
             inherited_never_initialized: Vec::new(),
             never_initialized_constraint_exempt: HashSet::new(),
             file_type_only_import_names: FxHashSet::default(),
+            file_type_only_export_import_names: FxHashSet::default(),
             file_import_names: FxHashSet::default(),
             file_namespace_import_names: FxHashSet::default(),
             checked_function_declaration_names: FxHashSet::default(),
@@ -947,6 +952,7 @@ impl CheckerContext {
             inherited_never_initialized: Vec::new(),
             never_initialized_constraint_exempt: HashSet::new(),
             file_type_only_import_names: FxHashSet::default(),
+            file_type_only_export_import_names: FxHashSet::default(),
             file_import_names: FxHashSet::default(),
             file_namespace_import_names: FxHashSet::default(),
             checked_function_declaration_names: FxHashSet::default(),
@@ -1363,7 +1369,8 @@ impl CheckerContext {
     /// plain type-as-value error instead; a class is both.
     pub(crate) fn is_type_only_import_value_reference(&self, name: &str) -> bool {
         self.file_type_only_import_names_owner.as_deref() == Some(self.file_name.as_str())
-            && self.file_type_only_import_names.contains(name)
+            && (self.file_type_only_import_names.contains(name)
+                || self.file_type_only_export_import_names.contains(name))
             && match self.lookup_type_declaration(name) {
                 None => true,
                 Some(TypeDeclarationInfo::Interface(info)) => info.is_class_instance,
@@ -1441,6 +1448,24 @@ impl CheckerContext {
         self.file_type_only_import_names_owner = Some(self.file_name.clone());
         for name in names {
             self.file_type_only_import_names.insert(Arc::from(name));
+        }
+    }
+
+    /// Whether a type-only value reference reached the file through a
+    /// target's `export type` rather than its own `import type`.
+    pub(crate) fn is_type_only_export_import_value_reference(&self, name: &str) -> bool {
+        self.file_type_only_import_names_owner.as_deref() == Some(self.file_name.as_str())
+            && self.file_type_only_export_import_names.contains(name)
+    }
+
+    /// Follows [`Self::set_file_type_only_import_names`], which owns the sets.
+    pub(crate) fn set_file_type_only_export_import_names<'a>(
+        &mut self,
+        names: impl IntoIterator<Item = &'a str>,
+    ) {
+        self.file_type_only_export_import_names.clear();
+        for name in names {
+            self.file_type_only_export_import_names.insert(Arc::from(name));
         }
     }
 

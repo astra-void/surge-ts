@@ -40,7 +40,8 @@ fn check_single_source(
     options: crate::context::CheckerOptions,
 ) -> Vec<Diagnostic> {
     let parsed = parse_source(source_text, file_name);
-    let suppressed_ranges = parsed.suppressed_ranges.clone();
+    let comment_directives = parsed.comment_directives.clone();
+    let has_parse_errors = !parsed.parser_errors.is_empty();
     let file_name = parsed.file_name;
     let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
     file_kinds.insert(file_name.clone(), classify_file_kind(&file_name));
@@ -127,9 +128,14 @@ fn check_single_source(
     ctx.module_value_fallback = None;
 
     let mut diagnostics = ctx.finish();
-    // Program mode drops these in `check_files`; the single-file driver has no
-    // such stage, so an `@ts-expect-error` suppressed nothing here.
-    crate::program::drop_suppressed_diagnostics(&mut diagnostics, &suppressed_ranges);
+    // Program mode applies these in `check_files`; the single-file driver has
+    // no such stage.
+    crate::program::apply_comment_directives(
+        &mut diagnostics,
+        &comment_directives,
+        has_parse_errors,
+        &file_name,
+    );
     diagnostics
 }
 
@@ -206,7 +212,7 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
                 file_kind: FileKind::GeneratedDeclaration,
                 module_reads: parsed.module_reads,
                 definite_writes: parsed.definite_writes,
-                suppressed_ranges: parsed.suppressed_ranges,
+                comment_directives: parsed.comment_directives,
                 grammar_diagnostics: Vec::new(),
                 parenthesized_expressions: Default::default(),
                 let_assignments: Default::default(),

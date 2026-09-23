@@ -582,12 +582,32 @@ pub(crate) fn allows_synthetic_default_import(
     false
 }
 
+/// Whether `export { name }` would resolve `name` in the global scope, or name
+/// a primitive type.
+pub(crate) fn is_global_scope_name(ctx: &CheckerContext, name: &str) -> bool {
+    matches!(
+        name,
+        "any" | "string" | "number" | "boolean" | "never" | "unknown" | "undefined" | "globalThis"
+    ) || ctx.ambient_global_symbols.get(name).is_some()
+        || ctx.ambient_global_type_declarations.get(name).is_some()
+        || ctx.namespace_registry.is_global(name)
+}
+
+/// tsc's `checkExportSpecifier` on `export { x }` with no module specifier:
+/// a name that resolves to a global-scope declaration (a lib or script
+/// global, `undefined`, `globalThis`) is TS2661, as is a primitive type name
+/// (`checkAndReportErrorForExportingPrimitiveType`); otherwise the name is
+/// simply not found.
 pub(crate) fn push_unresolved_export_diagnostic(
     ctx: &mut CheckerContext,
     local_name: &str,
     name_span: Option<TextSpan>,
 ) {
-    let mut diagnostic = Diagnostic::ts2304(local_name, ctx.file_name.clone());
+    let mut diagnostic = if is_global_scope_name(ctx, local_name) {
+        Diagnostic::ts2661(local_name, ctx.file_name.clone())
+    } else {
+        Diagnostic::ts2304(local_name, ctx.file_name.clone())
+    };
 
     if let Some(span) = name_span {
         diagnostic = diagnostic.with_span(convert_span(span));
