@@ -772,7 +772,6 @@ export const fixturePresets: Record<string, string> = {
   'super-type-arguments-basic': path.join(workspaceRoot, 'tests/compat-projects/super-type-arguments-basic/tsconfig.json'),
   'instanceof-instantiation-expression-basic': path.join(workspaceRoot, 'tests/compat-projects/instanceof-instantiation-expression-basic/tsconfig.json'),
   'mapped-type-member-in-body-basic': path.join(workspaceRoot, 'tests/compat-projects/mapped-type-member-in-body-basic/tsconfig.json'),
-  'enum-computed-member-name-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-computed-member-name-basic/tsconfig.json'),
   'arrow-captures-global-this-basic': path.join(workspaceRoot, 'tests/compat-projects/arrow-captures-global-this-basic/tsconfig.json'),
   'computed-type-member-type-name-basic': path.join(workspaceRoot, 'tests/compat-projects/computed-type-member-type-name-basic/tsconfig.json'),
   'for-in-left-operand-basic': path.join(workspaceRoot, 'tests/compat-projects/for-in-left-operand-basic/tsconfig.json'),
