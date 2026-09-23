@@ -1,5 +1,5 @@
 use surge_ts_syntax::{ParsedExpression, ParsedLogicalOperator, ParsedUnaryOperator};
-use surge_ts_types::{Type, TypeCopyReason, with_type_copy_reason};
+use surge_ts_types::{Type, TypeCopyReason, union_type, with_type_copy_reason};
 
 use crate::context::CheckerContext;
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolTable};
@@ -76,7 +76,7 @@ pub(super) fn resolve_constructor_instance_type(
 
 /// tsc's `getInstanceType`, for a right operand that is a value rather than a
 /// class name: the type of its `prototype` member unless that is `any`, else
-/// what its construct signature returns.
+/// the union of what its construct signatures return.
 fn instance_type_of_constructor_value(constructor: &Type) -> Option<Type> {
     let Type::Object(object) = constructor.peeled() else {
         return None;
@@ -87,10 +87,16 @@ fn instance_type_of_constructor_value(constructor: &Type) -> Option<Type> {
     {
         return Some(prototype.ty.clone());
     }
-    object
-        .construct_signature()
+    let mut signatures = Vec::new();
+    object.construct_signature()?.push_overload_members(&mut signatures);
+    let returns: Vec<Type> = signatures
+        .iter()
         .map(|signature| signature.return_type().clone())
-        .filter(usable)
+        .collect();
+    if !returns.iter().all(usable) {
+        return None;
+    }
+    Some(union_type(returns))
 }
 
 fn resolve_named_constructor_instance_type(
@@ -416,12 +422,16 @@ pub(super) fn narrow_to_instanceof_subclass(
     if !keep_matching || matches!(ty.peeled(), Type::Union(_)) {
         return None;
     }
-    // `unknown` narrows to the candidate itself (tsc's `narrowTypeByInstanceof`
-    // reads it as the widest subject there is).
-    if matches!(ty, Type::GenuineUnknown) {
+    // `unknown` and `any` narrow to the candidate itself (tsc's
+    // `getNarrowedType`), except that `any` stays `any` under `instanceof
+    // Object` and `instanceof Function` (`narrowTypeByInstanceof`).
+    if matches!(ty, Type::GenuineUnknown)
+        || matches!(ty, Type::Any)
+            && !instance.is_some_and(|instance| is_global_object_or_function(instance))
+    {
         return instance.filter(|instance| !instance.is_unknown()).cloned();
     }
-    // A subject that is already `any` or unresolved says nothing to narrow.
+    // A subject that is unresolved says nothing to narrow.
     if ty.is_unknown() || matches!(ty, Type::Any) {
         return None;
     }
@@ -432,6 +442,22 @@ pub(super) fn narrow_to_instanceof_subclass(
     // Narrow only along a real subtype edge; an unrelated constructor leaves the
     // subject alone rather than replacing it with something it never was.
     surge_ts_types::is_assignable_to(instance, ty).then(|| instance.clone())
+}
+
+/// Whether `instance` is the global `Object` or `Function` interface — the
+/// instance types `instanceof` does not narrow `any` to.
+fn is_global_object_or_function(instance: &Type) -> bool {
+    if surge_ts_types::is_global_function_interface(instance) {
+        return true;
+    }
+    let Type::Reference(reference) = instance else {
+        return false;
+    };
+    reference.id.split('\u{0}').next_back() == Some("Object")
+        && matches!(instance.peeled(), Type::Object(object)
+            if ["hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable"]
+                .iter()
+                .all(|member| object.properties.get(*member).is_some()))
 }
 
 /// Narrows `symbols` by a bare `x === "lit"` / `x !== 3` test.
