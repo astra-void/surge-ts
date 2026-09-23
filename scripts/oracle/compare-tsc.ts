@@ -731,6 +731,7 @@ export const fixturePresets: Record<string, string> = {
   'inference-fixed-tuple-rest-basic': path.join(workspaceRoot, 'tests/compat-projects/inference-fixed-tuple-rest-basic/tsconfig.json'),
   'recursive-alias-deferred-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/recursive-alias-deferred-reference-basic/tsconfig.json'),
   'umd-global-namespace-type-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/umd-global-namespace-type-reference-basic/tsconfig.json'),
+  'export-equals-namespace-top-level-scope-basic': path.join(workspaceRoot, 'tests/compat-projects/export-equals-namespace-top-level-scope-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

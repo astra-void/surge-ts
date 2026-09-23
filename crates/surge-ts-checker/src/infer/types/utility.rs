@@ -497,6 +497,16 @@ pub(crate) fn resolve_type_alias(
         .rsplit_once('.')
         .map(|(prefix, _)| prefix.to_string());
     let is_namespace_member = namespace_prefix.is_some();
+    // A declaration outside every namespace resolves its body in its own file's
+    // top-level scope, not in the namespace whose member led here: React's
+    // top-level `type NativeSubmitEvent = SubmitEvent` names the DOM's
+    // `SubmitEvent`, not its namespace's `React.SubmitEvent`.
+    let enclosing_namespaces = (!is_namespace_member).then(|| {
+        (
+            std::mem::take(&mut ctx.namespace_member_prefix_stack),
+            std::mem::replace(&mut ctx.namespace_member_resolution_depth, 0),
+        )
+    });
     if let Some(prefix) = namespace_prefix {
         ctx.namespace_member_resolution_depth += 1;
         ctx.namespace_member_prefix_stack.push(prefix);
@@ -526,6 +536,10 @@ pub(crate) fn resolve_type_alias(
     if is_namespace_member {
         ctx.namespace_member_resolution_depth -= 1;
         ctx.namespace_member_prefix_stack.pop();
+    }
+    if let Some((stack, depth)) = enclosing_namespaces {
+        ctx.namespace_member_prefix_stack = stack;
+        ctx.namespace_member_resolution_depth = depth;
     }
     resolving.pop();
 
