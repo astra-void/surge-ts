@@ -1160,7 +1160,12 @@ fn resolve_import_equals(
     namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
     ctx: &mut CheckerContext,
 ) {
-    let ParsedImportKind::Equals { local_name, .. } = &import.kind else {
+    let ParsedImportKind::Equals {
+        local_name,
+        name_span,
+        ..
+    } = &import.kind
+    else {
         return;
     };
 
@@ -1181,6 +1186,14 @@ fn resolve_import_equals(
         {
             report_unresolved_module(ctx, import);
         }
+        // The alias resolves to tsc's `unknownSymbol`, whose every meaning is
+        // the error type.
+        insert_error_type_import(
+            type_declarations,
+            local_name,
+            ctx.file_name_arc(),
+            *name_span,
+        );
         insert_unresolved_import_binding(local_name, ctx, import, symbols);
         return;
     };

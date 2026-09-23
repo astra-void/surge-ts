@@ -298,6 +298,22 @@ fn resolve_named_type_inner(
     };
 
     if has_type_arguments && !is_generic_declaration {
+        // `getTypeReferenceType`: a name bound to tsc's `unknownSymbol` (an
+        // import of a module that does not resolve) is the error type whatever
+        // its type arguments; only the arguments themselves are still checked.
+        if matches!(declaration, TypeDeclarationInfo::Alias(alias)
+            if matches!(alias.body.ty, ParsedType::ErrorType))
+        {
+            let mut had_error = false;
+            for argument in &named_type.type_arguments {
+                had_error |=
+                    resolve_parsed_type(argument.clone(), ctx, resolving, substitution).had_error;
+            }
+            return ResolvedType {
+                ty: Type::ErrorType,
+                had_error,
+            };
+        }
         let name = match declaration {
             TypeDeclarationInfo::Alias(alias) => &alias.name,
             TypeDeclarationInfo::Interface(interface) => &interface.name,
