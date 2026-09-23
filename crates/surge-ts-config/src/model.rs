@@ -79,6 +79,9 @@ pub struct NormalizedCompilerOptions {
     pub allow_js: bool,
     pub check_js: bool,
     pub no_emit: bool,
+    /// `compilerOptions.noCheck`: no file is type-checked, so only syntactic
+    /// diagnostics are reported.
+    pub no_check: bool,
     pub skip_lib_check: bool,
     pub es_module_interop: bool,
     pub allow_synthetic_default_imports: bool,
@@ -149,6 +152,7 @@ impl Default for NormalizedCompilerOptions {
             allow_js: false,
             check_js: false,
             no_emit: false,
+            no_check: false,
             skip_lib_check: false,
             es_module_interop: false,
             allow_synthetic_default_imports: false,

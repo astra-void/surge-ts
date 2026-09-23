@@ -170,6 +170,10 @@ pub(crate) fn normalize_compiler_options(
                 normalized.no_emit = parse_bool_option(key, value, config_dir, diagnostics)
                     .unwrap_or(normalized.no_emit);
             }
+            "noCheck" => {
+                normalized.no_check = parse_bool_option(key, value, config_dir, diagnostics)
+                    .unwrap_or(normalized.no_check);
+            }
             "skipLibCheck" => {
                 normalized.skip_lib_check = parse_bool_option(key, value, config_dir, diagnostics)
                     .unwrap_or(normalized.skip_lib_check);

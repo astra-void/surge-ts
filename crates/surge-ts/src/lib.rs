@@ -644,6 +644,14 @@ impl Project {
             result.diagnostics
         } else if !program_diagnostics.is_empty() {
             program_diagnostics
+        } else if loaded.compiler_options.no_check {
+            // tsc's `SkipTypeChecking`: every file's bind, check and inclusion
+            // diagnostics are skipped, leaving the location-less ones.
+            result
+                .diagnostics
+                .into_iter()
+                .filter(|diagnostic| diagnostic.file_name.is_empty())
+                .collect()
         } else {
             let mut diagnostics = apply_project_no_lib_compatibility_diagnostics(
                 result.diagnostics,
