@@ -1245,6 +1245,79 @@ fn without_undefined(ty: Type) -> Type {
     }
 }
 
+/// tsc's `getNarrowedTypeOfSymbol`: the parameters of a callback whose
+/// contextual signature is a lone rest parameter of a union of tuples depend on
+/// each other the way the names of one destructuring do — `kind === 'A'` picks
+/// the `payload` of the tuples it leaves — unless one of them is written.
+fn record_dependent_parameters(
+    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
+    expected_type: &FunctionType,
+    body: &surge_ts_syntax::ParsedArrowFunctionBody,
+    arrow_span: Option<surge_ts_syntax::TextSpan>,
+    scopes: &mut ScopeStack,
+) {
+    let (Some(span), [rest]) = (arrow_span, expected_type.parameters()) else {
+        return;
+    };
+    if parameters.len() < 2 || !expected_type.is_variadic() {
+        return;
+    }
+    let rest = rest.peeled();
+    let Type::Union(union) = &rest else {
+        return;
+    };
+    if !union
+        .types()
+        .iter()
+        .all(|member| matches!(member.peeled(), Type::Tuple(_) | Type::OpenTuple(_)))
+    {
+        return;
+    }
+    let assigned = match body {
+        surge_ts_syntax::ParsedArrowFunctionBody::Block(statements) => {
+            deep_assigned_names(&[statements.as_slice()])
+        }
+        surge_ts_syntax::ParsedArrowFunctionBody::Expression(expression) => {
+            crate::flow::expression_assignments(expression)
+                .into_iter()
+                .filter_map(|(assignment, _)| match assignment {
+                    surge_ts_syntax::ParsedExpression::Assignment { target_name, .. } => {
+                        Some(target_name.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+    };
+    let names: Vec<&str> = parameters
+        .iter()
+        .filter_map(|parameter| match &parameter.binding_name {
+            surge_ts_syntax::ParsedBindingName::Identifier { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    if names.iter().any(|name| assigned.iter().any(|assigned| assigned == name)) {
+        return;
+    }
+    let source: std::sync::Arc<str> = format!("\0rest@{}", span.start).into();
+    for (index, parameter) in parameters.iter().enumerate() {
+        if let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } = &parameter.binding_name
+            && parameter.declared_type.is_none()
+            && parameter.initializer.is_none()
+            && !parameter.rest
+        {
+            scopes.record_tuple_destructure(
+                name,
+                Some(crate::symbols::TupleDestructureBinding {
+                    source: source.clone(),
+                    key: crate::symbols::DestructureKey::Index(index),
+                    source_type: Some(rest.clone()),
+                }),
+            );
+        }
+    }
+}
+
 fn contextual_parameter_types(expected_type: &FunctionType, parameter_count: usize) -> Vec<Type> {
     // tsc's `getTypeOfParameter`: an optional parameter of the contextual
     // signature is `T | undefined`, and that is the type an unannotated
@@ -1291,6 +1364,37 @@ fn contextual_parameter_types(expected_type: &FunctionType, parameter_count: usi
     let mut expanded = leading.to_vec();
     match rest {
         Type::Tuple(elements) => expanded.extend(elements.iter().cloned()),
+        // tsc's `tryGetTypeAtPosition`: a rest parameter that is not itself a
+        // tuple is indexed at each position, which distributes over a union of
+        // tuples (`(...args: ['A', number] | ['B', string])` gives `'A' | 'B'`
+        // then `number | string`); a fixed tuple too short for the position
+        // reads `undefined`.
+        Type::Union(union) if union.types().iter().all(|member| {
+            matches!(member.peeled(), Type::Tuple(_) | Type::OpenTuple(_))
+        }) =>
+        {
+            for position in 0..parameter_count.saturating_sub(leading.len()) {
+                let elements = union
+                    .types()
+                    .iter()
+                    .map(|member| match member.peeled() {
+                        Type::Tuple(elements) => {
+                            elements.get(position).cloned().unwrap_or(Type::Undefined)
+                        }
+                        Type::OpenTuple(open) => match open.leading.get(position) {
+                            Some(element) => element.clone(),
+                            None => {
+                                let mut tail = vec![open.rest.as_ref().clone()];
+                                tail.extend(open.trailing.iter().cloned());
+                                surge_ts_types::union_type(tail)
+                            }
+                        },
+                        _ => unreachable!("every member is a tuple"),
+                    })
+                    .collect();
+                expanded.push(surge_ts_types::union_type(elements));
+            }
+        }
         // The resolver already unwraps an array rest annotation to its element
         // type, but a signature mapped from source keeps the array; accept both.
         other => {
@@ -1640,6 +1744,9 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 .as_ref()
                 .unwrap_or_else(|| parameter_types.get(index).unwrap_or(&Type::Any));
             insert_parameter_bindings(parameter, parameter_type, &mut scopes);
+        }
+        if let Some(expected_type) = expected_type {
+            record_dependent_parameters(&parameters, expected_type, &body, arrow_span, &mut scopes);
         }
         crate::checks::function::with_type_parameter_scope(&type_parameters, ctx, |ctx| {
             for (index, parameter) in parameters.iter().enumerate() {

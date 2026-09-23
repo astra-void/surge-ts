@@ -26,6 +26,7 @@ pub(crate) mod evolving_arrays;
 mod returns;
 
 pub(crate) use alias_conditions::*;
+pub(crate) use branch_assignments::deep_assigned_names;
 pub(crate) use assignments::*;
 pub(crate) use evolving_arrays::{apply_array_mutations, collect_array_mutations};
 use evolving_arrays::{prime_loop_mutations, release_loop_mutations};

@@ -1258,13 +1258,43 @@ fn widen_variadic_parameters<'a>(
     let Some(rest) = parameters.last() else {
         return parameters;
     };
-    let Type::Array(element) = rest_slot_shape(rest) else {
-        return parameters;
-    };
     let leading = parameters.len() - 1;
-    let element = *element;
     let mut widened = parameters[..leading].to_vec();
-    widened.resize(width.max(leading + 1), element);
+    match rest_slot_shape(rest) {
+        Type::Array(element) => widened.resize(width.max(leading + 1), *element),
+        // tsc's `getTypeAtPosition`: a rest parameter that is not itself a
+        // tuple is indexed at each position, which distributes over a union of
+        // tuples; a fixed tuple too short for the position reads `undefined`.
+        Type::Union(union)
+            if union
+                .types()
+                .iter()
+                .all(|member| matches!(member.peeled(), Type::Tuple(_) | Type::OpenTuple(_))) =>
+        {
+            for position in 0..width.max(leading + 1) - leading {
+                let elements = union
+                    .types()
+                    .iter()
+                    .map(|member| match member.peeled() {
+                        Type::Tuple(elements) => {
+                            elements.get(position).cloned().unwrap_or(Type::Undefined)
+                        }
+                        Type::OpenTuple(open) => match open.leading.get(position) {
+                            Some(element) => element.clone(),
+                            None => {
+                                let mut tail = vec![open.rest.as_ref().clone()];
+                                tail.extend(open.trailing.iter().cloned());
+                                crate::union_type(tail)
+                            }
+                        },
+                        _ => unreachable!("every member is a tuple"),
+                    })
+                    .collect();
+                widened.push(crate::union_type(elements));
+            }
+        }
+        _ => return parameters,
+    }
     std::borrow::Cow::Owned(widened)
 }
 

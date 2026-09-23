@@ -749,6 +749,7 @@ export const fixturePresets: Record<string, string> = {
   'jsx-factory-implicit-use': path.join(workspaceRoot, 'tests/compat-projects/jsx-factory-implicit-use/tsconfig.json'),
   'nested-destructuring-assignment-targets': path.join(workspaceRoot, 'tests/compat-projects/nested-destructuring-assignment-targets/tsconfig.json'),
   'binding-element-default-implicit-any': path.join(workspaceRoot, 'tests/compat-projects/binding-element-default-implicit-any/tsconfig.json'),
+  'union-tuple-rest-contextual-parameters': path.join(workspaceRoot, 'tests/compat-projects/union-tuple-rest-contextual-parameters/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -120,7 +120,11 @@ impl DestructureKey {
     /// The type this key reads off one member of the source union.
     pub(crate) fn read(&self, member: &Type) -> Option<Type> {
         match (self, member) {
-            (DestructureKey::Index(index), Type::Tuple(elements)) => elements.get(*index).cloned(),
+            // A fixed tuple too short for the index reads `undefined`
+            // (`getBindingElementTypeFromParentType` with no bounds check).
+            (DestructureKey::Index(index), Type::Tuple(elements)) => {
+                Some(elements.get(*index).cloned().unwrap_or(Type::Undefined))
+            }
             (DestructureKey::Property(name), Type::Object(object)) => {
                 let property = object.properties.get(name)?;
                 Some(if property.is_optional() {
