@@ -773,6 +773,7 @@ export const fixturePresets: Record<string, string> = {
   'script-parameter-default-values': path.join(workspaceRoot, 'tests/compat-projects/script-parameter-default-values/tsconfig.json'),
   'array-literal-spread-arguments': path.join(workspaceRoot, 'tests/compat-projects/array-literal-spread-arguments/tsconfig.json'),
   'plus-nullish-operands-loose': path.join(workspaceRoot, 'tests/compat-projects/plus-nullish-operands-loose/tsconfig.json'),
+  'delete-operand-loose-null-checks': path.join(workspaceRoot, 'tests/compat-projects/delete-operand-loose-null-checks/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

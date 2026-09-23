@@ -153,9 +153,11 @@ pub(crate) fn check_delete_operand(
         return;
     }
 
-    // tsc gates this on `strictNullChecks`. surge models no such flag — it
-    // checks as if it were always on, which is what its possibly-undefined
-    // diagnostics already assume.
+    // tsc's `checkDeleteExpressionMustBeOptional` runs under `strictNullChecks`
+    // only: without it `undefined` is in every type's domain.
+    if !ctx.options.strict_null_checks {
+        return;
+    }
     let unnarrowed = unnarrowed_receiver(operand, symbols, ctx).unwrap_or(receiver);
     let Some(property_type) = declared_property_type(&unnarrowed, &property_name) else {
         return;
