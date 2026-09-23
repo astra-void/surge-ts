@@ -257,6 +257,7 @@ pub(crate) fn collect_global_augmentations(
                 block_tables.push(collect_global_augmentation_block_types(
                     block_statements,
                     enclosing_statements,
+                    &parsed_file.statements,
                     ctx,
                 ));
             },
@@ -295,6 +296,7 @@ pub(crate) fn collect_global_augmentations_from_statements(
             block_tables.push(collect_global_augmentation_block_types(
                 block_statements,
                 enclosing_statements,
+                statements,
                 ctx,
             ));
         },
@@ -362,10 +364,12 @@ fn for_each_global_augmentation_block(
 /// Collect one `declare global` block's type declarations into a fresh table, so
 /// the result can later be merged into the ambient table by sharing payload
 /// handles. The caller merges every block's table together in one pass
-/// (see [`collect_global_augmentations`]).
+/// (see [`collect_global_augmentations`]). `file_statements` are those of the
+/// file the block is written in.
 fn collect_global_augmentation_block_types(
     block_statements: &[ParsedStatement],
     enclosing_statements: Option<&[ParsedStatement]>,
+    file_statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
 ) -> crate::symbols::TypeDeclarationTable {
     let saved_type_declarations = std::mem::replace(
@@ -398,11 +402,109 @@ fn collect_global_augmentation_block_types(
             );
         }
     }
+    publish_global_augmentation_alias_types(
+        block_statements,
+        enclosing_statements.unwrap_or(file_statements),
+        &mut block_table,
+        ctx,
+    );
 
     ctx.type_declarations = saved_type_declarations;
     ctx.type_declaration_scope = saved_type_declaration_scope;
 
     block_table
+}
+
+/// `export import X = N.M` in a `declare global` block merges `X` into the
+/// globals as an alias, and an alias carries every meaning of its entity: the
+/// entity's type and its namespace members are global types under `X`, as its
+/// value is a global value ([`lower_global_augmentation_values`]). The entity
+/// resolves from the block outwards the way the value does: the block, then
+/// the file or ambient module it is written in, then the globals.
+fn publish_global_augmentation_alias_types(
+    block_statements: &[ParsedStatement],
+    enclosing_statements: &[ParsedStatement],
+    block_table: &mut crate::symbols::TypeDeclarationTable,
+    ctx: &mut CheckerContext,
+) {
+    use crate::symbols::{TypeDeclarationScope, TypeDeclarationTable};
+
+    let aliases: Vec<(&str, &str)> = block_statements
+        .iter()
+        .filter_map(|statement| match crate::modules::peel_exported_statement(statement) {
+            ParsedStatement::ImportDeclaration(import) => match &import.kind {
+                surge_ts_syntax::ParsedImportKind::EntityAlias {
+                    local_name, target, ..
+                } => Some((local_name.as_str(), target.as_str())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    if aliases.is_empty() {
+        return;
+    }
+    let names_entity = |table: &TypeDeclarationTable, target: &str| {
+        let prefix = format!("{target}.");
+        table.get(target).is_some()
+            || table.iter().any(|(key, _)| key.starts_with(prefix.as_str()))
+    };
+    let mut enclosing: Option<(Arc<TypeDeclarationTable>, Arc<TypeDeclarationScope>)> = None;
+    for (local, target) in aliases {
+        let entries = if names_entity(block_table, target) {
+            entity_alias_type_entries(block_table, target, local, None)
+        } else {
+            let (enclosing_table, enclosing_scope) = enclosing.get_or_insert_with(|| {
+                let saved = std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+                let diagnostics_before = ctx.diagnostics().len();
+                collect_type_declarations(enclosing_statements, ctx);
+                ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+                let table = Arc::new(std::mem::replace(&mut ctx.type_declarations, saved));
+                let scope = Arc::new(TypeDeclarationScope::new(vec![table.clone()]));
+                (table, scope)
+            });
+            if names_entity(enclosing_table, target) {
+                entity_alias_type_entries(enclosing_table, target, local, Some(&*enclosing_scope))
+            } else {
+                entity_alias_type_entries(&ctx.ambient_global_type_declarations, target, local, None)
+            }
+        };
+        for (name, declaration) in entries {
+            let _ = block_table.insert(name, declaration);
+        }
+    }
+}
+
+/// The type declarations the entity path `target` names in `source`, keyed
+/// under the alias `local`: the entity itself and its qualified members.
+fn entity_alias_type_entries(
+    source: &crate::symbols::TypeDeclarationTable,
+    target: &str,
+    local: &str,
+    scope: Option<&Arc<crate::symbols::TypeDeclarationScope>>,
+) -> Vec<(String, TypeDeclarationInfo)> {
+    let mut entries = Vec::new();
+    if let Some(declaration) = source.get(target) {
+        let declaration =
+            crate::modules::exports::attach_type_resolution_scope_if_missing(declaration.clone(), scope);
+        entries.push((
+            local.to_string(),
+            crate::modules::exports::rename_type_declaration(declaration, local.to_string()),
+        ));
+    }
+    let prefix = format!("{target}.");
+    for (key, declaration) in source.iter() {
+        if let Some(member) = key.strip_prefix(prefix.as_str()) {
+            entries.push((
+                format!("{local}.{member}"),
+                crate::modules::exports::attach_type_resolution_scope_if_missing(
+                    declaration.clone(),
+                    scope,
+                ),
+            ));
+        }
+    }
+    entries
 }
 
 /// A global function re-declared by another declaration file is an *overload*
