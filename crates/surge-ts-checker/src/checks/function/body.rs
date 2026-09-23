@@ -301,6 +301,7 @@ pub(crate) fn check_function_body(
         let future_block_scoped_declarations = collect_future_block_scoped_declarations(&body);
         if !future_block_scoped_declarations.is_empty() {
             flow_state.push_scope(future_block_scoped_declarations);
+            flow_state.record_enum_objects(&body);
             pushed_scope = true;
         }
     } else {

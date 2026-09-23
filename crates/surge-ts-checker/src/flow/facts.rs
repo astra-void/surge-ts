@@ -625,6 +625,20 @@ pub(crate) fn report_read_flow_positioned(
             FlowCheck::Blocked
         }
         FlowReadOutcome::UseBeforeDeclaration => {
+            // tsc's `checkResolvedBlockScopedVariable`: an enum read before its
+            // declaration is TS2450, and a `const enum` (inlined, with no
+            // binding to be early of) is not reported outside isolatedModules.
+            if let Some(is_const) = flow_state.enum_object(name) {
+                if is_const {
+                    return FlowCheck::Clear;
+                }
+                let mut diagnostic = Diagnostic::ts2450(name, ctx.file_name.clone());
+                if let Some(span) = span {
+                    diagnostic = diagnostic.with_span(convert_span(span));
+                }
+                ctx.push(diagnostic);
+                return FlowCheck::Blocked;
+            }
             // A block-scoped (`let`/`const`) variable read before its declaration
             // is necessarily in its temporal dead zone, so it is also definitely
             // unassigned. tsc reports both TS2448 and TS2454 at every such read.
