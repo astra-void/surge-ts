@@ -123,6 +123,14 @@ fn lower_enum_declaration(
         member_types.push(member_type);
     }
 
+    // tsc's `resolveAnonymousTypeMembers`: an enum with a numeric (or
+    // computed) member, or none at all, maps its values back to their names
+    // through `[x: number]: string` (`enumNumberIndexInfo`).
+    let reverse_mapping = (member_types.is_empty()
+        || member_types
+            .iter()
+            .any(|ty| matches!(ty, ParsedType::NumberLiteral(_) | ParsedType::Number)))
+    .then(|| Box::new(ParsedType::String));
     let enum_type = match member_types.len() {
         0 => ParsedType::Never,
         1 => member_types.pop().expect("one member type"),
@@ -155,7 +163,7 @@ fn lower_enum_declaration(
             declared_type: Some(ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
                 properties,
                 string_index_type: None,
-                number_index_type: None,
+                number_index_type: reverse_mapping,
                 call_signature: None,
             call_signature_overloads: Vec::new(),
                 construct_signature: None,
@@ -240,12 +248,14 @@ pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStateme
     for indices in duplicated {
         let (first, rest) = indices.split_first().expect("non-empty group");
         let mut properties: Vec<ParsedObjectTypeProperty> = Vec::new();
+        let mut reverse_mapping = None;
         let mut member_types: Vec<ParsedType> = Vec::new();
         for index in rest {
             match peel_exported(&statements[*index]) {
                 ParsedStatement::VariableDeclaration(variable) => {
                     if let Some(ParsedType::Object(object)) = variable.declared_type.as_ref() {
                         properties.extend(object.properties.iter().cloned());
+                        reverse_mapping = reverse_mapping.or_else(|| object.number_index_type.clone());
                     }
                 }
                 ParsedStatement::TypeAliasDeclaration(alias) => {
@@ -263,6 +273,9 @@ pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStateme
             ParsedStatement::VariableDeclaration(variable) => {
                 if let Some(ParsedType::Object(object)) = variable.declared_type.as_mut() {
                     let object = std::sync::Arc::make_mut(object);
+                    if object.number_index_type.is_none() {
+                        object.number_index_type = reverse_mapping;
+                    }
                     for property in properties {
                         if !object.properties.iter().any(|kept| kept.name == property.name) {
                             object.properties.push(property);
