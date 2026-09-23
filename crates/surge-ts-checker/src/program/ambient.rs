@@ -321,13 +321,24 @@ pub(crate) fn lower_ambient_global_values(
     parsed_files: &[ParsedProgramFile],
     ctx: &mut CheckerContext,
 ) {
-    for parsed_file in parsed_files {
-        if !is_ambient_global_declaration_file(parsed_file, ctx)
-            || !publishes_ambient_globals(parsed_file)
-        {
-            continue;
-        }
-
+    let lowered_files: Vec<&ParsedProgramFile> = parsed_files
+        .iter()
+        .filter(|parsed_file| {
+            is_ambient_global_declaration_file(parsed_file, ctx) && publishes_ambient_globals(parsed_file)
+        })
+        .collect();
+    // tsc types a value on demand, so a type query in an ambient annotation
+    // reads a variable declared after it (`declare var S: typeof A;
+    // declare const A: number;`) — `isBlockScopedNameDeclaredBeforeUse` holds
+    // for any use in a type query or ambient context. A variable whose
+    // annotation queries one not lowered yet waits until that one is.
+    let mut pending: HashSet<&str> = lowered_files
+        .iter()
+        .flat_map(|parsed_file| parsed_file.statements.iter().filter_map(ambient_variable))
+        .map(|var| var.name.as_str())
+        .collect();
+    let mut deferred: Vec<(&ParsedProgramFile, &surge_ts_syntax::ParsedVariableDeclaration)> = Vec::new();
+    for &parsed_file in &lowered_files {
         ctx.set_file_name(parsed_file.file_name.clone());
         let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
         ctx.type_declaration_scope = None;
@@ -345,51 +356,14 @@ pub(crate) fn lower_ambient_global_values(
         );
         ctx.symbols = current_symbols;
 
-        for stmt in &parsed_file.statements {
-            let var = match stmt {
-                ParsedStatement::VariableDeclaration(var) => Some(var),
-                ParsedStatement::ExportDeclaration(export) => {
-                    if let surge_ts_syntax::ParsedExportDeclaration::Statement {
-                        declaration, ..
-                    } = export.as_ref()
-                    {
-                        if let ParsedStatement::VariableDeclaration(var) = declaration.as_ref() {
-                            Some(var)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-
-            if let Some(var) = var {
-                let ty = var
-                    .declared_type
-                    .as_ref()
-                    .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
-                    .unwrap_or(surge_ts_types::Type::Unknown);
-                if ctx.ambient_global_symbols.get(&var.name).is_none() {
-                    if !matches!(var.kind, surge_ts_syntax::ParsedVariableKind::Var) {
-                        Arc::make_mut(&mut ctx.block_scoped_globals)
-                            .insert(Arc::from(var.name.as_str()));
-                    }
-                    ctx.ambient_global_symbols.insert(
-                        var.name.clone(),
-                        crate::symbols::SymbolInfo {
-                            ty,
-                            kind: if matches!(var.kind, surge_ts_syntax::ParsedVariableKind::Const)
-                            {
-                                crate::symbols::SymbolKind::Const
-                            } else {
-                                crate::symbols::SymbolKind::Let
-                            },
-                            function_signature: None,
-                        },
-                    );
-                }
+        for var in parsed_file.statements.iter().filter_map(ambient_variable) {
+            let waits = deferred.iter().any(|(_, earlier)| earlier.name == var.name)
+                || queries_pending_value(var, &pending);
+            if waits {
+                deferred.push((parsed_file, var));
+            } else {
+                lower_ambient_variable(var, ctx);
+                pending.remove(var.name.as_str());
             }
         }
 
@@ -468,7 +442,103 @@ pub(crate) fn lower_ambient_global_values(
         ctx.type_declaration_scope = saved_type_declaration_scope;
     }
 
+    while !deferred.is_empty() {
+        let ready = deferred.iter().position(|(_, var)| {
+            let mut others = pending.clone();
+            others.remove(var.name.as_str());
+            !queries_pending_value(var, &others)
+        });
+        // A cycle has no ready variable; its members lower in source order.
+        let (parsed_file, var) = deferred.remove(ready.unwrap_or(0));
+        ctx.set_file_name(parsed_file.file_name.clone());
+        let saved_type_declaration_scope = ctx.type_declaration_scope.take();
+        let saved_type_declarations =
+            std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+        lower_ambient_variable(var, ctx);
+        ctx.type_declarations = saved_type_declarations;
+        ctx.type_declaration_scope = saved_type_declaration_scope;
+        if !deferred.iter().any(|(_, later)| later.name == var.name) {
+            pending.remove(var.name.as_str());
+        }
+    }
+
     lower_ambient_namespace_values(parsed_files, ctx);
+}
+
+fn ambient_variable(statement: &ParsedStatement) -> Option<&surge_ts_syntax::ParsedVariableDeclaration> {
+    match crate::modules::peel_exported_statement(statement) {
+        ParsedStatement::VariableDeclaration(var) => Some(var),
+        _ => None,
+    }
+}
+
+/// Whether `var`'s annotation queries the value of a variable in `pending`.
+fn queries_pending_value(
+    var: &surge_ts_syntax::ParsedVariableDeclaration,
+    pending: &HashSet<&str>,
+) -> bool {
+    fn queries(ty: &surge_ts_syntax::ParsedType, pending: &HashSet<&str>) -> bool {
+        use surge_ts_syntax::ParsedType;
+        let signature = |function: &surge_ts_syntax::ParsedFunctionType| {
+            function.parameters.iter().any(|parameter| queries(&parameter.ty, pending))
+                || queries(&function.return_type, pending)
+        };
+        match ty {
+            ParsedType::TypeOf(type_of) => {
+                type_of.import_specifier.is_none() && pending.contains(type_of.name.as_str())
+            }
+            ParsedType::Named(named) => named.type_arguments.iter().any(|argument| queries(argument, pending)),
+            ParsedType::Array(element) | ParsedType::Readonly(element) | ParsedType::KeyOf(element) => {
+                queries(element, pending)
+            }
+            ParsedType::Tuple(elements) | ParsedType::Union(elements) | ParsedType::Intersection(elements) => {
+                elements.iter().any(|element| queries(element, pending))
+            }
+            ParsedType::Object(object) => {
+                object.properties.iter().any(|property| queries(&property.ty, pending))
+                    || object.call_signature.as_deref().is_some_and(signature)
+            }
+            ParsedType::Function(function) => signature(function),
+            ParsedType::IndexedAccess(indexed) => {
+                queries(&indexed.object_type, pending) || queries(&indexed.index_type, pending)
+            }
+            ParsedType::Conditional(conditional) => {
+                queries(&conditional.check_type, pending)
+                    || queries(&conditional.extends_type, pending)
+                    || queries(&conditional.true_type, pending)
+                    || queries(&conditional.false_type, pending)
+            }
+            _ => false,
+        }
+    }
+    var.declared_type.as_ref().is_some_and(|ty| queries(ty, pending))
+}
+
+/// Declares an ambient variable in the global table unless an earlier
+/// declaration of the name already did.
+fn lower_ambient_variable(var: &surge_ts_syntax::ParsedVariableDeclaration, ctx: &mut CheckerContext) {
+    let ty = var
+        .declared_type
+        .as_ref()
+        .map(|ty| crate::infer::map_parsed_type(ty.clone(), ctx))
+        .unwrap_or(surge_ts_types::Type::Unknown);
+    if ctx.ambient_global_symbols.get(&var.name).is_none() {
+        if !matches!(var.kind, surge_ts_syntax::ParsedVariableKind::Var) {
+            Arc::make_mut(&mut ctx.block_scoped_globals).insert(Arc::from(var.name.as_str()));
+        }
+        ctx.ambient_global_symbols.insert(
+            var.name.clone(),
+            crate::symbols::SymbolInfo {
+                ty,
+                kind: if matches!(var.kind, surge_ts_syntax::ParsedVariableKind::Const) {
+                    crate::symbols::SymbolKind::Const
+                } else {
+                    crate::symbols::SymbolKind::Let
+                },
+                function_signature: None,
+            },
+        );
+    }
 }
 
 /// `declare namespace X { ... }` contributes a global value object whose members
