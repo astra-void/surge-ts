@@ -825,6 +825,7 @@ export const fixturePresets: Record<string, string> = {
   'loose-null-widening': path.join(workspaceRoot, 'tests/compat-projects/loose-null-widening/tsconfig.json'),
   'optional-call-chain-nullability': path.join(workspaceRoot, 'tests/compat-projects/optional-call-chain-nullability/tsconfig.json'),
   'module-member-assignment-narrowing': path.join(workspaceRoot, 'tests/compat-projects/module-member-assignment-narrowing/tsconfig.json'),
+  'satisfies-argument-elaboration': path.join(workspaceRoot, 'tests/compat-projects/satisfies-argument-elaboration/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

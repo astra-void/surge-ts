@@ -193,6 +193,31 @@ fn evaluate_expression_with_expected_type_inner(
         return evaluate_expression(expression, fallback_span, symbols, ctx);
     };
 
+    // tsc relates an argument through `satisfies` (`getEffectiveCheckNode`),
+    // so a literal inside elaborates a mismatch at its members.
+    if _expected_diagnostic == ExpectedTypeDiagnostic::ArgumentNotAssignable
+        && let ParsedExpression::SatisfiesExpression {
+            expression: satisfied,
+            span,
+            ..
+        } = expression
+        && matches!(
+            satisfied.as_ref(),
+            ParsedExpression::ObjectLiteral { .. } | ParsedExpression::ArrayLiteral { .. }
+        )
+    {
+        let _ = evaluate_expression(expression, fallback_span, symbols, ctx);
+        return evaluate_expression_with_expected_type_anchored(
+            satisfied,
+            span.or(fallback_span),
+            target_span,
+            Some(expected_type),
+            _expected_diagnostic,
+            symbols,
+            ctx,
+        );
+    }
+
     // Before the expected type is peeled below: a template literal type
     // resolves to `string`, and the pattern is what this reads.
     if let Some(template) = contextual_template_literal_type(expression, expected_type, symbols, ctx)
