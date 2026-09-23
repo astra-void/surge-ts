@@ -378,6 +378,7 @@ export const fixturePresets: Record<string, string> = {
   'for-of-var-hoisting': path.join(workspaceRoot, 'tests/compat-projects/for-of-var-hoisting/tsconfig.json'),
   'merged-interface-type-parameter-names': path.join(workspaceRoot, 'tests/compat-projects/merged-interface-type-parameter-names/tsconfig.json'),
   'script-global-shadowed-by-module-local': path.join(workspaceRoot, 'tests/compat-projects/script-global-shadowed-by-module-local/tsconfig.json'),
+  'type-query-hoisted-function': path.join(workspaceRoot, 'tests/compat-projects/type-query-hoisted-function/tsconfig.json'),
   'block-scoped-self-reference': path.join(workspaceRoot, 'tests/compat-projects/block-scoped-self-reference/tsconfig.json'),
   'assignment-target-resolution': path.join(workspaceRoot, 'tests/compat-projects/assignment-target-resolution/tsconfig.json'),
   'named-function-expression-scope': path.join(workspaceRoot, 'tests/compat-projects/named-function-expression-scope/tsconfig.json'),

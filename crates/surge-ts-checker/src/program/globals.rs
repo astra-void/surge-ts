@@ -383,7 +383,18 @@ fn hoist_function_declarations(
 ) -> Option<Option<Arc<SymbolTable>>> {
     let functions: Vec<&surge_ts_syntax::ParsedFunctionDeclaration> =
         statements.iter().filter_map(declared_function).collect();
-    if !check_function::signatures_read_ahead(&functions) {
+    let local_types: Vec<(&str, Vec<&surge_ts_syntax::ParsedType>)> = statements
+        .iter()
+        .filter_map(|statement| match crate::modules::peel_exported_statement(statement) {
+            ParsedStatement::TypeAliasDeclaration(alias) => Some((alias.name.as_str(), vec![&alias.ty])),
+            ParsedStatement::InterfaceDeclaration(interface) => Some((
+                interface.name.as_str(),
+                check_function::interface_written_types(interface),
+            )),
+            _ => None,
+        })
+        .collect();
+    if !check_function::signatures_read_ahead(&functions, &local_types) {
         return None;
     }
     let outer_fallback = ctx.module_value_fallback.clone();

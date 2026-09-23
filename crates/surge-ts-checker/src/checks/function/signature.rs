@@ -838,21 +838,100 @@ pub(crate) fn signature_value_reads(
 
 /// Whether a signature among `functions` — the function declarations of one
 /// scope, in source order — reads a function of the scope whose first
-/// declaration is not before it: itself, or one declared later.
-pub(crate) fn signatures_read_ahead(functions: &[&surge_ts_syntax::ParsedFunctionDeclaration]) -> bool {
+/// declaration is not before it: itself, or one declared later. A type alias or
+/// interface of the scope, `local_types` with the types written in each, reads
+/// what its body reads wherever a signature names it
+/// (`type R = ReturnType<typeof f>; function f(): R`).
+pub(crate) fn signatures_read_ahead(
+    functions: &[&surge_ts_syntax::ParsedFunctionDeclaration],
+    local_types: &[(&str, Vec<&ParsedType>)],
+) -> bool {
     let mut first_declared: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for (position, function) in functions.iter().enumerate() {
         first_declared.entry(function.name.as_str()).or_insert(position);
     }
+    let local_type_reads = local_type_value_reads(local_types);
     functions.iter().enumerate().any(|(position, function)| {
-        signature_value_reads(
+        let mut reads = signature_value_reads(
             &function.type_parameters,
             &function.parameters,
             function.return_type.as_ref(),
-        )
-        .iter()
-        .any(|name| first_declared.get(name.as_str()).is_some_and(|first| *first >= position))
+        );
+        let written = function
+            .parameters
+            .iter()
+            .filter_map(|parameter| parameter.declared_type.as_ref())
+            .chain(function.return_type.as_ref())
+            .chain(function.type_parameters.iter().flat_map(|parameter| {
+                [&parameter.constraint, &parameter.default_type].into_iter().flatten()
+            }));
+        for ty in written {
+            ty.for_each_named_type(&mut |named| {
+                if let Some(alias_reads) = local_type_reads.get(named.name.as_str()) {
+                    reads.extend(alias_reads.iter().cloned());
+                }
+            });
+        }
+        reads
+            .iter()
+            .any(|name| first_declared.get(name.as_str()).is_some_and(|first| *first >= position))
     })
+}
+
+/// The types an interface declaration writes in its members, index signatures
+/// and heritage type arguments.
+pub(crate) fn interface_written_types(
+    interface: &surge_ts_syntax::ParsedInterfaceDeclaration,
+) -> Vec<&ParsedType> {
+    interface
+        .members
+        .iter()
+        .map(|member| &member.ty)
+        .chain(interface.string_index_type.as_ref())
+        .chain(interface.number_index_type.as_ref())
+        .chain(interface.extends.iter().flat_map(|heritage| heritage.type_arguments.iter()))
+        .collect()
+}
+
+/// The value names each of `local_types` reads once resolved: its own `typeof`
+/// queries and those of the scope's other types it names, transitively.
+fn local_type_value_reads<'a>(
+    local_types: &[(&'a str, Vec<&ParsedType>)],
+) -> std::collections::HashMap<&'a str, Vec<String>> {
+    let mut reads: std::collections::HashMap<&'a str, Vec<String>> = std::collections::HashMap::new();
+    let mut names: std::collections::HashMap<&'a str, Vec<String>> = std::collections::HashMap::new();
+    for (name, types) in local_types {
+        let mut own = ValueReads::default();
+        let entry = names.entry(name).or_default();
+        for ty in types {
+            collect_type_query_reads(ty, false, &mut own);
+            ty.for_each_named_type(&mut |named| entry.push(named.name.clone()));
+        }
+        let ValueReads { eager, deferred } = own;
+        reads.entry(name).or_default().extend(eager.into_iter().chain(deferred));
+    }
+    loop {
+        let mut changed = false;
+        for (name, referenced) in &names {
+            let inherited: Vec<String> = referenced
+                .iter()
+                .filter(|other| other.as_str() != *name)
+                .filter_map(|other| reads.get(other.as_str()))
+                .flatten()
+                .cloned()
+                .collect();
+            let own = reads.entry(name).or_default();
+            for read in inherited {
+                if !own.contains(&read) {
+                    own.push(read);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return reads;
+        }
+    }
 }
 
 /// The names a parameter binds, each with the type it reads from the

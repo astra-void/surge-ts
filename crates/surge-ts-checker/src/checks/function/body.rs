@@ -340,7 +340,18 @@ pub(crate) fn check_function_body(
             _ => None,
         })
         .collect();
-    if crate::checks::function::signatures_read_ahead(&nested_functions) {
+    let local_types: Vec<(&str, Vec<&surge_ts_syntax::ParsedType>)> = body
+        .iter()
+        .filter_map(|statement| match statement {
+            ParsedFunctionBodyStatement::TypeAlias(alias) => Some((alias.name.as_str(), vec![&alias.ty])),
+            ParsedFunctionBodyStatement::Interface(interface) => Some((
+                interface.name.as_str(),
+                crate::checks::function::interface_written_types(interface),
+            )),
+            _ => None,
+        })
+        .collect();
+    if crate::checks::function::signatures_read_ahead(&nested_functions, &local_types) {
         for function in &nested_functions {
             scopes.insert_current(
                 function.name.as_str(),
