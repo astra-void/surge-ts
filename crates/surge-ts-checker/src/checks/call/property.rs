@@ -172,6 +172,15 @@ fn name_is_genuine_any(name: &str, symbols: &SymbolTable, ctx: &CheckerContext) 
         || ctx.genuine_any_bindings.contains(name)
 }
 
+/// A member of a call's receiver: surge's own member tables, then the global
+/// interface the configured lib declares behind a built-in receiver.
+fn receiver_member_type(receiver: &Type, property_name: &str, ctx: &mut CheckerContext) -> Option<Type> {
+    (!crate::infer::expression::lib_lacks_builtin_member(receiver, property_name, ctx))
+        .then(|| receiver.get_property_access_type(property_name))
+        .flatten()
+        .or_else(|| crate::infer::expression::lib_builtin_member_type(receiver, property_name, ctx))
+}
+
 /// `Array.prototype.filter` narrows its element type when the callback is a type
 /// predicate (`rows.filter(isCode)` is `Code[]`). The predicate lives on the
 /// argument's collected signature, not on its resolved callable type, so it is
@@ -724,13 +733,13 @@ pub(crate) fn check_property_call_like(
             }
             // The property is looked up on the union before anything is called:
             // a member lacking it is the error, whatever the others hold.
-            let lacks_member = |ty: &Type| {
+            let lacks_member = |ty: &Type, ctx: &mut CheckerContext| {
                 !matches!(ty, Type::Undefined | Type::Null)
-                    && ty.get_property_access_type(property_name).is_none()
+                    && receiver_member_type(ty, property_name, ctx).is_none()
                     && !ty.peeled().is_unknown()
                     && !matches!(ty, Type::Array(_) | Type::Tuple(_))
             };
-            if union_type.types().iter().any(lacks_member)
+            if union_type.types().iter().any(|ty| lacks_member(ty, ctx))
                 && !union_type
                     .types()
                     .iter()
@@ -799,7 +808,7 @@ pub(crate) fn check_property_call_like(
                     continue;
                 }
 
-                let Some(property_type) = ty.get_property_access_type(property_name) else {
+                let Some(property_type) = receiver_member_type(ty, property_name, ctx) else {
                     // A member whose reference peels to the sentinel is a shape
                     // surge could not reconstruct, not a type without the member.
                     if ty.peeled().is_unknown()
@@ -892,18 +901,7 @@ pub(crate) fn check_property_call_like(
                 );
             }
 
-            let property_type =
-                (!crate::infer::expression::lib_lacks_builtin_member(&object_ty, property_name, ctx))
-                    .then(|| object_ty.get_property_access_type(property_name))
-                    .flatten()
-                    .or_else(|| {
-                        crate::infer::expression::lib_builtin_member_type(
-                            &object_ty,
-                            property_name,
-                            ctx,
-                        )
-                    });
-            let Some(property_type) = property_type else {
+            let Some(property_type) = receiver_member_type(&object_ty, property_name, ctx) else {
                 if no_lib_array_member(&object_ty, ctx) {
                     return Some(Type::Any);
                 }
@@ -1359,7 +1357,7 @@ pub(crate) fn check_optional_property_call(
                     continue;
                 }
 
-                let Some(property_type) = ty.get_property_access_type(property_name) else {
+                let Some(property_type) = receiver_member_type(ty, property_name, ctx) else {
                     // A member whose reference peels to the sentinel is a shape
                     // surge could not reconstruct, not a type without the member.
                     if ty.peeled().is_unknown()
@@ -1456,7 +1454,7 @@ pub(crate) fn check_optional_property_call(
                 .map(|ret| surge_ts_types::union_type(vec![ret, Type::Undefined]));
             }
 
-            let Some(property_type) = base_type.get_property_access_type(property_name) else {
+            let Some(property_type) = receiver_member_type(&base_type, property_name, ctx) else {
                 if no_lib_array_member(&base_type, ctx) {
                     return Some(surge_ts_types::union_type(vec![Type::Any, Type::Undefined]));
                 }
