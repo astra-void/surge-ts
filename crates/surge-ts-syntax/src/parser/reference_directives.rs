@@ -9,14 +9,11 @@ pub fn extract_reference_type_directives(source_text: &str) -> Vec<ReferenceType
     extract_reference_directives_named(source_text, "types")
 }
 
-/// Collect leading `/// <reference path="..." />` directive values. The path is a
+/// Collect leading `/// <reference path="..." />` directives. The path is a
 /// file specifier resolved relative to the referencing file; callers do the
 /// resolution. Like the `types` scanner, only leading trivia is examined.
-pub fn extract_reference_path_directives(source_text: &str) -> Vec<String> {
+pub fn extract_reference_path_directives(source_text: &str) -> Vec<ReferenceTypeDirective> {
     extract_reference_directives_named(source_text, "path")
-        .into_iter()
-        .map(|directive| directive.value)
-        .collect()
 }
 
 /// tsc's `CheckJsDirective`: the last `// @ts-check` (`Some(true)`) or

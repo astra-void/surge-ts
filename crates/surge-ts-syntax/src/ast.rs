@@ -262,13 +262,15 @@ pub enum ParsedGrammarDiagnosticKind {
     TsUnderEsDecorators(u32),
 }
 
-/// A leading `/// <reference types="..." />` directive. Only the `types` form is
-/// modeled; `path`/`lib` references are not collected.
+/// A leading `/// <reference types="..." />` directive, or the `path` form
+/// (whose `resolution_mode` means nothing). `lib` references are not collected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReferenceTypeDirective {
-    /// The referenced type-package specifier, e.g. `node` or `@scope/pkg`.
+    /// The referenced type-package specifier, e.g. `node` or `@scope/pkg`, or
+    /// the referenced file's path.
     pub value: String,
-    /// Byte span of the specifier inside its quotes, used for TS2688 locations.
+    /// Byte span of the value inside its quotes, where the directive's
+    /// resolution errors (TS2688, TS6053) are reported.
     pub value_span: TextSpan,
     /// A valid `resolution-mode` attribute.
     pub resolution_mode: Option<ResolutionModeOverride>,

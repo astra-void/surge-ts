@@ -5335,6 +5335,56 @@ pub const TS1110: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS6053: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS6053",
+    number: Some(6053),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "File '{0}' not found.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS6054: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS6054",
+    number: Some(6054),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "File '{0}' has an unsupported extension. The only supported extensions are {1}.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS6231: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS6231",
+    number: Some(6231),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Could not resolve the path '{0}' with the extensions: {1}.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS6504: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS6504",
+    number: Some(6504),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "File '{0}' is a JavaScript file. Did you mean to enable the 'allowJs' option?",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1006: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1006",
+    number: Some(1006),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A file cannot have a reference to itself.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
     TS2411,
@@ -5869,6 +5919,11 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS17019,
     TS17020,
     TS1110,
+    TS6053,
+    TS6054,
+    TS6231,
+    TS6504,
+    TS1006,
 ];
 
 impl Diagnostic {
@@ -9964,5 +10019,52 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts1110(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS1110, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts6053(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS6053,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts6054(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS6054,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts6231(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS6231,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts6504(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS6504,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1006(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1006, Vec::<DiagnosticArg>::new(), file_name)
     }
 }

@@ -4262,5 +4262,45 @@
     "source": "typescript",
     "arity": 0,
     "support": "emitted"
+  },
+  {
+    "code": "TS6053",
+    "category": "Error",
+    "message": "File '{0}' not found.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6054",
+    "category": "Error",
+    "message": "File '{0}' has an unsupported extension. The only supported extensions are {1}.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6231",
+    "category": "Error",
+    "message": "Could not resolve the path '{0}' with the extensions: {1}.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6504",
+    "category": "Error",
+    "message": "File '{0}' is a JavaScript file. Did you mean to enable the 'allowJs' option?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1006",
+    "category": "Error",
+    "message": "A file cannot have a reference to itself.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
   }
 ]

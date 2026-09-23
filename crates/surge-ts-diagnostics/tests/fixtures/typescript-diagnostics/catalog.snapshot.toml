@@ -4264,3 +4264,43 @@ support = "emitted"
 message = "Type expected."
 arity = 0
 
+[[diagnostic]]
+code = "TS6053"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "File '{0}' not found."
+arity = 1
+
+[[diagnostic]]
+code = "TS6054"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "File '{0}' has an unsupported extension. The only supported extensions are {1}."
+arity = 2
+
+[[diagnostic]]
+code = "TS6231"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Could not resolve the path '{0}' with the extensions: {1}."
+arity = 2
+
+[[diagnostic]]
+code = "TS6504"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "File '{0}' is a JavaScript file. Did you mean to enable the 'allowJs' option?"
+arity = 1
+
+[[diagnostic]]
+code = "TS1006"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A file cannot have a reference to itself."
+arity = 0
+

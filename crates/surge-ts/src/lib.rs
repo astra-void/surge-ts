@@ -303,6 +303,7 @@ impl Project {
         let mut reference_type_resolver = package_declarations::ReferenceTypeDirectiveResolver::new(
             &loaded.root_dir,
             &loaded.compiler_options.type_roots,
+            loaded.compiler_options.allow_js,
         );
 
         let mut specifier_scanner =
@@ -789,6 +790,19 @@ impl Project {
                     ),
                 );
             }
+            for unresolved in &reference_type_resolution.unresolved_paths {
+                if loaded.compiler_options.skip_lib_check && unresolved.from_declaration_file {
+                    continue;
+                }
+                diagnostics.push(
+                    reference_path_diagnostic(unresolved, reference_type_resolution.allow_js).with_span(
+                        TextSpan {
+                            start: unresolved.value_span.start,
+                            end: unresolved.value_span.end,
+                        },
+                    ),
+                );
+            }
             diagnostics
         };
 
@@ -878,6 +892,32 @@ fn read_project_sources(
         sources.extend(chunk?);
     }
     Ok(sources)
+}
+
+/// tsgo's `getSourceFileFromReference` messages for a `/// <reference path>`
+/// that names no file: the path as written with its slashes normalized, and
+/// every supported extension, flattened.
+fn reference_path_diagnostic(
+    unresolved: &package_declarations::UnresolvedReferencePath,
+    allow_js: bool,
+) -> Diagnostic {
+    use package_declarations::ReferencePathFailure;
+    let path = unresolved.path.replace('\\', "/");
+    let file_name = unresolved.file_name.clone();
+    let extensions = || {
+        package_declarations::supported_extensions(allow_js)
+            .iter()
+            .map(|extension| format!("'{extension}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match unresolved.failure {
+        ReferencePathFailure::NotFound => Diagnostic::ts6053(path, file_name),
+        ReferencePathFailure::NoExtensionMatched => Diagnostic::ts6231(path, extensions(), file_name),
+        ReferencePathFailure::JavaScriptFile => Diagnostic::ts6504(path, file_name),
+        ReferencePathFailure::UnsupportedExtension => Diagnostic::ts6054(path, extensions(), file_name),
+        ReferencePathFailure::SelfReference => Diagnostic::ts1006(file_name),
+    }
 }
 
 /// `TS5102`/`TS5108` for every compiler option TypeScript 7 removed, spanned

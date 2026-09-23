@@ -1012,6 +1012,8 @@ export const fixturePresets: Record<string, string> = {
   'method-this-parameter': path.join(workspaceRoot, 'tests/compat-projects/method-this-parameter/tsconfig.json'),
   'ambient-destructuring-declaration': path.join(workspaceRoot, 'tests/compat-projects/ambient-destructuring-declaration/tsconfig.json'),
   'iife-spread-type-variable': path.join(workspaceRoot, 'tests/compat-projects/iife-spread-type-variable/tsconfig.json'),
+  'reference-path-unresolved': path.join(workspaceRoot, 'tests/compat-projects/reference-path-unresolved/tsconfig.json'),
+  'reference-path-skip-lib-check': path.join(workspaceRoot, 'tests/compat-projects/reference-path-skip-lib-check/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

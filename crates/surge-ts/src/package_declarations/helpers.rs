@@ -219,30 +219,64 @@ fn prefer_declaration_sibling(path: PathBuf) -> PathBuf {
 
 /// Add a resolved type-package declaration file to the project file set unless it
 /// is already present.
-/// Load the file targeted by a `/// <reference path="..." />` directive,
-/// resolved relative to the referencing file's directory. The literal target is
-/// tried first (the directive normally names a `.d.ts` file outright); otherwise
-/// the usual declaration-candidate extensions are attempted.
-pub(super) fn load_reference_path_file(
+/// tsgo's `getSourceFileFromReference` for a `/// <reference path="..." />`:
+/// the file `path_value` names relative to the referencing file, or why it
+/// names none. A path with an extension must name an existing file of a
+/// supported extension; one without is completed by the first extension group
+/// alone.
+pub(super) fn resolve_reference_path(
     referencing_file: &str,
     path_value: &str,
-    inputs: &mut Vec<SourceFileInput>,
-    sources: &mut Vec<(PathBuf, String, String)>,
-    known_file_names: &mut HashSet<String>,
-) {
-    let Some(base_dir) = Path::new(referencing_file).parent() else {
-        return;
-    };
+    allow_js: bool,
+    resolve_json_module: bool,
+) -> Result<PathBuf, ReferencePathFailure> {
+    let base_dir = Path::new(referencing_file).parent().unwrap_or(Path::new(""));
+    // A rooted value replaces the base, as `CombinePaths` does.
+    let target = base_dir.join(path_value);
+    let base_name = target.file_name().and_then(|name| name.to_str()).unwrap_or("");
+    if base_name.contains('.') {
+        let lower = base_name.to_ascii_lowercase();
+        let supported = supported_extensions(allow_js)
+            .iter()
+            .chain(resolve_json_module.then_some(&".json"))
+            .any(|extension| lower.ends_with(extension));
+        if !supported {
+            return Err(if JS_EXTENSIONS.iter().any(|extension| lower.ends_with(extension)) {
+                ReferencePathFailure::JavaScriptFile
+            } else {
+                ReferencePathFailure::UnsupportedExtension
+            });
+        }
+        if !crate::probe::is_existing_file(&target) {
+            return Err(ReferencePathFailure::NotFound);
+        }
+        if canonicalize_if_exists_string(&target) == canonicalize_if_exists_string(Path::new(referencing_file)) {
+            return Err(ReferencePathFailure::SelfReference);
+        }
+        return Ok(target);
+    }
+    let first_group = &supported_extensions(allow_js)[..if allow_js { 5 } else { 3 }];
+    for extension in first_group {
+        let mut candidate = target.clone().into_os_string();
+        candidate.push(extension);
+        let candidate = PathBuf::from(candidate);
+        if crate::probe::is_existing_file(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err(ReferencePathFailure::NoExtensionMatched)
+}
 
-    let candidate = base_dir.join(path_value);
-    let resolved = if candidate.is_file() {
-        Some(candidate)
+const JS_EXTENSIONS: [&str; 4] = [".js", ".jsx", ".mjs", ".cjs"];
+
+/// tsgo's `GetSupportedExtensions`, flattened in group order: the first group
+/// is the `.ts` family (with `.js`/`.jsx` under `allowJs`), then `.cts` and
+/// `.mts`.
+pub(crate) fn supported_extensions(allow_js: bool) -> &'static [&'static str] {
+    if allow_js {
+        &[".ts", ".tsx", ".d.ts", ".js", ".jsx", ".cts", ".d.cts", ".cjs", ".mts", ".d.mts", ".mjs"]
     } else {
-        resolve_declaration_candidate(&candidate)
-    };
-
-    if let Some(path) = resolved {
-        load_type_package_file(&path, inputs, sources, known_file_names);
+        &[".ts", ".tsx", ".d.ts", ".cts", ".d.cts", ".mts", ".d.mts"]
     }
 }
 

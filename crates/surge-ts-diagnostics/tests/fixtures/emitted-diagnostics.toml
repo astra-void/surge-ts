@@ -3489,3 +3489,34 @@ status = "emitted"
 oracle = [
   "jsdoc-unknown-type-in-typescript",
 ]
+
+[TS6053]
+status = "emitted"
+oracle = [
+  "reference-path-unresolved",
+  "reference-path-skip-lib-check",
+]
+
+[TS6054]
+status = "emitted"
+oracle = [
+  "reference-path-unresolved",
+]
+
+[TS6231]
+status = "emitted"
+oracle = [
+  "reference-path-unresolved",
+]
+
+[TS6504]
+status = "emitted"
+oracle = [
+  "reference-path-unresolved",
+]
+
+[TS1006]
+status = "emitted"
+oracle = [
+  "reference-path-unresolved",
+]
