@@ -53,7 +53,27 @@ pub(crate) fn check_assignment_with_symbols(
         return;
     };
 
-    let Some(target) = symbols.get(&assignment.target_name) else {
+    // The target resolves exactly as a read of the name does, module-scope
+    // fallback included: `var as1 = (as1 = 2)` writes the `var` it declares.
+    let target = match symbols.get_handle(&assignment.target_name) {
+        Some(handle)
+            if ctx
+                .ambient_global_symbols
+                .get_handle(&assignment.target_name)
+                .is_some_and(|global| std::sync::Arc::ptr_eq(&handle, &global)) =>
+        {
+            ctx.module_value_fallback
+                .as_ref()
+                .and_then(|fallback| fallback.get_own_shared(&assignment.target_name))
+                .or(Some(handle))
+        }
+        Some(handle) => Some(handle),
+        None => ctx
+            .module_value_fallback
+            .as_ref()
+            .and_then(|fallback| fallback.get_handle(&assignment.target_name)),
+    };
+    let Some(target) = target else {
         // `undefined` is not a variable to tsc (`checkIdentifier` finds its
         // symbol and rejects the write) — TS2539.
         if assignment.target_name == "undefined" {
@@ -86,7 +106,7 @@ pub(crate) fn check_assignment_with_symbols(
     }
 
     if let Some(diagnostic) =
-        unwritable_binding_diagnostic(&assignment.target_name, target, ctx.file_name.clone())
+        unwritable_binding_diagnostic(&assignment.target_name, &target, ctx.file_name.clone())
     {
         ctx.push(diagnostic.with_span(convert_span(target_span)));
         return;
