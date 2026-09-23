@@ -875,8 +875,16 @@ pub(crate) fn unclaimed_parser_errors<'a>(
         })
         .map(|finding| finding.span)
         .collect();
+    let in_declaration_file = surge_ts_syntax::is_declaration_file_name(&ctx.file_name);
     errors.iter().filter(move |error| {
         if error.code.is_some_and(|code| claimed.contains(&code)) {
+            return false;
+        }
+        // The grammar pass ports tsc's `checkAmbientInitializer` whole — which
+        // oxc applies too broadly (a decorated `declare` field never reaches
+        // it) — so where that pass runs, oxc's TS1039 is never the report. It
+        // does not run over a declaration file.
+        if error.code == Some(1039) && !in_declaration_file {
             return false;
         }
         // oxc rejects any parameter-property modifier outside a constructor
@@ -982,6 +990,7 @@ fn grammar_finding_diagnostic(
         Kind::OptionalParameterWithInitializer => Diagnostic::ts1015(ctx.file_name.clone()),
         Kind::RequiredParameterAfterOptional => Diagnostic::ts1016(ctx.file_name.clone()),
         Kind::AmbientInitializer => Diagnostic::ts1039(ctx.file_name.clone()),
+        Kind::AmbientConstInitializer => Diagnostic::ts1254(ctx.file_name.clone()),
         Kind::SetAccessorParameterCount => Diagnostic::ts1049(ctx.file_name.clone()),
         Kind::GetAccessorWithoutReturn => Diagnostic::ts2378(ctx.file_name.clone()),
         Kind::PropertyAccessorOverride

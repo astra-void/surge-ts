@@ -787,6 +787,7 @@ export const fixturePresets: Record<string, string> = {
   'logical-and-result-type-loose': path.join(workspaceRoot, 'tests/compat-projects/logical-and-result-type-loose/tsconfig.json'),
   'array-binding-parameter-defaults': path.join(workspaceRoot, 'tests/compat-projects/array-binding-parameter-defaults/tsconfig.json'),
   'missing-return-bare-return': path.join(workspaceRoot, 'tests/compat-projects/missing-return-bare-return/tsconfig.json'),
+  'ambient-initializer-constants': path.join(workspaceRoot, 'tests/compat-projects/ambient-initializer-constants/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

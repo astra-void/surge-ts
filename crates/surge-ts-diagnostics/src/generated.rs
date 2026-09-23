@@ -1585,6 +1585,16 @@ pub const TS1039: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1254: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1254",
+    number: Some(1254),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS1049: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS1049",
     number: Some(1049),
@@ -4264,6 +4274,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1015,
     TS1016,
     TS1039,
+    TS1254,
     TS1049,
     TS1095,
     TS1119,
@@ -5967,6 +5978,11 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts1039(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS1039, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1254(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1254, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

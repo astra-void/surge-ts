@@ -209,6 +209,9 @@ pub enum ParsedGrammarDiagnosticKind {
     RequiredParameterAfterOptional,
     /// An initializer in an ambient context — TS1039.
     AmbientInitializer,
+    /// An ambient `const` (or `readonly` property) initializer that is not a
+    /// literal or enum reference — TS1254.
+    AmbientConstInitializer,
     /// A `set` accessor whose parameter list is not exactly one — TS1049.
     SetAccessorParameterCount,
     /// A `set` accessor with a return type annotation — TS1095.

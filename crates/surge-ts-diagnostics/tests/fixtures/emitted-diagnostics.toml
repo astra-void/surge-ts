@@ -2706,3 +2706,9 @@ status = "emitted"
 oracle = [
   "arbitrary-extension-imports",
 ]
+
+[TS1254]
+status = "emitted"
+oracle = [
+  "ambient-initializer-constants",
+]

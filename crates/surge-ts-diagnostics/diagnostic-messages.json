@@ -1264,6 +1264,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS1254",
+    "category": "Error",
+    "message": "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS1049",
     "category": "Error",
     "message": "A 'set' accessor must have exactly one parameter.",

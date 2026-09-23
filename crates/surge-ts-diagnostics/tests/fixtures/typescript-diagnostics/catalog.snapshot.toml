@@ -1265,6 +1265,14 @@ message = "Initializers are not allowed in ambient contexts."
 arity = 0
 
 [[diagnostic]]
+code = "TS1254"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference."
+arity = 0
+
+[[diagnostic]]
 code = "TS1049"
 category = "Error"
 source = "typescript"

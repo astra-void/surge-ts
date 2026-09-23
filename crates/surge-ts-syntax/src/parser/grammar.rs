@@ -1149,10 +1149,20 @@ impl GrammarCollector {
                             None,
                         );
                     }
-                    if ambient
-                        && let Some(value) = property.value.as_ref() {
-                            self.push(Kind::AmbientInitializer, value.span(), None);
-                        }
+                    // A `declare` field is ambient itself. tsc checks the
+                    // initializer in `checkGrammarProperty`, which a decorator on
+                    // such a field never reaches (`checkGrammarModifiers` fails
+                    // first).
+                    if (ambient || property.declare)
+                        && !(property.declare && !property.decorators.is_empty())
+                        && let Some(value) = property.value.as_ref()
+                    {
+                        self.check_ambient_initializer(
+                            value,
+                            property.readonly,
+                            property.type_annotation.is_some(),
+                        );
+                    }
                     (&property.key, property.r#static, MemberKind::Property)
                 }
                 _ => continue,
@@ -1360,6 +1370,17 @@ impl GrammarCollector {
         }
     }
 
+    /// tsc's `checkAmbientInitializer`: only a `const` (or `readonly` property)
+    /// without a type annotation may be initialized in an ambient context, and
+    /// only with a constant (TS1254); any other initializer is TS1039.
+    fn check_ambient_initializer(&mut self, initializer: &Expression<'_>, const_or_readonly: bool, has_type: bool) {
+        if !const_or_readonly || has_type {
+            self.push(Kind::AmbientInitializer, initializer.span(), None);
+        } else if !is_ambient_constant_initializer(initializer) {
+            self.push(Kind::AmbientConstInitializer, initializer.span(), None);
+        }
+    }
+
     /// A signature has no body to run a default in.
     fn check_signature_parameters(&mut self, parameters: &FormalParameters<'_>) {
         for parameter in &parameters.items {
@@ -1376,11 +1397,20 @@ impl GrammarCollector {
     fn check_variable_initializers(&mut self, declaration: &VariableDeclaration<'_>) {
         if declaration.declare || self.is_ambient() {
             // An ambient declaration declares a value rather than producing
-            // one, so it may not carry an initializer — and its missing
-            // initializer is not the `const` grammar error either.
+            // one, so its missing initializer is not the `const` grammar error.
+            let const_like = matches!(
+                declaration.kind,
+                VariableDeclarationKind::Const
+                    | VariableDeclarationKind::Using
+                    | VariableDeclarationKind::AwaitUsing
+            );
             for declarator in &declaration.declarations {
                 if let Some(initializer) = declarator.init.as_ref() {
-                    self.push(Kind::AmbientInitializer, initializer.span(), None);
+                    self.check_ambient_initializer(
+                        initializer,
+                        const_like,
+                        declarator.type_annotation.is_some(),
+                    );
                 }
             }
             return;
@@ -2248,5 +2278,39 @@ fn report_enum_forward_references(
             }
         }
         _ => {}
+    }
+}
+
+/// The constants tsc's `checkAmbientInitializer` accepts: a string, numeric,
+/// bigint or boolean literal (a numeric or bigint one possibly negated) or a
+/// literal enum reference. Whether a member access is enum-typed is the
+/// checker's to know (`isInitializerSimpleLiteralEnumReference`); the walker
+/// accepts every access of the enum-reference shape.
+fn is_ambient_constant_initializer(expression: &Expression<'_>) -> bool {
+    fn is_string_or_number(expression: &Expression<'_>) -> bool {
+        match expression {
+            Expression::StringLiteral(_) | Expression::NumericLiteral(_) => true,
+            Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+            _ => false,
+        }
+    }
+    fn is_entity_name(expression: &Expression<'_>) -> bool {
+        match expression {
+            Expression::Identifier(_) => true,
+            Expression::StaticMemberExpression(member) => is_entity_name(&member.object),
+            _ => false,
+        }
+    }
+    match expression {
+        Expression::BooleanLiteral(_) | Expression::BigIntLiteral(_) => true,
+        Expression::UnaryExpression(unary) => {
+            unary.operator == UnaryOperator::UnaryNegation
+                && matches!(unary.argument, Expression::NumericLiteral(_) | Expression::BigIntLiteral(_))
+        }
+        Expression::StaticMemberExpression(_) => true,
+        Expression::ComputedMemberExpression(member) => {
+            is_string_or_number(&member.expression) && is_entity_name(&member.object)
+        }
+        other => is_string_or_number(other),
     }
 }
