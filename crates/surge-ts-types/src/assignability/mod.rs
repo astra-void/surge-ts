@@ -1014,6 +1014,13 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
     // comparing the structural expansion, so a reference stays interchangeable
     // with its expanded shape without forcing eager expansion at construction.
     if let Type::Reference(reference) = from {
+        // A written tuple relates to another tuple by the element flags it
+        // records, which its peeled shape no longer shows.
+        if let Some((elements, min_length)) = reference.written_tuple()
+            && let Some(related) = tuple_source_related(&fixed_tuple_kinds(elements, min_length), to)
+        {
+            return related;
+        }
         // A pattern source against a target that only *names* a pattern (an
         // annotation's lazy `Capitalize<string>`): resolve the target first,
         // or the source peels to `string` below and the pattern is gone.
@@ -1103,15 +1110,38 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         {
             return match resolved.as_ref() {
                 Type::Array(element) => object_related_to_array_like(source, from, element, None, true),
-                Type::Tuple(elements) => object_related_to_array_like(
-                    source,
-                    from,
-                    &crate::tuple_element_union(elements),
-                    Some(elements),
-                    true,
-                ),
-                _ => false,
+                other => match crate::fixed_tuple_parts(other) {
+                    Some(tuple) => object_related_to_array_like(
+                        source,
+                        from,
+                        &crate::tuple_element_union(tuple.0),
+                        Some(tuple),
+                        true,
+                    ),
+                    None => false,
+                },
             };
+        }
+        if let Some((elements, min_length)) = reference.written_tuple() {
+            match from {
+                Type::Tuple(source) => {
+                    return tuple_related_to_fixed_tuple(
+                        &fixed_tuple_elements(source),
+                        &fixed_tuple_kinds(elements, min_length),
+                    );
+                }
+                Type::Union(from_union) => return union_source_related(from_union, to),
+                Type::Object(source) => {
+                    return object_related_to_array_like(
+                        source,
+                        from,
+                        &crate::tuple_element_union(elements),
+                        Some((elements, min_length)),
+                        false,
+                    );
+                }
+                _ => {}
+            }
         }
         return is_assignable_to(from, &resolved);
     }
@@ -1179,7 +1209,7 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             source,
             from,
             &crate::tuple_element_union(elements),
-            Some(elements),
+            Some((elements.as_slice(), crate::tuple_min_length(elements))),
             false,
         ),
         (Type::Union(from_union), Type::Union(_)) => {
@@ -1468,10 +1498,12 @@ fn expanded_signature(function: &FunctionType) -> (std::borrow::Cow<'_, [Type]>,
         let mut expanded = parameters[..leading].to_vec();
         expanded.extend(elements.iter().cloned());
         let required = function.required_parameter_count().min(leading)
-            + elements
-                .iter()
-                .take_while(|element| !type_includes_undefined(element))
-                .count();
+            + written_tuple_min_length(rest).unwrap_or_else(|| {
+                elements
+                    .iter()
+                    .take_while(|element| !type_includes_undefined(element))
+                    .count()
+            });
         return (std::borrow::Cow::Owned(expanded), required, false);
     }
     (
@@ -1532,6 +1564,18 @@ fn rest_slot_shape(rest: &Type) -> Type {
     match rest {
         Type::Reference(_) => rest.peeled(),
         other => other.clone(),
+    }
+}
+
+/// The recorded `minLength` of the written tuple a rest slot names, through
+/// the references in front of it.
+fn written_tuple_min_length(rest: &Type) -> Option<usize> {
+    let Type::Reference(reference) = rest else {
+        return None;
+    };
+    match reference.written_tuple() {
+        Some((_, min_length)) => Some(min_length),
+        None => written_tuple_min_length(&reference.resolve_arc()),
     }
 }
 
@@ -1965,7 +2009,10 @@ enum ElementKind {
 }
 
 fn fixed_tuple_elements(elements: &[Type]) -> Vec<(ElementKind, &Type)> {
-    let min_length = crate::tuple_min_length(elements);
+    fixed_tuple_kinds(elements, crate::tuple_min_length(elements))
+}
+
+fn fixed_tuple_kinds(elements: &[Type], min_length: usize) -> Vec<(ElementKind, &Type)> {
     elements
         .iter()
         .enumerate()
@@ -1974,6 +2021,50 @@ fn fixed_tuple_elements(elements: &[Type]) -> Vec<(ElementKind, &Type)> {
             (kind, element)
         })
         .collect()
+}
+
+/// A mutable tuple source against the tuple `to` names — through an alias,
+/// and a readonly target takes it as it is — or `None` when `to` is no tuple.
+fn tuple_source_related(source: &[(ElementKind, &Type)], to: &Type) -> Option<bool> {
+    match to {
+        Type::OpenTuple(target) => Some(tuple_related_to_open_tuple(source, target)),
+        Type::Reference(reference) if reference.written_tuple().is_none() => {
+            tuple_source_related(source, &reference.resolve_arc())
+        }
+        other => {
+            let (elements, min_length) = crate::fixed_tuple_parts(other)?;
+            Some(tuple_related_to_fixed_tuple(source, &fixed_tuple_kinds(elements, min_length)))
+        }
+    }
+}
+
+/// relater.go `propertiesRelatedTo` for a tuple source against a tuple target
+/// without a rest element: the source must reach the target's `minLength` and
+/// the target must hold the source's longest length, and each element is
+/// related to its counterpart, which must not be required where the source's
+/// may be missing.
+fn tuple_related_to_fixed_tuple(source: &[(ElementKind, &Type)], target: &[(ElementKind, &Type)]) -> bool {
+    let min_length = |elements: &[(ElementKind, &Type)]| {
+        elements
+            .iter()
+            .filter(|(kind, _)| *kind == ElementKind::Required)
+            .count()
+    };
+    let source_rest = source.iter().any(|(kind, _)| *kind == ElementKind::Rest);
+    if !source_rest && source.len() < min_length(target)
+        || target.len() < min_length(source)
+        || source_rest
+        || target.len() < source.len()
+    {
+        return false;
+    }
+    source
+        .iter()
+        .zip(target)
+        .all(|((source_kind, source_type), (target_kind, target_type))| {
+            (*target_kind != ElementKind::Required || *source_kind == ElementKind::Required)
+                && is_assignable_to(source_type, target_type)
+        })
 }
 
 fn open_tuple_elements(tuple: &crate::OpenTupleType) -> Vec<(ElementKind, &Type)> {
@@ -2024,15 +2115,15 @@ fn object_related_to_array_like(
     source: &ObjectType,
     from: &Type,
     element: &Type,
-    tuple: Option<&[Type]>,
+    tuple: Option<(&[Type], usize)>,
     readonly: bool,
 ) -> bool {
     let has_array_members = crate::array_property_names()
         .iter()
         .filter(|name| !readonly || !crate::MUTATING_ARRAY_MEMBERS.contains(name))
         .all(|name| supplies_required_member(source, name));
-    let has_elements = tuple.is_none_or(|elements| {
-        (0..crate::tuple_min_length(elements)).all(|index| supplies_required_member(source, &index.to_string()))
+    let has_elements = tuple.is_none_or(|(_, min_length)| {
+        (0..min_length).all(|index| supplies_required_member(source, &index.to_string()))
     });
     if !has_array_members || !has_elements {
         return false;
@@ -2050,14 +2141,18 @@ fn object_related_to_array_like(
 /// over the element type (`ReadonlyArray<T>`'s for a readonly one, which lacks
 /// the mutators), and for a tuple the element properties and the `length`
 /// `createTupleTargetType` declares, beside the number index signature.
-fn array_like_apparent_object(element: &Type, tuple: Option<&[Type]>, readonly: bool) -> ObjectType {
+fn array_like_apparent_object(element: &Type, tuple: Option<(&[Type], usize)>, readonly: bool) -> ObjectType {
     let mut properties = crate::PropertyMap::default();
     for name in crate::array_property_names() {
         if readonly && crate::MUTATING_ARRAY_MEMBERS.contains(name) {
             continue;
         }
         let property = if *name == "length" {
-            crate::ObjectProperty::required(tuple.map_or(Type::Number, crate::tuple_length_type))
+            let length = match tuple {
+                Some((elements, min_length)) => crate::ty::tuple_length_literals(min_length, elements.len()),
+                None => Type::Number,
+            };
+            crate::ObjectProperty::required(length)
         } else {
             let Some(member) = crate::array_member_type(name, element) else {
                 continue;
@@ -2066,8 +2161,7 @@ fn array_like_apparent_object(element: &Type, tuple: Option<&[Type]>, readonly: 
         };
         properties.insert((*name).into(), property);
     }
-    if let Some(elements) = tuple {
-        let min_length = crate::tuple_min_length(elements);
+    if let Some((elements, min_length)) = tuple {
         for (index, element) in elements.iter().enumerate() {
             let property = if index < min_length {
                 crate::ObjectProperty::required(element.clone())
@@ -2125,7 +2219,11 @@ pub fn tuple_target_missing_property(source: &Type, elements: &[Type]) -> Option
     {
         return None;
     }
-    let target = array_like_apparent_object(&crate::tuple_element_union(elements), Some(elements), false);
+    let target = array_like_apparent_object(
+        &crate::tuple_element_union(elements),
+        Some((elements, crate::tuple_min_length(elements))),
+        false,
+    );
     let mut missing = target
         .required_properties()
         .filter(|(name, _)| !supplies_required_member(source, name))

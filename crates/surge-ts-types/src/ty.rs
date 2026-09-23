@@ -389,6 +389,11 @@ impl Type {
                 if reference.is_readonly_array() && MUTATING_ARRAY_MEMBERS.contains(&name) {
                     return None;
                 }
+                if name == "length"
+                    && let Some((elements, min_length)) = reference.written_tuple()
+                {
+                    return Some(tuple_length_literals(min_length, elements.len()));
+                }
                 reference.resolve().get_property_access_type(name)
             }
             // Every member must declare the property, and the read is their
@@ -758,10 +763,11 @@ fn tuple_element_property<'a>(name: &str, elements: &'a [Type]) -> Option<&'a Ty
     elements.get(index)
 }
 
-/// tsc's `minLength` of a fixed tuple. surge lowers an optional element
-/// (`[A, B?]`) to a slot whose type carries `undefined`, and optional elements
-/// can only trail the required ones, so the elements that may be absent are
-/// the trailing run of such slots.
+/// The `minLength` of a fixed tuple read off its element types alone. surge
+/// lowers an optional element (`[A, B?]`) to a slot whose type carries
+/// `undefined`, and optional elements can only trail the required ones, so
+/// the elements that may be absent are the trailing run of such slots. A
+/// written tuple this reading gets wrong is a [`written_tuple_type`].
 pub fn tuple_min_length(elements: &[Type]) -> usize {
     let optional = elements
         .iter()
@@ -778,14 +784,66 @@ pub fn tuple_min_length(elements: &[Type]) -> usize {
 /// The `length` member `createTupleTargetType` gives a fixed tuple: the union
 /// of the number literals from its `minLength` to its arity.
 pub fn tuple_length_type(elements: &[Type]) -> Type {
-    let lengths = (tuple_min_length(elements)..=elements.len())
-        .map(|length| {
-            Type::NumberLiteral(NumberLiteralType {
-                value: length.to_string(),
-            })
+    tuple_length_literals(tuple_min_length(elements), elements.len())
+}
+
+pub(crate) fn tuple_length_literals(min_length: usize, arity: usize) -> Type {
+    crate::union_type((min_length..=arity).map(number_literal).collect())
+}
+
+fn number_literal(value: usize) -> Type {
+    Type::NumberLiteral(NumberLiteralType {
+        value: value.to_string(),
+    })
+}
+
+/// A tuple type as written, with the `minLength` tsc counts from its element
+/// flags. The plain [`Type::Tuple`] stands for it where [`tuple_min_length`]
+/// reads the same length off the element types; where it cannot —
+/// `[a?: any]`, whose `any` absorbs the optional `undefined`, a required
+/// `[a: T | undefined]`, any optional element once `strictNullChecks` drops
+/// the `undefined` — the tuple is wrapped in a [`WRITTEN_TUPLE_REFERENCE_ID`]
+/// reference that records it, and a consumer that peels still sees the tuple.
+///
+/// [`WRITTEN_TUPLE_REFERENCE_ID`]: crate::WRITTEN_TUPLE_REFERENCE_ID
+pub fn written_tuple_type(elements: Vec<Type>, min_length: usize) -> Type {
+    let min_length = min_length.min(elements.len());
+    if min_length == tuple_min_length(&elements) {
+        return Type::Tuple(elements);
+    }
+    let display = elements
+        .iter()
+        .enumerate()
+        .map(|(index, element)| {
+            if index < min_length {
+                element.name()
+            } else {
+                format!("{}?", array_element_name(element))
+            }
         })
-        .collect();
-    crate::union_type(lengths)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let tuple = Type::Tuple(elements);
+    Type::Reference(TypeReference::new(
+        crate::WRITTEN_TUPLE_REFERENCE_ID,
+        format!("[{display}]"),
+        vec![tuple.clone(), number_literal(min_length)],
+        std::sync::Arc::new(FixedResolved(tuple)),
+    ))
+}
+
+pub fn is_written_tuple(ty: &Type) -> bool {
+    matches!(ty, Type::Reference(reference) if reference.written_tuple().is_some())
+}
+
+/// A fixed tuple's elements and `minLength`: a written tuple's recorded one,
+/// a plain tuple's as [`tuple_min_length`] reads it.
+pub fn fixed_tuple_parts(ty: &Type) -> Option<(&[Type], usize)> {
+    match ty {
+        Type::Tuple(elements) => Some((elements.as_slice(), tuple_min_length(elements))),
+        Type::Reference(reference) => reference.written_tuple(),
+        _ => None,
+    }
 }
 
 /// The members every function value carries via `Function`/`CallableFunction`
@@ -1178,12 +1236,6 @@ mod tests {
         );
     }
 
-    fn number_literal(value: usize) -> Type {
-        Type::NumberLiteral(NumberLiteralType {
-            value: value.to_string(),
-        })
-    }
-
     #[test]
     fn tuple_length_property_is_its_arity() {
         assert_eq!(
@@ -1224,6 +1276,27 @@ mod tests {
         assert_eq!(tuple.get_property_access_type("0"), Some(Type::String));
         assert_eq!(tuple.get_property_access_type("1"), None);
         assert_eq!(tuple.get_property_access_type("length"), Some(Type::Number));
+    }
+
+    #[test]
+    fn written_tuple_records_what_its_element_types_cannot_show() {
+        let optional = crate::union_type(vec![Type::Number, Type::Undefined]);
+
+        let optional_any = written_tuple_type(vec![Type::Any], 0);
+        assert!(is_written_tuple(&optional_any));
+        assert_eq!(optional_any.name(), "[any?]");
+        assert_eq!(
+            optional_any.get_property_access_type("length"),
+            Some(crate::union_type(vec![number_literal(0), number_literal(1)]))
+        );
+        assert_eq!(optional_any.get_property_access_type("0"), Some(Type::Any));
+
+        let required = written_tuple_type(vec![Type::String, optional.clone()], 2);
+        assert!(is_written_tuple(&required));
+        assert_eq!(required.get_property_access_type("length"), Some(number_literal(2)));
+
+        let plain = written_tuple_type(vec![Type::String, optional], 1);
+        assert!(matches!(plain, Type::Tuple(_)));
     }
 
     #[test]

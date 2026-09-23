@@ -515,9 +515,6 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
 
                 elements.push(optional_tuple_element(parsed_element, member.optional));
             }
-            // An optional element reads as `T | undefined`; the shorter lengths
-            // it admits are handled by tuple assignability, which lets a source
-            // stop short of trailing slots that accept `undefined`.
             TSTupleElement::TSOptionalType(optional) => {
                 let Some(parsed_element) = parse_type(&optional.type_annotation) else {
                     return None;
@@ -532,7 +529,7 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
                     return None;
                 };
 
-                elements.push(parsed_element);
+                elements.push(optional_tuple_element(parsed_element, false));
             }
         }
     }
@@ -540,11 +537,47 @@ fn parse_tuple_type(tuple_type: &TSTupleType<'_>) -> Option<ParsedType> {
     Some(ParsedType::Tuple(std::sync::Arc::new(elements)))
 }
 
+/// An optional element reads as `T | undefined`, but tsc keeps its
+/// optionality as a flag beside the type (`ElementFlags`), and the type alone
+/// cannot carry it: `[a?: any]` reads `any`, while `[a: T | undefined]` is
+/// required. So an optional element lowers to `undefined | T` with the
+/// `undefined` first, and a written union keeps its `undefined` after the
+/// other members, where the order means nothing else; see
+/// [`ParsedType::is_optional_tuple_element`].
 fn optional_tuple_element(element: ParsedType, optional: bool) -> ParsedType {
     if optional {
-        ParsedType::Union(std::sync::Arc::new(vec![element, ParsedType::Undefined]))
-    } else {
-        element
+        return ParsedType::Union(std::sync::Arc::new(vec![ParsedType::Undefined, element]));
+    }
+    match element {
+        ParsedType::Union(members) if matches!(members.first(), Some(ParsedType::Undefined)) => {
+            let (undefined, mut written): (Vec<ParsedType>, Vec<ParsedType>) = members
+                .iter()
+                .cloned()
+                .partition(|member| matches!(member, ParsedType::Undefined));
+            if written.is_empty() {
+                return ParsedType::Undefined;
+            }
+            written.extend(undefined);
+            ParsedType::Union(std::sync::Arc::new(written))
+        }
+        other => other,
+    }
+}
+
+impl ParsedType {
+    /// Whether this tuple element was written optional (`[a?: T]`, `[T?]`),
+    /// as [`optional_tuple_element`] lowers it.
+    pub fn is_optional_tuple_element(&self) -> bool {
+        matches!(self, ParsedType::Union(members) if matches!(members.first(), Some(ParsedType::Undefined)))
+    }
+
+    /// tsc's `minLength` of a written tuple without a rest element: the
+    /// number of its required elements.
+    pub fn tuple_min_length(elements: &[ParsedType]) -> usize {
+        elements
+            .iter()
+            .filter(|element| !element.is_optional_tuple_element())
+            .count()
     }
 }
 
@@ -618,7 +651,10 @@ fn variadic_tuple_elements(tuple_type: &TSTupleType<'_>) -> Option<Vec<ParsedTup
                 }
             },
             other => {
-                elements.push(ParsedTupleElement::Fixed(parse_type(other.as_ts_type()?)?));
+                elements.push(ParsedTupleElement::Fixed(optional_tuple_element(
+                    parse_type(other.as_ts_type()?)?,
+                    false,
+                )));
             }
         }
     }

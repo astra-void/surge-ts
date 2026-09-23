@@ -25,6 +25,10 @@ fn identical(left: &Type, right: &Type, depth: usize) -> bool {
     if is_readonly_array_like(left) != is_readonly_array_like(right) {
         return false;
     }
+    // Likewise a written tuple's optional elements are flags on its target.
+    if fixed_tuple_min_length(left) != fixed_tuple_min_length(right) {
+        return false;
+    }
     let (left, right) = (left.peeled(), right.peeled());
     if left == right {
         return true;
@@ -65,6 +69,16 @@ fn is_readonly_array_like(ty: &Type) -> bool {
             reference.is_readonly_array() || is_readonly_array_like(&reference.resolve_arc())
         }
         _ => false,
+    }
+}
+
+fn fixed_tuple_min_length(ty: &Type) -> Option<usize> {
+    match ty {
+        Type::Reference(reference) => match reference.written_tuple() {
+            Some((_, min_length)) => Some(min_length),
+            None => fixed_tuple_min_length(&reference.resolve_arc()),
+        },
+        other => crate::fixed_tuple_parts(other).map(|(_, min_length)| min_length),
     }
 }
 
