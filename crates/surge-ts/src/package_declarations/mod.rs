@@ -299,6 +299,52 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
     resolutions
 }
 
+/// tsc's `pathForLibFile` under `libReplacement`: `lib.dom.iterable.d.ts` is
+/// whatever `@typescript/lib-dom/iterable` resolves to from the config
+/// directory in CommonJS mode (`getLibraryNameFromLibFileName`,
+/// `resolveLibrary`), and stays the bundled lib when nothing does.
+pub(crate) fn resolve_lib_replacement(
+    normalized_name: &str,
+    config_dir: &Path,
+    opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<PathBuf> {
+    let library_name = lib_replacement_library_name(normalized_name);
+    let (package_name, subpath) = parse_package_specifier(&library_name)?;
+    let import_condition = resolves_with_import_condition(ResolutionMode::CommonJs, opts);
+    let req = PackageDeclarationRequest {
+        specifier: library_name,
+        package_name,
+        subpath,
+        importer_dir: config_dir.to_path_buf(),
+        importer_file: config_dir
+            .join(format!("__lib_node_modules_lookup_lib.{normalized_name}.d.ts__.ts")),
+        is_imports: false,
+        usage: ImportUsage::Declaration,
+        import_condition,
+    };
+    let resolution = resolve_package_entrypoint(&req, opts, import_condition, cache, config_dir)?;
+    (resolution.kind == PackageEntrypointKind::Declaration)
+        .then(|| resolution.path.canonicalize().unwrap_or(resolution.path))
+}
+
+/// The package a lib's replacement comes from: `@typescript/lib-dom` for
+/// `dom.iterable`.
+pub(crate) fn lib_replacement_package_name(normalized_name: &str) -> Option<String> {
+    parse_package_specifier(&lib_replacement_library_name(normalized_name))
+        .map(|(package_name, _)| package_name)
+}
+
+fn lib_replacement_library_name(normalized_name: &str) -> String {
+    let mut components = normalized_name.split('.');
+    let mut library_name = format!("@typescript/lib-{}", components.next().unwrap_or_default());
+    for (index, component) in components.enumerate() {
+        library_name.push(if index == 0 { '/' } else { '-' });
+        library_name.push_str(component);
+    }
+    library_name
+}
+
 /// Outcome of resolving the project's configured type packages.
 pub(crate) struct TypePackageResolution {
     /// Type-package names actually included, in load order. Passed to the checker

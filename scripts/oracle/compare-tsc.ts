@@ -257,6 +257,7 @@ export const fixturePresets: Record<string, string> = {
   'json-package-exports-target': path.join(workspaceRoot, 'tests/compat-projects/json-package-exports-target/tsconfig.json'),
   'directive-suppresses-import-diagnostics': path.join(workspaceRoot, 'tests/compat-projects/directive-suppresses-import-diagnostics/tsconfig.json'),
   'relative-directory-specifier': path.join(workspaceRoot, 'tests/compat-projects/relative-directory-specifier/tsconfig.json'),
+  'lib-replacement-package': path.join(workspaceRoot, 'tests/compat-projects/lib-replacement-package/tsconfig.json'),
   'module-forms': path.join(workspaceRoot, 'tests/compat-projects/module-forms/tsconfig.json'),
   'relative-deep': path.join(workspaceRoot, 'tests/compat-projects/relative-deep/tsconfig.json'),
   'private-types': path.join(workspaceRoot, 'tests/compat-projects/private-types/tsconfig.json'),

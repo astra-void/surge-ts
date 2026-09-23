@@ -212,6 +212,10 @@ pub(crate) fn normalize_compiler_options(
                 normalized.custom_conditions =
                     parse_string_list_option(value, diagnostics, config_dir);
             }
+            "libReplacement" => {
+                normalized.lib_replacement = parse_bool_option(key, value, config_dir, diagnostics)
+                    .unwrap_or(normalized.lib_replacement);
+            }
             other => match find_tsconfig_option(other) {
                 Some(definition) => match definition.support {
                     TsConfigOptionSupport::KnownNoop => {

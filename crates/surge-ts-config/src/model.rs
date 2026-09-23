@@ -103,6 +103,9 @@ pub struct NormalizedCompilerOptions {
     /// `TS2732`. Defaults on for every resolver except `node16`, which is what
     /// tsc 7.0.2 does.
     pub resolve_json_module: bool,
+    /// `compilerOptions.libReplacement`: a default lib an installed
+    /// `@typescript/lib-*` package provides is read from that package.
+    pub lib_replacement: bool,
 }
 
 impl Default for NormalizedCompilerOptions {
@@ -147,6 +150,7 @@ impl Default for NormalizedCompilerOptions {
             type_roots: Vec::new(),
             types: None,
             resolve_json_module: true,
+            lib_replacement: false,
             resolve_package_json_exports: true,
             resolve_package_json_imports: true,
             custom_conditions: Vec::new(),

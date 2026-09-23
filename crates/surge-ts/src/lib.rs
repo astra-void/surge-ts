@@ -478,6 +478,30 @@ impl Project {
             referenced_lib_names(&inputs)
         };
         let default_lib_loading_start = Instant::now();
+        let lib_replacements = std::cell::RefCell::new((
+            std::collections::HashMap::<String, Option<PathBuf>>::new(),
+            &mut package_resolution_cache,
+        ));
+        let config_dir = loaded
+            .config_path
+            .parent()
+            .unwrap_or(&loaded.root_dir)
+            .to_path_buf();
+        let lib_replacement = |normalized_name: &str| -> Option<PathBuf> {
+            let mut state = lib_replacements.borrow_mut();
+            let (resolved, cache) = &mut *state;
+            resolved
+                .entry(normalized_name.to_string())
+                .or_insert_with(|| {
+                    package_declarations::resolve_lib_replacement(
+                        normalized_name,
+                        &config_dir,
+                        &resolver_options,
+                        cache,
+                    )
+                })
+                .clone()
+        };
         let default_lib_load = load_default_lib_inputs(DefaultLibRequest {
             no_lib: loaded.compiler_options.no_lib,
             lib_entries: loaded.compiler_options.lib.as_slice(),
@@ -485,7 +509,22 @@ impl Project {
             root_dir: &loaded.root_dir,
             target_basename: target_lib_basename(loaded.compiler_options.target),
             source: options.lib_source.clone(),
+            lib_replacement: loaded
+                .compiler_options
+                .lib_replacement
+                .then_some(&lib_replacement as &dyn Fn(&str) -> Option<PathBuf>),
         });
+        // A replacement is a `node_modules` declaration file, whose globals
+        // the checker publishes only for a package on its `types` list.
+        let lib_replacement_packages = lib_replacements
+            .into_inner()
+            .0
+            .into_iter()
+            .filter(|(_, replacement)| replacement.is_some())
+            .filter_map(|(normalized_name, _)| {
+                package_declarations::lib_replacement_package_name(&normalized_name)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         for unknown in &default_lib_load.unknown_libs {
             warnings.push(format!(
                 "unknown lib '{unknown}' in compilerOptions.lib; no matching lib*.d.ts file"
@@ -558,6 +597,11 @@ impl Project {
         for name in &reference_type_resolution.effective_type_names {
             if !checker_types.contains(name) {
                 checker_types.push(name.clone());
+            }
+        }
+        for package in lib_replacement_packages {
+            if !checker_types.contains(&package) {
+                checker_types.push(package);
             }
         }
         if loaded
