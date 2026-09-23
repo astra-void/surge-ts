@@ -1120,10 +1120,23 @@ pub(super) fn check_program_file(
         // read-only lookup backdrop for the file check; holding them as a
         // `parent` fallback keeps the per-file working set O(imports + locals)
         // where a clone-then-insert deep-copied every global per file.
-        let globals_parent = Arc::new(
+        let ambient_globals = Arc::new(
             ctx.ambient_global_symbols
                 .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
         );
+        // The scripts' globals sit behind the module's own scope, which is a
+        // declaration space of its own: a module-level `let` never redeclares a
+        // script's.
+        let globals_parent = match shared_state.module_script_globals.as_ref() {
+            Some(script_globals) => Arc::new(crate::symbols::SymbolTable::declaration_scope(
+                Arc::new(
+                    script_globals
+                        .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext)
+                        .with_parent_fallback(ambient_globals),
+                ),
+            )),
+            None => ambient_globals,
+        };
         let mut merged_symbols =
             crate::symbols::SymbolTable::file_check_root(globals_parent.clone());
         if let Some(imported_bindings) = imported_bindings {
@@ -1188,6 +1201,13 @@ pub(super) fn check_program_file(
             parsed_file.is_module,
             ctx,
         );
+        // The collection backs its table with the lib's globals alone; the
+        // function bodies that fall back to it read the scripts' globals too.
+        let validation_symbols = if shared_state.module_script_globals.is_some() {
+            validation_symbols.with_parent_fallback(globals_parent.clone())
+        } else {
+            validation_symbols
+        };
         let saved_symbols = std::mem::replace(&mut ctx.symbols, validation_symbols);
 
         let validation_start = Instant::now();

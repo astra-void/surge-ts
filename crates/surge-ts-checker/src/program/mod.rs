@@ -133,6 +133,8 @@ struct ProgramCheckSharedState {
     /// Each script's own top-level values, indexed by file; see
     /// [`globals::collect_script_values`].
     script_values: Vec<Option<Arc<SymbolTable>>>,
+    /// See [`globals::module_script_globals`].
+    module_script_globals: Option<Arc<SymbolTable>>,
     function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
     module_analyses: Vec<Option<ModuleAnalysis>>,
     module_import_bindings: Vec<Option<ModuleImportBindings>>,
@@ -1027,10 +1029,13 @@ fn finalize_module_bindings(
     drop(module_import_bindings);
     drop(preliminary_module_import_bindings);
     crate::metrics::release_free_memory();
+    let module_script_globals =
+        module_script_globals(&global_symbols, &script_values, &ctx.ambient_global_symbols);
     let shared_state = ProgramCheckSharedState {
         script_type_declarations,
         global_symbols,
         script_values,
+        module_script_globals,
         function_signatures,
         module_analyses,
         module_import_bindings: merged_module_import_bindings,
