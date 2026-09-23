@@ -124,7 +124,7 @@ pub fn resolve_package_declaration_entrypoints(
     root_dir: &Path,
 ) -> PackageResolutions {
     let mut cache = PackageDeclarationResolverCache::default();
-    let mut scanner = crate::specifier_scan::ModuleSpecifierScanner::new();
+    let mut scanner = crate::specifier_scan::ModuleSpecifierScanner::new(Default::default());
     resolve_package_declaration_entrypoints_with_cache(
         inputs,
         sources,

@@ -764,6 +764,11 @@ pub(crate) struct TypeDeclarationScope {
     /// attached resolves every imported name in its body to `unknown`, so the
     /// attachment is replaceable: see `attach_type_resolution_scope`.
     preliminary: bool,
+    /// How many leading layers are lexically inside the file's own
+    /// declarations — a function body's local types, and the placeholders of
+    /// its enclosing type parameters — which a lookup reads before the file's
+    /// table, as tsc's `resolveName` walks the inner scopes first.
+    lexical_layers: usize,
 }
 
 impl TypeDeclarationScope {
@@ -771,7 +776,32 @@ impl TypeDeclarationScope {
         Self {
             layers,
             preliminary: false,
+            lexical_layers: 0,
         }
+    }
+
+    /// Marks the first `count` layers as lexical (see `lexical_layers`).
+    pub(crate) fn with_lexical_layers(mut self, count: usize) -> Self {
+        self.lexical_layers = count.min(self.layers.len());
+        self
+    }
+
+    pub(crate) fn lexical_layer_count(&self) -> usize {
+        self.lexical_layers
+    }
+
+    /// The declaration a lexical layer binds `name` to.
+    pub(crate) fn lexical_get(&self, name: &str) -> Option<&TypeDeclarationInfo> {
+        self.layers[..self.lexical_layers]
+            .iter()
+            .find_map(|layer| layer.get_without_lookup_record(name))
+    }
+
+    /// [`Self::lexical_get`] as a handle.
+    pub(crate) fn lexical_get_handle(&self, name: &str) -> Option<TypeDeclarationHandle> {
+        self.layers[..self.lexical_layers]
+            .iter()
+            .find_map(|layer| layer.get_handle(name))
     }
 
     /// Marks a scope as built before import binding.

@@ -305,7 +305,15 @@ impl Project {
             &loaded.compiler_options.type_roots,
         );
 
-        let mut specifier_scanner = specifier_scan::ModuleSpecifierScanner::new();
+        let mut specifier_scanner =
+            specifier_scan::ModuleSpecifierScanner::new(surge_ts_syntax::JsxRuntimeOptions {
+                automatic: matches!(
+                    loaded.compiler_options.jsx,
+                    Some(surge_ts_config::JsxMode::ReactJsx | surge_ts_config::JsxMode::ReactJsxDev)
+                ),
+                development: loaded.compiler_options.jsx == Some(surge_ts_config::JsxMode::ReactJsxDev),
+                import_source: loaded.compiler_options.jsx_import_source.clone(),
+            });
         let mut import_graph_state = import_graph::ImportGraphState::default();
         let mut javascript_modules = Vec::new();
 
@@ -703,6 +711,7 @@ impl Project {
                 fragment_factory: loaded.compiler_options.jsx_fragment_factory.clone(),
                 react_namespace: loaded.compiler_options.react_namespace.clone(),
                 import_source: loaded.compiler_options.jsx_import_source.clone(),
+                development: loaded.compiler_options.jsx == Some(surge_ts_config::JsxMode::ReactJsxDev),
             },
             diagnostic_profile: options.diagnostic_profile,
         };

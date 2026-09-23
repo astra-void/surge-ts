@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use surge_ts_syntax::{
-    ParsedExportDeclaration, ParsedImportKind, ParsedResolutionModeAttribute, ParsedSource,
-    ParsedStatement, ParserWorker, ResolutionModeOverride,
+    JsxRuntimeOptions, ParsedExportDeclaration, ParsedImportKind, ParsedResolutionModeAttribute,
+    ParsedSource, ParsedStatement, ParserWorker, ResolutionModeOverride,
 };
 
 /// One scanned source: the specifiers both fixpoint scanners ask for, and the
@@ -17,10 +17,14 @@ struct ScannedSource {
 }
 
 impl ScannedSource {
-    fn new(parsed: ParsedSource, retain_parse: bool) -> ScannedSource {
+    fn new(parsed: ParsedSource, retain_parse: bool, jsx_runtime: &JsxRuntimeOptions) -> ScannedSource {
+        // tsc's file loader resolves the automatic JSX runtime a file imports
+        // implicitly before the imports it writes.
+        let runtime_import =
+            surge_ts_syntax::jsx_runtime_import(&parsed.file_name, &parsed.jsx_factory_uses, jsx_runtime);
         ScannedSource {
-            specifiers: source_specifiers(&parsed),
-            usages: source_usages(&parsed),
+            specifiers: source_specifiers(&parsed, runtime_import.as_deref()),
+            usages: source_usages(&parsed, runtime_import.as_deref()),
             augmentation_specifiers: module_augmentation_specifiers(&parsed),
             parsed: retain_parse.then_some(parsed),
         }
@@ -49,6 +53,7 @@ pub(crate) struct ModuleSpecifierScanner {
     parser: ParserWorker,
     scanned: Vec<Option<ScannedSource>>,
     retain_parses: bool,
+    jsx_runtime: JsxRuntimeOptions,
 }
 
 /// `SURGE_PRESCANNED_PARSE_REUSE=0` drops each parse as soon as its specifiers
@@ -60,11 +65,12 @@ fn parse_reuse_enabled() -> bool {
 }
 
 impl ModuleSpecifierScanner {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(jsx_runtime: JsxRuntimeOptions) -> Self {
         Self {
             parser: ParserWorker::new(),
             scanned: Vec::new(),
             retain_parses: parse_reuse_enabled(),
+            jsx_runtime,
         }
     }
 
@@ -96,6 +102,7 @@ impl ModuleSpecifierScanner {
         }
         let next = std::sync::atomic::AtomicUsize::new(0);
         let retain_parses = self.retain_parses;
+        let jsx_runtime = &self.jsx_runtime;
         let results: Vec<(usize, ScannedSource)> = std::thread::scope(|scope| {
             let pending = &pending;
             let next = &next;
@@ -112,7 +119,7 @@ impl ModuleSpecifierScanner {
                         let index = pending[slot];
                         let (_, file_name, source_text) = &sources[index];
                         let parsed = parser.parse(source_text, file_name);
-                        out.push((index, ScannedSource::new(parsed, retain_parses)));
+                        out.push((index, ScannedSource::new(parsed, retain_parses, jsx_runtime)));
                     }
                     out
                 }));
@@ -159,7 +166,7 @@ impl ModuleSpecifierScanner {
         }
         if self.scanned[index].is_none() {
             let parsed = self.parser.parse(source_text, file_name);
-            self.scanned[index] = Some(ScannedSource::new(parsed, self.retain_parses));
+            self.scanned[index] = Some(ScannedSource::new(parsed, self.retain_parses, &self.jsx_runtime));
         }
         self.scanned[index]
             .as_ref()
@@ -191,11 +198,10 @@ impl ModuleSpecifierScanner {
 /// `Parsed*` tree cannot carry. Both belong to the module graph: a package
 /// reached only through an import type still supplies its
 /// `/// <reference types>` directives and ambient `declare module` blocks.
-fn source_specifiers(parsed: &ParsedSource) -> Arc<[String]> {
-    parsed
-        .statements
-        .iter()
-        .filter_map(statement_module_specifier)
+fn source_specifiers(parsed: &ParsedSource, runtime_import: Option<&str>) -> Arc<[String]> {
+    runtime_import
+        .into_iter()
+        .chain(parsed.statements.iter().filter_map(statement_module_specifier))
         .chain(parsed.import_call_specifiers.iter().map(String::as_str))
         .map(str::to_owned)
         .collect::<Vec<_>>()
@@ -223,11 +229,15 @@ fn module_augmentation_specifiers(parsed: &ParsedSource) -> Box<[String]> {
 }
 
 /// The usages behind [`source_specifiers`], in the same order.
-fn source_usages(parsed: &ParsedSource) -> Arc<[ModuleUsage]> {
-    parsed
-        .statements
-        .iter()
-        .filter_map(|statement| {
+fn source_usages(parsed: &ParsedSource, runtime_import: Option<&str>) -> Arc<[ModuleUsage]> {
+    let runtime_usage = runtime_import.map(|specifier| ModuleUsage {
+        specifier: specifier.to_owned(),
+        import_equals: false,
+        resolution_mode: None,
+    });
+    runtime_usage
+        .into_iter()
+        .chain(parsed.statements.iter().filter_map(|statement| {
             let specifier = statement_module_specifier(statement)?;
             let (import_equals, attribute) = match statement {
                 ParsedStatement::ImportDeclaration(import) => (
@@ -250,7 +260,7 @@ fn source_usages(parsed: &ParsedSource) -> Arc<[ModuleUsage]> {
                 import_equals,
                 resolution_mode: ParsedResolutionModeAttribute::resolution_override(attribute),
             })
-        })
+        }))
         .chain(parsed.import_call_specifiers.iter().map(|specifier| ModuleUsage {
             specifier: specifier.clone(),
             import_equals: false,

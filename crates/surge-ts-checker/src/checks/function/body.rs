@@ -525,6 +525,12 @@ fn install_body_local_type_declarations(
         .as_ref()
         .map(|scope| scope.layers().to_vec())
         .unwrap_or_default();
+    // The body's layers, and an enclosing body's, are inner scopes: a name
+    // they bind shadows the file's own declaration of it.
+    let outer_lexical_layers = ctx
+        .type_declaration_scope
+        .as_ref()
+        .map_or(0, |scope| scope.lexical_layer_count());
 
     // Each declaration's own body resolves against the declarations that
     // precede it plus a placeholder layer, never against a scope that transitively
@@ -541,7 +547,9 @@ fn install_body_local_type_declarations(
         layers.push(std::sync::Arc::new(prefix.clone()));
         layers.push(placeholder_layer.clone());
         layers.extend(outer_layers.iter().cloned());
-        let scope = std::sync::Arc::new(crate::symbols::TypeDeclarationScope::new(layers));
+        let scope = std::sync::Arc::new(
+            crate::symbols::TypeDeclarationScope::new(layers).with_lexical_layers(2 + outer_lexical_layers),
+        );
 
         let declaration = with_resolution_scope(declaration, scope);
         let _ = prefix.insert(name.as_str(), declaration.clone());
@@ -554,7 +562,7 @@ fn install_body_local_type_declarations(
 
     let saved = ctx.type_declaration_scope.take();
     ctx.type_declaration_scope = Some(std::sync::Arc::new(
-        crate::symbols::TypeDeclarationScope::new(layers),
+        crate::symbols::TypeDeclarationScope::new(layers).with_lexical_layers(1 + outer_lexical_layers),
     ));
 
     // The real static type is built at the class's own statement position, once

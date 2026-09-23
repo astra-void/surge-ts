@@ -955,6 +955,16 @@ pub const TS2747: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2875: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2875",
+    number: Some(2875),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This JSX tag requires the module path '{0}' to exist, but none could be found. Make sure you have types for the appropriate package installed.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2754: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2754",
     number: Some(2754),
@@ -5351,6 +5361,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2745,
     TS2746,
     TS2747,
+    TS2875,
     TS2754,
     TS2749,
     TS2869,
@@ -6751,6 +6762,15 @@ impl Diagnostic {
                 DiagnosticArg::from(arg1.to_string()),
                 DiagnosticArg::from(arg2.to_string()),
             ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2875(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2875,
+            vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
     }

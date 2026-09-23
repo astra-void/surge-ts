@@ -99,6 +99,8 @@ pub struct JsxFactoryNames {
     pub fragment_factory: Option<String>,
     pub react_namespace: Option<String>,
     pub import_source: Option<String>,
+    /// `jsx: react-jsxdev`: the automatic runtime is `jsx-dev-runtime`.
+    pub development: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

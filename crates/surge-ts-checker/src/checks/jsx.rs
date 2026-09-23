@@ -2,9 +2,11 @@ use std::sync::Arc;
 
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
-    ParsedExpression, ParsedJsxAttribute, ParsedJsxAttributeValueKind, ParsedJsxChild,
-    ParsedJsxTag, ParsedNamedType, ParsedType, TextSpan as SyntaxTextSpan,
+    ParsedExportDeclaration, ParsedExpression, ParsedJsxAttribute, ParsedJsxAttributeValueKind,
+    ParsedJsxChild, ParsedJsxTag, ParsedNamedType, ParsedStatement, ParsedType,
+    TextSpan as SyntaxTextSpan,
 };
+use surge_ts_types::fx::FxHashMap;
 use surge_ts_types::{
     FunctionType, ObjectProperty, ObjectType, PropertyMap, Type, is_assignable_to, union_type,
 };
@@ -15,7 +17,8 @@ use crate::context::CheckerContext;
 use crate::infer::{InferredExpression, map_parsed_type};
 use crate::metrics::alloc_object_type;
 use crate::spans::diagnostic_with_syntax_span;
-use crate::symbols::{SymbolTable, TypeDeclarationScope};
+use crate::program::ParsedProgramFile;
+use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
 
 /// Where a file's JSX looks up `IntrinsicElements`, `Element` and the other
 /// `JSX` members (tsc's `getJsxNamespaceAt`).
@@ -23,10 +26,9 @@ use crate::symbols::{SymbolTable, TypeDeclarationScope};
 pub(crate) enum JsxNamespace {
     /// The members resolve as `<prefix>.<member>` from the file's own scope.
     Qualified(Arc<str>),
-    /// The members resolve as `<prefix>.<member>` inside the scope of the
-    /// declaration file that declares them. The automatic runtime reaches its
-    /// namespace through the `jsx-runtime` import tsc synthesizes, which surge
-    /// does not load, so the declaring module is located instead.
+    /// The members resolve as `<prefix>.<member>` among a module's exports:
+    /// the runtime a file imports implicitly, or the module behind a UMD
+    /// global, neither of which the file's own scope binds.
     Declared {
         scope: Arc<TypeDeclarationScope>,
         prefix: Arc<str>,
@@ -89,14 +91,22 @@ fn jsx_factory_namespace_name(fragment: bool, ctx: &CheckerContext) -> String {
 /// so a module that never imports it reports once per tag. A fragment also
 /// resolves the file's element factory. `preserve` and `react-native` resolve
 /// it without error reporting and the automatic runtime never names it, which
-/// is why this is gated on the classic React mode alone.
+/// is why this is gated on the classic React mode alone — and skipped for a
+/// file whose runtime import (an `@jsxImportSource` pragma) resolves.
 pub(crate) fn check_jsx_factory_reference(
     fragment: bool,
     location_span: Option<SyntaxTextSpan>,
     fallback_span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) {
-    if !ctx.options.jsx_classic_react {
+    if !ctx.options.jsx_classic_react
+        || matches!(
+            ctx.jsx_namespace_modules
+                .implicit_imports
+                .get(ctx.file_name.as_str()),
+            Some(JsxImplicitImport::Resolved(_))
+        )
+    {
         return;
     }
 
@@ -146,51 +156,170 @@ pub(crate) fn jsx_namespace(ctx: &mut CheckerContext) -> JsxNamespace {
     namespace
 }
 
-/// The factory namespace's `JSX` when the factory resolves to a namespace
-/// that has one, else the global `JSX`.
+/// The implicitly imported runtime module's `JSX` when the file has one, else
+/// the factory namespace's `JSX` when the factory resolves to a namespace that
+/// has one, else the global `JSX`.
 fn resolve_jsx_namespace(ctx: &CheckerContext) -> JsxNamespace {
-    if ctx.options.jsx_automatic_runtime {
-        return automatic_runtime_jsx_namespace(ctx);
+    let modules = ctx.jsx_namespace_modules.clone();
+    if let Some(JsxImplicitImport::Resolved(jsx)) =
+        modules.implicit_imports.get(ctx.file_name.as_str())
+    {
+        return match jsx {
+            Some(exports) => exported_jsx_namespace(exports),
+            None => global_jsx_namespace(ctx),
+        };
     }
     let factory = jsx_factory_namespace_name(false, ctx);
     let qualified = format!("{factory}.JSX");
     if namespace_is_visible(&qualified, ctx) {
         return JsxNamespace::Qualified(qualified.into());
     }
-    if global_jsx_namespace_exists(ctx) {
-        return JsxNamespace::Qualified("JSX".into());
-    }
-    // A UMD global resolves as a namespace for tsc, but its members are not
-    // reachable from a module here, so whether it has a `JSX` is unknowable.
+    // A UMD global resolves as a namespace from a module too; only its value
+    // is off limits there (TS2686).
     if ctx.is_umd_global_value_reference(&factory) {
-        return JsxNamespace::Unmodelled;
+        return match modules.umd_globals.get(factory.as_str()) {
+            Some(Some(exports)) => exported_jsx_namespace(exports),
+            Some(None) => global_jsx_namespace(ctx),
+            None => JsxNamespace::Unmodelled,
+        };
     }
-    JsxNamespace::Missing
+    global_jsx_namespace(ctx)
 }
 
-/// The namespace the automatic runtime's `jsx-runtime` module exports.
-/// surge does not load that module, so a visible `JSX` or `React.JSX` stands
-/// in for it, and otherwise the declaration file that declares the intrinsic
-/// elements.
-fn automatic_runtime_jsx_namespace(ctx: &CheckerContext) -> JsxNamespace {
-    for prefix in ["JSX", "React.JSX"] {
-        if ctx
-            .lookup_type_declaration(&format!("{prefix}.IntrinsicElements"))
-            .is_some()
-        {
-            return JsxNamespace::Qualified(prefix.into());
+/// The `JSX` namespace among a module's exports.
+fn exported_jsx_namespace(exports: &Arc<TypeDeclarationTable>) -> JsxNamespace {
+    JsxNamespace::Declared {
+        scope: Arc::new(TypeDeclarationScope::new(vec![exports.clone()])),
+        prefix: "JSX".into(),
+    }
+}
+
+/// tsc's JSX global fallback.
+fn global_jsx_namespace(ctx: &CheckerContext) -> JsxNamespace {
+    if global_jsx_namespace_exists(ctx) {
+        JsxNamespace::Qualified("JSX".into())
+    } else {
+        JsxNamespace::Missing
+    }
+}
+
+/// The modules JSX namespaces are read from that no lexical scope exposes:
+/// the runtime each file imports implicitly under the automatic runtime
+/// (tsc's `getJsxNamespaceContainerForImplicitImport`), and the module behind
+/// each UMD global a factory can name.
+#[derive(Debug, Default)]
+pub(crate) struct JsxNamespaceModules {
+    implicit_imports: FxHashMap<Arc<str>, JsxImplicitImport>,
+    /// Each UMD global's module exports, when they hold a `JSX` namespace.
+    umd_globals: FxHashMap<Arc<str>, Option<Arc<TypeDeclarationTable>>>,
+}
+
+/// How a file's implicit JSX runtime import resolved.
+#[derive(Debug)]
+enum JsxImplicitImport {
+    /// The runtime module's exports, when they hold a `JSX` namespace.
+    Resolved(Option<Arc<TypeDeclarationTable>>),
+    /// Nothing answers the specifier (TS2875).
+    NotFound(String),
+    /// The specifier names a file surge has no declarations for.
+    Untyped,
+}
+
+/// Resolves every file's implicit JSX runtime import the way its written
+/// imports resolve, and records each `export as namespace` module's exports.
+pub(crate) fn collect_jsx_namespace_modules(
+    parsed_files: &[ParsedProgramFile],
+    module_export_tables: &[Option<crate::modules::ModuleExportTable>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
+    ctx: &mut CheckerContext,
+) -> JsxNamespaceModules {
+    let mut modules = JsxNamespaceModules::default();
+    // Many files share one runtime module; its exports are scanned once.
+    let mut jsx_exports: FxHashMap<usize, bool> = FxHashMap::default();
+    let mut with_jsx = |exports: &Arc<TypeDeclarationTable>| {
+        let declares_jsx = *jsx_exports
+            .entry(Arc::as_ptr(exports) as usize)
+            .or_insert_with(|| exports.iter().any(|(key, _)| key.starts_with("JSX.")));
+        declares_jsx.then(|| exports.clone())
+    };
+    for (parsed_file, export_table) in parsed_files.iter().zip(module_export_tables) {
+        let Some(export_table) = export_table.as_ref().filter(|_| parsed_file.is_module) else {
+            continue;
+        };
+        for statement in &parsed_file.statements {
+            if let ParsedStatement::ExportDeclaration(export) = statement
+                && let ParsedExportDeclaration::NamespaceExport { exported_name, .. } =
+                    export.as_ref()
+            {
+                if !modules.umd_globals.contains_key(exported_name.as_str()) {
+                    let jsx = with_jsx(&export_table.type_declarations);
+                    modules.umd_globals.insert(exported_name.as_str().into(), jsx);
+                }
+            }
         }
     }
-    match &ctx.jsx_intrinsic_elements_declarer {
-        Some((table, key)) => JsxNamespace::Declared {
-            scope: Arc::new(TypeDeclarationScope::new(vec![table.clone()])),
-            prefix: key
-                .strip_suffix(".IntrinsicElements")
-                .unwrap_or(key)
-                .into(),
-        },
-        None => JsxNamespace::Missing,
+
+    let runtime_options = surge_ts_syntax::JsxRuntimeOptions {
+        automatic: ctx.options.jsx_automatic_runtime,
+        development: ctx.options.jsx_factory_names.development,
+        import_source: ctx.options.jsx_factory_names.import_source.clone(),
+    };
+    let saved_file_name = ctx.file_name.clone();
+    for parsed_file in parsed_files {
+        let Some(specifier) = surge_ts_syntax::jsx_runtime_import(
+            &parsed_file.file_name,
+            &parsed_file.jsx_factory_uses,
+            &runtime_options,
+        ) else {
+            continue;
+        };
+        ctx.set_file_name(parsed_file.file_name.clone());
+        let resolution = match crate::modules::try_resolve_module(
+            &specifier,
+            ctx,
+            parsed_files,
+            module_export_tables,
+            module_resolution_scopes,
+        ) {
+            Some((export_table, _, _)) => {
+                JsxImplicitImport::Resolved(with_jsx(&export_table.type_declarations))
+            }
+            None if ctx
+                .options
+                .resolved_module_for(&parsed_file.file_name, &specifier)
+                .is_some() =>
+            {
+                JsxImplicitImport::Untyped
+            }
+            None => JsxImplicitImport::NotFound(specifier),
+        };
+        modules
+            .implicit_imports
+            .insert(parsed_file.file_name.as_str().into(), resolution);
     }
+    ctx.set_file_name(saved_file_name);
+    modules
+}
+
+/// tsc's `getJsxNamespaceContainerForImplicitImport` error: a runtime import
+/// nothing answers is reported once per file, at its first tag.
+pub(crate) fn check_jsx_runtime_import(ctx: &mut CheckerContext) {
+    let Some(first_tag) = ctx.jsx_factory_uses.first_tag else {
+        return;
+    };
+    let modules = ctx.jsx_namespace_modules.clone();
+    let Some(JsxImplicitImport::NotFound(specifier)) =
+        modules.implicit_imports.get(ctx.file_name.as_str())
+    else {
+        return;
+    };
+    if ctx.options.stub_external_modules && crate::modules::is_external_specifier(specifier) {
+        return;
+    }
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts2875(specifier, ctx.file_name.clone()),
+        Some(first_tag),
+    ));
 }
 
 /// The JSX member names tsc reads; one of them resolving is the cheap proof
