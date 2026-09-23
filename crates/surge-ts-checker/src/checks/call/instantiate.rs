@@ -3199,6 +3199,16 @@ pub(crate) fn record_type_argument_candidate(
         return;
     }
 
+    // `inferFromTypes` records an `any` source like any other, and every
+    // candidate is a subtype of `any` while `any` is a subtype of none of them
+    // (`isSimpleTypeRelatedTo` admits an `any` source only for assignability),
+    // so the common supertype is `any` wherever it arrives:
+    // `f(7, anyVar, 4)` binds `T` to `any`, not `number`.
+    if matches!(candidate, Type::Any | Type::ErrorType) {
+        substitution.set(type_parameter_name.to_string(), candidate, false);
+        return;
+    }
+
     // tsc's `getCommonSupertype`: nullable candidates do not compete — the
     // supertype is chosen among the rest and every candidate's `null` and
     // `undefined` are added back, so `eq(b as B, d as D | undefined)` binds
