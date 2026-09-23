@@ -12,6 +12,7 @@ use surge_ts_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
 use crate::context::{CheckerContext, convert_span};
 use crate::infer::string_literal_union_keys;
 use crate::infer::{InferredExpression, infer_expression};
+use crate::infer::types::InferenceCandidate;
 use crate::infer::{
     TypeParameterSubstitution, map_parsed_type_with_substitution,
     try_map_parsed_type_with_substitution,
@@ -753,6 +754,42 @@ thread_local! {
     /// Whether the argument being inferred from is written as a function
     /// literal, whose type therefore has no alias identity of its own.
     static SOURCE_IS_FUNCTION_LITERAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether the argument being inferred from is written as an object or
+    /// array literal. surge's types carry no freshness, so this is what marks a
+    /// structural candidate taken from it as an object or array literal type
+    /// (`isObjectOrArrayLiteralType`).
+    static SOURCE_IS_OBJECT_OR_ARRAY_LITERAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether the argument's literal types are fresh, which is what lets a
+    /// fixed inference widen them: one the call's contextual type names was
+    /// made regular (`getWidenedLiteralLikeTypeForContextualType`).
+    static SOURCE_IS_FRESH_LITERAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// tsc's `InferenceState.contravariant`: the walk is inside an odd number
+    /// of signature parameter positions.
+    static INFERENCE_CONTRAVARIANT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// tsc's `InferenceState.bivariant`: the walk has entered a method's
+    /// signature, whose parameters are related bivariantly and so infer as
+    /// ordinary candidates.
+    static INFERENCE_BIVARIANT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The declared parameter type the current argument is inferred against,
+    /// which decides whether a candidate is inferred to a top-level occurrence
+    /// of its type parameter. `None` for the contextual return type, whose
+    /// inferences never clear `topLevel`.
+    static INFERENCE_ROOT_PARAMETER: std::cell::RefCell<Option<ParsedType>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn with_inference_root<R>(root: &ParsedType, walk: impl FnOnce() -> R) -> R {
+    let outer = INFERENCE_ROOT_PARAMETER.with(|cell| cell.replace(Some(root.clone())));
+    let result = walk();
+    INFERENCE_ROOT_PARAMETER.with(|cell| cell.replace(outer));
+    result
+}
+
+fn with_bivariant_inference<R>(bivariant: bool, walk: impl FnOnce() -> R) -> R {
+    let outer = INFERENCE_BIVARIANT.replace(INFERENCE_BIVARIANT.get() || bivariant);
+    let result = walk();
+    INFERENCE_BIVARIANT.set(outer);
+    result
 }
 
 fn contains_unresolved_hole(ty: &Type) -> bool {
@@ -1505,6 +1542,15 @@ pub(crate) fn infer_type_argument_substitution(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> TypeParameterSubstitution {
+    // A call inferred while another's argument is being walked starts from a
+    // covariant, non-literal position of its own.
+    let outer_walk = (
+        INFERENCE_CONTRAVARIANT.replace(false),
+        INFERENCE_BIVARIANT.replace(false),
+        SOURCE_IS_OBJECT_OR_ARRAY_LITERAL.replace(false),
+        INFERENCE_ROOT_PARAMETER.with(|cell| cell.replace(None)),
+        SOURCE_IS_FRESH_LITERAL.replace(false),
+    );
     let mut substitution = TypeParameterSubstitution::new();
     for type_parameter in &function_signature.type_parameters {
         substitution.insert_placeholder(
@@ -1556,14 +1602,16 @@ pub(crate) fn infer_type_argument_substitution(
                     rest_tuple_bound = true;
                     if let Some(tuple) = rest_arguments_tuple(&arguments[index..], symbols, ctx) {
                         with_declaring_scope(function_signature, ctx, |ctx| {
-                            collect_inferred_type_argument(
-                                parameter_type,
-                                &tuple,
-                                &mut substitution,
-                                false,
-                                ctx,
-                                0,
-                            );
+                            with_inference_root(parameter_type, || {
+                                collect_inferred_type_argument(
+                                    parameter_type,
+                                    &tuple,
+                                    &mut substitution,
+                                    false,
+                                    ctx,
+                                    0,
+                                );
+                            });
                         });
                     }
                 }
@@ -1667,14 +1715,15 @@ pub(crate) fn infer_type_argument_substitution(
         // A literal the call's contextual type itself names stays a literal too
         // (tsc's `isLiteralOfContextualType`): `Promise.resolve('data')` where a
         // `'data'` result is expected infers `'data'`.
-        let widen_literals = argument_is_fresh_literal(&argument.expression)
+        let fresh_literal = argument_is_fresh_literal(&argument.expression)
             && literal_context == crate::infer::expression::LiteralElementContext::default()
+            && !expected_return_type
+                .is_some_and(|expected| contextual_type_names_literal(expected, &argument_type, 0));
+        let widen_literals = fresh_literal
             && !(argument_is_primitive_literal(&argument.expression)
                 && top_level_return_type_parameters
                     .iter()
-                    .any(|name| type_parameter_at_top_level(parameter_type, name, 0)))
-            && !expected_return_type
-                .is_some_and(|expected| contextual_type_names_literal(expected, &argument_type, 0));
+                    .any(|name| type_parameter_at_top_level(parameter_type, name, 0)));
         // `f(...xs)` supplies the *elements* of `xs`, each lined up with the
         // position it covers — tsc's `getSpreadArgumentType`. Matching the
         // spread's own type against the parameter bound a rest `T[]`'s `T` to
@@ -1698,22 +1747,31 @@ pub(crate) fn infer_type_argument_substitution(
         let source_is_function_literal =
             matches!(argument.expression, ParsedExpression::ArrowFunction(_));
         let outer_literal_source = SOURCE_IS_FUNCTION_LITERAL.replace(source_is_function_literal);
+        let outer_object_literal_source = SOURCE_IS_OBJECT_OR_ARRAY_LITERAL.replace(matches!(
+            argument.expression,
+            ParsedExpression::ObjectLiteral { .. } | ParsedExpression::ArrayLiteral { .. }
+        ));
+        let outer_fresh_source = SOURCE_IS_FRESH_LITERAL.replace(fresh_literal);
         with_declaring_scope(function_signature, ctx, |ctx| {
-            for candidate in &candidates {
-                if candidate.is_degraded() {
-                    continue;
+            with_inference_root(parameter_type, || {
+                for candidate in &candidates {
+                    if candidate.is_degraded() {
+                        continue;
+                    }
+                    collect_inferred_type_argument(
+                        parameter_type,
+                        candidate,
+                        &mut substitution,
+                        widen_literals,
+                        ctx,
+                        0,
+                    );
                 }
-                collect_inferred_type_argument(
-                    parameter_type,
-                    candidate,
-                    &mut substitution,
-                    widen_literals,
-                    ctx,
-                    0,
-                );
-            }
+            });
         });
         SOURCE_IS_FUNCTION_LITERAL.set(outer_literal_source);
+        SOURCE_IS_OBJECT_OR_ARRAY_LITERAL.set(outer_object_literal_source);
+        SOURCE_IS_FRESH_LITERAL.set(outer_fresh_source);
     }
 
     infer_from_context_sensitive_callbacks(
@@ -1734,6 +1792,12 @@ pub(crate) fn infer_type_argument_substitution(
         );
     });
 
+    substitution.clear_inference_candidates();
+    INFERENCE_CONTRAVARIANT.set(outer_walk.0);
+    INFERENCE_BIVARIANT.set(outer_walk.1);
+    SOURCE_IS_OBJECT_OR_ARRAY_LITERAL.set(outer_walk.2);
+    INFERENCE_ROOT_PARAMETER.with(|cell| cell.replace(outer_walk.3));
+    SOURCE_IS_FRESH_LITERAL.set(outer_walk.4);
     substitution
 }
 
@@ -1803,18 +1867,19 @@ fn infer_from_context_sensitive_callbacks(
     if deferred_callbacks.is_empty() {
         return;
     }
-    // The enclosing interface's own arguments (`T` of the `Box<string>` the
-    // method was read off) are seeded here and here only: they type the
-    // callback's parameters, but they are not this call's to infer, and the
-    // caller seeds them into the real substitution after inference.
-    let mut contextual_substitution =
-        substitution.clone_with_reason(TypeCopyReason::CallResolution);
-    seed_outer_type_arguments(&mut contextual_substitution, outer_type_arguments);
 
     for (parameter_type, arrow) in deferred_callbacks {
         let Some(callback) = callback_parameter_annotation(parameter_type) else {
             continue;
         };
+        fix_contextual_parameter_type_arguments(function_signature, callback, arrow, substitution);
+        // The enclosing interface's own arguments (`T` of the `Box<string>` the
+        // method was read off) are seeded here and here only: they type the
+        // callback's parameters, but they are not this call's to infer, and the
+        // caller seeds them into the real substitution after inference.
+        let mut contextual_substitution =
+            substitution.clone_with_reason(TypeCopyReason::CallResolution);
+        seed_outer_type_arguments(&mut contextual_substitution, outer_type_arguments);
         let diagnostics_before = ctx.diagnostics().len();
         let contextual_parameters = with_declaring_scope(function_signature, ctx, |ctx| {
             callback
@@ -1842,17 +1907,82 @@ fn infer_from_context_sensitive_callbacks(
         if crate::checks::expr::carries_leaked_type_parameter(&sketch, ctx) {
             continue;
         }
+        let callback_type = ParsedType::Function(callback.clone());
         with_declaring_scope(function_signature, ctx, |ctx| {
-            collect_inferred_type_argument(
-                &ParsedType::Function(callback.clone()),
-                &sketch,
-                substitution,
-                false,
-                ctx,
-                0,
-            );
+            with_inference_root(&callback_type, || {
+                collect_inferred_type_argument(&callback_type, &sketch, substitution, false, ctx, 0);
+            });
         });
     }
+}
+
+/// tsc's fixing mapper: a callback parameter written without an annotation is
+/// typed from the contextual signature (`assignContextualParameterTypes`), and
+/// every type parameter its contextual type names is fixed at the inference
+/// made so far. A contextual rest parameter typed by a bare type parameter is
+/// instantiated without fixing it (`contextuallyCheckFunctionExpressionOrObjectLiteralMethod`).
+fn fix_contextual_parameter_type_arguments(
+    function_signature: &FunctionSignatureInfo,
+    callback: &ParsedFunctionType,
+    arrow: &surge_ts_syntax::ParsedArrowFunction,
+    substitution: &mut TypeParameterSubstitution,
+) {
+    let contextual: Vec<&surge_ts_syntax::ParsedFunctionTypeParameter> = callback
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.is_this)
+        .collect();
+    let Some(last) = contextual.len().checked_sub(1) else {
+        return;
+    };
+    for (index, parameter) in arrow.parameters.iter().enumerate() {
+        if parameter.declared_type.is_some() {
+            continue;
+        }
+        let Some(contextual_parameter) = contextual
+            .get(index)
+            .or_else(|| contextual[last].rest.then_some(&contextual[last]))
+        else {
+            continue;
+        };
+        let bare_rest_parameter = contextual_parameter.rest
+            && matches!(&contextual_parameter.ty, ParsedType::Named(named)
+                if named.type_arguments.is_empty()
+                    && function_signature
+                        .type_parameters
+                        .iter()
+                        .any(|type_parameter| type_parameter.name == named.name));
+        if bare_rest_parameter {
+            continue;
+        }
+        for type_parameter in &function_signature.type_parameters {
+            if parsed_type_mentions_name(&contextual_parameter.ty, &type_parameter.name) {
+                fix_type_argument(substitution, &type_parameter.name);
+            }
+        }
+    }
+}
+
+/// Fixes `name` at `getInferredType` of its candidates with `isFixed` set,
+/// which widens literal candidates (`widenLiteralTypes`) unless the parameter
+/// is a literal context or a candidate was inferred below the top level. A
+/// parameter with no candidate yet keeps its placeholder.
+fn fix_type_argument(substitution: &mut TypeParameterSubstitution, name: &str) {
+    if substitution.is_inference_fixed(name) {
+        return;
+    }
+    let candidates = substitution.inference_candidates(name);
+    if candidates.is_empty() {
+        return;
+    }
+    let widen_literals = !substitution.keeps_literal(name)
+        && candidates
+            .iter()
+            .filter(|candidate| !candidate.contravariant)
+            .all(|candidate| candidate.top_level);
+    let fixed = inferred_type(candidates, widen_literals);
+    substitution.set(name.to_string(), fixed, false);
+    substitution.fix_inference(name);
 }
 
 /// tsc infers the *widened* type from a literal expression — `behaviorSubject(1)`
@@ -2466,6 +2596,27 @@ pub(crate) fn collect_inferred_type_argument(
                 .then(|| actual_parameters.len().checked_sub(1))
                 .flatten();
             for (index, expected_parameter) in expected_function.parameters.iter().enumerate() {
+                // `applyToParameterTypes`: a rest parameter of the target infers
+                // from the source's parameters from its position on, as one
+                // tuple (`getRestTypeAtPosition`), so `(...args: T) => U`
+                // against `(x: string, y: number) => …` binds `T` to
+                // `[string, number]`.
+                if expected_parameter.rest && index + 1 == expected_function.parameters.len() {
+                    if let Some(rest) = rest_type_at_position(&actual_function, index) {
+                        let outer_variance =
+                            INFERENCE_CONTRAVARIANT.replace(!INFERENCE_CONTRAVARIANT.get());
+                        collect_inferred_type_argument(
+                            &expected_parameter.ty,
+                            &rest,
+                            substitution,
+                            false,
+                            ctx,
+                            depth,
+                        );
+                        INFERENCE_CONTRAVARIANT.set(outer_variance);
+                    }
+                    break;
+                }
                 // A rest parameter stands for every position from its own on,
                 // and it is its *element* the expected parameter there lines up
                 // with: `(...args: any[]) => any` — vitest's `vi.fn()` — binds
@@ -2494,6 +2645,10 @@ pub(crate) fn collect_inferred_type_argument(
                 if rest_element.is_none() && matches!(actual_parameter, Type::Any) {
                     continue;
                 }
+                // `inferFromSignature` infers parameter types contravariantly
+                // (`inferFromContravariantTypes`), which surge's relation —
+                // always under `strictFunctionTypes` — matches.
+                let outer_variance = INFERENCE_CONTRAVARIANT.replace(!INFERENCE_CONTRAVARIANT.get());
                 collect_inferred_type_argument(
                     &expected_parameter.ty,
                     actual_parameter,
@@ -2502,6 +2657,7 @@ pub(crate) fn collect_inferred_type_argument(
                     ctx,
                     depth,
                 );
+                INFERENCE_CONTRAVARIANT.set(outer_variance);
             }
             collect_inferred_type_argument(
                 &expected_function.return_type,
@@ -2704,6 +2860,39 @@ pub(crate) fn collect_inferred_type_argument(
         }
         _ => {}
     }
+}
+
+/// tsc's `getRestTypeAtPosition`: the source's parameters from `position` on,
+/// as a tuple that ends in the source's own rest. A parameter the sketch left
+/// un-annotated (a bare `any` before the rest) is no evidence, so none is
+/// built from it.
+fn rest_type_at_position(source: &FunctionType, position: usize) -> Option<Type> {
+    let parameters = source.parameters();
+    let rest_index = source
+        .is_variadic()
+        .then(|| parameters.len().checked_sub(1))
+        .flatten();
+    let fixed_end = rest_index.unwrap_or(parameters.len());
+    let leading: Vec<Type> = parameters.get(position..fixed_end).unwrap_or_default().to_vec();
+    if leading.iter().any(|parameter| matches!(parameter, Type::Any)) {
+        return None;
+    }
+    let Some(rest_index) = rest_index else {
+        return Some(Type::Tuple(leading));
+    };
+    let rest = &parameters[rest_index];
+    if position >= rest_index {
+        return Some(rest.clone());
+    }
+    Some(match rest.peeled() {
+        Type::Array(element) => Type::OpenTuple(surge_ts_types::OpenTupleType {
+            leading,
+            rest: element,
+            trailing: Vec::new(),
+        }),
+        Type::Tuple(elements) => Type::Tuple(leading.into_iter().chain(elements).collect()),
+        _ => return None,
+    })
 }
 
 /// A union member that names a type parameter directly (`S` in `S | (() => S)`),
@@ -2958,14 +3147,16 @@ fn infer_through_generic_reference(
             };
             let expected_member_type =
                 substitute_parsed_type_parameters(&member.ty, &parameter_map);
-            collect_inferred_type_argument(
-                &expected_member_type,
-                &actual_member_type,
-                substitution,
-                widen_literals,
-                ctx,
-                depth + 1,
-            );
+            with_bivariant_inference(member.is_method, || {
+                collect_inferred_type_argument(
+                    &expected_member_type,
+                    &actual_member_type,
+                    substitution,
+                    widen_literals,
+                    ctx,
+                    depth + 1,
+                );
+            });
         }
 
         // An options interface usually declares almost nothing itself:
@@ -3155,14 +3346,16 @@ pub(crate) fn collect_object_type_candidates(
             continue;
         };
 
-        collect_inferred_type_argument(
-            &property.ty,
-            &actual_property_type,
-            substitution,
-            widen_literals,
-            ctx,
-            depth,
-        );
+        with_bivariant_inference(property.is_method, || {
+            collect_inferred_type_argument(
+                &property.ty,
+                &actual_property_type,
+                substitution,
+                widen_literals,
+                ctx,
+                depth,
+            );
+        });
     }
 }
 
@@ -3190,103 +3383,319 @@ pub(crate) fn record_type_argument_candidate(
         with_type_copy_reason(TypeCopyReason::CallResolution, || argument_type.clone())
     };
 
-    if existing.is_degraded() {
-        substitution.set(type_parameter_name.to_string(), candidate, false);
+    if substitution.is_inference_fixed(type_parameter_name) {
         return;
     }
-
-    if existing == candidate {
-        return;
-    }
-
-    // `never` is a subtype of every candidate, so a later `never` never
-    // decides the supertype: `withFew(xs, id, fail)` binds `r` from `id`'s
-    // return, not from `fail`'s. An *existing* `never` stands: replacing it
-    // needs the candidate's variance, which is not tracked here.
-    if matches!(candidate, Type::Never) {
-        return;
-    }
-
-    // `inferFromTypes` records an `any` source like any other, and every
-    // candidate is a subtype of `any` while `any` is a subtype of none of them
-    // (`isSimpleTypeRelatedTo` admits an `any` source only for assignability),
-    // so the common supertype is `any` wherever it arrives:
-    // `f(7, anyVar, 4)` binds `T` to `any`, not `number`.
-    if matches!(candidate, Type::Any | Type::ErrorType) {
-        substitution.set(type_parameter_name.to_string(), candidate, false);
-        return;
-    }
-
-    // tsc's `getCommonSupertype`: nullable candidates do not compete — the
-    // supertype is chosen among the rest and every candidate's `null` and
-    // `undefined` are added back, so `eq(b as B, d as D | undefined)` binds
-    // `T` to `B | undefined`. The supertype is the leftmost candidate every
-    // later one is a subtype of (`getSupertypeOrUnion`).
-    if let Some(merged) = common_supertype_candidate(&existing, &candidate) {
-        substitution.set(type_parameter_name.to_string(), merged, false);
-        return;
-    }
-
-    if let Some(common_primitive) = common_primitive_candidate(&existing, &candidate) {
-        substitution.set(type_parameter_name.to_string(), common_primitive, false);
-        return;
-    }
-
-    // Two structural candidates for one parameter: tsc infers the union of
-    // them, so `eq({ a: 1 }, { a: 2 })` binds `T` to both shapes and the second
-    // argument is not checked against the first. Dropping the later candidate
-    // — the previous behavior — fixed `T` from the first argument alone. An
-    // array of literals is the same case (`shallow([{ a }], [{ a, b }])`), so
-    // it unions too.
-    fn is_structural_candidate(ty: &Type) -> bool {
-        matches!(
-            ty.peeled(),
+    let contravariant = INFERENCE_CONTRAVARIANT.get() && !INFERENCE_BIVARIANT.get();
+    let top_level = INFERENCE_ROOT_PARAMETER.with(|root| {
+        root.borrow()
+            .as_ref()
+            .is_none_or(|root| type_parameter_at_top_level(root, type_parameter_name, 0))
+    });
+    let fresh = !contravariant && SOURCE_IS_FRESH_LITERAL.get();
+    let literal = !contravariant
+        && SOURCE_IS_OBJECT_OR_ARRAY_LITERAL.get()
+        && matches!(
+            candidate,
             Type::Object(_) | Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)
-        )
-    }
-    if is_structural_candidate(&existing) && is_structural_candidate(&candidate) {
-        substitution.set(
-            type_parameter_name.to_string(),
-            surge_ts_types::union_type(vec![existing, candidate]),
-            false,
         );
+    // A binding made before inference recorded anything stands as its first
+    // candidate.
+    if substitution.inference_candidates(type_parameter_name).is_empty()
+        && !existing.is_degraded()
+    {
+        substitution.push_inference_candidate(
+            type_parameter_name,
+            InferenceCandidate {
+                ty: existing,
+                literal: false,
+                contravariant: false,
+                top_level: true,
+                fresh: false,
+            },
+        );
+    }
+    // `inferFromTypes` records a candidate once in each list.
+    if substitution
+        .inference_candidates(type_parameter_name)
+        .iter()
+        .any(|recorded| recorded.contravariant == contravariant && recorded.ty == candidate)
+    {
+        return;
+    }
+    substitution.push_inference_candidate(
+        type_parameter_name,
+        InferenceCandidate {
+            ty: candidate,
+            literal,
+            contravariant,
+            top_level,
+            fresh,
+        },
+    );
+    let inferred = inferred_type(substitution.inference_candidates(type_parameter_name), false);
+    substitution.set(type_parameter_name.to_string(), inferred, false);
+}
+
+/// tsc's `getInferredType` from the candidates recorded so far. With both
+/// kinds, the covariant inference is preferred when it is neither `never` nor
+/// `any`, every covariant candidate is assignable to it, and it is assignable
+/// to some contravariant candidate; otherwise the contravariant one stands.
+/// (tsc also asks that no other parameter constrained to this one has a
+/// candidate the covariant inference would not accept; one parameter's
+/// candidates are all this sees.) `widen_literals` is `widenLiteralTypes`
+/// beyond what recording a candidate already widened: set once the parameter
+/// is fixed.
+fn inferred_type(candidates: &[InferenceCandidate], widen_literals: bool) -> Type {
+    let (contra, co): (Vec<&InferenceCandidate>, Vec<&InferenceCandidate>) =
+        candidates.iter().partition(|candidate| candidate.contravariant);
+    let covariant = (!co.is_empty()).then(|| covariant_inference(&co, widen_literals));
+    let Some(contravariant) = contravariant_inference(&contra) else {
+        return covariant.unwrap_or(Type::Never);
+    };
+    match covariant {
+        Some(covariant)
+            if !matches!(covariant, Type::Never | Type::Any | Type::ErrorType)
+                && co
+                    .iter()
+                    .all(|candidate| is_assignable_to(&candidate.ty, &covariant))
+                && contra
+                    .iter()
+                    .any(|candidate| is_assignable_to(&covariant, &candidate.ty)) =>
+        {
+            covariant
+        }
+        _ => contravariant,
     }
 }
 
-fn common_supertype_candidate(existing: &Type, candidate: &Type) -> Option<Type> {
-    let split = |ty: &Type| -> (Option<Type>, Vec<Type>) {
-        let members: Vec<Type> = match ty {
-            Type::Union(union) => union.types().to_vec(),
-            other => vec![other.clone()],
-        };
-        let (nullable, primary): (Vec<Type>, Vec<Type>) = members
-            .into_iter()
-            .partition(|member| matches!(member, Type::Null | Type::Undefined));
-        let primary = (!primary.is_empty()).then(|| surge_ts_types::union_type(primary));
-        (primary, nullable)
-    };
-    let (existing_primary, mut nullable) = split(existing);
-    let (candidate_primary, candidate_nullable) = split(candidate);
-    if nullable.is_empty() && candidate_nullable.is_empty() {
-        return None;
+/// tsc's `getWidenedLiteralType`: a literal becomes its primitive, member by
+/// member through a union; an object's members are left as they are.
+fn widen_literal_type(ty: &Type) -> Type {
+    match ty {
+        Type::StringLiteral(_) => Type::String,
+        Type::NumberLiteral(_) => Type::Number,
+        Type::BooleanLiteral(_) => Type::Boolean,
+        Type::Union(union) => {
+            surge_ts_types::union_type(union.types().iter().map(widen_literal_type).collect())
+        }
+        other => other.clone(),
     }
-    nullable.extend(candidate_nullable);
-    let primary = match (existing_primary, candidate_primary) {
-        (None, None) => None,
-        (Some(only), None) | (None, Some(only)) => Some(only),
-        (Some(left), Some(right)) => {
-            if left == right || is_assignable_to(&right, &left) {
-                Some(left)
-            } else if is_assignable_to(&left, &right) {
-                Some(right)
-            } else {
-                Some(common_primitive_candidate(&left, &right)?)
-            }
+}
+
+/// tsc's `getCovariantInference`. The object and array literal candidates are
+/// first replaced by their union (`unionObjectAndArrayLiteralCandidates`),
+/// placed after the others; the common supertype is then taken and widened
+/// (`getWidenedType`): literal members widen together, and without
+/// `strictNullChecks` `null` and `undefined` widen to `any`. Literal widening
+/// itself happened as each candidate was recorded.
+fn covariant_inference(candidates: &[&InferenceCandidate], widen_literals: bool) -> Type {
+    let widened = |candidate: &InferenceCandidate| {
+        if widen_literals && candidate.fresh {
+            widen_literal_type(&candidate.ty)
+        } else {
+            candidate.ty.clone()
         }
     };
-    let mut members: Vec<Type> = primary.into_iter().collect();
+    if let [only] = candidates {
+        return crate::checks::var::widen_nullable_type(&widened(only));
+    }
+    let literals: Vec<Type> = candidates
+        .iter()
+        .filter(|candidate| candidate.literal)
+        .map(|candidate| candidate.ty.clone())
+        .collect();
+    let mut types: Vec<(Type, bool)> = candidates
+        .iter()
+        .filter(|candidate| !candidate.literal)
+        .map(|candidate| (widened(candidate), false))
+        .collect();
+    if !literals.is_empty() {
+        types.push((surge_ts_types::union_type(literals.clone()), true));
+    }
+    crate::checks::var::widen_nullable_type(&normalize_object_literal_members(
+        &common_supertype(types),
+        &literals,
+    ))
+}
+
+/// tsc's `getContravariantInference` through `getCommonSubtype`: the leftmost
+/// candidate no later one is a subtype of.
+fn contravariant_inference(candidates: &[&InferenceCandidate]) -> Option<Type> {
+    candidates
+        .iter()
+        .map(|candidate| candidate.ty.clone())
+        .reduce(|subtype, candidate| {
+            if is_candidate_subtype(&candidate, &subtype, false) {
+                candidate
+            } else {
+                subtype
+            }
+        })
+}
+
+/// tsc's `getCommonSupertype`. Under `strictNullChecks` nullable candidates do
+/// not compete: the supertype is chosen among the rest and every candidate's
+/// `null` and `undefined` are added back, so `eq(b as B, d as D | undefined)`
+/// binds `T` to `B | undefined`. The supertype is the leftmost candidate no
+/// later one is a supertype of (`findLeftmostType` with `isTypeSubtypeOf`).
+/// Each type is paired with whether it is the object literal candidates' union.
+fn common_supertype(types: Vec<(Type, bool)>) -> Type {
+    if types.len() == 1 {
+        return types.into_iter().next().map(|(ty, _)| ty).unwrap_or(Type::Never);
+    }
+    let mut nullable: Vec<Type> = Vec::new();
+    let mut primary: Vec<(Type, bool)> = Vec::with_capacity(types.len());
+    for (ty, literal) in types {
+        if !surge_ts_types::strict_null_checks() {
+            primary.push((ty, literal));
+            continue;
+        }
+        let members: Vec<Type> = match ty {
+            Type::Union(union) => union.types().to_vec(),
+            other => vec![other],
+        };
+        let (nulls, rest): (Vec<Type>, Vec<Type>) = members
+            .into_iter()
+            .partition(|member| matches!(member, Type::Null | Type::Undefined));
+        nullable.extend(nulls);
+        if !rest.is_empty() {
+            primary.push((surge_ts_types::union_type(rest), literal));
+        }
+    }
+    let supertype = primary.into_iter().reduce(|left, right| {
+        // A later `never` never decides the supertype: `withFew(xs, id, fail)`
+        // binds `r` from `id`'s return, not from `fail`'s.
+        if left.0 == right.0 || matches!(right.0, Type::Never) {
+            return left;
+        }
+        // Candidates of one primitive kind settle on the primitive; tsc unions
+        // same-kind literals (`literalTypesWithSameBaseType`), which surge's
+        // declarations would keep unwidened.
+        if let Some(primitive) = common_primitive_candidate(&left.0, &right.0) {
+            return (primitive, false);
+        }
+        if is_candidate_subtype(&left.0, &right.0, right.1) {
+            right
+        } else {
+            left
+        }
+    });
+    let mut members: Vec<Type> = supertype.into_iter().map(|(ty, _)| ty).collect();
     members.extend(nullable);
-    Some(surge_ts_types::union_type(members))
+    surge_ts_types::union_type(members)
+}
+
+/// `isTypeSubtypeOf` for candidate selection, whose source is never an object
+/// literal: the literal candidates' union always comes last. Every type is a
+/// subtype of `any`, which is itself a subtype only of `unknown`
+/// (`isSimpleTypeRelatedTo` admits an `any` source only for assignability).
+/// Between object types the subtype relation asks more than assignability:
+/// the source lacks no target property, optional or not
+/// (`requireOptionalProperties`), and an object literal target has every
+/// property the source has (`propertiesRelatedTo`).
+fn is_candidate_subtype(source: &Type, target: &Type, literal_target: bool) -> bool {
+    let (written_source, written_target) = (source, target);
+    let (source, target) = (source.peeled(), target.peeled());
+    match (&source, &target) {
+        (_, Type::Any | Type::ErrorType | Type::GenuineUnknown) => return true,
+        (Type::Any | Type::ErrorType, _) => return false,
+        // Surge's sentinel and an unsubstituted placeholder relate to anything,
+        // which says nothing about either being a supertype.
+        (_, Type::Unknown | Type::TypeParameter(_)) => return false,
+        _ => {}
+    }
+    if let Type::Union(union) = &source {
+        return union
+            .types()
+            .iter()
+            .all(|member| is_candidate_subtype(member, &target, literal_target));
+    }
+    if let Type::Union(union) = &target {
+        return union
+            .types()
+            .iter()
+            .any(|member| is_candidate_subtype(&source, member, literal_target));
+    }
+    // An object surge could not enumerate (`synthetic_open_index`) has members
+    // it does not list, so only assignability can judge it.
+    if let (Type::Object(source_object), Type::Object(target_object)) = (&source, &target)
+        && !source_object.synthetic_open_index
+        && !target_object.synthetic_open_index
+    {
+        let lacks_target_property = target_object
+            .properties
+            .keys()
+            .any(|name| !source_object.properties.contains_key(name));
+        let carries_unknown_property = literal_target
+            && source_object
+                .properties
+                .keys()
+                .any(|name| !target_object.properties.contains_key(name));
+        if lacks_target_property || carries_unknown_property {
+            return false;
+        }
+    }
+    is_assignable_to(written_source, written_target)
+}
+
+/// `getWidenedType` of the inferred type: object literals widened together
+/// (`getWidenedTypeOfObjectLiteral` with the union as the widening context)
+/// each gain the properties their sibling literals write, as optional
+/// `undefined` members, so `f({ x: 1 }, { y: '' })` infers
+/// `{ x: number; y?: undefined } | { x?: undefined; y: string }`.
+fn normalize_object_literal_members(ty: &Type, literals: &[Type]) -> Type {
+    let Type::Union(union) = ty else {
+        return ty.clone();
+    };
+    let is_literal_object =
+        |member: &Type| matches!(member, Type::Object(_)) && literals.contains(member);
+    let mut names: Vec<std::sync::Arc<str>> = Vec::new();
+    for member in union.types().iter().filter(|member| is_literal_object(member)) {
+        if let Type::Object(object) = member {
+            for name in object.properties.keys() {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+            }
+        }
+    }
+    let members: Vec<Type> = union
+        .types()
+        .iter()
+        .map(|member| match member {
+            Type::Object(object)
+                if is_literal_object(member)
+                    && names.iter().any(|name| !object.properties.contains_key(name)) =>
+            {
+                let mut properties = (*object.properties).clone();
+                for name in &names {
+                    if !properties.contains_key(name) {
+                        properties.insert(
+                            name.clone(),
+                            surge_ts_types::ObjectProperty::optional(Type::Undefined),
+                        );
+                    }
+                }
+                let mut widened = alloc_object_type(
+                    properties,
+                    object.string_index_type.as_deref().cloned(),
+                );
+                if object.synthetic_open_index {
+                    widened = widened.with_open_index_marker();
+                }
+                if let Some(call_signature) = object.call_signature() {
+                    widened = widened.with_call_signature(call_signature.clone());
+                }
+                if let Some(construct_signature) = object.construct_signature() {
+                    widened = widened.with_construct_signature(construct_signature.clone());
+                }
+                Type::Object(widened)
+            }
+            other => other.clone(),
+        })
+        .collect();
+    surge_ts_types::union_type(members)
 }
 
 pub(crate) fn common_primitive_candidate(existing: &Type, candidate: &Type) -> Option<Type> {
