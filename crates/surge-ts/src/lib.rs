@@ -570,7 +570,9 @@ impl Project {
                 .compiler_options
                 .no_property_access_from_index_signature,
             no_unchecked_indexed_access: loaded.compiler_options.no_unchecked_indexed_access,
-            allow_importing_ts_extensions: loaded.compiler_options.allow_importing_ts_extensions,
+            // tsc's `GetAllowImportingTsExtensions`.
+            allow_importing_ts_extensions: loaded.compiler_options.allow_importing_ts_extensions
+                || loaded.compiler_options.rewrite_relative_import_extensions,
             no_unused_locals: loaded.compiler_options.no_unused_locals,
             no_unused_parameters: loaded.compiler_options.no_unused_parameters,
             allow_unreachable_code: loaded.compiler_options.allow_unreachable_code,

@@ -6,26 +6,28 @@
 //! sites. The matrix mirrors tsc's `tryAddingExtensions`:
 //!
 //! * extensionless → `.ts`, `.tsx`, `.d.ts` (plus `index.*` of the same set)
-//! * `.js` / `.jsx` → `.ts`, `.tsx`, `.d.ts`
-//! * `.mjs` → `.mts`, `.d.mts`
-//! * `.cjs` → `.cts`, `.d.cts`
+//! * `.ts` / `.d.ts` / `.js` / `.jsx` → `.ts`, `.tsx`, `.d.ts`
+//! * `.tsx` → `.tsx`, `.ts`, `.d.ts`
+//! * `.mjs` / `.mts` / `.d.mts` → `.mts`, `.d.mts`
+//! * `.cjs` / `.cts` / `.d.cts` → `.cts`, `.d.cts`
 //!
-//! Explicit `.js`/`.jsx`/`.mjs`/`.cjs` specifiers are file-shaped runtime
-//! paths: substitution replaces the extension in place and never turns the
-//! path into a directory-index lookup. Extensionless specifiers never probe
-//! the `.mts`/`.cts` flavors — tsc reaches those only through explicit
-//! `.mjs`/`.cjs` specifiers.
+//! Explicit extensions are file-shaped paths: substitution replaces the
+//! extension in place and never turns the path into a directory-index lookup.
+//! Extensionless specifiers never probe the `.mts`/`.cts` flavors — tsc
+//! reaches those only through an explicit module-flavored extension.
 
 /// How a relative specifier's final segment shapes candidate generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelativeSpecifierShape {
-    /// `./x.ts` — resolves to exactly that file.
+    /// `./x.ts` or `./x.d.ts` — substitutes `.ts`/`.tsx`/`.d.ts`.
     ExplicitTs,
+    /// `./x.tsx` — substitutes `.tsx`/`.ts`/`.d.ts`.
+    ExplicitTsx,
     /// `./x.js` or `./x.jsx` — runtime path; substitutes `.ts`/`.tsx`/`.d.ts`.
     ExplicitJs,
-    /// `./x.mjs` — substitutes `.mts`/`.d.mts`.
+    /// `./x.mjs`, `./x.mts` or `./x.d.mts` — substitutes `.mts`/`.d.mts`.
     ExplicitMjs,
-    /// `./x.cjs` — substitutes `.cts`/`.d.cts`.
+    /// `./x.cjs`, `./x.cts` or `./x.d.cts` — substitutes `.cts`/`.d.cts`.
     ExplicitCjs,
     /// `./x` (or `.` / `..`) — implicit extensions plus directory index.
     Extensionless,
@@ -34,9 +36,6 @@ pub enum RelativeSpecifierShape {
     /// take the candidate: the diagnostic for an unresolved `.json` differs
     /// (`TS2732`, not `TS2307`).
     ExplicitJson,
-    /// Explicit `.tsx`/`.mts`/`.cts`/`.d.*` specifiers (pinned unsupported:
-    /// `allowImportingTsExtensions`).
-    Unsupported,
 }
 
 pub fn classify_relative_specifier(specifier: &str) -> RelativeSpecifierShape {
@@ -50,14 +49,8 @@ pub fn classify_relative_specifier(specifier: &str) -> RelativeSpecifierShape {
         return RelativeSpecifierShape::ExplicitJson;
     }
 
-    if last_segment.ends_with(".tsx")
-        || last_segment.ends_with(".mts")
-        || last_segment.ends_with(".cts")
-        || last_segment.ends_with(".d.ts")
-        || last_segment.ends_with(".d.mts")
-        || last_segment.ends_with(".d.cts")
-    {
-        return RelativeSpecifierShape::Unsupported;
+    if last_segment.ends_with(".tsx") {
+        return RelativeSpecifierShape::ExplicitTsx;
     }
 
     if last_segment.ends_with(".ts") {
@@ -68,11 +61,11 @@ pub fn classify_relative_specifier(specifier: &str) -> RelativeSpecifierShape {
         return RelativeSpecifierShape::ExplicitJs;
     }
 
-    if last_segment.ends_with(".mjs") {
+    if last_segment.ends_with(".mjs") || last_segment.ends_with(".mts") {
         return RelativeSpecifierShape::ExplicitMjs;
     }
 
-    if last_segment.ends_with(".cjs") {
+    if last_segment.ends_with(".cjs") || last_segment.ends_with(".cts") {
         return RelativeSpecifierShape::ExplicitCjs;
     }
 
@@ -80,28 +73,36 @@ pub fn classify_relative_specifier(specifier: &str) -> RelativeSpecifierShape {
 }
 
 /// Candidate paths for a relative import whose importer-joined, normalized
-/// path is `joined` and whose original specifier is `specifier`. Returns
-/// `None` for unsupported specifier shapes. Candidates are ordered by tsc
-/// probe priority; the exact `joined` path leads each substitution list so a
-/// literally-matching loaded file still wins.
+/// path is `joined` and whose original specifier is `specifier`. Candidates
+/// are ordered by tsc probe priority; the exact `joined` path leads each
+/// runtime-extension substitution list so a literally-matching loaded file
+/// still wins.
 pub fn relative_import_candidates(joined: &str, specifier: &str) -> Option<Vec<String>> {
-    match classify_relative_specifier(specifier) {
-        RelativeSpecifierShape::ExplicitTs => Some(vec![joined.to_string()]),
+    let candidates = match classify_relative_specifier(specifier) {
+        RelativeSpecifierShape::ExplicitTs => substitution_candidates_js(&strip_ts_extension(joined)),
+        RelativeSpecifierShape::ExplicitTsx => {
+            let stem = strip_extension(joined);
+            vec![format!("{stem}.tsx"), format!("{stem}.ts"), format!("{stem}.d.ts")]
+        }
         RelativeSpecifierShape::ExplicitJs => {
-            let stem = strip_extension(joined);
-            Some(with_exact(joined, substitution_candidates_js(&stem)))
+            with_exact(joined, substitution_candidates_js(&strip_extension(joined)))
         }
-        RelativeSpecifierShape::ExplicitMjs => {
-            let stem = strip_extension(joined);
-            Some(with_exact(joined, substitution_candidates_mjs(&stem)))
-        }
-        RelativeSpecifierShape::ExplicitCjs => {
-            let stem = strip_extension(joined);
-            Some(with_exact(joined, substitution_candidates_cjs(&stem)))
-        }
-        RelativeSpecifierShape::ExplicitJson => Some(vec![joined.to_string()]),
-        RelativeSpecifierShape::Extensionless => Some(extensionless_candidates(joined)),
-        RelativeSpecifierShape::Unsupported => None,
+        RelativeSpecifierShape::ExplicitMjs => module_flavor_candidates(joined, ".mjs", substitution_candidates_mjs),
+        RelativeSpecifierShape::ExplicitCjs => module_flavor_candidates(joined, ".cjs", substitution_candidates_cjs),
+        RelativeSpecifierShape::ExplicitJson => vec![joined.to_string()],
+        RelativeSpecifierShape::Extensionless => extensionless_candidates(joined),
+    };
+    Some(candidates)
+}
+
+/// `.mjs`/`.cjs` keep the exact runtime path first; the TypeScript flavors
+/// (`.mts`, `.d.mts`, ...) are themselves the first substitutions.
+fn module_flavor_candidates(joined: &str, runtime_extension: &str, substitutions: fn(&str) -> Vec<String>) -> Vec<String> {
+    let stem = strip_ts_extension(joined);
+    if joined.ends_with(runtime_extension) {
+        with_exact(joined, substitutions(&stem))
+    } else {
+        substitutions(&stem)
     }
 }
 
@@ -186,6 +187,17 @@ pub fn strip_extension(path: &str) -> String {
     }
 }
 
+/// tsc's `removeFileExtension` for a TypeScript path: a declaration extension
+/// comes off whole, so `x.d.ts` probes from `x`, not `x.d`.
+fn strip_ts_extension(path: &str) -> String {
+    for extension in [".d.ts", ".d.mts", ".d.cts"] {
+        if let Some(stem) = path.strip_suffix(extension) {
+            return stem.to_string();
+        }
+    }
+    strip_extension(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,28 +257,35 @@ mod tests {
     }
 
     #[test]
-    fn explicit_ts_is_exact_only() {
+    fn explicit_ts_substitutes_ts_flavors() {
         assert_eq!(
             relative_import_candidates("src/foo.ts", "./foo.ts").unwrap(),
-            vec!["src/foo.ts"]
+            vec!["src/foo.ts", "src/foo.tsx", "src/foo.d.ts"]
+        );
+        assert_eq!(
+            relative_import_candidates("src/foo.d.ts", "./foo.d.ts").unwrap(),
+            vec!["src/foo.ts", "src/foo.tsx", "src/foo.d.ts"]
         );
     }
 
     #[test]
-    fn unsupported_shapes_yield_none() {
-        for specifier in [
-            "./x.tsx",
-            "./x.mts",
-            "./x.cts",
-            "./x.d.ts",
-            "./x.d.mts",
-            "./x.d.cts",
-        ] {
-            assert!(
-                relative_import_candidates("src/x", specifier).is_none(),
-                "{specifier}"
-            );
-        }
+    fn explicit_tsx_prefers_tsx() {
+        assert_eq!(
+            relative_import_candidates("src/foo.tsx", "./foo.tsx").unwrap(),
+            vec!["src/foo.tsx", "src/foo.ts", "src/foo.d.ts"]
+        );
+    }
+
+    #[test]
+    fn explicit_module_flavors_substitute_their_own_flavor() {
+        assert_eq!(
+            relative_import_candidates("src/foo.mts", "./foo.mts").unwrap(),
+            vec!["src/foo.mts", "src/foo.d.mts"]
+        );
+        assert_eq!(
+            relative_import_candidates("src/foo.d.cts", "./foo.d.cts").unwrap(),
+            vec!["src/foo.cts", "src/foo.d.cts"]
+        );
     }
 
     #[test]

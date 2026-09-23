@@ -43,6 +43,10 @@ pub struct NormalizedCompilerOptions {
     /// `compilerOptions.allowImportingTsExtensions`. Defaults off; without it an
     /// import path ending in a TypeScript extension is TS5097.
     pub allow_importing_ts_extensions: bool,
+    /// `compilerOptions.rewriteRelativeImportExtensions`. Defaults off; it
+    /// permits TypeScript-extension imports as `allowImportingTsExtensions`
+    /// does (tsc's `GetAllowImportingTsExtensions`).
+    pub rewrite_relative_import_extensions: bool,
     /// `compilerOptions.noUnusedLocals`. Independent of `strict`; defaults off.
     pub no_unused_locals: bool,
     /// `compilerOptions.noUnusedParameters`. Independent of `strict`; defaults off.
@@ -120,6 +124,7 @@ impl Default for NormalizedCompilerOptions {
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
             allow_importing_ts_extensions: false,
+            rewrite_relative_import_extensions: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,

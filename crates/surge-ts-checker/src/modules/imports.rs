@@ -1850,24 +1850,28 @@ pub(crate) fn strip_typescript_extension(file_name: &str) -> &str {
     file_name
 }
 
-/// tsc's TS5097: an import path that resolves *by* its written TypeScript
-/// extension needs `allowImportingTsExtensions`. A type-only import and an
-/// import written in a declaration file are exempt, and a `.d.*` path is a
-/// different error, so it is not one of these extensions.
+/// tsc's `resolveExternalModule` for an emittable import (`IsEmittableImport`:
+/// one with an import clause that is not type-only) that resolves *by* its
+/// written TypeScript extension: a `.d.*` path is TS2846 wherever it is
+/// written, and any other TypeScript extension needs
+/// `allowImportingTsExtensions` (TS5097), which a declaration file always has.
 fn report_ts_extension_import(
     import: &ParsedImportDeclaration,
     program_files: &[ParsedProgramFile],
     ctx: &mut CheckerContext,
 ) {
-    if ctx.options.allow_importing_ts_extensions
-        || is_declaration_file_name(&ctx.file_name)
-        || import_is_type_only(&import.kind)
-    {
+    if import_is_type_only(&import.kind) || matches!(import.kind, ParsedImportKind::SideEffect) {
         return;
     }
     let Some(extension) = written_ts_extension(&import.module_specifier) else {
         return;
     };
+    let declaration_specifier = is_declaration_file_name(&import.module_specifier);
+    if !declaration_specifier
+        && (ctx.options.allow_importing_ts_extensions || is_declaration_file_name(&ctx.file_name))
+    {
+        return;
+    }
     if resolve_relative_module(
         &ctx.file_name,
         &import.module_specifier,
@@ -1878,20 +1882,40 @@ fn report_ts_extension_import(
     {
         return;
     }
-    let mut diagnostic = Diagnostic::ts5097(extension, ctx.file_name.clone());
+    let mut diagnostic = if declaration_specifier {
+        let suggestion = suggested_import_source(&import.module_specifier, extension, ctx);
+        Diagnostic::ts2846(suggestion, ctx.file_name.clone())
+    } else {
+        Diagnostic::ts5097(extension, ctx.file_name.clone())
+    };
     if let Some(span) = import.module_specifier_span {
         diagnostic = diagnostic.with_span(convert_span(span));
     }
     ctx.push(diagnostic);
 }
 
+/// tsc's `TryExtractTSExtension`: declaration extensions are tried first.
 fn written_ts_extension(specifier: &str) -> Option<&'static str> {
-    if is_declaration_file_name(specifier) {
-        return None;
-    }
-    [".ts", ".tsx", ".mts", ".cts"]
+    [".d.ts", ".d.cts", ".d.mts", ".ts", ".tsx", ".mts", ".cts"]
         .into_iter()
         .find(|extension| specifier.ends_with(extension))
+}
+
+/// tsc's `getSuggestedImportSource`: an ES module output imports the emitted
+/// JavaScript (or, with `allowImportingTsExtensions`, the TypeScript source a
+/// declaration specifier stands for); anything else imports extensionless.
+fn suggested_import_source(specifier: &str, extension: &str, ctx: &CheckerContext) -> String {
+    let stem = &specifier[..specifier.len() - extension.len()];
+    if !ctx.options.module_emit.is_ecmascript() && !resolves_in_node_esm_mode(&ctx.file_name) {
+        return stem.to_string();
+    }
+    let prefer_ts = is_declaration_file_name(specifier) && ctx.options.allow_importing_ts_extensions;
+    let suffix = match extension {
+        ".mts" | ".d.mts" => if prefer_ts { ".mts" } else { ".mjs" },
+        ".cts" | ".d.cts" => if prefer_ts { ".cts" } else { ".cjs" },
+        _ => if prefer_ts { ".ts" } else { ".js" },
+    };
+    format!("{stem}{suffix}")
 }
 
 fn import_is_type_only(kind: &ParsedImportKind) -> bool {

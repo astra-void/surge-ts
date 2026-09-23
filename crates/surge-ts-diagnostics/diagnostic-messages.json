@@ -920,6 +920,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2846",
+    "category": "Error",
+    "message": "A declaration file cannot be imported without 'import type'. Did you mean to import an implementation file '{0}' instead?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS6192",
     "category": "Error",
     "message": "All imports in import declaration are unused.",

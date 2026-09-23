@@ -2694,3 +2694,9 @@ status = "emitted"
 oracle = [
   "for-await-in-parse-error",
 ]
+
+[TS2846]
+status = "emitted"
+oracle = [
+  "explicit-ts-extension-imports",
+]
