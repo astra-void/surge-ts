@@ -1928,6 +1928,9 @@ pub struct ParsedArrayElement {
     /// `[...xs]`. The element stands for however many elements `xs` holds, and
     /// what it contributes is `xs`'s *element* type, not `xs` itself.
     pub spread: bool,
+    /// `[1, , 3]`: an omitted element, `undefined` to tsc, which never
+    /// elaborates a mismatch into one.
+    pub omitted: bool,
 }
 
 /// Census-only estimated owned-heap size of a parsed type tree, used by the

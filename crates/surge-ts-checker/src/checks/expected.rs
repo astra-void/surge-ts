@@ -1714,6 +1714,8 @@ fn evaluate_array_literal_with_expected_type(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let mut reported_element = false;
+    let mut omitted_mismatch = false;
+    let mut element_types = Vec::with_capacity(elements.len());
     for element in elements {
         // `[...xs]` writes the *elements* of `xs` into the literal, so the
         // expected element type belongs to what `xs` yields, not to `xs`. The
@@ -1744,7 +1746,12 @@ fn evaluate_array_literal_with_expected_type(
                 {
                     continue;
                 }
+                element_types.push(actual_type.clone());
 
+                if element.omitted && !is_assignable_to(&actual_type, expected_element_type) {
+                    omitted_mismatch = true;
+                    continue;
+                }
                 if !is_assignable_to(&actual_type, expected_element_type) {
                     let reported_target = crate::checks::expr::reported_relation_target(
                         &actual_type,
@@ -1779,6 +1786,13 @@ fn evaluate_array_literal_with_expected_type(
     }
     if reported_element {
         return InferredExpression::Unknown;
+    }
+    // A mismatch only an omitted element carries is the whole literal's: its
+    // own type goes back for the caller to report where it anchors the value.
+    if omitted_mismatch {
+        return InferredExpression::Known(Type::Array(Box::new(surge_ts_types::union_type(
+            element_types,
+        ))));
     }
 
     InferredExpression::Known(Type::Array(Box::new(with_type_copy_reason(
@@ -2192,6 +2206,7 @@ fn evaluate_tuple_literal_with_expected_type(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let mut reported_element = false;
+    let mut omitted_mismatch = false;
     for (index, element) in elements.iter().enumerate() {
         if index >= expected_elements.len() {
             if reported_element {
@@ -2239,6 +2254,10 @@ fn evaluate_tuple_literal_with_expected_type(
                     continue;
                 }
 
+                if element.omitted && !is_assignable_to(&actual_type, expected_element_type) {
+                    omitted_mismatch = true;
+                    continue;
+                }
                 if !is_assignable_to(&actual_type, expected_element_type) {
                     let reported_target = crate::checks::expr::reported_relation_target(
                         &actual_type,
@@ -2280,7 +2299,9 @@ fn evaluate_tuple_literal_with_expected_type(
     let trailing_optional = expected_elements[elements.len().min(expected_elements.len())..]
         .iter()
         .all(|slot| is_assignable_to(&Type::Undefined, slot));
-    if elements.len() != expected_elements.len() && !trailing_optional {
+    // A mismatch only an omitted element carries is reported on the whole
+    // literal, as a length mismatch is.
+    if omitted_mismatch || (elements.len() != expected_elements.len() && !trailing_optional) {
         let source_type_name = Type::Tuple(literal_element_types(elements, symbols, ctx)).name();
         let target_type_name = Type::Tuple(expected_elements.to_vec()).name();
         let (diagnostic, span) = if is_argument {

@@ -1399,7 +1399,15 @@ pub(crate) fn parse_array_expression(
     let mut elements = Vec::new();
 
     for element in &array_expression.elements {
+        // An omitted element (`[1, , 3]`) is still an element: tsc types it
+        // `undefined`, and dropping it shifted every later element's position.
         if element.is_elision() {
+            elements.push(crate::ParsedArrayElement {
+                expression: ParsedExpression::UndefinedLiteral,
+                span: None,
+                spread: false,
+                omitted: true,
+            });
             continue;
         }
 
@@ -1414,6 +1422,7 @@ pub(crate) fn parse_array_expression(
                 expression: parsed_expression,
                 span: Some(text_span_from_oxc_span(span)),
                 spread: true,
+                omitted: false,
             });
             continue;
         }
@@ -1427,6 +1436,7 @@ pub(crate) fn parse_array_expression(
             expression: parsed_expression,
             span: Some(text_span_from_oxc_span(span)),
             spread: false,
+            omitted: false,
         });
     }
 
