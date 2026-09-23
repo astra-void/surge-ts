@@ -139,11 +139,12 @@ pub(crate) fn check_assignment_with_symbols(
                     &reported_target,
                 );
                 let target_type_name = reported_target.name();
-                let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
                     &inferred_value_type,
                     &reported_target,
                     &inferred_type_name,
                     &target_type_name,
+                    false,
                     ctx.file_name.clone(),
                 );
 
