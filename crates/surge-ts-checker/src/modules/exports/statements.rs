@@ -406,16 +406,27 @@ pub(crate) fn collect_exports_from_statement(
                     // declaration's type side too, not just its value
                     // (`getTargetOfExportAssignment`: an entity name is an
                     // alias of every meaning it has).
-                    if let Some(entity_name) =
-                        entity_name_expression(expression, parenthesized_expressions)
-                    {
+                    let entity_name = entity_name_expression(expression, parenthesized_expressions);
+                    if let Some(entity_name) = &entity_name {
                         publish_default_type_export(
-                            &entity_name,
+                            entity_name,
                             local_type_declarations,
                             resolution_scope,
                             type_declarations,
                             ctx,
                         );
+                    }
+                    // An imported name shadows a global of its name: next's
+                    // `import Error from "./_error"; export default Error` is
+                    // that class, not the global `Error`. The exportable
+                    // values fall back to the globals, so own-ness is read
+                    // from their own map.
+                    if let Some(name) = entity_name.as_deref().filter(|name| !name.contains('.'))
+                        && exportable_values.get_own_shared(name).is_none()
+                        && let Some(symbol) = imported_symbols.get_own_shared(name)
+                    {
+                        *default_symbol = Some(symbol);
+                        return;
                     }
 
                     let ty = crate::infer::infer_expression(expression, exportable_values, ctx);
