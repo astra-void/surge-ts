@@ -725,7 +725,11 @@ pub(crate) fn collect_function_declaration_signature(
     ctx: &mut CheckerContext,
     allow_lazy_dependency_signature: bool,
 ) -> FunctionType {
+    // The signature resolves against `symbols`; whatever table the context
+    // held goes back afterwards, or every declaration collected after this one
+    // would resolve names against an empty table.
     let temp_symbols = std::mem::take(symbols);
+    let outer_symbols = std::mem::take(&mut ctx.symbols);
     ctx.set_symbols(temp_symbols);
 
     // Establish the function's own type-parameter scope (with constraints) while
@@ -809,6 +813,7 @@ pub(crate) fn collect_function_declaration_signature(
     };
 
     *symbols = std::mem::take(&mut ctx.symbols);
+    ctx.set_symbols(outer_symbols);
 
     let duplicate = register_function_signature(
         function.name.clone(),

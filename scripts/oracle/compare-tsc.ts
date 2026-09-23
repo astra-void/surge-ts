@@ -754,6 +754,7 @@ export const fixturePresets: Record<string, string> = {
   'super-type-arguments-parse-error': path.join(workspaceRoot, 'tests/compat-projects/super-type-arguments-parse-error/tsconfig.json'),
   'constructor-guard-definite-assignment': path.join(workspaceRoot, 'tests/compat-projects/constructor-guard-definite-assignment/tsconfig.json'),
   'new-function-uninferred-return': path.join(workspaceRoot, 'tests/compat-projects/new-function-uninferred-return/tsconfig.json'),
+  'signature-collection-restores-scope': path.join(workspaceRoot, 'tests/compat-projects/signature-collection-restores-scope/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
