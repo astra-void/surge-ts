@@ -261,13 +261,31 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
             PackageEntrypointKind::RuntimeOnly => {
                 if let Ok(path) = resolution.path.canonicalize() {
                     let file_name = canonicalize_if_exists_string(&path);
+                    let is_json = file_name.to_ascii_lowercase().ends_with(".json");
                     resolved_packages.insert(resolved_key);
                     resolutions.push(PackageResolution {
                         importer: importer_key,
                         specifier: req.specifier.clone(),
-                        resolved_file: file_name,
+                        resolved_file: if !is_json || opts.resolve_json_module {
+                            file_name.clone()
+                        } else {
+                            String::new()
+                        },
                         usage: req.usage,
                     });
+                    // A `.json` module joins the program like the relative
+                    // ones the import graph loads.
+                    if is_json
+                        && opts.resolve_json_module
+                        && known_file_names.insert(file_name.clone())
+                        && let Ok(source_text) = std::fs::read_to_string(&path)
+                    {
+                        inputs.push(SourceFileInput {
+                            file_name: file_name.clone(),
+                            source_text: source_text.clone(),
+                        });
+                        sources.push((path, file_name, source_text));
+                    }
                 }
             }
         }

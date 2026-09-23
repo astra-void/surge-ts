@@ -287,6 +287,7 @@ impl Project {
                     .unwrap_or_else(|| loaded.root_dir.clone()),
             ),
             emit_module: loaded.compiler_options.emit_module,
+            resolve_json_module: loaded.compiler_options.resolve_json_module,
         };
 
         let type_package_resolution = package_declarations::resolve_type_packages(

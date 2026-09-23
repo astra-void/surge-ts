@@ -36,6 +36,9 @@ pub struct ResolverOptions {
     pub path_mapping_base: Option<std::path::PathBuf>,
     /// tsgo's `GetEmitModuleKind`, which decides a file's resolution mode.
     pub emit_module: surge_ts_config::ModuleKind,
+    /// `resolveJsonModule`: a package entry naming a `.json` file resolves to
+    /// it.
+    pub resolve_json_module: bool,
 }
 
 impl Default for ResolverOptions {
@@ -48,6 +51,7 @@ impl Default for ResolverOptions {
             path_mappings: Vec::new(),
             path_mapping_base: None,
             emit_module: surge_ts_config::ModuleKind::ES2022,
+            resolve_json_module: true,
         }
     }
 }

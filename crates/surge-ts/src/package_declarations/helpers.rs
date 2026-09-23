@@ -864,6 +864,9 @@ pub(super) fn resolve_declaration_or_runtime_candidate(
     resolve_runtime_only_candidate(path)
 }
 
+/// A candidate from tsc's fallback extensions: runtime JavaScript, or a
+/// `.json` file named outright, which the loader keeps as a module only under
+/// `resolveJsonModule`.
 pub(super) fn resolve_runtime_only_candidate(path: &Path) -> Option<PackageEntrypointResolution> {
     for candidate in runtime_javascript_candidates(path.to_path_buf()) {
         if crate::probe::is_existing_file(&candidate) {
@@ -872,6 +875,13 @@ pub(super) fn resolve_runtime_only_candidate(path: &Path) -> Option<PackageEntry
                 kind: PackageEntrypointKind::RuntimeOnly,
             });
         }
+    }
+
+    if path_ends_with_ignore_ascii_case(path, ".json") && crate::probe::is_existing_file(path) {
+        return Some(PackageEntrypointResolution {
+            path: path.to_path_buf(),
+            kind: PackageEntrypointKind::RuntimeOnly,
+        });
     }
 
     None
