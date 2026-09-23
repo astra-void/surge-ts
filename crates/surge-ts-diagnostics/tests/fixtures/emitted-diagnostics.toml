@@ -427,8 +427,10 @@ span_tests = [
 ]
 
 [TS2306]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "non-module-file-import-basic",
+]
 
 [TS2307]
 status = "emitted"
@@ -2636,4 +2638,130 @@ oracle = [
 status = "emitted"
 oracle = [
   "node-esm-relative-extension-basic",
+]
+
+[TS1362]
+status = "emitted"
+oracle = [
+  "type-only-export-value-use-basic",
+]
+
+[TS2578]
+status = "emitted"
+oracle = [
+  "unused-expect-error-directive-basic",
+]
+
+[TS2661]
+status = "emitted"
+oracle = [
+  "export-global-name-basic",
+]
+
+[TS2664]
+status = "emitted"
+oracle = [
+  "module-augmentation-target-basic",
+]
+
+[TS2671]
+status = "emitted"
+oracle = [
+  "module-augmentation-target-basic",
+]
+
+[TS2436]
+status = "emitted"
+oracle = [
+  "relative-ambient-module-name-basic",
+]
+
+[TS2432]
+status = "emitted"
+oracle = [
+  "enum-merge-and-const-rules-basic",
+]
+
+[TS2475]
+status = "emitted"
+oracle = [
+  "enum-merge-and-const-rules-basic",
+]
+
+[TS2476]
+status = "emitted"
+oracle = [
+  "enum-merge-and-const-rules-basic",
+]
+
+[TS2477]
+status = "emitted"
+oracle = [
+  "enum-merge-and-const-rules-basic",
+]
+
+[TS2478]
+status = "emitted"
+oracle = [
+  "enum-merge-and-const-rules-basic",
+]
+
+[TS17004]
+status = "emitted"
+oracle = [
+  "jsx-flag-missing-basic",
+]
+
+[TS2707]
+status = "emitted"
+oracle = [
+  "generic-type-argument-range-basic",
+]
+
+[TS7027]
+status = "emitted"
+oracle = [
+  "unreachable-code-basic",
+]
+
+[TS2433]
+status = "emitted"
+oracle = [
+  "merged-declaration-placement-basic",
+]
+
+[TS2434]
+status = "emitted"
+oracle = [
+  "merged-declaration-placement-basic",
+]
+
+[TS2481]
+status = "emitted"
+oracle = [
+  "merged-declaration-placement-basic",
+]
+
+[TS2687]
+status = "emitted"
+oracle = [
+  "merged-declaration-placement-basic",
+]
+
+[TS2813]
+status = "emitted"
+oracle = [
+  "merged-declaration-placement-basic",
+]
+
+[TS2814]
+status = "emitted"
+oracle = [
+  "merged-declaration-placement-basic",
+]
+
+[TS2652]
+status = "emitted"
+oracle = [
+  "default-export-merge-basic",
 ]
