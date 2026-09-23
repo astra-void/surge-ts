@@ -7,7 +7,7 @@ use oxc_span::GetSpan;
 
 use crate::{
     ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedExportSpecifier,
-    ParsedExpression, ParsedStatement,
+    ParsedExpression, ParsedImportKind, ParsedStatement,
 };
 
 use super::expressions::{
@@ -308,14 +308,30 @@ fn parse_exported_declaration(
             super::enums::parse_enum_declaration(enum_declaration, true)
         }
         Declaration::TSModuleDeclaration(module) => super::parse_ts_module_declaration(module),
-        Declaration::TSImportEqualsDeclaration(import_equals)
-            if !matches!(
-                import_equals.module_reference,
-                oxc_ast::ast::TSModuleReference::ExternalModuleReference(_)
-            ) =>
-        {
-            super::imports::parse_import_equals_declaration(import_equals)
-                .map(|import| vec![ParsedStatement::ImportDeclaration(Box::new(import))])?
+        Declaration::TSImportEqualsDeclaration(import_equals) => {
+            let import = super::imports::parse_import_equals_declaration(import_equals)?;
+            // `export import local = require("m")` declares the alias and
+            // exports it — the exported alias `export { local }` would give.
+            if let ParsedImportKind::Equals { local_name, name_span } = &import.kind {
+                let export = ParsedExportDeclaration::Named {
+                    is_type_only: false,
+                    specifiers: vec![ParsedExportSpecifier {
+                        local_name: local_name.clone(),
+                        exported_name: local_name.clone(),
+                        name_span: *name_span,
+                        exported_name_span: *name_span,
+                        is_type_only: false,
+                    }],
+                    module_specifier: None,
+                    module_specifier_span: None,
+                    span: import.span,
+                };
+                return Some(vec![
+                    ParsedStatement::ImportDeclaration(Box::new(import)),
+                    ParsedStatement::ExportDeclaration(Box::new(export)),
+                ]);
+            }
+            vec![ParsedStatement::ImportDeclaration(Box::new(import))]
         }
         _ => return None,
     };

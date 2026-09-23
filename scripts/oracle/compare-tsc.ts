@@ -730,6 +730,7 @@ export const fixturePresets: Record<string, string> = {
   'export-clause-local-targets-basic': path.join(workspaceRoot, 'tests/compat-projects/export-clause-local-targets-basic/tsconfig.json'),
   'untyped-javascript-module-basic': path.join(workspaceRoot, 'tests/compat-projects/untyped-javascript-module-basic/tsconfig.json'),
   'untyped-javascript-module-no-implicit-any': path.join(workspaceRoot, 'tests/compat-projects/untyped-javascript-module-no-implicit-any/tsconfig.json'),
+  'export-import-require-alias-basic': path.join(workspaceRoot, 'tests/compat-projects/export-import-require-alias-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
