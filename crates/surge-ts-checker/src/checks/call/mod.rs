@@ -1731,6 +1731,31 @@ pub(crate) fn check_expression_call(
         return Some(Type::Void);
     }
 
+    if callee.continues_optional_chain()
+        && let Some((unmarked, root)) = unmarked_optional_chain(callee)
+    {
+        let result = check_expression_call(
+            &unmarked,
+            callee_span,
+            call_span,
+            type_arguments,
+            arguments,
+            symbols,
+            ctx,
+        )?;
+        let short_circuits = match crate::infer::infer_expression(root, symbols, ctx) {
+            InferredExpression::Known(receiver) => {
+                crate::checks::expr::receiver_nullability(&receiver).is_some()
+            }
+            _ => true,
+        };
+        return Some(if short_circuits {
+            union_type(vec![result, Type::Undefined])
+        } else {
+            result
+        });
+    }
+
     let callee_result = match immediately_invoked_arrow_type(callee, arguments, symbols, ctx) {
         Some(function_type) => InferredExpression::Known(Type::Function(function_type)),
         None => evaluate_expression(callee, callee_span, symbols, ctx),
@@ -1772,6 +1797,96 @@ pub(crate) fn check_expression_call(
             ctx.degraded_expected_type_depth -= 1;
             None
         }
+    }
+}
+
+/// tsc's `getOptionalExpressionType`: a call continuing an optional chain
+/// (`o?.["m"]()`) invokes the member as read off the non-nullish receiver, and
+/// the chain's short-circuit adds `undefined` to the call's result instead of
+/// to the callee. The chain rewritten with a non-optional access on a
+/// non-null receiver at its root reads the member that way; the root's
+/// receiver says whether the chain can short-circuit.
+fn unmarked_optional_chain(
+    expression: &ParsedExpression,
+) -> Option<(ParsedExpression, &ParsedExpression)> {
+    let non_null = |object: &ParsedExpression, span: Option<SyntaxTextSpan>| {
+        Box::new(ParsedExpression::NonNullAssertion {
+            expression: Box::new(object.clone()),
+            span,
+            in_optional_chain: false,
+        })
+    };
+    match expression {
+        ParsedExpression::OptionalPropertyAccess {
+            object,
+            object_span,
+            property_name,
+            property_span,
+            is_bracketed,
+        } => Some((
+            ParsedExpression::PropertyAccess {
+                object: non_null(object, *object_span),
+                object_span: *object_span,
+                property_name: property_name.clone(),
+                property_span: *property_span,
+                is_bracketed: *is_bracketed,
+                binding_element: false,
+            },
+            object,
+        )),
+        ParsedExpression::OptionalIndexAccess {
+            object,
+            object_span,
+            index,
+            index_span,
+        } => Some((
+            ParsedExpression::ElementAccess {
+                object: non_null(object, *object_span),
+                object_span: *object_span,
+                index: index.clone(),
+                index_span: *index_span,
+            },
+            object,
+        )),
+        ParsedExpression::PropertyAccess {
+            object,
+            object_span,
+            property_name,
+            property_span,
+            is_bracketed,
+            binding_element,
+        } if object.continues_optional_chain() => {
+            let (inner, root) = unmarked_optional_chain(object)?;
+            Some((
+                ParsedExpression::PropertyAccess {
+                    object: Box::new(inner),
+                    object_span: *object_span,
+                    property_name: property_name.clone(),
+                    property_span: *property_span,
+                    is_bracketed: *is_bracketed,
+                    binding_element: *binding_element,
+                },
+                root,
+            ))
+        }
+        ParsedExpression::ElementAccess {
+            object,
+            object_span,
+            index,
+            index_span,
+        } if object.continues_optional_chain() => {
+            let (inner, root) = unmarked_optional_chain(object)?;
+            Some((
+                ParsedExpression::ElementAccess {
+                    object: Box::new(inner),
+                    object_span: *object_span,
+                    index: index.clone(),
+                    index_span: *index_span,
+                },
+                root,
+            ))
+        }
+        _ => None,
     }
 }
 
