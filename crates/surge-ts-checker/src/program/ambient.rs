@@ -1608,6 +1608,7 @@ pub(crate) fn merge_module_export_tables(
     }
 
     target.namespace_export_object_type = None;
+    target.writes_export_assignment |= source.writes_export_assignment;
     target.has_unresolved_star_export |= source.has_unresolved_star_export;
     target.has_incomplete_declaration_surface |= source.has_incomplete_declaration_surface;
 }

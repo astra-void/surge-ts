@@ -203,12 +203,24 @@ pub(crate) fn build_module_export_table(
         symbols,
         default_symbol,
         export_assignment_symbol,
+        writes_export_assignment: parsed_file.statements.iter().any(is_export_assignment),
         namespace_export_object_type: None,
         has_unresolved_star_export: false,
         has_incomplete_declaration_surface: module_has_incomplete_declaration_surface(parsed_file),
         shorthand: false,
         type_only_exports: Arc::new(type_only_exports),
     }
+}
+
+fn is_export_assignment(statement: &ParsedStatement) -> bool {
+    matches!(
+        statement,
+        ParsedStatement::ExportDeclaration(export)
+            if matches!(
+                export.as_ref(),
+                ParsedExportDeclaration::Equals { .. } | ParsedExportDeclaration::EqualsExpression { .. }
+            )
+    )
 }
 
 /// The export surface of a `.json` module: the value itself as the default
@@ -242,6 +254,7 @@ fn build_json_module_export_table(
         symbols,
         default_symbol: Some(Arc::new(value_symbol(value_type.clone()))),
         export_assignment_symbol: Some(Arc::new(value_symbol(value_type.clone()))),
+        writes_export_assignment: true,
         has_unresolved_star_export: false,
         namespace_export_object_type: Some(value_type),
         has_incomplete_declaration_surface: false,

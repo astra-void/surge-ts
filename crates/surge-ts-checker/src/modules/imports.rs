@@ -353,12 +353,19 @@ pub(crate) fn ambient_module_export_table<'a>(
     ctx: &'a CheckerContext,
     module_specifier: &str,
 ) -> Option<&'a ModuleExportTable> {
-    if let Some(export_table) = ctx.ambient_modules.get(module_specifier) {
-        return Some(export_table);
+    ctx.ambient_modules
+        .get(ambient_module_name(ctx, module_specifier)?)
+}
+
+/// The name of the ambient module [`ambient_module_export_table`] finds for
+/// `module_specifier`: the declaration itself or the wildcard pattern.
+fn ambient_module_name<'a>(ctx: &'a CheckerContext, module_specifier: &str) -> Option<&'a str> {
+    if let Some((name, _)) = ctx.ambient_modules.get_key_value(module_specifier) {
+        return Some(name);
     }
 
-    let mut best: Option<(usize, &ModuleExportTable)> = None;
-    for (pattern, export_table) in ctx.ambient_modules.iter() {
+    let mut best: Option<(usize, &str)> = None;
+    for pattern in ctx.ambient_modules.keys() {
         let Some((prefix, suffix)) = pattern.split_once('*') else {
             continue;
         };
@@ -370,11 +377,11 @@ pub(crate) fn ambient_module_export_table<'a>(
             continue;
         }
         if best.is_none_or(|(best_prefix, _)| prefix.len() > best_prefix) {
-            best = Some((prefix.len(), export_table));
+            best = Some((prefix.len(), pattern));
         }
     }
 
-    best.map(|(_, export_table)| export_table)
+    best.map(|(_, pattern)| pattern)
 }
 
 /// Whether a resolved file must yield to an ambient `declare module
@@ -1287,22 +1294,7 @@ fn resolve_import_equals(
     // resolve keeps the unknown placeholder: its real shape is that value, not
     // the module namespace, and standing the (empty) namespace in its place
     // turns every use into a cascade.
-    let writes_export_assignment = resolved_index
-        .and_then(|index| program_files.get(index))
-        .is_some_and(|resolved_file| {
-            resolved_file.statements.iter().any(|statement| {
-                matches!(
-                    statement,
-                    ParsedStatement::ExportDeclaration(export)
-                        if matches!(
-                            export.as_ref(),
-                            ParsedExportDeclaration::Equals { .. }
-                                | ParsedExportDeclaration::EqualsExpression { .. }
-                        )
-                )
-            })
-        });
-    if writes_export_assignment || resolved_index.is_none() {
+    if export_table.writes_export_assignment {
         insert_unknown_value_import(local_name, symbols);
         return;
     }
@@ -1313,7 +1305,9 @@ fn resolve_import_equals(
     // `x.member` and every `typeof x.member` silent, which is what opened the
     // whole jscodeshift surface in tRPC's `upgrade` transforms: its `JSCodeshift`
     // is an intersection over `typeof recast.types.namedTypes`, reached through
-    // `import recast = require("recast")`.
+    // `import recast = require("recast")`. An ambient `declare module "m"` is
+    // such a module too (`resolveExternalModuleSymbol` returns the module
+    // symbol when it has no `export =`).
     namespace_alias_layers.push(namespace_alias_table(
         &export_table,
         local_name,
@@ -1331,10 +1325,12 @@ fn resolve_import_equals(
     }
 
     let namespace_type = namespace_export_object_type(&export_table);
-    let namespace_type = match resolved_index.and_then(|index| program_files.get(index)) {
-        Some(resolved_file) => {
-            tag_namespace_type_with_module_path(namespace_type, &resolved_file.file_name)
-        }
+    let module_name = match resolved_index {
+        Some(index) => program_files.get(index).map(|file| file.file_name.as_str()),
+        None => ambient_module_name(ctx, &import.module_specifier),
+    };
+    let namespace_type = match module_name {
+        Some(module_name) => tag_namespace_type_with_module_path(namespace_type, module_name),
         None => namespace_type,
     };
     symbols.insert(

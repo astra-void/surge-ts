@@ -66,6 +66,10 @@ pub(crate) struct ModuleExportTable {
     /// `default_symbol` so plain ESM default imports do not resolve through it
     /// (no synthetic default / `esModuleInterop`).
     pub(crate) export_assignment_symbol: Option<Arc<SymbolInfo>>,
+    /// Whether the module writes `export =`, whether or not surge resolved its
+    /// entity: `import x = require()` of it binds that entity, never the
+    /// module namespace.
+    pub(crate) writes_export_assignment: bool,
     pub(crate) namespace_export_object_type: Option<Type>,
     pub(crate) has_unresolved_star_export: bool,
     pub(crate) has_incomplete_declaration_surface: bool,
@@ -95,6 +99,7 @@ impl Clone for ModuleExportTable {
             symbols: self.symbols.clone(),
             default_symbol: self.default_symbol.clone(),
             export_assignment_symbol: self.export_assignment_symbol.clone(),
+            writes_export_assignment: self.writes_export_assignment,
             namespace_export_object_type: self.namespace_export_object_type.clone(),
             has_unresolved_star_export: self.has_unresolved_star_export,
             has_incomplete_declaration_surface: self.has_incomplete_declaration_surface,
