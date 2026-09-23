@@ -264,39 +264,6 @@ impl Project {
                 .sum::<u64>();
         }
 
-        let default_lib_loading_start = Instant::now();
-        let default_lib_load = load_default_lib_inputs(DefaultLibRequest {
-            no_lib: loaded.compiler_options.no_lib,
-            lib_entries: loaded.compiler_options.lib.as_slice(),
-            root_dir: &loaded.root_dir,
-            target_basename: target_lib_basename(loaded.compiler_options.target),
-            source: options.lib_source.clone(),
-        });
-        for unknown in &default_lib_load.unknown_libs {
-            warnings.push(format!(
-                "unknown lib '{unknown}' in compilerOptions.lib; no matching lib*.d.ts file"
-            ));
-        }
-        if let Some(error) = &default_lib_load.override_error
-            && !loaded.compiler_options.no_lib
-        {
-            warnings.push(error.clone());
-        }
-        let default_lib_io = default_lib_load.io_stats;
-        let default_lib_inputs = default_lib_load.inputs;
-        if collect {
-            timings.default_lib_loading += default_lib_loading_start.elapsed();
-            timings.default_lib_files_read += default_lib_inputs.len() as u64;
-            timings.default_lib_bytes_read += default_lib_inputs
-                .iter()
-                .map(|input| input.source_text.len() as u64)
-                .sum::<u64>();
-            timings.default_lib_read_io += default_lib_io.read_io;
-            timings.default_lib_existence_probes += default_lib_io.existence_probes;
-            timings.default_lib_canonicalize_syscalls += default_lib_io.canonicalize_syscalls;
-        }
-        surge_ts_checker::lowlevel::record_loader_rss_stage("default_libs_loaded");
-
         let mut resolved_modules = surge_ts_types::fx::FxHashMap::default();
         let mut resolved_modules_by_importer: surge_ts_types::fx::FxHashMap<
             String,
@@ -456,6 +423,47 @@ impl Project {
         if collect {
             timings.path_mapping_resolution += path_mapping_start.elapsed();
         }
+
+        // The lib set is only known once every program file is: tsc's file
+        // loader adds each file's `/// <reference lib>` to the program.
+        let referenced_libs = if loaded.compiler_options.no_lib {
+            Vec::new()
+        } else {
+            referenced_lib_names(&inputs)
+        };
+        let default_lib_loading_start = Instant::now();
+        let default_lib_load = load_default_lib_inputs(DefaultLibRequest {
+            no_lib: loaded.compiler_options.no_lib,
+            lib_entries: loaded.compiler_options.lib.as_slice(),
+            referenced_libs: &referenced_libs,
+            root_dir: &loaded.root_dir,
+            target_basename: target_lib_basename(loaded.compiler_options.target),
+            source: options.lib_source.clone(),
+        });
+        for unknown in &default_lib_load.unknown_libs {
+            warnings.push(format!(
+                "unknown lib '{unknown}' in compilerOptions.lib; no matching lib*.d.ts file"
+            ));
+        }
+        if let Some(error) = &default_lib_load.override_error
+            && !loaded.compiler_options.no_lib
+        {
+            warnings.push(error.clone());
+        }
+        let default_lib_io = default_lib_load.io_stats;
+        let default_lib_inputs = default_lib_load.inputs;
+        if collect {
+            timings.default_lib_loading += default_lib_loading_start.elapsed();
+            timings.default_lib_files_read += default_lib_inputs.len() as u64;
+            timings.default_lib_bytes_read += default_lib_inputs
+                .iter()
+                .map(|input| input.source_text.len() as u64)
+                .sum::<u64>();
+            timings.default_lib_read_io += default_lib_io.read_io;
+            timings.default_lib_existence_probes += default_lib_io.existence_probes;
+            timings.default_lib_canonicalize_syscalls += default_lib_io.canonicalize_syscalls;
+        }
+        surge_ts_checker::lowlevel::record_loader_rss_stage("default_libs_loaded");
 
         // Default-lib sources never contribute project imports or package
         // specifiers, so they stay out of the package-declaration / import-graph
@@ -710,6 +718,18 @@ fn read_project_sources(
         sources.extend(chunk?);
     }
     Ok(sources)
+}
+
+fn referenced_lib_names(inputs: &[SourceFileInput]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for input in inputs {
+        for name in surge_ts_checker::lowlevel::reference_lib_directives(&input.source_text) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
 }
 
 /// Map a configured `target` to the lib name base used to derive the default

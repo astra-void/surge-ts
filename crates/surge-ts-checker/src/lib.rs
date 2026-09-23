@@ -58,7 +58,7 @@ pub mod lowlevel {
         DefaultLibIoStats, DefaultLibLoad, DefaultLibRequest, DirectoryLibSource, EMBEDDED_LIB_DIR,
         EmbeddedLib, EmbeddedLibSource, LibSource, LibSourceChoice, PhysicalLibResolution,
         bundled_typescript_version, default_full_lib_seed_for_target, find_typescript_lib_dir,
-        load_default_lib_inputs, load_generated_default_lib_inputs,
+        load_default_lib_inputs, load_generated_default_lib_inputs, reference_lib_directives,
     };
     pub use crate::metrics::{last_rss_stage_label, record_loader_rss_stage};
     pub use crate::program::check_program_with_prescanned_sources;

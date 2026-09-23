@@ -12,7 +12,7 @@ pub use loader::{
 pub(crate) use physical::is_physical_default_lib_file_name;
 pub use physical::{
     DefaultLibIoStats, PhysicalLibResolution, default_full_lib_seed_for_target,
-    find_typescript_lib_dir,
+    find_typescript_lib_dir, reference_lib_directives,
 };
 pub use provider::{DirectoryLibSource, EmbeddedLibSource, LibSource};
 pub(crate) use source::is_generated_default_lib_file_name;

@@ -32,6 +32,9 @@ pub struct DefaultLibRequest<'a> {
     pub no_lib: bool,
     /// `compilerOptions.lib`. Empty means "derive the lib set from `target`".
     pub lib_entries: &'a [String],
+    /// `/// <reference lib>` names declared by the program's files, loaded in
+    /// addition to the configured set.
+    pub referenced_libs: &'a [String],
     /// Project root, used to discover an installed TypeScript when asked.
     pub root_dir: &'a Path,
     /// Target lib basename (e.g. `"es2022"`) used to derive the implicit
@@ -112,6 +115,7 @@ pub fn load_default_lib_inputs(request: DefaultLibRequest<'_>) -> DefaultLibLoad
         request.no_lib,
         request.lib_entries,
         &seed,
+        request.referenced_libs,
         DefaultLibIoStats::default(),
     );
 
@@ -136,6 +140,7 @@ pub fn load_generated_default_lib_inputs(
         no_lib,
         lib_entries.unwrap_or_default(),
         &default_full_lib_seed_for_target("es2024"),
+        &[],
         DefaultLibIoStats::default(),
     )
     .inputs
