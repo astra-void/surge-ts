@@ -138,7 +138,19 @@ pub(crate) fn collect_exports_from_statement(
                 for specifier in specifiers {
                     let specifier_is_type_only = *is_type_only || specifier.is_type_only;
 
-                    if specifier_is_type_only {
+                    // tsc's `checkExportSpecifier` resolves every meaning of the
+                    // name; `type` only keeps an importer from reading a value
+                    // through it, so a type-only specifier naming a value is
+                    // resolved as any other.
+                    if specifier_is_type_only
+                        && local_type_declarations
+                            .get_handle(&specifier.local_name)
+                            .or_else(|| {
+                                resolution_scope
+                                    .and_then(|scope| scope.get_handle(&specifier.local_name))
+                            })
+                            .is_some()
+                    {
                         export_local_type_name(
                             &specifier.local_name,
                             &specifier.exported_name,

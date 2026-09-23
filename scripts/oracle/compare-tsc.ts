@@ -745,6 +745,7 @@ export const fixturePresets: Record<string, string> = {
   'iife-contextual-parameters': path.join(workspaceRoot, 'tests/compat-projects/iife-contextual-parameters/tsconfig.json'),
   'unused-import-declaration-grouping': path.join(workspaceRoot, 'tests/compat-projects/unused-import-declaration-grouping/tsconfig.json'),
   'default-and-namespace-import': path.join(workspaceRoot, 'tests/compat-projects/default-and-namespace-import/tsconfig.json'),
+  'type-only-export-specifier-value': path.join(workspaceRoot, 'tests/compat-projects/type-only-export-specifier-value/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
