@@ -1119,7 +1119,7 @@ impl GrammarCollector {
                     }
                     if method.kind == MethodDefinitionKind::Constructor {
                         if method.value.body.is_none() {
-                            self.check_signature_parameters(&method.value.params, true);
+                            self.check_signature_parameters(&method.value.params);
                         }
                         constructors.push((method.key.span(), method.value.body.is_some()));
                         continue;
@@ -1360,24 +1360,12 @@ impl GrammarCollector {
         }
     }
 
-    /// A signature has no body to run a default in, and no instance to declare
-    /// a parameter property on.
-    fn check_signature_parameters(
-        &mut self,
-        parameters: &FormalParameters<'_>,
-        is_constructor: bool,
-    ) {
+    /// A signature has no body to run a default in.
+    fn check_signature_parameters(&mut self, parameters: &FormalParameters<'_>) {
         for parameter in &parameters.items {
             if parameter.initializer.is_some() {
                 self.push(
                     Kind::ParameterInitializerOutsideImplementation,
-                    parameter.span,
-                    None,
-                );
-            }
-            if is_constructor && (parameter.accessibility.is_some() || parameter.readonly) {
-                self.push(
-                    Kind::ParameterPropertyOutsideImplementation,
                     parameter.span,
                     None,
                 );
@@ -2052,7 +2040,7 @@ impl<'a> Visit<'a> for GrammarCollector {
             self.check_async_return_type(function.return_type.as_deref());
         }
         if function.body.is_none() {
-            self.check_signature_parameters(&function.params, false);
+            self.check_signature_parameters(&function.params);
         }
         self.function_async.push(function.r#async);
         oxc_ast_visit::walk::walk_function(self, function, flags);
@@ -2135,7 +2123,7 @@ impl<'a> Visit<'a> for GrammarCollector {
         if signature.return_type.is_none() {
             self.push(Kind::ImplicitAnyCallReturn, signature.span, None);
         }
-        self.check_signature_parameters(&signature.params, false);
+        self.check_signature_parameters(&signature.params);
         self.check_implicit_any_signature_parameters(&signature.params);
         oxc_ast_visit::walk::walk_ts_call_signature_declaration(self, signature);
     }
@@ -2147,7 +2135,7 @@ impl<'a> Visit<'a> for GrammarCollector {
         if signature.return_type.is_none() {
             self.push(Kind::ImplicitAnyConstructReturn, signature.span, None);
         }
-        self.check_signature_parameters(&signature.params, false);
+        self.check_signature_parameters(&signature.params);
         self.check_implicit_any_signature_parameters(&signature.params);
         oxc_ast_visit::walk::walk_ts_construct_signature_declaration(self, signature);
     }
@@ -2163,7 +2151,7 @@ impl<'a> Visit<'a> for GrammarCollector {
     }
 
     fn visit_ts_method_signature(&mut self, method: &TSMethodSignature<'a>) {
-        self.check_signature_parameters(&method.params, false);
+        self.check_signature_parameters(&method.params);
         self.check_implicit_any_signature_parameters(&method.params);
         if method.kind == TSMethodSignatureKind::Method
             && method.return_type.is_none()

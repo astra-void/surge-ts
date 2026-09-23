@@ -879,6 +879,17 @@ pub(crate) fn unclaimed_parser_errors<'a>(
         if error.code.is_some_and(|code| claimed.contains(&code)) {
             return false;
         }
+        // oxc rejects any parameter-property modifier outside a constructor
+        // as TS1090; tsc's modifier grammar rejects only `static`, `export`,
+        // `declare` and `async` on a parameter and reports a misplaced
+        // parameter property as TS2369 instead.
+        if error.code == Some(1090)
+            && error.span_text.as_deref().is_some_and(|modifier| {
+                matches!(modifier, "public" | "private" | "protected" | "readonly" | "override")
+            })
+        {
+            return false;
+        }
         !(error.code == Some(1030)
             && error.span.is_some_and(|span| {
                 abstract_members
@@ -1003,9 +1014,6 @@ fn grammar_finding_diagnostic(
         Kind::ObjectLiteralPropertyAndAccessor => Diagnostic::ts1119(ctx.file_name.clone()),
         Kind::AbstractMethodOutsideAbstractClass => Diagnostic::ts1244(ctx.file_name.clone()),
         Kind::AbstractPropertyOutsideAbstractClass => Diagnostic::ts1253(ctx.file_name.clone()),
-        Kind::ParameterPropertyOutsideImplementation => {
-            Diagnostic::ts2369(ctx.file_name.clone())
-        }
         Kind::ParameterInitializerOutsideImplementation => {
             Diagnostic::ts2371(ctx.file_name.clone())
         }

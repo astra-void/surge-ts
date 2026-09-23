@@ -1221,6 +1221,27 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
+    /// tsc's `checkParameter`: an accessibility, `readonly` or `override`
+    /// modifier declares a parameter property, which only a constructor with
+    /// a body can have — TS2369 on any other parameter list.
+    fn check_parameter_property(&mut self, parameter: &oxc_ast::ast::FormalParameter<'_>) {
+        if parameter.accessibility.is_none() && !parameter.readonly && !parameter.r#override {
+            return;
+        }
+        let mut ancestors = self.stack.iter().rev();
+        ancestors.next();
+        let in_constructor_implementation = match (ancestors.next(), ancestors.next()) {
+            (Some(AstKind::Function(function)), Some(AstKind::MethodDefinition(method))) => {
+                method.kind == oxc_ast::ast::MethodDefinitionKind::Constructor
+                    && function.body.is_some()
+            }
+            _ => false,
+        };
+        if !in_constructor_implementation {
+            self.push(2369, parameter.span, &[]);
+        }
+    }
+
     /// A decorator on a parameter of a plain function — TS1206. (A class
     /// method's parameter decorators depend on `experimentalDecorators`.)
     fn check_parameter_decorator(&mut self, decorator: &oxc_ast::ast::Decorator<'_>) {
@@ -1781,6 +1802,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_jump(statement.span, statement.label.as_ref().map(|l| l.name.as_str()), true);
             }
             AstKind::LabeledStatement(statement) => self.check_labeled_statement(statement),
+            AstKind::FormalParameter(parameter) => self.check_parameter_property(parameter),
             AstKind::WithStatement(statement) => self.check_with_statement(statement),
             AstKind::BindingIdentifier(identifier) => {
                 self.check_contextual_identifier(&identifier.name, identifier.span);

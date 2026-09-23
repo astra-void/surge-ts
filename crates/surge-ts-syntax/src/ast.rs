@@ -211,8 +211,6 @@ pub enum ParsedGrammarDiagnosticKind {
     AbstractMethodOutsideAbstractClass,
     /// An `abstract` property in a class that is not abstract — TS1253.
     AbstractPropertyOutsideAbstractClass,
-    /// A parameter property on a constructor signature — TS2369.
-    ParameterPropertyOutsideImplementation,
     /// A parameter default on a signature with no body — TS2371.
     ParameterInitializerOutsideImplementation,
     /// A grammar error identified by its TypeScript number alone; `name`
