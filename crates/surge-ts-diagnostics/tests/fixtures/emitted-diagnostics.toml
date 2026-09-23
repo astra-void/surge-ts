@@ -2637,3 +2637,147 @@ status = "emitted"
 oracle = [
   "node-esm-relative-extension-basic",
 ]
+
+[TS1040]
+status = "emitted"
+oracle = [
+  "modifier-ambient-and-async-placement-basic",
+]
+
+[TS1042]
+status = "emitted"
+oracle = [
+  "modifier-ambient-and-async-placement-basic",
+]
+
+[TS1044]
+status = "emitted"
+oracle = [
+  "modifier-ambient-and-async-placement-basic",
+]
+
+[TS1243]
+status = "emitted"
+oracle = [
+  "modifier-combinations-basic",
+]
+
+[TS1277]
+status = "emitted"
+oracle = [
+  "const-type-parameter-owner-basic",
+]
+
+[TS1232]
+status = "emitted"
+oracle = [
+  "module-element-context-basic",
+]
+
+[TS1233]
+status = "emitted"
+oracle = [
+  "module-element-context-basic",
+]
+
+[TS1234]
+status = "emitted"
+oracle = [
+  "module-element-context-basic",
+]
+
+[TS1235]
+status = "emitted"
+oracle = [
+  "module-element-context-basic",
+]
+
+[TS1258]
+status = "emitted"
+oracle = [
+  "module-element-context-basic",
+]
+
+[TS1231]
+status = "emitted"
+oracle = [
+  "export-assignment-context-basic",
+]
+
+[TS1319]
+status = "emitted"
+oracle = [
+  "namespace-default-export-basic",
+]
+
+[TS2435]
+status = "emitted"
+oracle = [
+  "ambient-module-nesting-basic",
+]
+
+[TS1540]
+status = "emitted"
+oracle = [
+  "module-keyword-namespace-basic",
+]
+
+[TS2669]
+status = "emitted"
+oracle = [
+  "global-augmentation-placement-basic",
+]
+
+[TS2670]
+status = "emitted"
+oracle = [
+  "global-augmentation-placement-basic",
+]
+
+[TS2666]
+status = "emitted"
+oracle = [
+  "global-augmentation-placement-basic",
+]
+
+[TS2667]
+status = "emitted"
+oracle = [
+  "global-augmentation-placement-basic",
+]
+
+[TS2668]
+status = "emitted"
+oracle = [
+  "ambient-module-export-modifier-basic",
+]
+
+[TS1046]
+status = "emitted"
+oracle = [
+  "declaration-file-declare-modifier-basic",
+]
+
+[TS1346]
+status = "emitted"
+oracle = [
+  "use-strict-parameter-list-basic",
+]
+
+[TS1347]
+status = "emitted"
+oracle = [
+  "use-strict-parameter-list-basic",
+]
+
+[TS2754]
+status = "emitted"
+oracle = [
+  "super-type-arguments-basic",
+]
+
+[TS2848]
+status = "emitted"
+oracle = [
+  "instanceof-instantiation-expression-basic",
+]
