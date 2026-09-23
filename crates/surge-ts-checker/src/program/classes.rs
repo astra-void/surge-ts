@@ -1520,10 +1520,15 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
                 if !method.has_body {
                     continue;
                 }
-                let this_type = if method.is_static {
-                    static_type.clone()
-                } else {
-                    instance_type.clone()
+                // A method's own `this` parameter is what `this` means in it.
+                let this_type = match &method.this_parameter_type {
+                    Some(written) => crate::checks::function::with_type_parameter_scope(
+                        &method.type_parameters,
+                        ctx,
+                        |ctx| map_parsed_type(written.clone(), ctx),
+                    ),
+                    None if method.is_static => static_type.clone(),
+                    None => instance_type.clone(),
                 };
                 check_function_body_with_signature_and_this(
                     None,
