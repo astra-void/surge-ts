@@ -411,6 +411,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             }
         }
         ClassElement::PropertyDefinition(property) => {
+            let has_literal_name = !property.computed && is_literal_property_key(&property.key);
             let (name, name_span) = if property.computed {
                 (super::types::computed_key_name(&property.key)?, property.key.span())
             } else {
@@ -437,6 +438,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 span: Some(text_span_from_oxc_span(property.span)),
                 name,
                 name_span: Some(text_span_from_oxc_span(name_span)),
+                has_literal_name,
                 is_static: property.r#static,
                 is_override: property.r#override,
                 is_abstract: matches!(
@@ -463,6 +465,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
         // slot: for typing it is the property it looks like. Dropping it made
         // every use of the member a missing property.
         ClassElement::AccessorProperty(property) => {
+            let has_literal_name = !property.computed && is_literal_property_key(&property.key);
             let (name, name_span) = if property.computed {
                 (super::types::computed_key_name(&property.key)?, property.key.span())
             } else {
@@ -486,6 +489,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 span: Some(text_span_from_oxc_span(property.span)),
                 name,
                 name_span: Some(text_span_from_oxc_span(name_span)),
+                has_literal_name,
                 is_static: property.r#static,
                 is_override: property.r#override,
                 is_abstract: matches!(
@@ -504,4 +508,8 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
         // Index signatures are not part of this slice.
         ClassElement::TSIndexSignature(_) => None,
     }
+}
+
+fn is_literal_property_key(key: &PropertyKey<'_>) -> bool {
+    matches!(key, PropertyKey::StringLiteral(_) | PropertyKey::NumericLiteral(_))
 }

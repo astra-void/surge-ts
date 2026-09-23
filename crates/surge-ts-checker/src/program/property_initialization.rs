@@ -150,6 +150,7 @@ fn check_declared_properties(
             continue;
         };
         if property.is_static
+            || property.has_literal_name
             || property.is_abstract
             || property.is_declare
             || property.has_definite_assertion

@@ -945,6 +945,9 @@ pub const EXPRESSION_HERITAGE_BASE: &str = "\0expression-base";
 pub struct ParsedClassProperty {
     pub name: String,
     pub name_span: Option<TextSpan>,
+    /// `"a": T` or `1: T`: a string or numeric literal key, which tsc's
+    /// property-initialization check (TS2564) does not look at.
+    pub has_literal_name: bool,
     pub is_static: bool,
     pub is_override: bool,
     pub is_abstract: bool,
