@@ -1022,6 +1022,7 @@ export const fixturePresets: Record<string, string> = {
   'object-literal-predicate-members': path.join(workspaceRoot, 'tests/compat-projects/object-literal-predicate-members/tsconfig.json'),
   'property-reference-discriminant-narrowing': path.join(workspaceRoot, 'tests/compat-projects/property-reference-discriminant-narrowing/tsconfig.json'),
   'property-reference-nullish-union-base': path.join(workspaceRoot, 'tests/compat-projects/property-reference-nullish-union-base/tsconfig.json'),
+  'override-declare-property': path.join(workspaceRoot, 'tests/compat-projects/override-declare-property/tsconfig.json'),
   'class-property-arrow-signature': path.join(workspaceRoot, 'tests/compat-projects/class-property-arrow-signature/tsconfig.json'),
 };
 

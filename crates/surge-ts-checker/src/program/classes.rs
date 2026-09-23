@@ -2239,6 +2239,9 @@ fn check_implicit_override(class: &ParsedClassDeclaration, ctx: &mut CheckerCont
                 method.is_static,
                 method.is_override,
             ),
+            // tsc's `checkMembersForOverrideModifier` skips a member with the
+            // `declare` modifier: it only redeclares the base's property.
+            ParsedClassMember::Property(property) if property.is_declare => continue,
             ParsedClassMember::Property(property) => (
                 &property.name,
                 property.name_span,
