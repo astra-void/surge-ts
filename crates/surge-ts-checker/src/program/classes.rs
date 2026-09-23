@@ -1427,6 +1427,14 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
         .collect();
 
     for member in &class.members {
+        let _this_class = crate::checks::expr::ThisParameterClassScope::enter(match member {
+            ParsedClassMember::Method(method) => crate::checks::expr::this_parameter_class(
+                method.this_parameter_type.as_ref(),
+                &method.type_parameters,
+                ctx,
+            ),
+            _ => None,
+        });
         let static_span = match member {
             ParsedClassMember::Method(method) => method.is_static.then_some(method.span),
             ParsedClassMember::Property(property) => property.is_static.then_some(property.span),

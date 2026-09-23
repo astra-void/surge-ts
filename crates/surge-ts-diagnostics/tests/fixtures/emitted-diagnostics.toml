@@ -88,6 +88,12 @@ oracle = [
   "member-accessibility-basic",
 ]
 
+[TS2446]
+status = "emitted"
+oracle = [
+  "protected-access-through-instance",
+]
+
 [TS2456]
 status = "emitted"
 oracle = [

@@ -1650,6 +1650,8 @@ pub(crate) fn check_arrow_function_expression_anchored(
         surge_ts_syntax::ParsedThisBinding::Own => ctx.this_is_implicitly_any = false,
         surge_ts_syntax::ParsedThisBinding::ImplicitAny => ctx.this_is_implicitly_any = true,
     }
+    let _this_class = (!matches!(this_binding, surge_ts_syntax::ParsedThisBinding::Inherited))
+        .then(|| crate::checks::expr::ThisParameterClassScope::enter(None));
 
     let mut expanded_contextual_parameter_types = expected_type
         .map(|expected_type| contextual_parameter_types(expected_type, parameters.len()));

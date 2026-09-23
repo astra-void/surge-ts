@@ -348,6 +348,12 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                             method.value.type_parameters.as_deref(),
                         ),
                         parameters,
+                        this_parameter_type: method
+                            .value
+                            .this_param
+                            .as_ref()
+                            .and_then(|this_param| this_param.type_annotation.as_ref())
+                            .and_then(|annotation| parse_type_annotation(annotation)),
                         return_type,
                         return_type_span,
                         body,

@@ -215,6 +215,16 @@ pub const TS2445: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2446: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2446",
+    number: Some(2446),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Property '{0}' is protected and only accessible through an instance of class '{1}'. This is an instance of class '{2}'.",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2440: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2440",
     number: Some(2440),
@@ -4227,6 +4237,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2484,
     TS2341,
     TS2445,
+    TS2446,
     TS2440,
     TS2613,
     TS2614,
@@ -4868,6 +4879,24 @@ impl Diagnostic {
             vec![
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2446(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2446,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
             ],
             file_name,
         )

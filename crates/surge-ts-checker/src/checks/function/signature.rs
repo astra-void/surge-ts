@@ -1790,6 +1790,9 @@ pub(crate) fn check_function_body_with_signature(
     this_parameter_type: Option<ParsedType>,
     ctx: &mut CheckerContext,
 ) {
+    let _this_class = crate::checks::expr::ThisParameterClassScope::enter(
+        crate::checks::expr::this_parameter_class(this_parameter_type.as_ref(), type_parameters, ctx),
+    );
     let this_type = this_parameter_type.map(|this_parameter_type| {
         with_type_parameter_scope(type_parameters, ctx, |ctx| {
             crate::infer::map_parsed_type(this_parameter_type, ctx)

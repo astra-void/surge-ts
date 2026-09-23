@@ -168,6 +168,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2446",
+    "category": "Error",
+    "message": "Property '{0}' is protected and only accessible through an instance of class '{1}'. This is an instance of class '{2}'.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
     "code": "TS2440",
     "category": "Error",
     "message": "Import declaration conflicts with local declaration of '{0}'.",

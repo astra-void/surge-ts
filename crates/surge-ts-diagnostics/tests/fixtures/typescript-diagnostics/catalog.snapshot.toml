@@ -169,6 +169,14 @@ message = "Property '{0}' is protected and only accessible within class '{1}' an
 arity = 2
 
 [[diagnostic]]
+code = "TS2446"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' is protected and only accessible through an instance of class '{1}'. This is an instance of class '{2}'."
+arity = 3
+
+[[diagnostic]]
 code = "TS2440"
 category = "Error"
 source = "typescript"
