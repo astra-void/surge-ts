@@ -875,6 +875,16 @@ pub const TS2745: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1034: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1034",
+    number: Some(1034),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'super' must be followed by an argument list or member access.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS2754: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS2754",
     number: Some(2754),
@@ -4153,6 +4163,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2686,
     TS2741,
     TS2745,
+    TS1034,
     TS2754,
     TS2749,
     TS2869,
@@ -5353,6 +5364,11 @@ impl Diagnostic {
             ],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1034(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1034, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

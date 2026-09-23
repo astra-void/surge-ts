@@ -1,11 +1,13 @@
 //! Scanner and parser errors tsc raises that oxc does not: a legacy octal
 //! literal (TS1121) and a decimal with a leading zero (TS1489) are rejected by
 //! tsc's `scanNumber` in every file, strict or not, and type arguments on
-//! `super` (TS2754) by `parseSuperExpression`. Like any parse error they make
-//! the program report its syntactic diagnostics alone.
+//! `super` (TS2754) and a `super` followed by anything but an argument list or
+//! member access (TS1034) by `parseSuperExpression`. Like any parse error they
+//! make the program report its syntactic diagnostics alone.
 
 use oxc_ast::ast::{
-    BinaryExpression, CallExpression, Expression, NumericLiteral, Program, UnaryExpression,
+    BinaryExpression, CallExpression, ComputedMemberExpression, Expression, NewExpression,
+    NumericLiteral, Program, PrivateFieldExpression, StaticMemberExpression, Super, UnaryExpression,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_syntax::operator::{BinaryOperator, UnaryOperator};
@@ -16,6 +18,7 @@ pub(crate) fn collect_missing_parser_errors(program: &Program<'_>, source_text: 
     let mut collector = Collector {
         source_text,
         after_minus: Vec::new(),
+        followed_super: Vec::new(),
         errors: Vec::new(),
     };
     collector.visit_program(program);
@@ -27,6 +30,8 @@ struct Collector<'s> {
     /// Literals whose previous token is `-`, which the scanner folds into an
     /// octal's suggested spelling and span.
     after_minus: Vec<u32>,
+    /// `super`s followed by an argument list or member access.
+    followed_super: Vec<u32>,
     errors: Vec<ParserError>,
 }
 
@@ -49,7 +54,53 @@ impl<'a> Visit<'a> for Collector<'_> {
         walk::walk_binary_expression(self, expression);
     }
 
+    fn visit_new_expression(&mut self, new: &NewExpression<'a>) {
+        if let Expression::Super(callee) = &new.callee {
+            self.followed_super.push(callee.span.start);
+        }
+        walk::walk_new_expression(self, new);
+    }
+
+    fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
+        if let Expression::Super(object) = &member.object {
+            self.followed_super.push(object.span.start);
+        }
+        walk::walk_static_member_expression(self, member);
+    }
+
+    fn visit_computed_member_expression(&mut self, member: &ComputedMemberExpression<'a>) {
+        if let Expression::Super(object) = &member.object {
+            self.followed_super.push(object.span.start);
+        }
+        walk::walk_computed_member_expression(self, member);
+    }
+
+    fn visit_private_field_expression(&mut self, member: &PrivateFieldExpression<'a>) {
+        if let Expression::Super(object) = &member.object {
+            self.followed_super.push(object.span.start);
+        }
+        walk::walk_private_field_expression(self, member);
+    }
+
+    fn visit_super(&mut self, keyword: &Super) {
+        if self.followed_super.contains(&keyword.span.start) {
+            return;
+        }
+        // Reported on the token after the keyword (`parseErrorAtCurrentToken`).
+        let after = keyword.span.end as usize;
+        let start = after
+            + self.source_text[after..]
+                .char_indices()
+                .find(|(_, c)| !c.is_whitespace())
+                .map_or(self.source_text.len() - after, |(offset, _)| offset);
+        let end = (start + 1).min(self.source_text.len()).max(start);
+        self.push(1034, "'super' must be followed by an argument list or member access.".to_string(), start, end);
+    }
+
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        if let Expression::Super(callee) = &call.callee {
+            self.followed_super.push(callee.span.start);
+        }
         if matches!(call.callee, Expression::Super(_))
             && let Some(type_arguments) = &call.type_arguments
         {

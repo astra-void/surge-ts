@@ -697,6 +697,14 @@ message = "This JSX tag's '{0}' prop expects type '{1}' which requires multiple 
 arity = 2
 
 [[diagnostic]]
+code = "TS1034"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'super' must be followed by an argument list or member access."
+arity = 0
+
+[[diagnostic]]
 code = "TS2754"
 category = "Error"
 source = "typescript"

@@ -696,6 +696,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS1034",
+    "category": "Error",
+    "message": "'super' must be followed by an argument list or member access.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS2754",
     "category": "Error",
     "message": "'super' may not use type arguments.",

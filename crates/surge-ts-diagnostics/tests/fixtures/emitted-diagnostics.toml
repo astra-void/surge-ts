@@ -2682,3 +2682,9 @@ status = "emitted"
 oracle = [
   "unused-declaration-list-grouping",
 ]
+
+[TS1034]
+status = "emitted"
+oracle = [
+  "bare-super-parse-error",
+]
