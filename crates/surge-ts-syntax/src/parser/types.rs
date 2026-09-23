@@ -450,7 +450,7 @@ fn parse_literal_type(literal_type: &TSLiteralType<'_>) -> ParsedType {
             ParsedType::StringLiteral(string_literal.value.to_string())
         }
         TSLiteral::NumericLiteral(numeric_literal) => {
-            ParsedType::NumberLiteral(numeric_literal.value.to_string())
+            ParsedType::NumberLiteral(super::number_text::js_number_to_string(numeric_literal.value))
         }
         TSLiteral::BooleanLiteral(boolean_literal) => {
             ParsedType::BooleanLiteral(boolean_literal.value)
@@ -1168,7 +1168,7 @@ pub(crate) fn computed_key_name(key: &PropertyKey<'_>) -> Option<String> {
         // `interface StoreMutators<S, A> { ['zustand/immer']: WithImmer<S> }`
         // augmentation contributed nothing at all.
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
-        PropertyKey::NumericLiteral(literal) => Some(literal.value.to_string()),
+        PropertyKey::NumericLiteral(literal) => Some(super::number_text::js_number_to_string(literal.value)),
         // `[-1]` names the property `-1`, as a written literal key would.
         PropertyKey::UnaryExpression(unary) => {
             super::expressions::signed_number_literal_text(unary)
@@ -1227,7 +1227,9 @@ pub(crate) fn parse_type_property_signature(
         PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
         // A numeric name is the number's canonical string: `1.0` and `1.`
         // name the same member as `1`.
-        PropertyKey::NumericLiteral(literal) => (literal.value.to_string(), literal.span),
+        PropertyKey::NumericLiteral(literal) => {
+            (super::number_text::js_number_to_string(literal.value), literal.span)
+        }
         PropertyKey::StringLiteral(literal) => (literal.value.to_string(), literal.span),
         _ => return None,
     };

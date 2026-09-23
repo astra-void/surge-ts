@@ -54,7 +54,7 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
             ParsedExpression::StringLiteral(string_literal.value.to_string())
         }
         Expression::NumericLiteral(numeric_literal) => {
-            ParsedExpression::NumberLiteral(numeric_literal.value.to_string())
+            ParsedExpression::NumberLiteral(super::number_text::js_number_to_string(numeric_literal.value))
         }
         Expression::BooleanLiteral(boolean_literal) => {
             ParsedExpression::BooleanLiteral(boolean_literal.value)
@@ -1141,7 +1141,7 @@ pub(crate) fn signed_number_literal_text(unary_expression: &UnaryExpression<'_>)
         _ => return None,
     };
     // `-0` is the literal type `0`.
-    Some(if value == 0.0 { 0.0 } else { value }.to_string())
+    Some(super::number_text::js_number_to_string(value))
 }
 
 pub(crate) fn parse_unary_expression(
@@ -1318,7 +1318,7 @@ pub(crate) fn parse_object_properties(
                 PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
                 PropertyKey::StringLiteral(literal) => (literal.value.to_string(), literal.span),
                 PropertyKey::NumericLiteral(literal) => {
-                    (literal.value.to_string(), literal.span)
+                    (super::number_text::js_number_to_string(literal.value), literal.span)
                 }
                 _ => return None,
             };

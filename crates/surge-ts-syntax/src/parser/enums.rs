@@ -201,11 +201,7 @@ fn constant_member_type(initializer: &Expression<'_>) -> Option<ParsedType> {
 }
 
 fn format_auto_value(value: f64) -> String {
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        format!("{}", value as i64)
-    } else {
-        format!("{value}")
-    }
+    super::number_text::js_number_to_string(value)
 }
 
 /// An `enum` declared more than once in one scope is one enum: tsc merges the

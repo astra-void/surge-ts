@@ -1634,7 +1634,7 @@ fn assigned_property_names(class: &Class<'_>) -> (Vec<String>, Vec<String>) {
                             self.names.push(literal.value.to_string());
                         }
                         Expression::NumericLiteral(literal) => {
-                            self.names.push(literal.value.to_string());
+                            self.names.push(super::number_text::js_number_to_string(literal.value));
                         }
                         _ => {}
                     }
@@ -1855,7 +1855,7 @@ fn property_key_name(key: &PropertyKey<'_>) -> Option<String> {
     match key {
         PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
-        PropertyKey::NumericLiteral(literal) => Some(literal.value.to_string()),
+        PropertyKey::NumericLiteral(literal) => Some(super::number_text::js_number_to_string(literal.value)),
         PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
         _ => None,
     }

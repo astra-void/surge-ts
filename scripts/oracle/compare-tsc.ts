@@ -739,6 +739,7 @@ export const fixturePresets: Record<string, string> = {
   'numeric-literal-forms-valid': path.join(workspaceRoot, 'tests/compat-projects/numeric-literal-forms-valid/tsconfig.json'),
   'var-case-narrowing-scope': path.join(workspaceRoot, 'tests/compat-projects/var-case-narrowing-scope/tsconfig.json'),
   'array-literal-omitted-elements': path.join(workspaceRoot, 'tests/compat-projects/array-literal-omitted-elements/tsconfig.json'),
+  'numeric-literal-property-names': path.join(workspaceRoot, 'tests/compat-projects/numeric-literal-property-names/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
