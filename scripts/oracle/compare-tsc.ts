@@ -766,6 +766,19 @@ export const fixturePresets: Record<string, string> = {
   'instanceof-instantiation-expression-basic': path.join(workspaceRoot, 'tests/compat-projects/instanceof-instantiation-expression-basic/tsconfig.json'),
   'mapped-type-member-in-body-basic': path.join(workspaceRoot, 'tests/compat-projects/mapped-type-member-in-body-basic/tsconfig.json'),
   'enum-computed-member-name-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-computed-member-name-basic/tsconfig.json'),
+  'arrow-captures-global-this-basic': path.join(workspaceRoot, 'tests/compat-projects/arrow-captures-global-this-basic/tsconfig.json'),
+  'computed-type-member-type-name-basic': path.join(workspaceRoot, 'tests/compat-projects/computed-type-member-type-name-basic/tsconfig.json'),
+  'for-in-left-operand-basic': path.join(workspaceRoot, 'tests/compat-projects/for-in-left-operand-basic/tsconfig.json'),
+  'for-of-es5-lib-basic': path.join(workspaceRoot, 'tests/compat-projects/for-of-es5-lib-basic/tsconfig.json'),
+  'missing-dom-lib-property-basic': path.join(workspaceRoot, 'tests/compat-projects/missing-dom-lib-property-basic/tsconfig.json'),
+  'object-rest-non-object-basic': path.join(workspaceRoot, 'tests/compat-projects/object-rest-non-object-basic/tsconfig.json'),
+  'rest-element-non-array-basic': path.join(workspaceRoot, 'tests/compat-projects/rest-element-non-array-basic/tsconfig.json'),
+  'rest-element-property-name-basic': path.join(workspaceRoot, 'tests/compat-projects/rest-element-property-name-basic/tsconfig.json'),
+  'setter-implicit-any-basic': path.join(workspaceRoot, 'tests/compat-projects/setter-implicit-any-basic/tsconfig.json'),
+  'signature-parameter-named-type-basic': path.join(workspaceRoot, 'tests/compat-projects/signature-parameter-named-type-basic/tsconfig.json'),
+  'type-parameter-default-reference-basic': path.join(workspaceRoot, 'tests/compat-projects/type-parameter-default-reference-basic/tsconfig.json'),
+  'type-predicate-assignability-basic': path.join(workspaceRoot, 'tests/compat-projects/type-predicate-assignability-basic/tsconfig.json'),
+  'unused-label-basic': path.join(workspaceRoot, 'tests/compat-projects/unused-label-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
