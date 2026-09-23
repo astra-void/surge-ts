@@ -13,12 +13,14 @@ use crate::program::{
 mod branch;
 mod expr;
 mod facts;
+mod guards;
 mod module_scope;
 mod never_initialized;
 
 pub(crate) use branch::*;
 pub(crate) use expr::*;
 pub(crate) use facts::*;
+pub(crate) use guards::{condition_defined_names, condition_never_takes};
 pub(crate) use module_scope::{
     check_class_member_flow, check_module_definite_assignment, walk_class,
 };
@@ -26,6 +28,44 @@ pub(crate) use never_initialized::{
     begin_file as begin_never_initialized_file, enter_container, expression_container_flow,
     is_plainly_defined,
 };
+
+/// Marks what `condition` proves defined on its `when` edge, for the code the
+/// edge leads to.
+pub(crate) fn mark_condition_defined(
+    condition: &ParsedExpression,
+    when: bool,
+    flow_state: &mut FunctionFlowState,
+    ctx: &CheckerContext,
+) {
+    for name in condition_defined_names(condition, when, &|callee| predicate_parameter(callee, ctx)) {
+        flow_state.mark_assigned(name);
+    }
+}
+
+/// The argument position a callee's `param is T` predicate tests, when the
+/// callee in scope declares one (not an `asserts` form, and not `this`).
+pub(crate) fn predicate_parameter(callee: &str, ctx: &CheckerContext) -> Option<usize> {
+    let symbol = ctx.symbols.get(callee).cloned().or_else(|| {
+        ctx.module_value_fallback
+            .as_ref()
+            .and_then(|fallback| fallback.get(callee).cloned())
+    })?;
+    let signature = symbol.function_signature?;
+    let signature = match &signature.return_type {
+        Some(surge_ts_syntax::ParsedType::Predicate(_)) => signature,
+        _ => signature.predicate_overload.clone()?,
+    };
+    let Some(surge_ts_syntax::ParsedType::Predicate(predicate)) = &signature.return_type else {
+        return None;
+    };
+    if predicate.asserts || predicate.ty.is_none() || predicate.parameter_name == "this" {
+        return None;
+    }
+    signature
+        .parameter_names
+        .iter()
+        .position(|name| name.as_deref() == Some(predicate.parameter_name.as_str()))
+}
 
 pub(crate) fn check_expression_flow(
     expression: &ParsedExpression,
@@ -108,6 +148,12 @@ pub(crate) struct FunctionFlowState {
     /// namespace function), walked for definite assignment alone: its own
     /// annotated `let`s are tracked from their written types.
     pub(crate) detached: bool,
+    /// Locals a guard on the way to the expression being walked proves are
+    /// not `undefined` (`x` in `typeof x === "string" && x`; see `guards`).
+    guarded_defined: std::cell::RefCell<Vec<Arc<str>>>,
+    /// How many enclosing branches no flow reaches (`b` in `true ? a : b`),
+    /// where tsc reads a local as its declared type.
+    unreachable_depth: std::cell::Cell<u32>,
 }
 
 impl Clone for FunctionFlowState {
@@ -129,6 +175,8 @@ impl Clone for FunctionFlowState {
             discriminant_aliases: self.discriminant_aliases.clone(),
             constraint_exempt: self.constraint_exempt.clone(),
             detached: self.detached,
+            guarded_defined: self.guarded_defined.clone(),
+            unreachable_depth: self.unreachable_depth.clone(),
         }
     }
 }
@@ -218,7 +266,41 @@ impl FunctionFlowState {
             discriminant_aliases: HashMap::new(),
             constraint_exempt: std::collections::HashSet::new(),
             detached: false,
+            guarded_defined: std::cell::RefCell::new(Vec::new()),
+            unreachable_depth: std::cell::Cell::new(0),
         }
+    }
+
+    /// Adds the locals a guard proves defined for the expression walked next;
+    /// returns the mark [`Self::restore_guarded_defined`] takes back.
+    pub(crate) fn push_guarded_defined(&self, names: &[&str]) -> usize {
+        let mut guarded = self.guarded_defined.borrow_mut();
+        let mark = guarded.len();
+        guarded.extend(names.iter().map(|name| Arc::<str>::from(*name)));
+        mark
+    }
+
+    pub(crate) fn restore_guarded_defined(&self, mark: usize) {
+        self.guarded_defined.borrow_mut().truncate(mark);
+    }
+
+    pub(crate) fn enter_unreachable(&self, unreachable: bool) {
+        if unreachable {
+            self.unreachable_depth.set(self.unreachable_depth.get() + 1);
+        }
+    }
+
+    pub(crate) fn exit_unreachable(&self, unreachable: bool) {
+        if unreachable {
+            self.unreachable_depth.set(self.unreachable_depth.get() - 1);
+        }
+    }
+
+    /// Whether tsc's flow type for `name` here cannot hold the `undefined` an
+    /// unassigned local starts with: a guard stripped it, or no flow reaches.
+    fn reads_as_defined(&self, name: &str) -> bool {
+        self.unreachable_depth.get() > 0
+            || self.guarded_defined.borrow().iter().any(|guarded| &**guarded == name)
     }
 
     /// Opens the container's own scope holding its hoisted `var`s as declared

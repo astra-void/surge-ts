@@ -610,6 +610,11 @@ pub(crate) fn report_read_flow_positioned(
         {
             FlowCheck::Clear
         }
+        FlowReadOutcome::Declared(AssignmentState::DeclaredUnassigned)
+            if flow_state.reads_as_defined(name) =>
+        {
+            FlowCheck::Clear
+        }
         FlowReadOutcome::Declared(AssignmentState::DeclaredUnassigned) => {
             let mut diagnostic = Diagnostic::ts2454(name, ctx.file_name.clone());
             if let Some(span) = span {

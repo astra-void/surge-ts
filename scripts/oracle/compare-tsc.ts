@@ -725,6 +725,7 @@ export const fixturePresets: Record<string, string> = {
   'parameter-property-placement-basic': path.join(workspaceRoot, 'tests/compat-projects/parameter-property-placement-basic/tsconfig.json'),
   'dotted-namespace-value-member-basic': path.join(workspaceRoot, 'tests/compat-projects/dotted-namespace-value-member-basic/tsconfig.json'),
   'import-equals-entity-alias-basic': path.join(workspaceRoot, 'tests/compat-projects/import-equals-entity-alias-basic/tsconfig.json'),
+  'definite-assignment-guard-narrowing-basic': path.join(workspaceRoot, 'tests/compat-projects/definite-assignment-guard-narrowing-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -164,6 +164,9 @@ pub(crate) fn check_function_if_statement(
         }
         flow_state.begin_branch_capture();
         mark_condition_true_assignments(&if_statement.condition, flow_state);
+        crate::flow::mark_condition_defined(&if_statement.condition, true, flow_state, ctx);
+        let then_unreachable = crate::flow::condition_never_takes(&if_statement.condition, true);
+        flow_state.enter_unreachable(then_unreachable);
         check_function_body(
             if_statement.then_body,
             with_type_copy_reason(TypeCopyReason::ReturnChecking, || return_type.clone()),
@@ -171,6 +174,7 @@ pub(crate) fn check_function_if_statement(
             flow_state,
             ctx,
         );
+        flow_state.exit_unreachable(then_unreachable);
         let mut then_delta = flow_state.finish_branch_capture();
         // tsc folds only the `true`/`false` keywords out of the flow graph.
         let condition_always_true = matches!(
@@ -209,7 +213,12 @@ pub(crate) fn check_function_if_statement(
                 narrow_discriminant_in_scope(&if_statement.condition, scopes, false, ctx);
             }
             flow_state.begin_branch_capture();
+            crate::flow::mark_condition_defined(&if_statement.condition, false, flow_state, ctx);
+            let else_unreachable =
+                crate::flow::condition_never_takes(&if_statement.condition, false);
+            flow_state.enter_unreachable(else_unreachable);
             check_function_body(if_statement.else_body, return_type, scopes, flow_state, ctx);
+            flow_state.exit_unreachable(else_unreachable);
             let mut else_delta = flow_state.finish_branch_capture();
             else_delta.continues = !else_diverts_control && !condition_always_true;
             let else_assignment_types = branch_assignment_types(&joinable_assignments, scopes);
@@ -242,11 +251,16 @@ pub(crate) fn check_function_if_statement(
             narrow_aliased_guard_after_exit(&if_statement.condition, scopes, flow_state);
         }
 
-        merge_branch_deltas(
-            flow_state,
-            &branch_deltas,
-            !has_else_body && !condition_always_true,
-        );
+        // Without an `else`, the condition's false edge is the other way to
+        // the join, carrying what that edge proves defined.
+        if !has_else_body {
+            flow_state.begin_branch_capture();
+            crate::flow::mark_condition_defined(&if_statement.condition, false, flow_state, ctx);
+            let mut fallthrough_delta = flow_state.finish_branch_capture();
+            fallthrough_delta.continues = !condition_always_true;
+            branch_deltas.push(fallthrough_delta);
+        }
+        merge_branch_deltas(flow_state, &branch_deltas, false);
     } else {
         scopes.push_child();
         narrow_condition_and_aliases_in_scope(

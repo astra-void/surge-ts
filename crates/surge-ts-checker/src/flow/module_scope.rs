@@ -480,10 +480,11 @@ fn walk_statement(
                 index,
                 ctx,
             );
+            let condition = &if_statement.condition;
             let mut then_flow = flow.clone();
-            let then_continues = in_block(&if_statement.then_body, index, &mut then_flow, ctx);
+            let then_continues = in_edge_block(condition, true, &if_statement.then_body, index, &mut then_flow, ctx);
             let mut else_flow = flow.clone();
-            let else_continues = in_block(&if_statement.else_body, index, &mut else_flow, ctx);
+            let else_continues = in_edge_block(condition, false, &if_statement.else_body, index, &mut else_flow, ctx);
             join(
                 flow,
                 [
@@ -501,7 +502,8 @@ fn walk_statement(
                 ctx,
             );
             let mut body_flow = flow.clone();
-            let body_continues = in_block(&while_statement.body, index, &mut body_flow, ctx);
+            let body_continues =
+                in_edge_block(&while_statement.condition, true, &while_statement.body, index, &mut body_flow, ctx);
             // Only a body that must run adds its assignments to the code after
             // the loop; otherwise the loop may be skipped outright.
             if while_statement.runs_at_least_once
@@ -703,6 +705,25 @@ fn in_block(
     let continues = walk_body(body, index, flow, ctx);
     flow.pop_scope();
     continues
+}
+
+/// A block entered on `condition`'s `when` edge, which carries what the edge
+/// proves defined; one a literal condition never enters is unreachable, so it
+/// reports nothing and reaches no join.
+fn in_edge_block(
+    condition: &ParsedExpression,
+    when: bool,
+    body: &[ParsedFunctionBodyStatement],
+    index: usize,
+    flow: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let unreachable = super::condition_never_takes(condition, when);
+    super::mark_condition_defined(condition, when, flow, ctx);
+    flow.enter_unreachable(unreachable);
+    let continues = in_block(body, index, flow, ctx);
+    flow.exit_unreachable(unreachable);
+    continues && !unreachable
 }
 
 /// The container's bindings after edges meet: assigned only where every edge
