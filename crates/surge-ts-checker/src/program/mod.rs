@@ -53,6 +53,7 @@ use parse::*;
 pub(crate) use phase::*;
 pub(crate) use probes::*;
 pub(crate) use statements::*;
+pub(crate) use unused_locals::report_unused_declaration_list;
 
 #[derive(Debug, Clone)]
 pub struct SourceFileInput {

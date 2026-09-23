@@ -65,6 +65,55 @@ pub(crate) fn jsx_factory_reads(
     reads
 }
 
+/// tsc's `reportUnusedVariables`: a declaration list of several declarations
+/// none of which is read reports once (TS6199), a destructuring pattern of
+/// several elements none of which is read reports once (TS6198,
+/// `reportUnusedBindingElements`), and otherwise each unread name is TS6133 —
+/// a nested pattern counting as read when any of its names is.
+pub(crate) fn report_unused_declaration_list(
+    list: &surge_ts_syntax::ParsedDeclarationList,
+    is_used: &dyn Fn(&str) -> bool,
+    ctx: &mut CheckerContext,
+) {
+    use surge_ts_syntax::ParsedDeclarationShape as Shape;
+
+    fn unreferenced(shape: &Shape, is_used: &dyn Fn(&str) -> bool) -> bool {
+        match shape {
+            Shape::Omitted => true,
+            Shape::Pattern { elements, .. } => elements.iter().all(|element| unreferenced(element, is_used)),
+            Shape::Name { name, always_used, .. } => !always_used && !is_used(name),
+        }
+    }
+    fn report_group(
+        shapes: &[Shape],
+        span: Option<TextSpan>,
+        grouped: fn(String) -> Diagnostic,
+        is_used: &dyn Fn(&str) -> bool,
+        ctx: &mut CheckerContext,
+    ) {
+        if shapes.len() > 1 && shapes.iter().all(|shape| unreferenced(shape, is_used)) {
+            let diagnostic = grouped(ctx.file_name.clone());
+            ctx.push(match span {
+                Some(span) => diagnostic.with_span(convert_span(span)),
+                None => diagnostic,
+            });
+            return;
+        }
+        for shape in shapes {
+            match shape {
+                Shape::Pattern { span, elements } => {
+                    report_group(elements, *span, Diagnostic::ts6198, is_used, ctx);
+                }
+                Shape::Name { name, span, .. } if unreferenced(shape, is_used) => {
+                    push_unused(name, *span, ctx);
+                }
+                _ => {}
+            }
+        }
+    }
+    report_group(&list.declarations, list.span, Diagnostic::ts6199, is_used, ctx);
+}
+
 pub(crate) fn emit_unused_module_bindings(
     statements: &[ParsedStatement],
     module_reads: &[String],
@@ -98,6 +147,7 @@ pub(crate) fn emit_unused_module_bindings(
     // one and none is used. The parser splits `import d, * as ns` and type-only
     // specifiers into several declarations that share the statement's span.
     let mut import_groups: Vec<(Option<TextSpan>, usize, Vec<(&str, Option<TextSpan>)>)> = Vec::new();
+    let mut declaration_lists: Vec<std::sync::Arc<surge_ts_syntax::ParsedDeclarationList>> = Vec::new();
     for statement in statements {
         match statement {
             ParsedStatement::ImportDeclaration(import) => {
@@ -123,13 +173,20 @@ pub(crate) fn emit_unused_module_bindings(
                     }
                 }
             }
-            ParsedStatement::VariableDeclaration(variable)
-                if !variable.is_declare
+            ParsedStatement::VariableDeclaration(variable) if !variable.is_declare => {
+                match &variable.declaration_list {
+                    Some(list) => {
+                        if !declaration_lists.iter().any(|seen| std::sync::Arc::ptr_eq(seen, list)) {
+                            declaration_lists.push(list.clone());
+                        }
+                    }
                     // See the matching exemption in `collect_local_var_declarations`.
-                    && !(variable.from_binding_pattern && variable.name.starts_with('_')) =>
-            {
-                if !is_used(&variable.name) {
-                    push_unused(&variable.name, variable.name_span, ctx);
+                    None if variable.from_binding_pattern && variable.name.starts_with('_') => {}
+                    None => {
+                        if !is_used(&variable.name) {
+                            push_unused(&variable.name, variable.name_span, ctx);
+                        }
+                    }
                 }
             }
             ParsedStatement::FunctionDeclaration(function) if !function.is_declare => {
@@ -142,6 +199,10 @@ pub(crate) fn emit_unused_module_bindings(
             // are intentionally excluded here.
             _ => {}
         }
+    }
+
+    for list in &declaration_lists {
+        report_unused_declaration_list(list, &is_used, ctx);
     }
 
     for (span, binding_count, unused) in import_groups {

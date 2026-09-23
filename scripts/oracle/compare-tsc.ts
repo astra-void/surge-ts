@@ -755,6 +755,7 @@ export const fixturePresets: Record<string, string> = {
   'constructor-guard-definite-assignment': path.join(workspaceRoot, 'tests/compat-projects/constructor-guard-definite-assignment/tsconfig.json'),
   'new-function-uninferred-return': path.join(workspaceRoot, 'tests/compat-projects/new-function-uninferred-return/tsconfig.json'),
   'signature-collection-restores-scope': path.join(workspaceRoot, 'tests/compat-projects/signature-collection-restores-scope/tsconfig.json'),
+  'unused-declaration-list-grouping': path.join(workspaceRoot, 'tests/compat-projects/unused-declaration-list-grouping/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

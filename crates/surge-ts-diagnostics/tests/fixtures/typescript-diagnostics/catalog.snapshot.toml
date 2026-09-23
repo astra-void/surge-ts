@@ -921,6 +921,14 @@ message = "All destructured elements are unused."
 arity = 0
 
 [[diagnostic]]
+code = "TS6199"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "All variables are unused."
+arity = 0
+
+[[diagnostic]]
 code = "TS6196"
 category = "Error"
 source = "typescript"

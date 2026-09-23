@@ -1644,6 +1644,37 @@ pub struct ParsedVariableDeclaration {
     pub declared_type: Option<ParsedType>,
     pub initializer: Option<ParsedExpression>,
     pub initializer_span: Option<TextSpan>,
+    /// The declaration list this binding was written in, shared by every
+    /// binding the list declares. `None` for a declaration surge synthesized.
+    pub declaration_list: Option<std::sync::Arc<ParsedDeclarationList>>,
+}
+
+/// One `var`/`let`/`const`/`using` declaration list as written, for the
+/// unused-binding report (tsc's `reportUnusedVariables`): its declarations
+/// with their destructuring patterns, which the lowering flattens.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedDeclarationList {
+    pub span: Option<TextSpan>,
+    pub declarations: Vec<ParsedDeclarationShape>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedDeclarationShape {
+    /// A bound name. `always_used` when tsc never reports it
+    /// (`isUnreferencedVariableDeclaration`): an `_`-prefixed name in an array
+    /// pattern, a renaming object element or a `using` declaration, and an
+    /// object element whose pattern ends in a rest element.
+    Name {
+        name: String,
+        span: Option<TextSpan>,
+        always_used: bool,
+    },
+    Pattern {
+        span: Option<TextSpan>,
+        elements: Vec<ParsedDeclarationShape>,
+    },
+    /// An omitted array element (`[, b]`).
+    Omitted,
 }
 
 #[derive(Debug, Clone, PartialEq)]

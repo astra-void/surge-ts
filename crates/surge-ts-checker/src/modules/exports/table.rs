@@ -114,6 +114,7 @@ fn nested_vars(
                             }),
                             initializer: None,
                             initializer_span: None,
+                            declaration_list: None,
                         },
                     )));
                 }

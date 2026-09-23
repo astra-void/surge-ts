@@ -1155,6 +1155,16 @@ pub const TS6198: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS6199: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS6199",
+    number: Some(6199),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "All variables are unused.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS6196: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS6196",
     number: Some(6196),
@@ -4171,6 +4181,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS6142,
     TS6192,
     TS6198,
+    TS6199,
     TS6196,
     TS4112,
     TS4113,
@@ -5568,6 +5579,11 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts6198(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS6198, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts6199(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS6199, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

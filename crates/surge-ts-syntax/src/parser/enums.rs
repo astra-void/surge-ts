@@ -172,6 +172,7 @@ fn lower_enum_declaration(
             }))),
             initializer: None,
             initializer_span: None,
+            declaration_list: None,
         },
     )
 }

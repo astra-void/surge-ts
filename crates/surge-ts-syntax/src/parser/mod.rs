@@ -159,6 +159,7 @@ fn parse_declaration(declaration: &Declaration<'_>) -> Option<Vec<ParsedStatemen
 }
 
 fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<ParsedStatement> {
+    let list = std::sync::Arc::new(declaration_list_shape(declaration));
     let kind = match declaration.kind {
         VariableDeclarationKind::Var => ParsedVariableKind::Var,
         VariableDeclarationKind::Let => ParsedVariableKind::Let,
@@ -210,7 +211,87 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                 declared_type,
             )
         })
+        .map(|statement| match statement {
+            ParsedStatement::VariableDeclaration(mut variable) => {
+                variable.declaration_list = Some(list.clone());
+                ParsedStatement::VariableDeclaration(variable)
+            }
+            other => other,
+        })
         .collect()
+}
+
+fn declaration_list_shape(declaration: &VariableDeclaration<'_>) -> crate::ParsedDeclarationList {
+    use crate::ParsedDeclarationShape;
+    let using = matches!(
+        declaration.kind,
+        VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing
+    );
+    fn name(identifier: &oxc_ast::ast::BindingIdentifier<'_>, always_used: bool) -> ParsedDeclarationShape {
+        ParsedDeclarationShape::Name {
+            name: identifier.name.to_string(),
+            span: Some(text_span_from_oxc_span(identifier.span)),
+            always_used,
+        }
+    }
+    // An element of a pattern: `underscore_exempts` when an `_`-prefixed name
+    // counts as used there, `rest_sibling` when the pattern's rest needs it.
+    fn element(pattern: &BindingPattern<'_>, underscore_exempts: bool, rest_sibling: bool) -> ParsedDeclarationShape {
+        match pattern {
+            BindingPattern::BindingIdentifier(identifier) => name(
+                identifier,
+                rest_sibling || (underscore_exempts && identifier.name.starts_with('_')),
+            ),
+            BindingPattern::AssignmentPattern(assignment) => {
+                element(&assignment.left, underscore_exempts, rest_sibling)
+            }
+            BindingPattern::ObjectPattern(object) => {
+                let has_rest = object.rest.is_some();
+                let mut elements: Vec<_> = object
+                    .properties
+                    .iter()
+                    .map(|property| element(&property.value, !property.shorthand, has_rest))
+                    .collect();
+                if let Some(rest) = &object.rest {
+                    elements.push(element(&rest.argument, false, false));
+                }
+                ParsedDeclarationShape::Pattern {
+                    span: Some(text_span_from_oxc_span(object.span)),
+                    elements,
+                }
+            }
+            BindingPattern::ArrayPattern(array) => {
+                let mut elements: Vec<_> = array
+                    .elements
+                    .iter()
+                    .map(|element_pattern| match element_pattern {
+                        Some(element_pattern) => element(element_pattern, true, false),
+                        None => ParsedDeclarationShape::Omitted,
+                    })
+                    .collect();
+                if let Some(rest) = &array.rest {
+                    elements.push(element(&rest.argument, true, false));
+                }
+                ParsedDeclarationShape::Pattern {
+                    span: Some(text_span_from_oxc_span(array.span)),
+                    elements,
+                }
+            }
+        }
+    }
+    crate::ParsedDeclarationList {
+        span: Some(text_span_from_oxc_span(declaration.span)),
+        declarations: declaration
+            .declarations
+            .iter()
+            .map(|declarator| match &declarator.id {
+                BindingPattern::BindingIdentifier(identifier) => {
+                    name(identifier, using && identifier.name.starts_with('_'))
+                }
+                pattern => element(pattern, false, false),
+            })
+            .collect(),
+    }
 }
 
 fn parse_expression_statement(
@@ -569,6 +650,7 @@ fn parse_binding_pattern_declarations_with_definite(
                     declared_type,
                     initializer,
                     initializer_span,
+                    declaration_list: None,
                 },
             ))]
         }

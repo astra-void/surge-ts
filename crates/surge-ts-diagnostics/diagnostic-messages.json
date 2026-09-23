@@ -920,6 +920,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS6199",
+    "category": "Error",
+    "message": "All variables are unused.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS6196",
     "category": "Error",
     "message": "'{0}' is declared but never used.",

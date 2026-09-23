@@ -2674,3 +2674,9 @@ status = "emitted"
 oracle = [
   "super-type-arguments-parse-error",
 ]
+
+[TS6199]
+status = "emitted"
+oracle = [
+  "unused-declaration-list-grouping",
+]

@@ -1594,9 +1594,13 @@ pub(crate) fn emit_unused_locals(
     }
     debug_assert_reads_sorted(reads);
     let mut locals: Vec<(&str, Option<TextSpan>)> = Vec::new();
+    let mut lists: Vec<&std::sync::Arc<surge_ts_syntax::ParsedDeclarationList>> = Vec::new();
     let mut local_types: Vec<(&str, Option<TextSpan>)> = Vec::new();
-    collect_local_var_declarations(statements, &mut locals);
+    collect_local_var_declarations(statements, &mut locals, &mut lists);
     collect_local_type_declarations(statements, &mut local_types);
+    for list in lists {
+        crate::program::report_unused_declaration_list(list, &|name| body_reads_name(reads, name), ctx);
+    }
     for (name, span) in locals {
         if body_reads_name(reads, name) {
             continue;
@@ -1670,43 +1674,51 @@ fn collect_local_type_declarations<'a>(
 /// Collects `const`/`let`/`var` declarations directly owned by this function
 /// body, recursing through control-flow statements but not into nested functions
 /// (whose locals belong to their own scope).
+/// The function's local declarations: the lists they were written in, and
+/// the declarations surge synthesized without one.
 fn collect_local_var_declarations<'a>(
     statements: &'a [ParsedFunctionBodyStatement],
     out: &mut Vec<(&'a str, Option<TextSpan>)>,
+    lists: &mut Vec<&'a std::sync::Arc<surge_ts_syntax::ParsedDeclarationList>>,
 ) {
     for statement in statements {
         match statement {
-            ParsedFunctionBodyStatement::VariableDeclaration(variable)
-                if !variable.is_declare
+            ParsedFunctionBodyStatement::VariableDeclaration(variable) if !variable.is_declare => {
+                match &variable.declaration_list {
+                    Some(list) => {
+                        if !lists.iter().any(|seen| std::sync::Arc::ptr_eq(seen, list)) {
+                            lists.push(list);
+                        }
+                    }
                     // tsc exempts an `_`-prefixed *destructured* binding: it is
                     // the idiom for naming a property only to drop it from a
                     // rest spread (`const { a: _a, ...rest } = x`).
-                    && !(variable.from_binding_pattern && variable.name.starts_with('_')) =>
-            {
-                out.push((variable.name.as_str(), variable.name_span));
+                    None if variable.from_binding_pattern && variable.name.starts_with('_') => {}
+                    None => out.push((variable.name.as_str(), variable.name_span)),
+                }
             }
-            ParsedFunctionBodyStatement::Block(body) => collect_local_var_declarations(body, out),
+            ParsedFunctionBodyStatement::Block(body) => collect_local_var_declarations(body, out, lists),
             ParsedFunctionBodyStatement::If(statement) => {
-                collect_local_var_declarations(&statement.then_body, out);
-                collect_local_var_declarations(&statement.else_body, out);
+                collect_local_var_declarations(&statement.then_body, out, lists);
+                collect_local_var_declarations(&statement.else_body, out, lists);
             }
             ParsedFunctionBodyStatement::While(statement) => {
-                collect_local_var_declarations(&statement.body, out)
+                collect_local_var_declarations(&statement.body, out, lists)
             }
             ParsedFunctionBodyStatement::ForOf(statement) => {
-                collect_local_var_declarations(&statement.body, out)
+                collect_local_var_declarations(&statement.body, out, lists)
             }
             ParsedFunctionBodyStatement::Switch(statement) => {
                 for case in &statement.cases {
-                    collect_local_var_declarations(&case.consequent, out);
+                    collect_local_var_declarations(&case.consequent, out, lists);
                 }
             }
             ParsedFunctionBodyStatement::Try(statement) => {
-                collect_local_var_declarations(&statement.block, out);
+                collect_local_var_declarations(&statement.block, out, lists);
                 if let Some(handler) = &statement.handler {
-                    collect_local_var_declarations(&handler.body, out);
+                    collect_local_var_declarations(&handler.body, out, lists);
                 }
-                collect_local_var_declarations(&statement.finalizer, out);
+                collect_local_var_declarations(&statement.finalizer, out, lists);
             }
             _ => {}
         }
