@@ -34,10 +34,11 @@ pub(crate) fn class_instance_interface_info(
     // member inference does not model yet; those members stay `any`.
     let infer_members =
         class.type_parameters.is_empty() && crate::checks::function::lazy_body_returns(&file_name);
+    let javascript = surge_ts_syntax::is_javascript_file_name(&file_name);
     let mut members: Vec<_> = class
         .members
         .iter()
-        .filter_map(|member| class_member_to_interface_member(class, member, infer_members))
+        .filter_map(|member| class_member_to_interface_member(class, member, infer_members, javascript))
         .collect();
     members.extend(constructor_parameter_property_members(class));
 
@@ -67,6 +68,7 @@ fn class_member_to_interface_member(
     class: &ParsedClassDeclaration,
     member: &ParsedClassMember,
     infer_members: bool,
+    javascript: bool,
 ) -> Option<ParsedInterfaceMember> {
     match member {
         ParsedClassMember::Property(property) if !property.is_static => {
@@ -79,7 +81,7 @@ fn class_member_to_interface_member(
                 ty: property
                     .declared_type
                     .clone()
-                    .unwrap_or_else(|| inferred_property_type(class, property, infer_members)),
+                    .unwrap_or_else(|| inferred_property_type(class, property, infer_members, javascript)),
                 readonly: property.readonly,
                 write_ty: None,
             })
@@ -185,10 +187,15 @@ fn inferred_property_type(
     class: &ParsedClassDeclaration,
     property: &ParsedClassProperty,
     infer_members: bool,
+    javascript: bool,
 ) -> ParsedType {
+    // A JavaScript initializer is inferred where it is written, so an object
+    // literal in it is open-ended (`isJSLiteralType`) as the syntax alone
+    // cannot say.
     let syntactic = property
         .initializer
         .as_ref()
+        .filter(|_| !javascript)
         .and_then(|initializer| syntactic_initializer_type(initializer, property.readonly));
     match (syntactic, &property.initializer) {
         (Some(syntactic), _) => syntactic,
@@ -702,6 +709,16 @@ fn inherited_construct_signature(base: &FunctionType, instance_type: &Type) -> F
 fn static_property_type(property: &ParsedClassProperty, ctx: &mut CheckerContext) -> Type {
     match property.declared_type.clone() {
         Some(declared_type) => map_parsed_type(declared_type, ctx),
+        // An open-ended JavaScript object literal (`isJSLiteralType`) has no
+        // syntactic type; the static side infers nothing else either.
+        None if surge_ts_syntax::is_javascript_file_name(&ctx.file_name)
+            && matches!(
+                property.initializer,
+                Some(surge_ts_syntax::ParsedExpression::ObjectLiteral { .. })
+            ) =>
+        {
+            Type::Any
+        }
         None => map_parsed_type(initializer_property_type(property), ctx),
     }
 }

@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "strict": false,
+    "noImplicitAny": true,
+    "allowJs": true,
+    "types": [],
+    "noEmit": true
+  },
+  "files": ["src/values.js", "src/main.ts"]
+}
