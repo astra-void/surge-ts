@@ -311,40 +311,52 @@ impl GrammarCollector {
                 _ => None,
             })
             .collect();
-        let class_named = |name: &str| {
-            classes
-                .iter()
-                .copied()
-                .find(|class| class.id.as_ref().is_some_and(|id| id.name == name))
-        };
+        // First declaration wins for both lookups, as the linear `find`s did.
+        let mut class_slots: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for (slot, class) in classes.iter().enumerate() {
+            if let Some(id) = class.id.as_ref() {
+                class_slots.entry(id.name.as_str()).or_insert(slot);
+            }
+        }
         let base_of = |class: &Class<'_>| match &class.super_class {
             Some(Expression::Identifier(base)) if class.super_type_arguments.is_none() => {
-                class_named(base.name.as_str())
+                class_slots.get(base.name.as_str()).copied()
             }
             _ => None,
         };
+        let member_lists: Vec<Vec<(String, Member)>> =
+            classes.iter().map(|class| instance_members(class)).collect();
+        let member_maps: Vec<std::collections::HashMap<&str, &Member>> = member_lists
+            .iter()
+            .map(|members| {
+                let mut map = std::collections::HashMap::new();
+                for (name, member) in members {
+                    map.entry(name.as_str()).or_insert(member);
+                }
+                map
+            })
+            .collect();
 
-        for class in &classes {
+        for (slot, class) in classes.iter().enumerate() {
             let (Some(derived_name), Some(base)) = (class.id.as_ref(), base_of(class)) else {
                 continue;
             };
-            let Some(base_name) = base.id.as_ref() else {
+            let Some(base_name) = classes[base].id.as_ref() else {
                 continue;
             };
-            for (name, derived) in instance_members(class) {
+            for (name, derived) in &member_lists[slot] {
                 let mut ancestor = Some(base);
                 let mut found = None;
                 let mut depth = 0;
                 while let Some(current) = ancestor
                     && depth < 32
                 {
-                    if let Some((_, member)) =
-                        instance_members(current).into_iter().find(|(other, _)| *other == name)
-                    {
+                    if let Some(&member) = member_maps[current].get(name.as_str()) {
                         found = Some(member);
                         break;
                     }
-                    ancestor = base_of(current);
+                    ancestor = base_of(classes[current]);
                     depth += 1;
                 }
                 let Some(inherited) = found else {
@@ -1107,6 +1119,8 @@ impl GrammarCollector {
     fn check_class_members(&mut self, class: &Class<'_>) {
         let ambient = self.is_ambient() || class.declare;
         let mut groups: Vec<MemberGroup> = Vec::new();
+        let mut group_slots: std::collections::HashMap<(String, bool), usize> =
+            std::collections::HashMap::new();
         let mut constructors: Vec<(Span, bool)> = Vec::new();
 
         for element in &class.body.body {
@@ -1161,16 +1175,15 @@ impl GrammarCollector {
             let Some(name) = property_key_name(key) else {
                 continue;
             };
-            match groups
-                .iter_mut()
-                .find(|group| group.name == name && group.is_static == is_static)
-            {
-                Some(group) => group.members.push((key.span(), member)),
-                None => groups.push(MemberGroup {
-                    name,
-                    is_static,
-                    members: vec![(key.span(), member)],
-                }),
+            match group_slots.get(&(name.clone(), is_static)) {
+                Some(&slot) => groups[slot].members.push((key.span(), member)),
+                None => {
+                    group_slots.insert((name.clone(), is_static), groups.len());
+                    groups.push(MemberGroup {
+                        name,
+                        members: vec![(key.span(), member)],
+                    });
+                }
             }
         }
 
@@ -1297,6 +1310,8 @@ impl GrammarCollector {
     /// a signature, never a missing implementation.
     fn check_interface_members(&mut self, members: &[TSSignature<'_>]) {
         let mut groups: Vec<MemberGroup> = Vec::new();
+        let mut group_slots: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
 
         for member in members {
             let (key, kind) = match member {
@@ -1312,13 +1327,15 @@ impl GrammarCollector {
             let Some(name) = property_key_name(key) else {
                 continue;
             };
-            match groups.iter_mut().find(|group| group.name == name) {
-                Some(group) => group.members.push((key.span(), kind)),
-                None => groups.push(MemberGroup {
-                    name,
-                    is_static: false,
-                    members: vec![(key.span(), kind)],
-                }),
+            match group_slots.get(&name) {
+                Some(&slot) => groups[slot].members.push((key.span(), kind)),
+                None => {
+                    group_slots.insert(name.clone(), groups.len());
+                    groups.push(MemberGroup {
+                        name,
+                        members: vec![(key.span(), kind)],
+                    });
+                }
             }
         }
 
@@ -1604,7 +1621,6 @@ impl OverloadSibling {
 
 struct MemberGroup {
     name: String,
-    is_static: bool,
     members: Vec<(Span, MemberKind)>,
 }
 
