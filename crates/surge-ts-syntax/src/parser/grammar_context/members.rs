@@ -643,9 +643,10 @@ impl<'a> ContextCollector<'a, '_> {
 
     /// The modifier keywords written on the same line right before `start`,
     /// for a node whose span oxc begins after them. `floor` bounds the scan
-    /// (a decorator's end).
+    /// (a decorator's end); a span that already covers its decorators, as a
+    /// decorated rest parameter's does, has nothing before it to read.
     fn preceding_modifiers(&self, start: u32, floor: Option<u32>) -> Vec<(&'a str, Span)> {
-        let floor = floor.unwrap_or(0) as usize;
+        let floor = floor.unwrap_or(0).min(start) as usize;
         let mut words = Vec::new();
         let mut end = start as usize;
         loop {
