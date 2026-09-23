@@ -828,6 +828,7 @@ export const fixturePresets: Record<string, string> = {
   'satisfies-argument-elaboration': path.join(workspaceRoot, 'tests/compat-projects/satisfies-argument-elaboration/tsconfig.json'),
   'new-error-type-callee': path.join(workspaceRoot, 'tests/compat-projects/new-error-type-callee/tsconfig.json'),
   'function-without-return-is-void': path.join(workspaceRoot, 'tests/compat-projects/function-without-return-is-void/tsconfig.json'),
+  'override-method-bivariance': path.join(workspaceRoot, 'tests/compat-projects/override-method-bivariance/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

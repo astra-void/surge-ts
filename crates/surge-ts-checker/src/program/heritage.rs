@@ -86,6 +86,23 @@ fn comparable(source: &Type, target: &Type) -> bool {
         && !matches!(target, Type::Any)
 }
 
+/// The member itself, as a one-member object: a method compares its
+/// parameters bivariantly (tsc's `compareSignaturesRelated` for a method
+/// declaration), which only the member, not its function type, records. Only
+/// the types are related (`issueMemberSpecificError`), so neither a
+/// `private`/`protected` restriction nor `readonly` takes part.
+fn member_alone(receiver: &Type, name: &str) -> Option<Type> {
+    let Type::Object(object) = receiver.peeled() else {
+        return None;
+    };
+    let mut property = object.properties.get(name)?.clone();
+    property.restriction = None;
+    property.readonly = false;
+    let mut properties = surge_ts_types::PropertyMap::default();
+    properties.insert(name.into(), property);
+    Some(Type::Object(crate::metrics::alloc_object_type(properties, None)))
+}
+
 /// Names every declared member of `members` whose type is not assignable to the
 /// same-named member of `base_type`, with the span tsc anchors on.
 fn incompatible_members(
@@ -104,7 +121,14 @@ fn incompatible_members(
         if !comparable(&own, &base) {
             continue;
         }
-        if !is_assignable_to(&own, &base) {
+        let assignable = match (
+            member_alone(own_type, &member.name),
+            member_alone(base_type, &member.name),
+        ) {
+            (Some(own_member), Some(base_member)) => is_assignable_to(&own_member, &base_member),
+            _ => is_assignable_to(&own, &base),
+        };
+        if !assignable {
             incompatible.push((member.name.clone(), member.name_span));
         }
     }
