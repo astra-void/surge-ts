@@ -4792,7 +4792,7 @@ pub const TS2578: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Unused '@ts-expect-error' directive.",
     argument_count: 0,
-    support: DiagnosticSupport::Emitted,
+    support: DiagnosticSupport::CatalogOnly,
 };
 
 pub const TS2664: DiagnosticDescriptor = DiagnosticDescriptor {

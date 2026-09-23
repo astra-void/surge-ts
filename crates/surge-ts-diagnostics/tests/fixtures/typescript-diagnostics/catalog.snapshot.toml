@@ -3828,7 +3828,7 @@ arity = 1
 code = "TS2578"
 category = "Error"
 source = "typescript"
-support = "emitted"
+support = "catalog-only"
 message = "Unused '@ts-expect-error' directive."
 arity = 0
 

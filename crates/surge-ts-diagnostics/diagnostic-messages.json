@@ -3829,7 +3829,7 @@
     "message": "Unused '@ts-expect-error' directive.",
     "source": "typescript",
     "arity": 0,
-    "support": "emitted"
+    "support": "catalog-only"
   },
   {
     "code": "TS2664",

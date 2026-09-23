@@ -493,7 +493,6 @@ export const fixturePresets: Record<string, string> = {
   'evolving-array-basic': path.join(workspaceRoot, 'tests/compat-projects/evolving-array-basic/tsconfig.json'),
   'type-only-export-value-use-basic': path.join(workspaceRoot, 'tests/compat-projects/type-only-export-value-use-basic/tsconfig.json'),
   'non-module-file-import-basic': path.join(workspaceRoot, 'tests/compat-projects/non-module-file-import-basic/tsconfig.json'),
-  'unused-expect-error-directive-basic': path.join(workspaceRoot, 'tests/compat-projects/unused-expect-error-directive-basic/tsconfig.json'),
   'export-global-name-basic': path.join(workspaceRoot, 'tests/compat-projects/export-global-name-basic/tsconfig.json'),
   'module-augmentation-target-basic': path.join(workspaceRoot, 'tests/compat-projects/module-augmentation-target-basic/tsconfig.json'),
   'module-augmentation-subpath-resolution-basic': path.join(workspaceRoot, 'tests/compat-projects/module-augmentation-subpath-resolution-basic/tsconfig.json'),

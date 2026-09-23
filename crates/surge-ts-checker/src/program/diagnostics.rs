@@ -154,15 +154,27 @@ pub(super) fn extend_diagnostics_dedup(
     DiagnosticDeduper::with_existing(diagnostics).extend(diagnostics, new_diagnostics);
 }
 
+/// `SURGE_REPORT_UNUSED_EXPECT_ERROR=1` turns on TS2578. The check matches
+/// tsc, but every real error surge misses under an `@ts-expect-error` becomes
+/// a TS2578 false positive, which on the real-project corpora outnumbered the
+/// directives surge does satisfy. Off until surge's recall catches up.
+fn report_unused_expect_error() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("SURGE_REPORT_UNUSED_EXPECT_ERROR").as_deref() == Ok("1")
+    })
+}
+
 /// tsc's `getDiagnosticsWithPrecedingDirectives` plus the unused-directive
 /// report that follows it: a diagnostic starting on a directive's suppressed
-/// line is dropped and marks the nearest directive above it used; every
-/// `@ts-expect-error` left unused is TS2578 at the directive. An `@ts-ignore`
-/// never reports. Runs only for files surge checks in full: a declaration
-/// file returns before it, since its statements are never checked and every
-/// directive there would read as unused. A file with parse errors reports no
-/// unused directive either: tsc skips semantic diagnostics once any syntax
-/// error exists, and surge's checker may not have seen the file's statements.
+/// line is dropped and marks the nearest directive above it used; with the
+/// gate on, every `@ts-expect-error` left unused is TS2578 at the directive.
+/// An `@ts-ignore` never reports. Runs only for files surge checks in full: a
+/// declaration file returns before it, since its statements are never checked
+/// and every directive there would read as unused. A file with parse errors
+/// reports no unused directive either: tsc skips semantic diagnostics once any
+/// syntax error exists, and surge's checker may not have seen the file's
+/// statements.
 pub(crate) fn apply_comment_directives(
     diagnostics: &mut Vec<surge_ts_diagnostics::Diagnostic>,
     directives: &[surge_ts_syntax::CommentDirective],
@@ -194,6 +206,9 @@ pub(crate) fn apply_comment_directives(
             None => true,
         }
     });
+    if !report_unused_expect_error() {
+        return;
+    }
     for (directive, used) in directives.iter().zip(used) {
         if used
             || has_parse_errors

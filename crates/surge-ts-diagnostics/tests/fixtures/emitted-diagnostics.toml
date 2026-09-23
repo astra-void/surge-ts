@@ -3102,10 +3102,8 @@ oracle = [
 ]
 
 [TS2578]
-status = "emitted"
-oracle = [
-  "unused-expect-error-directive-basic",
-]
+status = "catalog-only"
+reason = "Opt-in via SURGE_REPORT_UNUSED_EXPECT_ERROR=1: every error surge misses under an @ts-expect-error would read as TS2578"
 
 [TS2661]
 status = "emitted"
