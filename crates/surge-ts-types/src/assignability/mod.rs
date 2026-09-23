@@ -1143,41 +1143,11 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
                 source.is_empty() || source.iter().any(|source_ty| is_assignable_to(source_ty, target))
             }
         },
-        // A fixed tuple satisfies an open one when it covers the fixed slots on
-        // both sides and everything in between fits the rest element.
         (Type::Tuple(source), Type::OpenTuple(target)) => {
-            source.len() >= target.fixed_len()
-                && source
-                    .iter()
-                    .zip(target.leading.iter())
-                    .all(|(s, t)| is_assignable_to(s, t))
-                && source[source.len() - target.trailing.len()..]
-                    .iter()
-                    .zip(target.trailing.iter())
-                    .all(|(s, t)| is_assignable_to(s, t))
-                && source[target.leading.len()..source.len() - target.trailing.len()]
-                    .iter()
-                    .all(|s| is_assignable_to(s, &target.rest))
+            tuple_related_to_open_tuple(&fixed_tuple_elements(source), target)
         }
         (Type::OpenTuple(source), Type::OpenTuple(target)) => {
-            source.leading.len() >= target.leading.len()
-                && source.trailing.len() >= target.trailing.len()
-                && source
-                    .leading
-                    .iter()
-                    .zip(target.leading.iter())
-                    .all(|(s, t)| is_assignable_to(s, t))
-                && source.leading[target.leading.len()..]
-                    .iter()
-                    .all(|s| is_assignable_to(s, &target.rest))
-                && is_assignable_to(&source.rest, &target.rest)
-                && source.trailing[..source.trailing.len() - target.trailing.len()]
-                    .iter()
-                    .all(|s| is_assignable_to(s, &target.rest))
-                && source.trailing[source.trailing.len() - target.trailing.len()..]
-                    .iter()
-                    .zip(target.trailing.iter())
-                    .all(|(s, t)| is_assignable_to(s, t))
+            tuple_related_to_open_tuple(&open_tuple_elements(source), target)
         }
         (Type::OpenTuple(source), Type::Array(target)) => {
             is_assignable_to(&source.element_union(), target)
@@ -1984,6 +1954,66 @@ fn object_assignable(from_obj: &ObjectType, to_obj: &ObjectType, from: &Type, to
         set.borrow_mut().remove(&key);
     });
     result
+}
+
+/// A tuple element's `ElementFlags`, as far as surge's shapes carry them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ElementKind {
+    Required,
+    Optional,
+    Rest,
+}
+
+fn fixed_tuple_elements(elements: &[Type]) -> Vec<(ElementKind, &Type)> {
+    let min_length = crate::tuple_min_length(elements);
+    elements
+        .iter()
+        .enumerate()
+        .map(|(index, element)| {
+            let kind = if index < min_length { ElementKind::Required } else { ElementKind::Optional };
+            (kind, element)
+        })
+        .collect()
+}
+
+fn open_tuple_elements(tuple: &crate::OpenTupleType) -> Vec<(ElementKind, &Type)> {
+    let mut elements = fixed_tuple_elements(&tuple.leading);
+    elements.push((ElementKind::Rest, tuple.rest.as_ref()));
+    elements.extend(tuple.trailing.iter().map(|element| (ElementKind::Required, element)));
+    elements
+}
+
+/// relater.go `propertiesRelatedTo` for a tuple source against a tuple target
+/// with a rest element: a fixed source must reach the target's `minLength`,
+/// and each source position is related to the target position it lands on —
+/// counted from the start within the target's leading elements, from the end
+/// past them — which must not be a required element the source may lack.
+fn tuple_related_to_open_tuple(source: &[(ElementKind, &Type)], target: &crate::OpenTupleType) -> bool {
+    let target_elements = open_tuple_elements(target);
+    let target_arity = target_elements.len();
+    let target_min_length = target_elements
+        .iter()
+        .filter(|(kind, _)| *kind == ElementKind::Required)
+        .count();
+    let source_rest = source.iter().any(|(kind, _)| *kind == ElementKind::Rest);
+    if !source_rest && source.len() < target_min_length {
+        return false;
+    }
+    let source_arity = source.len();
+    source
+        .iter()
+        .enumerate()
+        .all(|(source_position, (source_kind, source_type))| {
+            let from_end = source_arity - 1 - source_position;
+            let target_position = if source_position >= target.leading.len() {
+                target_arity - 1 - from_end.min(target.trailing.len())
+            } else {
+                source_position
+            };
+            let (target_kind, target_type) = target_elements[target_position];
+            (target_kind != ElementKind::Required || *source_kind == ElementKind::Required)
+                && is_assignable_to(source_type, target_type)
+        })
 }
 
 /// An object source against an array or fixed-tuple target, related as

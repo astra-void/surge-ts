@@ -785,6 +785,7 @@ export const fixturePresets: Record<string, string> = {
   'tuple-length-literal-basic': path.join(workspaceRoot, 'tests/compat-projects/tuple-length-literal-basic/tsconfig.json'),
   'tuple-identity-arity-basic': path.join(workspaceRoot, 'tests/compat-projects/tuple-identity-arity-basic/tsconfig.json'),
   'tuple-target-structural-source-basic': path.join(workspaceRoot, 'tests/compat-projects/tuple-target-structural-source-basic/tsconfig.json'),
+  'tuple-rest-target-positions-basic': path.join(workspaceRoot, 'tests/compat-projects/tuple-rest-target-positions-basic/tsconfig.json'),
   'tagged-template-generic-call-basic': path.join(workspaceRoot, 'tests/compat-projects/tagged-template-generic-call-basic/tsconfig.json'),
   'reference-lib-directive-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-lib-directive-basic/tsconfig.json'),
   'reference-lib-directive-leading-only-basic': path.join(workspaceRoot, 'tests/compat-projects/reference-lib-directive-leading-only-basic/tsconfig.json'),
