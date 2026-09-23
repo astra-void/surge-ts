@@ -715,6 +715,7 @@ export const fixturePresets: Record<string, string> = {
   'script-global-values-across-files-basic': path.join(workspaceRoot, 'tests/compat-projects/script-global-values-across-files-basic/tsconfig.json'),
   'var-redeclaration-identity-basic': path.join(workspaceRoot, 'tests/compat-projects/var-redeclaration-identity-basic/tsconfig.json'),
   'tagged-template-generic-call-basic': path.join(workspaceRoot, 'tests/compat-projects/tagged-template-generic-call-basic/tsconfig.json'),
+  'enum-reverse-mapping-basic': path.join(workspaceRoot, 'tests/compat-projects/enum-reverse-mapping-basic/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

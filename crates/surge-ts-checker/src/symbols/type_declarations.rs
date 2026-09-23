@@ -45,6 +45,9 @@ pub(crate) struct TypeAliasInfo {
     pub(crate) enum_name: Option<Arc<str>>,
     /// Whether that enum was exported; tsc qualifies only an exported one.
     pub(crate) enum_exported: bool,
+    /// Whether that enum is a `const enum`, whose object only a string
+    /// literal may index (`isConstEnumObjectType`).
+    pub(crate) enum_is_const: bool,
     /// Memoized resolution-cache key (canonical file name + declared name).
     /// Built on first request — key construction canonicalizes the path and
     /// allocates, and resolution asks for it millions of times per run. Carried
@@ -78,6 +81,7 @@ impl TypeAliasInfo {
             }),
             enum_name: None,
             enum_exported: false,
+            enum_is_const: false,
             cached_resolution_key: std::sync::OnceLock::new(),
             cached_alias_id: std::sync::OnceLock::new(),
         }
@@ -85,9 +89,15 @@ impl TypeAliasInfo {
 
     /// Marks this alias as standing for an enum, so its resolution can carry the
     /// enum's nominal display.
-    pub(crate) fn with_enum_name(mut self, enum_name: Option<&str>, exported: bool) -> Self {
+    pub(crate) fn with_enum_name(
+        mut self,
+        enum_name: Option<&str>,
+        exported: bool,
+        is_const: bool,
+    ) -> Self {
         self.enum_name = enum_name.map(Arc::from);
         self.enum_exported = exported;
+        self.enum_is_const = is_const;
         self
     }
 }
@@ -104,6 +114,7 @@ impl Clone for TypeAliasInfo {
             body: self.body.clone(),
             enum_name: self.enum_name.clone(),
             enum_exported: self.enum_exported,
+            enum_is_const: self.enum_is_const,
             cached_resolution_key: self.cached_resolution_key.clone(),
             cached_alias_id: self.cached_alias_id.clone(),
         }

@@ -1089,7 +1089,11 @@ fn collect_namespace_type_declarations_prefixed(
                         alias.ty.clone(),
                         None,
                     )
-                    .with_enum_name(alias.enum_name.as_deref(), alias.enum_exported);
+                    .with_enum_name(
+                        alias.enum_name.as_deref(),
+                        alias.enum_exported,
+                        alias.enum_is_const,
+                    );
                     let _ = ctx
                         .type_declarations
                         .insert(key, TypeDeclarationInfo::Alias(info));
@@ -1575,7 +1579,11 @@ pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
         alias.ty.clone(),
         None,
     )
-    .with_enum_name(alias.enum_name.as_deref(), alias.enum_exported);
+    .with_enum_name(
+        alias.enum_name.as_deref(),
+        alias.enum_exported,
+        alias.enum_is_const,
+    );
 
     let previous = ctx
         .type_declarations

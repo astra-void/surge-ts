@@ -123,6 +123,7 @@ fn lower_enum_declaration(
         member_types.push(member_type);
     }
 
+    let number_index_type = reverse_mapping_index_type(&properties);
     let enum_type = match member_types.len() {
         0 => ParsedType::Never,
         1 => member_types.pop().expect("one member type"),
@@ -155,7 +156,7 @@ fn lower_enum_declaration(
             declared_type: Some(ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
                 properties,
                 string_index_type: None,
-                number_index_type: None,
+                number_index_type,
                 call_signature: None,
             call_signature_overloads: Vec::new(),
                 construct_signature: None,
@@ -166,6 +167,18 @@ fn lower_enum_declaration(
             initializer_span: None,
         },
     )
+}
+
+/// tsc's `enumNumberIndexInfo` (`resolveAnonymousTypeMembers`): the object of
+/// an enum with no members, or with any numeric member, carries the reverse
+/// mapping `readonly [n: number]: string`. A string-only enum has none, so
+/// `S[0]` stays an implicit `any`.
+fn reverse_mapping_index_type(properties: &[ParsedObjectTypeProperty]) -> Option<Box<ParsedType>> {
+    let numeric = properties.is_empty()
+        || properties
+            .iter()
+            .any(|property| matches!(property.ty, ParsedType::NumberLiteral(_) | ParsedType::Number));
+    numeric.then(|| Box::new(ParsedType::String))
 }
 
 fn enum_member_name(name: &TSEnumMemberName<'_>) -> Option<String> {
@@ -272,6 +285,7 @@ pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStateme
                             object.properties.push(property);
                         }
                     }
+                    object.number_index_type = reverse_mapping_index_type(&object.properties);
                 }
             }
             ParsedStatement::TypeAliasDeclaration(alias) => {
