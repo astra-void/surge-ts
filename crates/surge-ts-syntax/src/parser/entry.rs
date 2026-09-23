@@ -65,7 +65,7 @@ fn classify_uncoded_parser_error(
     match message {
         "Cannot assign to this expression" => {
             if let Some(stop) = update_target_stop(text, span, source_text) {
-                return Some((1005, stop));
+                return Some(stop);
             }
             // tsc's target node keeps the parentheses oxc's label drops.
             let mut span = span;
@@ -219,16 +219,28 @@ fn parameter_property_modifiers_start(source_text: &str, position: usize) -> Opt
 }
 
 /// Where tsc's parser stops at an update expression (`x++`, `--x`) written
-/// as a write target. tsc parses an assignment's target and a prefix `++`/`--`
-/// operand as a left-hand-side expression only, so the update expression ends
-/// the statement, and the next token — the assignment operator, or the
-/// trailing `++`/`--` of `--x--` — is TS1005 `';' expected`
-/// (`parseExpressionStatement`'s `parseSemicolon`). Parenthesized, the update
-/// expression is a left-hand-side expression and the checker's to judge.
-fn update_target_stop(text: &str, span: crate::TextSpan, source_text: &str) -> Option<crate::TextSpan> {
+/// as a write target, and with what. tsc parses an assignment's target and a
+/// prefix `++`/`--` operand as a left-hand-side expression only, so the update
+/// expression ends the statement, and the next token — the assignment
+/// operator, or the trailing `++`/`--` of `--x--` — is TS1005 `';' expected`
+/// (`parseExpressionStatement`'s `parseSemicolon`); a prefix operand that is
+/// itself a prefix update (`++ ++x`) has no left-hand-side expression to
+/// begin with, TS1109 on its operator. Parenthesized, the update expression is
+/// a left-hand-side expression and the checker's to judge.
+fn update_target_stop(text: &str, span: crate::TextSpan, source_text: &str) -> Option<(u32, crate::TextSpan)> {
     let postfix = text.ends_with("++") || text.ends_with("--");
-    if !postfix && !text.starts_with("++") && !text.starts_with("--") {
+    let prefix = text.starts_with("++") || text.starts_with("--");
+    if !postfix && !prefix {
         return None;
+    }
+    // oxc starts a prefix update nested in another at the outer operator.
+    if prefix {
+        let rest = &text[2..];
+        let inner = rest.trim_start();
+        if inner.starts_with("++") || inner.starts_with("--") {
+            let start = span.start + 2 + (rest.len() - inner.len());
+            return Some((1109, crate::TextSpan { start, end: start + 2 }));
+        }
     }
     let after = source_text.get(span.end..)?.trim_start();
     let after_start = source_text.len() - after.len();
@@ -237,11 +249,11 @@ fn update_target_stop(text: &str, span: crate::TextSpan, source_text: &str) -> O
         .find(|operator| after.starts_with(**operator))
         .filter(|operator| **operator != "=" || !matches!(after.as_bytes().get(1), Some(b'=' | b'>')));
     if let Some(operator) = assignment {
-        return Some(crate::TextSpan { start: after_start, end: after_start + operator.len() });
+        return Some((1005, crate::TextSpan { start: after_start, end: after_start + operator.len() }));
     }
     let before = source_text.get(..span.start)?.trim_end();
     (postfix && (before.ends_with("++") || before.ends_with("--")))
-        .then(|| crate::TextSpan { start: span.end - 2, end: span.end })
+        .then(|| (1005, crate::TextSpan { start: span.end - 2, end: span.end }))
 }
 
 const ASSIGNMENT_OPERATORS: [&str; 16] = [
@@ -420,6 +432,8 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
                 message = "'of' expected.".to_string();
             } else if code == Some(1005) && message == "Cannot assign to this expression" {
                 message = "';' expected.".to_string();
+            } else if code == Some(1109) && message == "Cannot assign to this expression" {
+                message = "Expression expected.".to_string();
             }
             Some(crate::ParserError { code, message, span, span_text })
         })
