@@ -1558,9 +1558,11 @@ fn immediately_invoked_arrow_type(
         }
     }
     ctx.truncate_diagnostics(diagnostics_before);
+    // A spread of a generic body's own type variable (`...t` with `t: T`) is an
+    // argument like any other; only what surge could not model stops here.
     if effective.iter().any(|argument| match argument {
         EffectiveArgument::Plain(ty) | EffectiveArgument::Variadic(ty) | EffectiveArgument::Spread(ty) => {
-            ty.is_unknown()
+            ty.is_unmodelled()
         }
     }) {
         return None;

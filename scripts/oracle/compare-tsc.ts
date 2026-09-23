@@ -831,6 +831,7 @@ export const fixturePresets: Record<string, string> = {
   'override-method-bivariance': path.join(workspaceRoot, 'tests/compat-projects/override-method-bivariance/tsconfig.json'),
   'method-this-parameter': path.join(workspaceRoot, 'tests/compat-projects/method-this-parameter/tsconfig.json'),
   'ambient-destructuring-declaration': path.join(workspaceRoot, 'tests/compat-projects/ambient-destructuring-declaration/tsconfig.json'),
+  'iife-spread-type-variable': path.join(workspaceRoot, 'tests/compat-projects/iife-spread-type-variable/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
