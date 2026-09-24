@@ -283,7 +283,7 @@ fn evaluate_add_binary(
 /// do not count on their own.
 fn is_strictly_assignable_to(ty: &Type, target: &Type) -> bool {
     !matches!(ty, Type::Any | Type::Void | Type::Undefined | Type::Null)
-        && !ty.is_unknown()
+        && !ty.is_unmodelled()
         && surge_ts_types::is_assignable_to(ty, target)
 }
 
@@ -426,6 +426,7 @@ fn is_bigint_like(ty: &Type) -> bool {
     match ty {
         Type::BigInt | Type::Any => true,
         Type::Union(union) => union.types().iter().all(is_bigint_like),
+        Type::TypeParameter(_) => surge_ts_types::is_assignable_to(ty, &Type::BigInt),
         _ => false,
     }
 }
@@ -434,16 +435,21 @@ fn maybe_bigint_like(ty: &Type) -> bool {
     match ty {
         Type::BigInt => true,
         Type::Union(union) => union.types().iter().any(maybe_bigint_like),
+        Type::TypeParameter(_) => surge_ts_types::is_assignable_to(ty, &Type::BigInt),
         _ => false,
     }
 }
 
 /// `checkArithmeticOperandType`: `any`, number-like (numeric enums included)
-/// or bigint-like.
+/// or bigint-like — `isTypeAssignableTo(t, numberOrBigIntType)`, which a type
+/// variable meets through its constraint.
 fn is_valid_arithmetic_operand(ty: &Type) -> bool {
     match ty {
         Type::Any | Type::BigInt => true,
         Type::Union(union) => union.types().iter().all(is_valid_arithmetic_operand),
+        Type::TypeParameter(_) => {
+            surge_ts_types::is_assignable_to(ty, &union_type(vec![Type::Number, Type::BigInt]))
+        }
         other => is_number_like_for_arithmetic(other),
     }
 }
@@ -466,8 +472,7 @@ fn evaluate_comparison_binary(
 
     // A type variable of the body being checked is a real operand, related
     // through its constraint.
-    let unjudged = |ty: &Type| is_unmodelled(ty) && !ty.is_type_variable();
-    if unjudged(left_type) || unjudged(right_type) {
+    if is_unmodelled(left_type) || is_unmodelled(right_type) {
         return InferredExpression::Unknown;
     }
 
@@ -651,7 +656,8 @@ fn binary_operator_text(operator: ParsedBinaryOperator) -> &'static str {
 
 /// A type surge could not model, as opposed to the written `unknown`, which an
 /// operator judges like any other operand (under `strictNullChecks` it is
-/// reported before it gets here).
+/// reported before it gets here), and to a type variable of the body being
+/// checked, which relates through its constraint.
 fn is_unmodelled(ty: &Type) -> bool {
-    ty.is_unknown() && *ty != Type::GenuineUnknown
+    ty.is_unmodelled() && *ty != Type::GenuineUnknown
 }
