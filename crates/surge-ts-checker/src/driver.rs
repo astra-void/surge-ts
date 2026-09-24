@@ -872,6 +872,48 @@ pub(crate) fn validate_local_type_declarations(
     }
 }
 
+/// tsc's `checkModuleDeclaration` checks a namespace body's declarations as it
+/// checks a file's. The namespace's own members are registered under their
+/// qualified name, `prefix.Name`; nested namespaces validate their own members
+/// when their bodies are checked.
+pub(crate) fn validate_namespace_type_declarations(
+    statements: &[ParsedStatement],
+    prefix: &str,
+    file_name: &str,
+    ctx: &mut CheckerContext,
+) {
+    let mut local_declarations = Vec::new();
+    let mut seen = HashSet::new();
+    for statement in statements {
+        let declaration = match statement {
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => declaration.as_ref(),
+                _ => continue,
+            },
+            other => other,
+        };
+        let (name, kind) = match declaration {
+            ParsedStatement::TypeAliasDeclaration(alias) => (&alias.name, LocalDeclarationKind::Alias),
+            ParsedStatement::InterfaceDeclaration(interface) => {
+                (&interface.name, LocalDeclarationKind::Interface)
+            }
+            ParsedStatement::ClassDeclaration(class) => (&class.name, LocalDeclarationKind::Interface),
+            _ => continue,
+        };
+        collect_named_local_type_declaration(
+            &format!("{prefix}.{name}"),
+            file_name,
+            kind,
+            &mut seen,
+            &mut local_declarations,
+            ctx,
+        );
+    }
+    for declaration in local_declarations.into_iter().rev() {
+        validate_local_type_declaration(&declaration, ctx);
+    }
+}
+
 fn collect_local_type_declarations_from_statements(
     statements: &[ParsedStatement],
     file_name: &str,

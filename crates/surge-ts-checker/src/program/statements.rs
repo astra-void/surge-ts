@@ -984,6 +984,15 @@ fn check_namespace_body(
     );
     let saved_symbols = std::mem::take(&mut ctx.symbols);
     ctx.set_symbols(symbols);
+    if let Some(prefix) = ctx.namespace_member_prefix_stack.last().cloned() {
+        let file_name = ctx.file_name.clone();
+        crate::driver::validate_namespace_type_declarations(
+            &namespace.statements,
+            &prefix,
+            &file_name,
+            ctx,
+        );
+    }
     check_program_file_statements(&namespace.statements, file_index, &function_signatures, ctx);
     ctx.set_symbols(saved_symbols);
     ctx.module_value_fallback = saved_fallback;

@@ -1052,6 +1052,7 @@ export const fixturePresets: Record<string, string> = {
   'type-query-declaring-module-scope': path.join(workspaceRoot, 'tests/compat-projects/type-query-declaring-module-scope/tsconfig.json'),
   'include-parent-directory': path.join(workspaceRoot, 'tests/compat-projects/include-parent-directory/app/tsconfig.json'),
   'optional-property-source-index-signature': path.join(workspaceRoot, 'tests/compat-projects/optional-property-source-index-signature/tsconfig.json'),
+  'namespace-member-declarations-checked': path.join(workspaceRoot, 'tests/compat-projects/namespace-member-declarations-checked/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
