@@ -55,35 +55,69 @@ pub(super) fn is_syntactic_parser_error(error: &surge_ts_syntax::ParserError) ->
     }
 }
 
-/// A file's syntax errors as tsc's own parser reports them, from its port:
-/// oxc stops at the first failure, words most failures its own way, and
-/// accepts some syntax tsc rejects, while tsc recovers and reports every error
-/// — and a program with any syntax error reports those alone. `None` keeps
-/// oxc's errors: tsc's parser finds nothing wrong with the file.
-pub(super) fn tsc_parser_errors(
+/// What tsc reports for a file before type checking, from the port of its
+/// parser and binder; `None` for a file tsc does not parse as script.
+pub(super) struct TscFileErrors {
+    /// The parser's diagnostics. oxc stops at the first failure, words most
+    /// failures its own way, and rejects some syntax tsc accepts and accepts
+    /// some it rejects, while tsc recovers and reports every error — and a
+    /// program with any syntax error reports those alone.
+    pub(super) syntactic: Vec<surge_ts_syntax::ParserError>,
+    pub(super) bind: Vec<surge_ts_syntax::ParserError>,
+}
+
+/// The binder's diagnostics are what tsc reports for a file without syntax
+/// errors (conflicting declarations, strict-mode restrictions), as tsc's
+/// `getBindAndCheckDiagnostics` includes them: none for a file tsc skips
+/// (`// @ts-nocheck`, or JavaScript with `checkJs: false`), and for plain
+/// JavaScript (neither `checkJs` nor `// @ts-check` written) only the ones
+/// in its `plainJSErrors`.
+pub(super) fn tsc_file_errors(
     source_text: &str,
     file_name: &str,
-) -> Option<Vec<surge_ts_syntax::ParserError>> {
+    check_js: Option<bool>,
+) -> Option<TscFileErrors> {
     let options = surge_ts_tsc_syntax::ParseOptions::for_file_name(file_name)?;
-    let diagnostics = surge_ts_tsc_syntax::syntactic_diagnostics(source_text, &options);
-    if diagnostics.is_empty() {
-        return None;
+    let diagnostics = surge_ts_tsc_syntax::file_diagnostics(source_text, &options);
+    let to_parser_error = |diagnostic: surge_ts_tsc_syntax::SyntaxDiagnostic| surge_ts_syntax::ParserError {
+        code: Some(diagnostic.code),
+        span_text: source_text.get(diagnostic.start..diagnostic.end).map(str::to_string),
+        span: Some(surge_ts_syntax::TextSpan {
+            start: diagnostic.start,
+            end: diagnostic.end,
+        }),
+        message: diagnostic.message,
+    };
+    if !diagnostics.syntactic.is_empty() {
+        return Some(TscFileErrors {
+            syntactic: diagnostics.syntactic.into_iter().map(to_parser_error).collect(),
+            bind: Vec::new(),
+        });
     }
-    Some(
-        diagnostics
+    let is_javascript = surge_ts_syntax::is_javascript_file_name(file_name);
+    let bind = match (surge_ts_syntax::extract_check_directive(source_text), check_js) {
+        (Some(false), _) => Vec::new(),
+        (Some(true), _) => diagnostics.bind,
+        (None, _) if !is_javascript => diagnostics.bind,
+        (None, Some(true)) => diagnostics.bind,
+        (None, Some(false)) => Vec::new(),
+        (None, None) => diagnostics
+            .bind
             .into_iter()
-            .map(|diagnostic| surge_ts_syntax::ParserError {
-                code: Some(diagnostic.code),
-                span_text: source_text.get(diagnostic.start..diagnostic.end).map(str::to_string),
-                span: Some(surge_ts_syntax::TextSpan {
-                    start: diagnostic.start,
-                    end: diagnostic.end,
-                }),
-                message: diagnostic.message,
-            })
+            .filter(|diagnostic| PLAIN_JS_BIND_CODES.contains(&diagnostic.code))
             .collect(),
-    )
+    };
+    Some(TscFileErrors {
+        syntactic: Vec::new(),
+        bind: bind.into_iter().map(to_parser_error).collect(),
+    })
 }
+
+/// The binder codes in tsc's `plainJSErrors`: what it reports for a
+/// JavaScript file that neither `checkJs` nor `// @ts-check` opts in.
+const PLAIN_JS_BIND_CODES: &[u32] = &[
+    1100, 1101, 1102, 1184, 1210, 1214, 1215, 1262, 1344, 1359, 2451, 2528, 18012,
+];
 
 /// tsc's `GetDiagnosticsOfAnyProgram`: a program with a syntax error anywhere
 /// reports its syntactic diagnostics and nothing else.

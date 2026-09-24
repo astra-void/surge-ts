@@ -4055,3 +4055,39 @@ status = "emitted"
 oracle = [
   "tsc-parser-javascript-only-syntax",
 ]
+
+[TS1262]
+status = "emitted"
+oracle = [
+  "tsc-binder-declarations",
+]
+
+[TS1314]
+status = "emitted"
+oracle = [
+  "tsc-binder-declarations",
+]
+
+[TS5061]
+status = "emitted"
+oracle = [
+  "tsc-binder-declarations",
+]
+
+[TS18012]
+status = "emitted"
+oracle = [
+  "tsc-binder-declarations",
+]
+
+[TS1315]
+status = "emitted"
+oracle = [
+  "tsc-binder-declarations",
+]
+
+[TS1316]
+status = "emitted"
+oracle = [
+  "tsc-binder-declarations",
+]

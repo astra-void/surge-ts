@@ -150,6 +150,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             diagnostic_profile: Default::default(),
             resolve_json_module: true,
             allow_js: false,
+            check_js: None,
             jsx_configured: false,
             jsx_factory_names: Default::default(),
             resolved_modules: Default::default(),

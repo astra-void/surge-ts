@@ -5030,5 +5030,53 @@
     "source": "typescript",
     "arity": 0,
     "support": "emitted"
+  },
+  {
+    "code": "TS1262",
+    "category": "Error",
+    "message": "Identifier expected. '{0}' is a reserved word at the top-level of a module.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1314",
+    "category": "Error",
+    "message": "Global module exports may only appear in module files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1315",
+    "category": "Error",
+    "message": "Global module exports may only appear in declaration files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1316",
+    "category": "Error",
+    "message": "Global module exports may only appear at top level.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS5061",
+    "category": "Error",
+    "message": "Pattern '{0}' can have at most one '*' character.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18012",
+    "category": "Error",
+    "message": "'#constructor' is a reserved word.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
   }
 ]

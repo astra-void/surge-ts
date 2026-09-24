@@ -169,8 +169,9 @@ pub(crate) fn normalize_compiler_options(
                     .unwrap_or(normalized.allow_js);
             }
             "checkJs" => {
-                normalized.check_js = parse_bool_option(key, value, config_dir, diagnostics)
-                    .unwrap_or(normalized.check_js);
+                if let Some(check_js) = parse_bool_option(key, value, config_dir, diagnostics) {
+                    normalized.check_js = Some(check_js);
+                }
             }
             "noEmit" => {
                 normalized.no_emit = parse_bool_option(key, value, config_dir, diagnostics)

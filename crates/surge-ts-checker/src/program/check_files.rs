@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -819,6 +819,38 @@ pub(super) fn module_scope_by_file_map(
     map
 }
 
+fn emit_bind_diagnostics(parsed_file: &ParsedProgramFile, ctx: &mut CheckerContext) {
+    for error in &parsed_file.bind_errors {
+        ctx.push(super::diagnostics::parser_error_diagnostic(error, &parsed_file.file_name));
+    }
+}
+
+/// The binder is tsc's only source of these reports for a declaration in the
+/// file, so a report surge's own checks make of the same code at the same
+/// place restates one the binder made first.
+fn drop_restated_bind_diagnostics(diagnostics: &mut Vec<Diagnostic>, parsed_file: &ParsedProgramFile) {
+    if parsed_file.bind_errors.is_empty() {
+        return;
+    }
+    let bound: HashSet<(u32, usize)> = parsed_file
+        .bind_errors
+        .iter()
+        .filter_map(|error| Some((error.code?, error.span?.start)))
+        .collect();
+    let mut claimed: HashSet<(u32, usize)> = HashSet::new();
+    diagnostics.retain(|diagnostic| {
+        let surge_ts_diagnostics::DiagnosticCode::TypeScript(code) = diagnostic.code else {
+            return true;
+        };
+        let Some(span) = diagnostic.span else { return true };
+        let key = (code, span.start);
+        if !bound.contains(&key) {
+            return true;
+        }
+        claimed.insert(key)
+    });
+}
+
 /// Turns the parser's grammar findings (see
 /// [`surge_ts_syntax::ParsedSource::grammar_diagnostics`]) into diagnostics.
 /// The two implicit-`any` kinds are reported only under `noImplicitAny`; the
@@ -1349,9 +1381,11 @@ pub(super) fn check_program_file(
     }
 
     if parsed_file.file_kind.is_declaration() {
+        emit_bind_diagnostics(parsed_file, ctx);
         emit_grammar_diagnostics(&parsed_file.grammar_diagnostics, ctx);
         emit_unsupported_declaration_diagnostics(&parsed_file.statements, ctx);
-        let diagnostics = std::mem::take(&mut ctx.diagnostics);
+        let mut diagnostics = std::mem::take(&mut ctx.diagnostics);
+        drop_restated_bind_diagnostics(&mut diagnostics, parsed_file);
         let stats = std::mem::take(&mut ctx.stats);
         return FileCheckResult {
             file_index,
@@ -1360,6 +1394,7 @@ pub(super) fn check_program_file(
         };
     }
 
+    emit_bind_diagnostics(parsed_file, ctx);
     emit_grammar_diagnostics(&parsed_file.grammar_diagnostics, ctx);
     ctx.parenthesized_expressions = parsed_file.parenthesized_expressions.clone();
     ctx.let_assignments = parsed_file.let_assignments.clone();
@@ -1704,6 +1739,7 @@ pub(super) fn check_program_file(
 
     emit_deferred_grammar_diagnostics(ctx);
     let mut diagnostics = std::mem::take(&mut ctx.diagnostics);
+    drop_restated_bind_diagnostics(&mut diagnostics, parsed_file);
     apply_comment_directives(
         &mut diagnostics,
         &parsed_file.comment_directives,

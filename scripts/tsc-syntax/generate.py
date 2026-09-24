@@ -29,7 +29,7 @@ lines += ['', '    pub const ALL: [Kind; ' + str(len(kinds)) + '] = [' + ', '.jo
 
 # Messages referenced by the parser and scanner.
 used = set()
-for f in ['parser/parser.go', 'parser/utilities.go', 'parser/references.go', 'scanner/scanner.go', 'scanner/utilities.go', 'ast/utilities.go']:
+for f in ['parser/parser.go', 'parser/utilities.go', 'parser/references.go', 'scanner/scanner.go', 'scanner/utilities.go', 'ast/utilities.go', 'binder/binder.go']:
     used |= set(re.findall(r'diagnostics\.(\w+)', (root / f).read_text()))
 diag = (root / 'diagnostics/diagnostics_generated.go').read_text()
 def rust_str(s):

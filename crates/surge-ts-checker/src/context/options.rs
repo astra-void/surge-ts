@@ -195,6 +195,9 @@ pub struct CheckerOptions {
     /// `compilerOptions.allowJs`. On, tsc makes a JavaScript file a relative
     /// import resolves to a program file instead of an untyped module.
     pub allow_js: bool,
+    /// `compilerOptions.checkJs`, unset when not written: a JavaScript file
+    /// is "plain" JavaScript (`ast.IsPlainJSFile`) only when it is unset.
+    pub check_js: Option<bool>,
     /// `compilerOptions.jsx` is set. Unset, a module that resolves to a `.jsx`
     /// file is TS6142 (`GetResolutionDiagnostic`).
     pub jsx_configured: bool,
@@ -285,6 +288,7 @@ impl Default for CheckerOptions {
             allow_umd_global_access: false,
             resolve_json_module: true,
             allow_js: false,
+            check_js: None,
             jsx_configured: false,
             jsx_factory_names: Default::default(),
             diagnostic_profile: DiagnosticProfile::default(),

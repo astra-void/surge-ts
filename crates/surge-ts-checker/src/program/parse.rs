@@ -44,6 +44,7 @@ pub(super) fn parse_program_files(
     files: Vec<SourceFileInput>,
     prescanned: Vec<ParsedSource>,
     jobs: usize,
+    check_js: Option<bool>,
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> Vec<ParsedProgramFile> {
     let prescanned = prescanned_by_file(prescanned, &files);
@@ -58,6 +59,7 @@ pub(super) fn parse_program_files(
                     &mut parser,
                     input,
                     reused.into_inner().ok().flatten(),
+                    check_js,
                     timings,
                 )
             })
@@ -97,6 +99,7 @@ pub(super) fn parse_program_files(
                             &mut parser,
                             &files[file_index],
                             reused,
+                            check_js,
                             timings.as_ref(),
                         ),
                     ));
@@ -164,6 +167,7 @@ pub(super) fn parse_program_file(
     parser: &mut ParserWorker,
     input: &SourceFileInput,
     prescanned: Option<ParsedSource>,
+    check_js: Option<bool>,
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> ParsedProgramFile {
     record_program_counter(|c| c.files_total += 1);
@@ -179,13 +183,18 @@ pub(super) fn parse_program_file(
     };
     let tsc_errors = match file_kind {
         FileKind::GeneratedDeclaration | FileKind::PhysicalDefaultLib => None,
-        _ => super::diagnostics::tsc_parser_errors(&input.source_text, &input.file_name),
+        _ => super::diagnostics::tsc_file_errors(&input.source_text, &input.file_name, check_js),
     };
-    if let Some(errors) = tsc_errors {
-        // The grammar walk reports tsc's checker grammar errors, which a
-        // program with syntax errors never reaches.
-        parsed.parser_errors = errors;
-        parsed.grammar_diagnostics.clear();
+    let mut bind_errors = Vec::new();
+    if let Some(tsc_errors) = tsc_errors {
+        if !tsc_errors.syntactic.is_empty() {
+            // The grammar walk reports tsc's checker grammar errors, which a
+            // program with syntax errors never reaches.
+            parsed.parser_errors = tsc_errors.syntactic;
+            parsed.grammar_diagnostics.clear();
+        } else {
+            bind_errors = tsc_errors.bind;
+        }
     }
     let parse_duration = parse_start.elapsed();
     let file_name = parsed.file_name;
@@ -224,6 +233,7 @@ pub(super) fn parse_program_file(
         contains_typeof: source_text_has_typeof(&input.source_text),
         statements: parsed.statements,
         parser_errors: parsed.parser_errors,
+        bind_errors,
         is_module: parsed.is_module,
         import_call_specifiers: parsed.import_call_specifiers,
         file_kind,

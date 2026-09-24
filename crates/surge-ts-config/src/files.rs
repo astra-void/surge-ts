@@ -20,7 +20,7 @@ pub(crate) fn resolve_source_files(
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) -> Vec<PathBuf> {
     // tsc's `getAllowJSCompilerOption`: `checkJs` implies `allowJs`.
-    let allow_js = compiler_options.allow_js || compiler_options.check_js;
+    let allow_js = compiler_options.allow_js || compiler_options.check_js == Some(true);
     if let Some(files) = files {
         return resolve_explicit_files(root_dir, files, allow_js, diagnostics);
     }

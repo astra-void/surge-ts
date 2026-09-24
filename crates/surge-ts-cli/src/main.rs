@@ -564,6 +564,7 @@ fn run_single_file_mode(
             allow_umd_global_access: false,
             resolve_json_module: true,
             allow_js: false,
+            check_js: None,
             jsx_configured: false,
             jsx_factory_names: Default::default(),
             diagnostic_profile,
@@ -1421,7 +1422,7 @@ fn build_compiler_options_json(
     );
     options.insert(
         "checkJs".to_string(),
-        Value::Bool(compiler_options.check_js),
+        Value::Bool(compiler_options.check_js == Some(true)),
     );
     options.insert("noEmit".to_string(), Value::Bool(compiler_options.no_emit));
     options.insert(

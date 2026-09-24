@@ -218,6 +218,7 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
                 contains_typeof: input.source_text.contains("typeof"),
                 statements: parsed.statements,
                 parser_errors: parsed.parser_errors,
+                bind_errors: Vec::new(),
                 is_module: parsed.is_module,
                 import_call_specifiers: parsed.import_call_specifiers,
                 file_kind: FileKind::GeneratedDeclaration,

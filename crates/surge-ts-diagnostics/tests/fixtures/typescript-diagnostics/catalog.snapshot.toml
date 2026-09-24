@@ -5032,3 +5032,51 @@ support = "emitted"
 message = "An optional chain cannot contain private identifiers."
 arity = 0
 
+[[diagnostic]]
+code = "TS1262"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Identifier expected. '{0}' is a reserved word at the top-level of a module."
+arity = 1
+
+[[diagnostic]]
+code = "TS1314"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Global module exports may only appear in module files."
+arity = 0
+
+[[diagnostic]]
+code = "TS1315"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Global module exports may only appear in declaration files."
+arity = 0
+
+[[diagnostic]]
+code = "TS1316"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Global module exports may only appear at top level."
+arity = 0
+
+[[diagnostic]]
+code = "TS5061"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Pattern '{0}' can have at most one '*' character."
+arity = 1
+
+[[diagnostic]]
+code = "TS18012"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'#constructor' is a reserved word."
+arity = 0
+

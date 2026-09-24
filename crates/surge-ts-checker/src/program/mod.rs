@@ -83,6 +83,9 @@ pub(crate) struct ParsedProgramFile {
     pub(crate) contains_typeof: bool,
     pub(crate) statements: Vec<ParsedStatement>,
     pub(crate) parser_errors: Vec<surge_ts_syntax::ParserError>,
+    /// tsc's binder diagnostics for the file (see
+    /// [`diagnostics::tsc_file_errors`]), reported with its check.
+    pub(crate) bind_errors: Vec<surge_ts_syntax::ParserError>,
     pub(crate) is_module: bool,
     /// Specifiers written as `import("…")` in type positions (see
     /// [`surge_ts_syntax::ParsedSource::import_call_specifiers`]).
@@ -314,6 +317,20 @@ fn check_program_with_stats_and_jobs_inner(
     namespaces::report_cross_file_namespace_merges(&mut parsed_files);
     ctx.constructor_local_properties = constructor_local_properties_by_file(&parsed_files, &ctx.options);
     let syntax_errors = diagnostics::program_has_syntax_errors(&parsed_files);
+    if syntax_errors {
+        for file in &mut parsed_files {
+            file.bind_errors.clear();
+        }
+    }
+    let unchecked_bind_reports: HashSet<(String, u32, usize)> = parsed_files
+        .iter()
+        .filter(|file| unchecked_files.contains(&file.file_name))
+        .flat_map(|file| {
+            file.bind_errors
+                .iter()
+                .filter_map(|error| Some((file.file_name.clone(), error.code?, error.span?.start)))
+        })
+        .collect();
     let globals = collect_program_globals(&parsed_files, &mut ctx, &timings, program_start);
     let preliminary = run_preliminary_pass(
         &mut parsed_files,
@@ -411,9 +428,24 @@ fn check_program_with_stats_and_jobs_inner(
         result.diagnostics.retain(|diagnostic| {
             !unchecked_files.contains(&diagnostic.file_name)
                 || diagnostics::is_syntactic_diagnostic(diagnostic)
+                || is_unchecked_bind_report(diagnostic, &unchecked_bind_reports)
         });
     }
     result
+}
+
+/// A JavaScript file's binder reports survive the file being otherwise
+/// unchecked, as tsc reports them for plain JavaScript.
+fn is_unchecked_bind_report(
+    diagnostic: &surge_ts_diagnostics::Diagnostic,
+    reports: &HashSet<(String, u32, usize)>,
+) -> bool {
+    let surge_ts_diagnostics::DiagnosticCode::TypeScript(code) = diagnostic.code else {
+        return false;
+    };
+    diagnostic
+        .span
+        .is_some_and(|span| reports.contains(&(diagnostic.file_name.clone(), code, span.start)))
 }
 
 fn start_program_run(
@@ -452,7 +484,7 @@ fn start_program_run(
     crate::modules::set_allow_arbitrary_extensions(options.allow_arbitrary_extensions);
 
     let parse_start = Instant::now();
-    let parsed_files = parse_program_files(files, prescanned, jobs, timings.as_ref());
+    let parsed_files = parse_program_files(files, prescanned, jobs, options.check_js, timings.as_ref());
     let ast_nodes = parsed_files
         .iter()
         .map(|file| file.statements.len() as u64)

@@ -23,6 +23,12 @@ pub const Unexpected_token_A_constructor_method_accessor_or_property_was_expecte
 #[allow(non_upper_case_globals, dead_code)]
 pub const Invalid_reference_directive_syntax: &Message = &Message { code: 1084, text: "Invalid 'reference' directive syntax." };
 #[allow(non_upper_case_globals, dead_code)]
+pub const Invalid_use_of_0_in_strict_mode: &Message = &Message { code: 1100, text: "Invalid use of '{0}' in strict mode." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const X_with_statements_are_not_allowed_in_strict_mode: &Message = &Message { code: 1101, text: "'with' statements are not allowed in strict mode." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const X_delete_cannot_be_called_on_an_identifier_in_strict_mode: &Message = &Message { code: 1102, text: "'delete' cannot be called on an identifier in strict mode." };
+#[allow(non_upper_case_globals, dead_code)]
 pub const Expression_expected: &Message = &Message { code: 1109, text: "Expression expected." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Type_expected: &Message = &Message { code: 1110, text: "Type expected." };
@@ -83,6 +89,8 @@ pub const Property_destructuring_pattern_expected: &Message = &Message { code: 1
 #[allow(non_upper_case_globals, dead_code)]
 pub const Array_element_destructuring_pattern_expected: &Message = &Message { code: 1181, text: "Array element destructuring pattern expected." };
 #[allow(non_upper_case_globals, dead_code)]
+pub const Modifiers_cannot_appear_here: &Message = &Message { code: 1184, text: "Modifiers cannot appear here." };
+#[allow(non_upper_case_globals, dead_code)]
 pub const Merge_conflict_marker_encountered: &Message = &Message { code: 1185, text: "Merge conflict marker encountered." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const An_extended_Unicode_escape_value_must_be_between_0x0_and_0x10FFFF_inclusive: &Message = &Message { code: 1198, text: "An extended Unicode escape value must be between 0x0 and 0x10FFFF inclusive." };
@@ -93,13 +101,39 @@ pub const Decorators_are_not_valid_here: &Message = &Message { code: 1206, text:
 #[allow(non_upper_case_globals, dead_code)]
 pub const Invalid_optional_chain_from_new_expression_Did_you_mean_to_call_0: &Message = &Message { code: 1209, text: "Invalid optional chain from new expression. Did you mean to call '{0}()'?" };
 #[allow(non_upper_case_globals, dead_code)]
+pub const Code_contained_in_a_class_is_evaluated_in_JavaScript_s_strict_mode_which_does_not_allow_this_use_of_0_For_more_information_see_https_Colon_Slash_Slashdeveloper_mozilla_org_Slashen_US_Slashdocs_SlashWeb_SlashJavaScript_SlashReference_SlashStrict_mode: &Message = &Message { code: 1210, text: "Code contained in a class is evaluated in JavaScript's strict mode which does not allow this use of '{0}'. For more information, see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Strict_mode." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Identifier_expected_0_is_a_reserved_word_in_strict_mode: &Message = &Message { code: 1212, text: "Identifier expected. '{0}' is a reserved word in strict mode." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Identifier_expected_0_is_a_reserved_word_in_strict_mode_Class_definitions_are_automatically_in_strict_mode: &Message = &Message { code: 1213, text: "Identifier expected. '{0}' is a reserved word in strict mode. Class definitions are automatically in strict mode." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Identifier_expected_0_is_a_reserved_word_in_strict_mode_Modules_are_automatically_in_strict_mode: &Message = &Message { code: 1214, text: "Identifier expected. '{0}' is a reserved word in strict mode. Modules are automatically in strict mode." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Invalid_use_of_0_Modules_are_automatically_in_strict_mode: &Message = &Message { code: 1215, text: "Invalid use of '{0}'. Modules are automatically in strict mode." };
+#[allow(non_upper_case_globals, dead_code)]
 pub const A_type_predicate_is_only_allowed_in_return_type_position_for_functions_and_methods: &Message = &Message { code: 1228, text: "A type predicate is only allowed in return type position for functions and methods." };
 #[allow(non_upper_case_globals, dead_code)]
+pub const Function_declarations_are_not_allowed_inside_blocks_in_strict_mode_when_targeting_ES5: &Message = &Message { code: 1250, text: "Function declarations are not allowed inside blocks in strict mode when targeting 'ES5'." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Function_declarations_are_not_allowed_inside_blocks_in_strict_mode_when_targeting_ES5_Class_definitions_are_automatically_in_strict_mode: &Message = &Message { code: 1251, text: "Function declarations are not allowed inside blocks in strict mode when targeting 'ES5'. Class definitions are automatically in strict mode." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Function_declarations_are_not_allowed_inside_blocks_in_strict_mode_when_targeting_ES5_Modules_are_automatically_in_strict_mode: &Message = &Message { code: 1252, text: "Function declarations are not allowed inside blocks in strict mode when targeting 'ES5'. Modules are automatically in strict mode." };
+#[allow(non_upper_case_globals, dead_code)]
 pub const Keywords_cannot_contain_escape_characters: &Message = &Message { code: 1260, text: "Keywords cannot contain escape characters." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Identifier_expected_0_is_a_reserved_word_at_the_top_level_of_a_module: &Message = &Message { code: 1262, text: "Identifier expected. '{0}' is a reserved word at the top-level of a module." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Global_module_exports_may_only_appear_in_module_files: &Message = &Message { code: 1314, text: "Global module exports may only appear in module files." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Global_module_exports_may_only_appear_in_declaration_files: &Message = &Message { code: 1315, text: "Global module exports may only appear in declaration files." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Global_module_exports_may_only_appear_at_top_level: &Message = &Message { code: 1316, text: "Global module exports may only appear at top level." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const String_literal_with_double_quotes_expected: &Message = &Message { code: 1327, text: "String literal with double quotes expected." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Property_value_can_only_be_string_literal_numeric_literal_true_false_null_object_literal_or_array_literal: &Message = &Message { code: 1328, text: "Property value can only be string literal, numeric literal, 'true', 'false', 'null', object literal or array literal." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const A_label_is_not_allowed_here: &Message = &Message { code: 1344, text: "A label is not allowed here." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const An_identifier_or_keyword_cannot_immediately_follow_a_numeric_literal: &Message = &Message { code: 1351, text: "An identifier or keyword cannot immediately follow a numeric literal." };
 #[allow(non_upper_case_globals, dead_code)]
@@ -110,6 +144,8 @@ pub const A_bigint_literal_must_be_an_integer: &Message = &Message { code: 1353,
 pub const An_enum_member_name_must_be_followed_by_a_or: &Message = &Message { code: 1357, text: "An enum member name must be followed by a ',', '=', or '}'." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Identifier_expected_0_is_a_reserved_word_that_cannot_be_used_here: &Message = &Message { code: 1359, text: "Identifier expected. '{0}' is a reserved word that cannot be used here." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Did_you_mean_0: &Message = &Message { code: 1369, text: "Did you mean '{0}'?" };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Unexpected_token_Did_you_mean_or_rbrace: &Message = &Message { code: 1381, text: "Unexpected token. Did you mean `{'}'}` or `&rbrace;`?" };
 #[allow(non_upper_case_globals, dead_code)]
@@ -181,11 +217,25 @@ pub const Decimal_escape_sequences_and_backreferences_are_not_allowed_in_a_chara
 #[allow(non_upper_case_globals, dead_code)]
 pub const Unicode_escape_sequences_are_only_available_when_the_Unicode_u_flag_or_the_Unicode_Sets_v_flag_is_set: &Message = &Message { code: 1538, text: "Unicode escape sequences are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set." };
 #[allow(non_upper_case_globals, dead_code)]
+pub const Duplicate_identifier_0: &Message = &Message { code: 2300, text: "Duplicate identifier '{0}'." };
+#[allow(non_upper_case_globals, dead_code)]
 pub const Interface_name_cannot_be_0: &Message = &Message { code: 2427, text: "Interface name cannot be '{0}'." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Cannot_redeclare_block_scoped_variable_0: &Message = &Message { code: 2451, text: "Cannot redeclare block-scoped variable '{0}'." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Type_alias_name_cannot_be_0: &Message = &Message { code: 2457, text: "Type alias name cannot be '{0}'." };
 #[allow(non_upper_case_globals, dead_code)]
+pub const A_module_cannot_have_multiple_default_exports: &Message = &Message { code: 2528, text: "A module cannot have multiple default exports." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Enum_declarations_can_only_merge_with_namespace_or_other_enum_declarations: &Message = &Message { code: 2567, text: "Enum declarations can only merge with namespace or other enum declarations." };
+#[allow(non_upper_case_globals, dead_code)]
 pub const JSX_expressions_must_have_one_parent_element: &Message = &Message { code: 2657, text: "JSX expressions must have one parent element." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const X_export_modifier_cannot_be_applied_to_ambient_modules_and_module_augmentations_since_they_are_always_visible: &Message = &Message { code: 2668, text: "'export' modifier cannot be applied to ambient modules and module augmentations since they are always visible." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const The_first_export_default_is_here: &Message = &Message { code: 2752, text: "The first export default is here." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Another_export_default_is_here: &Message = &Message { code: 2753, text: "Another export default is here." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const X_super_may_not_use_type_arguments: &Message = &Message { code: 2754, text: "'super' may not use type arguments." };
 #[allow(non_upper_case_globals, dead_code)]
@@ -195,9 +245,13 @@ pub const Namespace_name_cannot_be_0: &Message = &Message { code: 2819, text: "N
 #[allow(non_upper_case_globals, dead_code)]
 pub const Import_assertions_have_been_replaced_by_import_attributes_Use_with_instead_of_assert: &Message = &Message { code: 2880, text: "Import assertions have been replaced by import attributes. Use 'with' instead of 'assert'." };
 #[allow(non_upper_case_globals, dead_code)]
+pub const Pattern_0_can_have_at_most_one_Asterisk_character: &Message = &Message { code: 5061, text: "Pattern '{0}' can have at most one '*' character." };
+#[allow(non_upper_case_globals, dead_code)]
 pub const Numeric_separators_are_not_allowed_here: &Message = &Message { code: 6188, text: "Numeric separators are not allowed here." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Multiple_consecutive_numeric_separators_are_not_permitted: &Message = &Message { code: 6189, text: "Multiple consecutive numeric separators are not permitted." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const X_and_here: &Message = &Message { code: 6204, text: "and here." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const X_import_can_only_be_used_in_TypeScript_files: &Message = &Message { code: 8002, text: "'import ... =' can only be used in TypeScript files." };
 #[allow(non_upper_case_globals, dead_code)]
@@ -244,6 +298,8 @@ pub const Expected_corresponding_closing_tag_for_JSX_fragment: &Message = &Messa
 pub const Unicode_escape_sequence_cannot_appear_here: &Message = &Message { code: 17021, text: "Unicode escape sequence cannot appear here." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Private_identifiers_cannot_be_used_as_parameters: &Message = &Message { code: 18009, text: "Private identifiers cannot be used as parameters." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const X_constructor_is_a_reserved_word: &Message = &Message { code: 18012, text: "'#constructor' is a reserved word." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Private_identifiers_are_not_allowed_outside_class_bodies: &Message = &Message { code: 18016, text: "Private identifiers are not allowed outside class bodies." };
 #[allow(non_upper_case_globals, dead_code)]

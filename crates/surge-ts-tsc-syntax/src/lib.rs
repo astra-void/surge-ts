@@ -1,12 +1,14 @@
-//! The syntactic diagnostics tsc reports for a file: a port of typescript-go's
-//! scanner and recovering parser (`internal/scanner`, `internal/parser`), kept
-//! to the parts that decide which errors are reported and where.
+//! The diagnostics tsc reports for a file before type checking: a port of
+//! typescript-go's scanner, recovering parser and binder (`internal/scanner`,
+//! `internal/parser`, `internal/binder`), kept to the parts that decide which
+//! errors are reported and where.
 //!
 //! tsc reports a program's syntactic diagnostics alone when there are any, so
-//! the syntax tree built here is only ever used to reproduce the parser's own
-//! decisions; nothing downstream reads it.
+//! the syntax tree built here is only read by the parser's own decisions and,
+//! for a file that parses cleanly, by the binder.
 
 mod ast;
+mod binder;
 mod chars;
 mod flags;
 mod kind;
@@ -102,12 +104,35 @@ impl ParseOptions {
 /// `SortAndDeduplicateDiagnostics` does: an unclosed JSX element nested in
 /// another reports the missing `</` at the end of the file for both.
 pub fn syntactic_diagnostics(text: &str, options: &ParseOptions) -> Vec<SyntaxDiagnostic> {
-    let (diagnostics, js_diagnostics) = parser::parse(text, options);
+    let parsed = parser::parse(text, options);
+    render(parsed.diagnostics.iter().chain(parsed.js_diagnostics.iter()))
+}
+
+fn render<'d>(diagnostics: impl Iterator<Item = &'d Diagnostic>) -> Vec<SyntaxDiagnostic> {
     let mut rendered: Vec<SyntaxDiagnostic> = Vec::new();
-    for diagnostic in diagnostics.iter().chain(js_diagnostics.iter()).map(Diagnostic::render) {
+    for diagnostic in diagnostics.map(Diagnostic::render) {
         if !rendered.contains(&diagnostic) {
             rendered.push(diagnostic);
         }
     }
     rendered
+}
+
+/// What tsc reports for a file before type checking: its syntactic
+/// diagnostics, and, for a file with none, what its binder reports
+/// (declarations that conflict, strict-mode restrictions).
+pub struct FileDiagnostics {
+    pub syntactic: Vec<SyntaxDiagnostic>,
+    pub bind: Vec<SyntaxDiagnostic>,
+}
+
+pub fn file_diagnostics(text: &str, options: &ParseOptions) -> FileDiagnostics {
+    let parsed = parser::parse(text, options);
+    let syntactic = render(parsed.diagnostics.iter().chain(parsed.js_diagnostics.iter()));
+    let bind = if parsed.diagnostics.is_empty() {
+        render(binder::bind(&parsed, text).iter())
+    } else {
+        Vec::new()
+    };
+    FileDiagnostics { syntactic, bind }
 }

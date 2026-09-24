@@ -6295,6 +6295,66 @@ pub const TS18030: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1262: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1262",
+    number: Some(1262),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Identifier expected. '{0}' is a reserved word at the top-level of a module.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1314: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1314",
+    number: Some(1314),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Global module exports may only appear in module files.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1315: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1315",
+    number: Some(1315),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Global module exports may only appear in declaration files.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1316: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1316",
+    number: Some(1316),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Global module exports may only appear at top level.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS5061: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS5061",
+    number: Some(5061),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Pattern '{0}' can have at most one '*' character.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS18012: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS18012",
+    number: Some(18012),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'#constructor' is a reserved word.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
     TS2411,
@@ -6925,6 +6985,12 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS18026,
     TS18029,
     TS18030,
+    TS1262,
+    TS1314,
+    TS1315,
+    TS1316,
+    TS5061,
+    TS18012,
 ];
 
 impl Diagnostic {
@@ -11574,5 +11640,43 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts18030(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS18030, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1262(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1262,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1314(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1314, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1315(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1315, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1316(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1316, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts5061(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS5061,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts18012(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS18012, Vec::<DiagnosticArg>::new(), file_name)
     }
 }

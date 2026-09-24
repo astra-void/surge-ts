@@ -704,7 +704,8 @@ impl Project {
             allow_umd_global_access: loaded.compiler_options.allow_umd_global_access,
             resolve_json_module: loaded.compiler_options.resolve_json_module,
             // tsc's `GetAllowJS`: `checkJs` implies `allowJs`.
-            allow_js: loaded.compiler_options.allow_js || loaded.compiler_options.check_js,
+            allow_js: loaded.compiler_options.allow_js || loaded.compiler_options.check_js == Some(true),
+            check_js: loaded.compiler_options.check_js,
             jsx_configured: loaded.compiler_options.jsx.is_some(),
             jsx_factory_names: surge_ts_checker::JsxFactoryNames {
                 factory: loaded.compiler_options.jsx_factory.clone(),

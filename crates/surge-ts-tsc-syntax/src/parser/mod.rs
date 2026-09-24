@@ -137,9 +137,58 @@ pub(crate) struct Parser<'a> {
     is_declaration_file: bool,
 }
 
-/// Parses `text` and returns its parse diagnostics and JavaScript-only syntax
-/// diagnostics.
-pub(crate) fn parse(text: &str, options: &ParseOptions) -> (Vec<Diagnostic>, Vec<Diagnostic>) {
+/// A parsed file: its tree, rooted at a `SourceFile` node, and what the parser
+/// reported.
+pub(crate) struct ParsedFile {
+    pub nodes: Vec<Node>,
+    pub root: NodeId,
+    pub parents: Vec<Option<NodeId>>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub js_diagnostics: Vec<Diagnostic>,
+    /// `ast.IsExternalModule(file)`: the file has an `ExternalModuleIndicator`.
+    pub external_module: bool,
+    pub is_declaration_file: bool,
+    pub jsx: bool,
+}
+
+impl ParsedFile {
+    pub fn node(&self, id: NodeId) -> &Node {
+        &self.nodes[id as usize]
+    }
+
+    pub fn parent(&self, id: NodeId) -> Option<NodeId> {
+        self.parents[id as usize]
+    }
+
+    /// `node.ForEachChild`: every child, in source order.
+    pub fn children(&self, id: NodeId) -> Vec<NodeId> {
+        child_ids(&self.nodes, id)
+    }
+}
+
+fn child_ids(nodes: &[Node], id: NodeId) -> Vec<NodeId> {
+    let node = &nodes[id as usize];
+    let mut children: Vec<NodeId> = Vec::new();
+    let lists = [&node.modifiers, &node.type_parameters, &node.type_arguments, &node.parameters];
+    for list in lists.into_iter().flatten() {
+        children.extend(&list.nodes);
+    }
+    for list in node.lists.iter().flatten() {
+        children.extend(&list.nodes);
+    }
+    children.extend(
+        [node.name, node.ty, node.body, node.expression, node.initializer, node.question_token, node.import_clause]
+            .into_iter()
+            .flatten(),
+    );
+    children.extend(node.children.iter().flatten());
+    children.sort_by_key(|&child| (nodes[child as usize].pos, nodes[child as usize].end, child));
+    children.dedup();
+    children
+}
+
+/// Parses `text`.
+pub(crate) fn parse(text: &str, options: &ParseOptions) -> ParsedFile {
     let jsx = matches!(options.script_kind, ScriptKind::Tsx | ScriptKind::Jsx | ScriptKind::Js);
     let mut parser = Parser {
         scanner: Scanner::new(text, jsx),
@@ -162,9 +211,34 @@ pub(crate) fn parse(text: &str, options: &ParseOptions) -> (Vec<Diagnostic>, Vec
         is_declaration_file: options.is_declaration_file,
     };
     parser.next_token();
-    parser.parse_source_file_worker();
+    let (statements, external_module) = parser.parse_source_file_worker();
+    let mut root = Node::new(Kind::SourceFile).list(NodeList::new(0, text.len(), statements));
+    root.pos = 0;
+    root.end = text.len();
+    root.flags = parser.context_flags;
+    let root_id = parser.nodes.len() as NodeId;
+    parser.nodes.push(root);
+    let mut parents = vec![None; parser.nodes.len()];
+    let mut stack = vec![root_id];
+    while let Some(id) = stack.pop() {
+        for child in child_ids(&parser.nodes, id) {
+            if parents[child as usize].is_none() && child != root_id {
+                parents[child as usize] = Some(id);
+                stack.push(child);
+            }
+        }
+    }
     let diagnostics = std::mem::take(&mut parser.scanner.diagnostics);
-    (diagnostics, parser.js_diagnostics)
+    ParsedFile {
+        nodes: parser.nodes,
+        root: root_id,
+        parents,
+        diagnostics,
+        js_diagnostics: parser.js_diagnostics,
+        external_module,
+        is_declaration_file: options.is_declaration_file,
+        jsx,
+    }
 }
 
 impl<'a> Parser<'a> {
@@ -254,17 +328,22 @@ impl<'a> Parser<'a> {
 
     // --- Source file --------------------------------------------------------
 
-    fn parse_source_file_worker(&mut self) {
+    /// The file's statements, and whether it is an external module
+    /// (`getExternalModuleIndicator`: a declaration file is only one by its
+    /// statements).
+    fn parse_source_file_worker(&mut self) -> (Vec<NodeId>, bool) {
         if self.is_declaration_file {
             self.context_flags |= NodeFlags::Ambient;
         }
         let statements = self.parse_list_index(PC::SourceElements, Self::parse_toplevel_statement);
-        let is_module = self.force_module
-            || statements.iter().any(|&statement| self.is_an_external_module_indicator_node(statement))
+        let probably_module = statements.iter().any(|&statement| self.is_an_external_module_indicator_node(statement))
             || self.source_flags.has(NodeFlags::PossiblyContainsImportMeta);
+        let is_module = probably_module || !self.is_declaration_file && self.force_module;
         if !self.is_declaration_file && is_module && !self.possible_await_spans.is_empty() {
-            self.reparse_top_level_await(&statements);
+            let statements = self.reparse_top_level_await(&statements);
+            return (statements, is_module);
         }
+        (statements, is_module)
     }
 
     fn is_an_external_module_indicator_node(&self, id: NodeId) -> bool {
@@ -293,7 +372,8 @@ impl<'a> Parser<'a> {
     /// `reparseTopLevelAwait`: the statements that used `await` as an
     /// identifier are parsed again in an await context, and their diagnostics
     /// replace the first parse's for that range.
-    fn reparse_top_level_await(&mut self, statements: &[NodeId]) {
+    fn reparse_top_level_await(&mut self, statements: &[NodeId]) -> Vec<NodeId> {
+        let mut reparsed = Vec::new();
         let saved = std::mem::take(&mut self.scanner.diagnostics);
         let copy_range = |parser: &mut Self, from: usize, to: Option<usize>| {
             if let Some(start) = saved.iter().position(|d| d.start >= from) {
@@ -307,6 +387,7 @@ impl<'a> Parser<'a> {
             let next_await_statement = self.possible_await_spans[i];
             let prev_pos = self.node(statements[after_await_statement]).pos;
             let next_pos = self.node(statements[next_await_statement]).pos;
+            reparsed.extend_from_slice(&statements[after_await_statement..next_await_statement]);
             copy_range(self, prev_pos, Some(next_pos));
 
             let mut state = self.mark();
@@ -318,6 +399,7 @@ impl<'a> Parser<'a> {
             while self.token != Kind::EndOfFile {
                 let start_pos = self.scanner.token_full_start();
                 let statement = self.parse_statement();
+                reparsed.push(statement);
                 if start_pos == self.scanner.token_full_start() {
                     self.next_token();
                 }
@@ -343,8 +425,10 @@ impl<'a> Parser<'a> {
         }
         if after_await_statement < statements.len() {
             let prev_pos = self.node(statements[after_await_statement]).pos;
+            reparsed.extend_from_slice(&statements[after_await_statement..]);
             copy_range(self, prev_pos, None);
         }
+        reparsed
     }
 
     // --- Lists --------------------------------------------------------------

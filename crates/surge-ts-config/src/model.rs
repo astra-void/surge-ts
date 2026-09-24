@@ -82,7 +82,9 @@ pub struct NormalizedCompilerOptions {
     pub react_namespace: Option<String>,
     pub jsx_import_source: Option<String>,
     pub allow_js: bool,
-    pub check_js: bool,
+    /// `compilerOptions.checkJs`; unset is not `false`: tsc reports a plain
+    /// JavaScript file's binder and grammar errors only when it is unset.
+    pub check_js: Option<bool>,
     pub no_emit: bool,
     /// `compilerOptions.noCheck`: no file is type-checked, so only syntactic
     /// diagnostics are reported.
@@ -163,7 +165,7 @@ impl Default for NormalizedCompilerOptions {
             react_namespace: None,
             jsx_import_source: None,
             allow_js: false,
-            check_js: false,
+            check_js: None,
             no_emit: false,
             no_check: false,
             no_resolve: false,
