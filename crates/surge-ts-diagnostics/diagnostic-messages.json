@@ -2021,7 +2021,7 @@
     "message": "File appears to be binary.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1502",
@@ -2141,7 +2141,7 @@
     "message": "'import ... =' can only be used in TypeScript files.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS8005",
@@ -2149,7 +2149,7 @@
     "message": "'implements' clauses can only be used in TypeScript files.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS8012",
@@ -2157,7 +2157,7 @@
     "message": "Parameter modifiers can only be used in TypeScript files.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS8016",
@@ -2165,7 +2165,7 @@
     "message": "Type assertion expressions can only be used in TypeScript files.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS8037",
@@ -2173,7 +2173,7 @@
     "message": "Type satisfaction expressions can only be used in TypeScript files.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS17000",
@@ -4307,6 +4307,726 @@
     "code": "TS1109",
     "category": "Error",
     "message": "Expression expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1002",
+    "category": "Error",
+    "message": "Unterminated string literal.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1003",
+    "category": "Error",
+    "message": "Identifier expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1010",
+    "category": "Error",
+    "message": "'*/' expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1012",
+    "category": "Error",
+    "message": "Unexpected token.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1068",
+    "category": "Error",
+    "message": "Unexpected token. A constructor, method, accessor, or property was expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1124",
+    "category": "Error",
+    "message": "Digit expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1125",
+    "category": "Error",
+    "message": "Hexadecimal digit expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1126",
+    "category": "Error",
+    "message": "Unexpected end of text.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1127",
+    "category": "Error",
+    "message": "Invalid character.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1128",
+    "category": "Error",
+    "message": "Declaration or statement expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1129",
+    "category": "Error",
+    "message": "Statement expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1130",
+    "category": "Error",
+    "message": "'case' or 'default' expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1131",
+    "category": "Error",
+    "message": "Property or signature expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1132",
+    "category": "Error",
+    "message": "Enum member expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1134",
+    "category": "Error",
+    "message": "Variable declaration expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1135",
+    "category": "Error",
+    "message": "Argument expression expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1136",
+    "category": "Error",
+    "message": "Property assignment expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1137",
+    "category": "Error",
+    "message": "Expression or comma expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1138",
+    "category": "Error",
+    "message": "Parameter declaration expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1139",
+    "category": "Error",
+    "message": "Type parameter declaration expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1140",
+    "category": "Error",
+    "message": "Type argument expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1142",
+    "category": "Error",
+    "message": "Line break not permitted here.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1144",
+    "category": "Error",
+    "message": "'{' or ';' expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1145",
+    "category": "Error",
+    "message": "'{' or JSX element expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1146",
+    "category": "Error",
+    "message": "Declaration expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1160",
+    "category": "Error",
+    "message": "Unterminated template literal.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1161",
+    "category": "Error",
+    "message": "Unterminated regular expression literal.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1177",
+    "category": "Error",
+    "message": "Binary digit expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1178",
+    "category": "Error",
+    "message": "Octal digit expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1179",
+    "category": "Error",
+    "message": "Unexpected token. '{' expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1180",
+    "category": "Error",
+    "message": "Property destructuring pattern expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1181",
+    "category": "Error",
+    "message": "Array element destructuring pattern expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1185",
+    "category": "Error",
+    "message": "Merge conflict marker encountered.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1198",
+    "category": "Error",
+    "message": "An extended Unicode escape value must be between 0x0 and 0x10FFFF inclusive.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1199",
+    "category": "Error",
+    "message": "Unterminated Unicode escape sequence.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1209",
+    "category": "Error",
+    "message": "Invalid optional chain from new expression. Did you mean to call '{0}()'?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1260",
+    "category": "Error",
+    "message": "Keywords cannot contain escape characters.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1351",
+    "category": "Error",
+    "message": "An identifier or keyword cannot immediately follow a numeric literal.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1352",
+    "category": "Error",
+    "message": "A bigint literal cannot use exponential notation.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1353",
+    "category": "Error",
+    "message": "A bigint literal must be an integer.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1357",
+    "category": "Error",
+    "message": "An enum member name must be followed by a ',', '=', or '}'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1359",
+    "category": "Error",
+    "message": "Identifier expected. '{0}' is a reserved word that cannot be used here.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1381",
+    "category": "Error",
+    "message": "Unexpected token. Did you mean `{'}'}` or `&rbrace;`?",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1382",
+    "category": "Error",
+    "message": "Unexpected token. Did you mean `{'>'}` or `&gt;`?",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1385",
+    "category": "Error",
+    "message": "Function type notation must be parenthesized when used in a union type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1386",
+    "category": "Error",
+    "message": "Constructor type notation must be parenthesized when used in a union type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1387",
+    "category": "Error",
+    "message": "Function type notation must be parenthesized when used in an intersection type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1388",
+    "category": "Error",
+    "message": "Constructor type notation must be parenthesized when used in an intersection type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1389",
+    "category": "Error",
+    "message": "'{0}' is not allowed as a variable declaration name.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1390",
+    "category": "Error",
+    "message": "'{0}' is not allowed as a parameter name.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1434",
+    "category": "Error",
+    "message": "Unexpected keyword or identifier.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1435",
+    "category": "Error",
+    "message": "Unknown keyword or identifier. Did you mean '{0}'?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1436",
+    "category": "Error",
+    "message": "Decorators must precede the name and all keywords of property declarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1437",
+    "category": "Error",
+    "message": "Namespace must be given a name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1438",
+    "category": "Error",
+    "message": "Interface must be given a name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1439",
+    "category": "Error",
+    "message": "Type alias must be given a name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1440",
+    "category": "Error",
+    "message": "Variable declaration not allowed at this location.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1441",
+    "category": "Error",
+    "message": "Cannot start a function call in a type annotation.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1442",
+    "category": "Error",
+    "message": "Expected '=' for property initializer.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1443",
+    "category": "Error",
+    "message": "Module declaration names may only use ' or \" quoted strings.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1472",
+    "category": "Error",
+    "message": "'catch' or 'finally' expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1478",
+    "category": "Error",
+    "message": "Identifier or string literal expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1487",
+    "category": "Error",
+    "message": "Octal escape sequences are not allowed. Use the syntax '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1488",
+    "category": "Error",
+    "message": "Escape sequence '{0}' is not allowed.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2657",
+    "category": "Error",
+    "message": "JSX expressions must have one parent element.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2809",
+    "category": "Error",
+    "message": "Declaration or statement expected. This '=' follows a block of statements, so if you intended to write a destructuring assignment, you might need to wrap the whole assignment in parentheses.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2819",
+    "category": "Error",
+    "message": "Namespace name cannot be '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6188",
+    "category": "Error",
+    "message": "Numeric separators are not allowed here.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6189",
+    "category": "Error",
+    "message": "Multiple consecutive numeric separators are not permitted.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8003",
+    "category": "Error",
+    "message": "'export =' can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8004",
+    "category": "Error",
+    "message": "Type parameter declarations can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8006",
+    "category": "Error",
+    "message": "'{0}' declarations can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8008",
+    "category": "Error",
+    "message": "Type aliases can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8009",
+    "category": "Error",
+    "message": "The '{0}' modifier can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8010",
+    "category": "Error",
+    "message": "Type annotations can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8011",
+    "category": "Error",
+    "message": "Type arguments can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8013",
+    "category": "Error",
+    "message": "Non-null assertions can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8017",
+    "category": "Error",
+    "message": "Signature declarations can only be used in TypeScript files.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8038",
+    "category": "Error",
+    "message": "Decorators may not appear after 'export' or 'export default' if they also appear before 'export'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17002",
+    "category": "Error",
+    "message": "Expected corresponding JSX closing tag for '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17006",
+    "category": "Error",
+    "message": "An unary expression with the '{0}' operator is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17007",
+    "category": "Error",
+    "message": "A type assertion expression is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17008",
+    "category": "Error",
+    "message": "JSX element '{0}' has no corresponding closing tag.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17014",
+    "category": "Error",
+    "message": "JSX fragment has no corresponding closing tag.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17015",
+    "category": "Error",
+    "message": "Expected corresponding closing tag for JSX fragment.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17021",
+    "category": "Error",
+    "message": "Unicode escape sequence cannot appear here.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18009",
+    "category": "Error",
+    "message": "Private identifiers cannot be used as parameters.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18026",
+    "category": "Error",
+    "message": "'#!' can only be used at the start of a file.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18029",
+    "category": "Error",
+    "message": "Private identifiers are not allowed in variable declarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18030",
+    "category": "Error",
+    "message": "An optional chain cannot contain private identifiers.",
     "source": "typescript",
     "arity": 0,
     "support": "emitted"

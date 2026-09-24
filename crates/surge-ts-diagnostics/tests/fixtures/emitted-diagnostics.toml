@@ -3532,3 +3532,526 @@ status = "emitted"
 oracle = [
   "update-expression-write-target",
 ]
+
+[TS1002]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1003]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1010]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1124]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1125]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1126]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1127]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1128]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1129]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1130]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1131]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1132]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1134]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+  "tsc-scanner-errors",
+]
+
+[TS1135]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1136]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1137]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1138]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1139]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1142]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1144]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1145]
+status = "emitted"
+oracle = [
+  "tsc-parser-jsx-recovery",
+]
+
+[TS1146]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1160]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1161]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1177]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1178]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1180]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1181]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1185]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1198]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1199]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1209]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1351]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1352]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1353]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1357]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1359]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1381]
+status = "emitted"
+oracle = [
+  "tsc-parser-jsx-recovery",
+]
+
+[TS1382]
+status = "emitted"
+oracle = [
+  "tsc-parser-jsx-recovery",
+]
+
+[TS1385]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1386]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1387]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1388]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1389]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1390]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1434]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1435]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1436]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1437]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1438]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1440]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1442]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1443]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1472]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1478]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1487]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS1488]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS2657]
+status = "emitted"
+oracle = [
+  "tsc-parser-jsx-recovery",
+]
+
+[TS2809]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS2819]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS6188]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS6189]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS8003]
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
+
+[TS8004]
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
+
+[TS8006]
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
+
+[TS8008]
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
+
+[TS8009]
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
+
+[TS8010]
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
+
+[TS8013]
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
+
+[TS8017]
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
+
+[TS8038]
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
+
+[TS17002]
+status = "emitted"
+oracle = [
+  "tsc-parser-jsx-recovery",
+]
+
+[TS17006]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS17007]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS17008]
+status = "emitted"
+oracle = [
+  "tsc-parser-jsx-recovery",
+]
+
+[TS17014]
+status = "emitted"
+oracle = [
+  "tsc-parser-jsx-recovery",
+]
+
+[TS17015]
+status = "emitted"
+oracle = [
+  "tsc-parser-jsx-recovery",
+]
+
+[TS18009]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS18026]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS18030]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1068]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1260]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1441]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS18029]
+status = "emitted"
+oracle = [
+  "tsc-parser-statement-recovery",
+]
+
+[TS1490]
+status = "emitted"
+oracle = [
+  "tsc-scanner-errors",
+]
+
+[TS17021]
+status = "emitted"
+oracle = [
+  "tsc-parser-jsx-recovery",
+]
+
+[TS8011]
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]

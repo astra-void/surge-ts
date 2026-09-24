@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "noEmit": true, "target": "esnext", "module": "esnext", "moduleResolution": "bundler", "types": [], "jsx": "preserve" },
+  "include": ["src/**/*"]
+}

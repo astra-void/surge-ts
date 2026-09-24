@@ -1056,6 +1056,10 @@ export const fixturePresets: Record<string, string> = {
   'type-variable-arithmetic-operand': path.join(workspaceRoot, 'tests/compat-projects/type-variable-arithmetic-operand/tsconfig.json'),
   'compound-assignment-not-definite': path.join(workspaceRoot, 'tests/compat-projects/compound-assignment-not-definite/tsconfig.json'),
   'unresolved-type-reference-arguments-checked': path.join(workspaceRoot, 'tests/compat-projects/unresolved-type-reference-arguments-checked/tsconfig.json'),
+  'tsc-parser-statement-recovery': path.join(workspaceRoot, 'tests/compat-projects/tsc-parser-statement-recovery/tsconfig.json'),
+  'tsc-scanner-errors': path.join(workspaceRoot, 'tests/compat-projects/tsc-scanner-errors/tsconfig.json'),
+  'tsc-parser-jsx-recovery': path.join(workspaceRoot, 'tests/compat-projects/tsc-parser-jsx-recovery/tsconfig.json'),
+  'tsc-parser-javascript-only-syntax': path.join(workspaceRoot, 'tests/compat-projects/tsc-parser-javascript-only-syntax/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -55,6 +55,36 @@ pub(super) fn is_syntactic_parser_error(error: &surge_ts_syntax::ParserError) ->
     }
 }
 
+/// A file's syntax errors as tsc's own parser reports them, from its port:
+/// oxc stops at the first failure, words most failures its own way, and
+/// accepts some syntax tsc rejects, while tsc recovers and reports every error
+/// — and a program with any syntax error reports those alone. `None` keeps
+/// oxc's errors: tsc's parser finds nothing wrong with the file.
+pub(super) fn tsc_parser_errors(
+    source_text: &str,
+    file_name: &str,
+) -> Option<Vec<surge_ts_syntax::ParserError>> {
+    let options = surge_ts_tsc_syntax::ParseOptions::for_file_name(file_name)?;
+    let diagnostics = surge_ts_tsc_syntax::syntactic_diagnostics(source_text, &options);
+    if diagnostics.is_empty() {
+        return None;
+    }
+    Some(
+        diagnostics
+            .into_iter()
+            .map(|diagnostic| surge_ts_syntax::ParserError {
+                code: Some(diagnostic.code),
+                span_text: source_text.get(diagnostic.start..diagnostic.end).map(str::to_string),
+                span: Some(surge_ts_syntax::TextSpan {
+                    start: diagnostic.start,
+                    end: diagnostic.end,
+                }),
+                message: diagnostic.message,
+            })
+            .collect(),
+    )
+}
+
 /// tsc's `GetDiagnosticsOfAnyProgram`: a program with a syntax error anywhere
 /// reports its syntactic diagnostics and nothing else.
 pub(super) fn program_has_syntax_errors(parsed_files: &[ParsedProgramFile]) -> bool {

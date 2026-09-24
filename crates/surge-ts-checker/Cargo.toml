@@ -28,6 +28,7 @@ memchr = "2.8.0"
 oxc_allocator = "0.128.0"
 surge-ts-diagnostics = { version = "0.1.0", path = "../surge-ts-diagnostics" }
 surge-ts-syntax = { version = "0.1.0", path = "../surge-ts-syntax" }
+surge-ts-tsc-syntax = { version = "0.1.0", path = "../surge-ts-tsc-syntax" }
 surge-ts-types = { version = "0.1.0", path = "../surge-ts-types" }
 
 [dev-dependencies]

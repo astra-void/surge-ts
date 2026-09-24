@@ -2020,7 +2020,7 @@ arity = 0
 code = "TS1490"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "File appears to be binary."
 arity = 0
 
@@ -2140,7 +2140,7 @@ arity = 0
 code = "TS8002"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "'import ... =' can only be used in TypeScript files."
 arity = 0
 
@@ -2148,7 +2148,7 @@ arity = 0
 code = "TS8005"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "'implements' clauses can only be used in TypeScript files."
 arity = 0
 
@@ -2156,7 +2156,7 @@ arity = 0
 code = "TS8012"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Parameter modifiers can only be used in TypeScript files."
 arity = 0
 
@@ -2164,7 +2164,7 @@ arity = 0
 code = "TS8016"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Type assertion expressions can only be used in TypeScript files."
 arity = 0
 
@@ -2172,7 +2172,7 @@ arity = 0
 code = "TS8037"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Type satisfaction expressions can only be used in TypeScript files."
 arity = 0
 
@@ -4310,5 +4310,725 @@ category = "Error"
 source = "typescript"
 support = "emitted"
 message = "Expression expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1002"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unterminated string literal."
+arity = 0
+
+[[diagnostic]]
+code = "TS1003"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Identifier expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1010"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'*/' expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1012"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Unexpected token."
+arity = 0
+
+[[diagnostic]]
+code = "TS1068"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unexpected token. A constructor, method, accessor, or property was expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1124"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Digit expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1125"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Hexadecimal digit expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1126"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unexpected end of text."
+arity = 0
+
+[[diagnostic]]
+code = "TS1127"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Invalid character."
+arity = 0
+
+[[diagnostic]]
+code = "TS1128"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Declaration or statement expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1129"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Statement expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1130"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'case' or 'default' expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1131"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property or signature expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1132"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Enum member expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1134"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Variable declaration expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1135"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Argument expression expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1136"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property assignment expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1137"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expression or comma expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1138"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Parameter declaration expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1139"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type parameter declaration expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1140"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Type argument expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1142"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Line break not permitted here."
+arity = 0
+
+[[diagnostic]]
+code = "TS1144"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{' or ';' expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1145"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{' or JSX element expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1146"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Declaration expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1160"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unterminated template literal."
+arity = 0
+
+[[diagnostic]]
+code = "TS1161"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unterminated regular expression literal."
+arity = 0
+
+[[diagnostic]]
+code = "TS1177"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Binary digit expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1178"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Octal digit expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1179"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Unexpected token. '{' expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1180"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property destructuring pattern expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1181"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Array element destructuring pattern expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1185"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Merge conflict marker encountered."
+arity = 0
+
+[[diagnostic]]
+code = "TS1198"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An extended Unicode escape value must be between 0x0 and 0x10FFFF inclusive."
+arity = 0
+
+[[diagnostic]]
+code = "TS1199"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unterminated Unicode escape sequence."
+arity = 0
+
+[[diagnostic]]
+code = "TS1209"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Invalid optional chain from new expression. Did you mean to call '{0}()'?"
+arity = 1
+
+[[diagnostic]]
+code = "TS1260"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Keywords cannot contain escape characters."
+arity = 0
+
+[[diagnostic]]
+code = "TS1351"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An identifier or keyword cannot immediately follow a numeric literal."
+arity = 0
+
+[[diagnostic]]
+code = "TS1352"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A bigint literal cannot use exponential notation."
+arity = 0
+
+[[diagnostic]]
+code = "TS1353"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A bigint literal must be an integer."
+arity = 0
+
+[[diagnostic]]
+code = "TS1357"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An enum member name must be followed by a ',', '=', or '}'."
+arity = 0
+
+[[diagnostic]]
+code = "TS1359"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Identifier expected. '{0}' is a reserved word that cannot be used here."
+arity = 1
+
+[[diagnostic]]
+code = "TS1381"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unexpected token. Did you mean `{'}'}` or `&rbrace;`?"
+arity = 0
+
+[[diagnostic]]
+code = "TS1382"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unexpected token. Did you mean `{'>'}` or `&gt;`?"
+arity = 0
+
+[[diagnostic]]
+code = "TS1385"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Function type notation must be parenthesized when used in a union type."
+arity = 0
+
+[[diagnostic]]
+code = "TS1386"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Constructor type notation must be parenthesized when used in a union type."
+arity = 0
+
+[[diagnostic]]
+code = "TS1387"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Function type notation must be parenthesized when used in an intersection type."
+arity = 0
+
+[[diagnostic]]
+code = "TS1388"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Constructor type notation must be parenthesized when used in an intersection type."
+arity = 0
+
+[[diagnostic]]
+code = "TS1389"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is not allowed as a variable declaration name."
+arity = 1
+
+[[diagnostic]]
+code = "TS1390"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is not allowed as a parameter name."
+arity = 1
+
+[[diagnostic]]
+code = "TS1434"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unexpected keyword or identifier."
+arity = 0
+
+[[diagnostic]]
+code = "TS1435"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unknown keyword or identifier. Did you mean '{0}'?"
+arity = 1
+
+[[diagnostic]]
+code = "TS1436"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Decorators must precede the name and all keywords of property declarations."
+arity = 0
+
+[[diagnostic]]
+code = "TS1437"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Namespace must be given a name."
+arity = 0
+
+[[diagnostic]]
+code = "TS1438"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Interface must be given a name."
+arity = 0
+
+[[diagnostic]]
+code = "TS1439"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Type alias must be given a name."
+arity = 0
+
+[[diagnostic]]
+code = "TS1440"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Variable declaration not allowed at this location."
+arity = 0
+
+[[diagnostic]]
+code = "TS1441"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot start a function call in a type annotation."
+arity = 0
+
+[[diagnostic]]
+code = "TS1442"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expected '=' for property initializer."
+arity = 0
+
+[[diagnostic]]
+code = "TS1443"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Module declaration names may only use ' or \" quoted strings."
+arity = 0
+
+[[diagnostic]]
+code = "TS1472"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'catch' or 'finally' expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1478"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Identifier or string literal expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1487"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Octal escape sequences are not allowed. Use the syntax '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS1488"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Escape sequence '{0}' is not allowed."
+arity = 1
+
+[[diagnostic]]
+code = "TS2657"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "JSX expressions must have one parent element."
+arity = 0
+
+[[diagnostic]]
+code = "TS2809"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Declaration or statement expected. This '=' follows a block of statements, so if you intended to write a destructuring assignment, you might need to wrap the whole assignment in parentheses."
+arity = 0
+
+[[diagnostic]]
+code = "TS2819"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Namespace name cannot be '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS6188"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Numeric separators are not allowed here."
+arity = 0
+
+[[diagnostic]]
+code = "TS6189"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Multiple consecutive numeric separators are not permitted."
+arity = 0
+
+[[diagnostic]]
+code = "TS8003"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'export =' can only be used in TypeScript files."
+arity = 0
+
+[[diagnostic]]
+code = "TS8004"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type parameter declarations can only be used in TypeScript files."
+arity = 0
+
+[[diagnostic]]
+code = "TS8006"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' declarations can only be used in TypeScript files."
+arity = 1
+
+[[diagnostic]]
+code = "TS8008"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type aliases can only be used in TypeScript files."
+arity = 0
+
+[[diagnostic]]
+code = "TS8009"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The '{0}' modifier can only be used in TypeScript files."
+arity = 1
+
+[[diagnostic]]
+code = "TS8010"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type annotations can only be used in TypeScript files."
+arity = 0
+
+[[diagnostic]]
+code = "TS8011"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type arguments can only be used in TypeScript files."
+arity = 0
+
+[[diagnostic]]
+code = "TS8013"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Non-null assertions can only be used in TypeScript files."
+arity = 0
+
+[[diagnostic]]
+code = "TS8017"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Signature declarations can only be used in TypeScript files."
+arity = 0
+
+[[diagnostic]]
+code = "TS8038"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Decorators may not appear after 'export' or 'export default' if they also appear before 'export'."
+arity = 0
+
+[[diagnostic]]
+code = "TS17002"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expected corresponding JSX closing tag for '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS17006"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An unary expression with the '{0}' operator is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses."
+arity = 1
+
+[[diagnostic]]
+code = "TS17007"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A type assertion expression is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses."
+arity = 0
+
+[[diagnostic]]
+code = "TS17008"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "JSX element '{0}' has no corresponding closing tag."
+arity = 1
+
+[[diagnostic]]
+code = "TS17014"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "JSX fragment has no corresponding closing tag."
+arity = 0
+
+[[diagnostic]]
+code = "TS17015"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expected corresponding closing tag for JSX fragment."
+arity = 0
+
+[[diagnostic]]
+code = "TS17021"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unicode escape sequence cannot appear here."
+arity = 0
+
+[[diagnostic]]
+code = "TS18009"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Private identifiers cannot be used as parameters."
+arity = 0
+
+[[diagnostic]]
+code = "TS18026"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'#!' can only be used at the start of a file."
+arity = 0
+
+[[diagnostic]]
+code = "TS18029"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Private identifiers are not allowed in variable declarations."
+arity = 0
+
+[[diagnostic]]
+code = "TS18030"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An optional chain cannot contain private identifiers."
 arity = 0
 

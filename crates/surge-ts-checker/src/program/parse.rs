@@ -173,10 +173,20 @@ pub(super) fn parse_program_file(
     }
 
     let parse_start = Instant::now();
-    let parsed = match prescanned {
+    let mut parsed = match prescanned {
         Some(parsed) => parsed,
         None => parser.parse(&input.source_text, &input.file_name),
     };
+    let tsc_errors = match file_kind {
+        FileKind::GeneratedDeclaration | FileKind::PhysicalDefaultLib => None,
+        _ => super::diagnostics::tsc_parser_errors(&input.source_text, &input.file_name),
+    };
+    if let Some(errors) = tsc_errors {
+        // The grammar walk reports tsc's checker grammar errors, which a
+        // program with syntax errors never reaches.
+        parsed.parser_errors = errors;
+        parsed.grammar_diagnostics.clear();
+    }
     let parse_duration = parse_start.elapsed();
     let file_name = parsed.file_name;
     record_program_timing(timings, |timings| match file_kind {

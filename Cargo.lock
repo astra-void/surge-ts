@@ -815,6 +815,7 @@ dependencies = [
  "serde",
  "surge-ts-diagnostics",
  "surge-ts-syntax",
+ "surge-ts-tsc-syntax",
  "surge-ts-types",
  "toml",
 ]
@@ -877,6 +878,13 @@ dependencies = [
  "oxc_parser",
  "oxc_span",
  "oxc_syntax",
+]
+
+[[package]]
+name = "surge-ts-tsc-syntax"
+version = "0.1.0"
+dependencies = [
+ "unicode-id-start",
 ]
 
 [[package]]
