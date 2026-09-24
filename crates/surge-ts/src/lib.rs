@@ -637,12 +637,6 @@ impl Project {
             checker_types.push("*".to_string());
         }
 
-        if loaded.compiler_options.allow_synthetic_default_imports {
-            resolved_modules.insert(
-                CheckerOptions::ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL.to_string(),
-                String::new(),
-            );
-        }
         if loaded
             .compiler_options
             .lib
@@ -1115,8 +1109,9 @@ fn checker_module_emit(kind: surge_ts_config::ModuleKind) -> surge_ts_checker::M
 }
 
 /// The files whose implied module format under node16/nodenext resolution is
-/// ESM: an `.mts`, or a `.ts`/`.tsx` whose nearest `package.json` says
-/// `"type": "module"` (tsgo's `getImpliedNodeFormatForFile`).
+/// ESM: an `.mts`/`.mjs`, or a `.ts`/`.tsx`/`.js`/`.jsx` — declaration files
+/// included — whose nearest `package.json` says `"type": "module"` (tsgo's
+/// `GetImpliedNodeFormatForFile`).
 fn esm_format_files<'a>(
     files: impl Iterator<Item = (&'a std::path::Path, &'a str)>,
 ) -> std::collections::HashSet<String> {
@@ -1150,11 +1145,14 @@ fn esm_format_files<'a>(
     let mut esm = std::collections::HashSet::new();
     for (path, name) in files {
         let lower = name.to_ascii_lowercase();
-        let is_esm = if lower.ends_with(".mts") {
+        let is_esm = if lower.ends_with(".mts") || lower.ends_with(".mjs") {
             true
-        } else if lower.ends_with(".cts") || lower.ends_with(".d.ts") {
+        } else if lower.ends_with(".cts") || lower.ends_with(".cjs") {
             false
-        } else if lower.ends_with(".ts") || lower.ends_with(".tsx") {
+        } else if [".ts", ".tsx", ".js", ".jsx"]
+            .iter()
+            .any(|extension| lower.ends_with(extension))
+        {
             path.parent().is_some_and(&mut is_module_package)
         } else {
             false

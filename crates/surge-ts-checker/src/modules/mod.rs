@@ -18,12 +18,14 @@ pub(crate) use exports::{
 pub(crate) mod imports;
 mod node_builtins;
 mod resolution;
+mod synthetic_default;
 
 pub(crate) use diagnostics::*;
 pub(crate) use exports::*;
 pub(crate) use imports::*;
 pub(crate) use node_builtins::*;
 pub(crate) use resolution::*;
+pub(crate) use synthetic_default::*;
 
 /// tsc's `InternalSymbolNameExportEquals`. An `export =` module's type table
 /// keys the assigned entity's type meaning under this name and each of its
@@ -70,6 +72,10 @@ pub(crate) struct ModuleExportTable {
     /// entity: `import x = require()` of it binds that entity, never the
     /// module namespace.
     pub(crate) writes_export_assignment: bool,
+    /// The `export =` names an `import x = require()` alias of a module with
+    /// no `export =` of its own: the entity is that module's namespace, whose
+    /// surface this table adopted.
+    pub(crate) export_assignment_names_module: bool,
     pub(crate) namespace_export_object_type: Option<Type>,
     pub(crate) has_unresolved_star_export: bool,
     pub(crate) has_incomplete_declaration_surface: bool,
@@ -100,6 +106,7 @@ impl Clone for ModuleExportTable {
             default_symbol: self.default_symbol.clone(),
             export_assignment_symbol: self.export_assignment_symbol.clone(),
             writes_export_assignment: self.writes_export_assignment,
+            export_assignment_names_module: self.export_assignment_names_module,
             namespace_export_object_type: self.namespace_export_object_type.clone(),
             has_unresolved_star_export: self.has_unresolved_star_export,
             has_incomplete_declaration_surface: self.has_incomplete_declaration_surface,

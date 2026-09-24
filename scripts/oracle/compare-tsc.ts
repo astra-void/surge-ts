@@ -1024,6 +1024,8 @@ export const fixturePresets: Record<string, string> = {
   'property-reference-nullish-union-base': path.join(workspaceRoot, 'tests/compat-projects/property-reference-nullish-union-base/tsconfig.json'),
   'override-declare-property': path.join(workspaceRoot, 'tests/compat-projects/override-declare-property/tsconfig.json'),
   'class-property-arrow-signature': path.join(workspaceRoot, 'tests/compat-projects/class-property-arrow-signature/tsconfig.json'),
+  'synthetic-default-overrides-default-export': path.join(workspaceRoot, 'tests/compat-projects/synthetic-default-overrides-default-export/tsconfig.json'),
+  'synthetic-default-node-esm-import-cjs': path.join(workspaceRoot, 'tests/compat-projects/synthetic-default-node-esm-import-cjs/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

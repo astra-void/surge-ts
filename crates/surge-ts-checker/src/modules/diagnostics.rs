@@ -549,11 +549,8 @@ pub(crate) fn emit_no_default_export_diagnostic(
     let Some(file) = resolved_index.and_then(|index| program_files.get(index)) else {
         return;
     };
-    if file.file_kind.is_declaration() {
-        return;
-    }
     let path = file.file_name.as_str();
-    let stem = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx"]
+    let stem = [".d.ts", ".d.mts", ".d.cts", ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx"]
         .iter()
         .find_map(|extension| path.strip_suffix(extension))
         .unwrap_or(path);
@@ -633,26 +630,6 @@ pub(crate) fn module_has_explicit_default_export(
 
 pub(crate) fn file_has_explicit_default_export(file: &ParsedProgramFile) -> bool {
     file.has_export_default
-}
-
-pub(crate) fn allows_synthetic_default_import(
-    ctx: &CheckerContext,
-    resolved_index: Option<usize>,
-    parsed_files: &[ParsedProgramFile],
-) -> bool {
-    let Some(resolved_index) = resolved_index else {
-        return ctx.options.allow_synthetic_default_imports();
-    };
-
-    let Some(file) = parsed_files.get(resolved_index) else {
-        return false;
-    };
-
-    if file.file_kind == FileKind::DependencyDeclaration {
-        return true;
-    }
-
-    false
 }
 
 /// Whether `export { name }` would resolve `name` in the global scope, or name
