@@ -1554,6 +1554,32 @@ fn bind_external_module_symbol(
     );
 }
 
+/// The type side [`bind_external_module_symbol`] binds under `local_name`: the
+/// `export =` entity's type and its namespace members, or without an
+/// `export =` the module namespace's members.
+pub(crate) fn external_module_type_bindings(
+    export_table: &ModuleExportTable,
+    scope: Option<&Arc<TypeDeclarationScope>>,
+    resolved_index: Option<usize>,
+    local_name: &str,
+) -> (Option<TypeDeclarationInfo>, Option<Arc<TypeDeclarationTable>>) {
+    let assignment_type = lookup_type_export(export_table, EXPORT_ASSIGNMENT_NAME).cloned();
+    let assignment_members = export_assignment_member_table(export_table, local_name, scope);
+    if export_table.export_assignment_symbol.is_some()
+        || assignment_type.is_some()
+        || assignment_members.is_some()
+    {
+        return (assignment_type, assignment_members);
+    }
+    if export_table.writes_export_assignment && !export_table.export_assignment_names_module {
+        return (None, None);
+    }
+    (
+        None,
+        Some(namespace_alias_table(export_table, local_name, scope, resolved_index)),
+    )
+}
+
 /// The value [`bind_external_module_symbol`] binds, for a re-export of it.
 pub(crate) fn external_module_value(
     export_table: &ModuleExportTable,

@@ -72,6 +72,79 @@ pub(crate) fn collect_umd_global_names(
     ctx.umd_global_names = Arc::new(names);
 }
 
+/// tsc's `bindNamespaceExportDeclaration` and its merge into the globals:
+/// `export as namespace X` in a declaration module binds `X` globally as an
+/// alias of the module (`resolveExternalModuleSymbol`) — the `export =`
+/// entity's value, type and namespace members, or the module namespace. A
+/// script reads the value freely; a module's value use is TS2686, and its type
+/// uses need no import. A global some script or global augmentation declares
+/// keeps its own binding, and since tsc reports TS2686 only when every
+/// declaration of the merged global is a UMD export, the name then stops being
+/// a UMD global.
+pub(crate) fn bind_umd_globals(
+    parsed_files: &[ParsedProgramFile],
+    module_export_tables: &[Option<ModuleExportTable>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
+    ctx: &mut CheckerContext,
+) {
+    let globally_declared = super::globals::globally_declared_names(parsed_files);
+    let mut bound: HashSet<&str> = HashSet::new();
+    for (index, parsed_file) in parsed_files.iter().enumerate() {
+        if !parsed_file.is_module || !super::file_classify::is_declaration_file_name(&parsed_file.file_name) {
+            continue;
+        }
+        for statement in &parsed_file.statements {
+            let ParsedStatement::ExportDeclaration(export) = statement else {
+                continue;
+            };
+            let surge_ts_syntax::ParsedExportDeclaration::NamespaceExport { exported_name, .. } =
+                export.as_ref()
+            else {
+                continue;
+            };
+            let Some(Some(export_table)) = module_export_tables.get(index) else {
+                continue;
+            };
+            let scope = module_resolution_scopes.get(index).and_then(Option::as_ref);
+            let merged = !bound.contains(exported_name.as_str())
+                && globally_declared.contains(exported_name.as_str());
+            if merged {
+                Arc::make_mut(&mut ctx.umd_global_names).remove(exported_name.as_str());
+            }
+            // With no global declaration of its own, the name is the alias
+            // alone: its value replaces any entry surge put there some other
+            // way (a module's own `declare namespace X` of the same name).
+            if bound.insert(exported_name.as_str()) && !merged {
+                let value = crate::modules::external_module_value(
+                    export_table,
+                    Some(index),
+                    "",
+                    parsed_files,
+                    ctx,
+                );
+                let _ = ctx.ambient_global_symbols.insert_shared(exported_name.as_str(), value);
+            }
+            let (entity_type, members) = crate::modules::external_module_type_bindings(
+                export_table,
+                scope,
+                Some(index),
+                exported_name,
+            );
+            let globals = Arc::make_mut(&mut ctx.ambient_global_type_declarations);
+            if let Some(declaration) = entity_type
+                && globals.get(exported_name).is_none()
+            {
+                crate::modules::exports::insert_type_export(globals, exported_name, scope, declaration);
+            }
+            for (key, declaration) in members.iter().flat_map(|members| members.iter()) {
+                if globals.get(key).is_none() {
+                    let _ = globals.insert(key.as_ref(), declaration.clone());
+                }
+            }
+        }
+    }
+}
+
 /// Every name a file binds at module scope, by syntax alone. A UMD global is
 /// shadowed by any such declaration whether or not surge managed to bind it, so
 /// this must not be derived from the analysis tables.

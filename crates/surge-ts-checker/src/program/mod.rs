@@ -1070,6 +1070,12 @@ fn finalize_module_bindings(
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_resolution_scope_construction += scope_build_start.elapsed()
     });
+    bind_umd_globals(
+        &parsed_files,
+        &module_export_tables,
+        &module_resolution_scopes,
+        ctx,
+    );
     let module_scope_map = module_scope_by_file_map(&parsed_files, &module_resolution_scopes, &ctx);
     ctx.set_module_scope_by_file(module_scope_map);
     ctx.jsx_namespace_modules = Arc::new(crate::checks::jsx::collect_jsx_namespace_modules(

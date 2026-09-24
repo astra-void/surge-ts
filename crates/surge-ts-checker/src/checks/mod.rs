@@ -125,7 +125,12 @@ pub(crate) fn check_umd_global_value_reference(
         // searchParams.toString()` is the local, not `@types/qs`. A type-only
         // import is itself a symbol-table entry, so the shadow test belongs to
         // the UMD branch alone.
-        if !ctx.is_umd_global_value_reference(name) || symbols.get(name).is_some() {
+        let shadowed = symbols.get_handle(name).is_some_and(|resolved| {
+            ctx.ambient_global_symbols
+                .get_handle(name)
+                .is_none_or(|global| !std::sync::Arc::ptr_eq(&resolved, &global))
+        });
+        if !ctx.is_umd_global_value_reference(name) || shadowed {
             return;
         }
     }
