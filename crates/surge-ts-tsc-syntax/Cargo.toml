@@ -1,0 +1,18 @@
+[package]
+name = "surge-ts-tsc-syntax"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "A port of typescript-go's scanner and parser that reports tsc's syntactic diagnostics."
+keywords = ["typescript", "parser", "diagnostics"]
+categories = ["development-tools"]
+
+[lib]
+doctest = false
+
+[dependencies]
+unicode-id-start = "1.4.0"

@@ -3,6 +3,7 @@ members = [
   "crates/surge-ts",
   "crates/surge-ts-cli",
   "crates/surge-ts-syntax",
+  "crates/surge-ts-tsc-syntax",
   "crates/surge-ts-checker",
   "crates/surge-ts-diagnostics",
   "crates/surge-ts-diagnostics-codegen",
