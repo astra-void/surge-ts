@@ -2465,23 +2465,18 @@ pub fn object_assignability_failure(
 
     for (property_name, target_property) in target.properties.iter() {
         let source_property = source.properties.get(property_name.as_ref());
-        // A declared index signature does not supply a *required* property
-        // (tsc's `propertiesRelatedTo` reads `getPropertyOfType` only):
-        // `{ [k: string]: any }` is missing `hello` from `{ hello: string }`.
+        // A declared index signature supplies no target property (tsc's
+        // `propertiesRelatedTo` reads `getPropertyOfType` only): `{ [k: string]:
+        // any }` is missing `hello` from `{ hello: string }`, and an optional
+        // target property the source does not declare has nothing to relate.
         // Checker-injected openness still answers, since it stands for members
         // surge could not enumerate — and so does an `any`-valued signature,
         // which is also how surge spells an object it could not model (the
         // stand-in a generic body's own type parameter is evaluated with).
-        // Under the comparable relation an optional target is not answered by
-        // the signature either: with no such property there is nothing to
-        // relate.
         let source_property_ty = source_property.map(|property| &property.ty).or_else(|| {
             let index = source
                 .applicable_index_type(crate::object::is_numeric_key(property_name.as_ref()))?;
-            (target_property.is_optional() && !comparable
-                || source.synthetic_open_index
-                || index.is_unknown())
-            .then_some(index)
+            (source.synthetic_open_index || index.is_unknown()).then_some(index)
         });
 
         let source_property_ty = source_property_ty
