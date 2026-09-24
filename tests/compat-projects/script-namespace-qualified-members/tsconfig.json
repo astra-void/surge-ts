@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "strict": false, "noEmit": true, "target": "es2022", "types": [] },
+  "include": ["src/**/*.ts"]
+}

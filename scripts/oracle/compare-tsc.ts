@@ -1060,6 +1060,7 @@ export const fixturePresets: Record<string, string> = {
   'tsc-scanner-errors': path.join(workspaceRoot, 'tests/compat-projects/tsc-scanner-errors/tsconfig.json'),
   'tsc-parser-jsx-recovery': path.join(workspaceRoot, 'tests/compat-projects/tsc-parser-jsx-recovery/tsconfig.json'),
   'tsc-parser-javascript-only-syntax': path.join(workspaceRoot, 'tests/compat-projects/tsc-parser-javascript-only-syntax/tsconfig.json'),
+  'script-namespace-qualified-members': path.join(workspaceRoot, 'tests/compat-projects/script-namespace-qualified-members/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

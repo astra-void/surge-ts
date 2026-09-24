@@ -111,6 +111,7 @@ pub(crate) fn emit_unresolved_qualified_type_head(
     if ctx.suppress_unknown_type_name()
         || !ctx.knows_file_imports()
         || crate::modules::is_declaration_file_name(&ctx.file_name)
+        || !is_written_type_position(named_type, ctx)
     {
         return false;
     }
@@ -182,6 +183,10 @@ fn emit_missing_namespace_member(
 ) -> bool {
     use crate::program::{MEANING_NAMESPACE, MEANING_TYPE, MEANING_VALUE};
 
+    if !is_written_type_position(named_type, ctx) {
+        return false;
+    }
+
     let segments: Vec<&str> = named_type.name.split('.').collect();
     let mut namespace = qualified_head.to_string();
     // Byte offset of the current segment within the written name.
@@ -249,6 +254,18 @@ fn emit_missing_namespace_member(
         return true;
     }
     false
+}
+
+/// Whether a qualified name is one written in a type position, where a
+/// failure to resolve it through namespaces is the source's error. A name with
+/// no span is surge's own lookup (the JSX namespace, a heritage re-resolution),
+/// and a class's `extends` base is an expression, resolved and reported as a
+/// value by the class check.
+fn is_written_type_position(named_type: &ParsedNamedType, ctx: &CheckerContext) -> bool {
+    named_type.span.is_some()
+        && !(ctx.resolving_class_heritage
+            && crate::program::current_dts_expansion_reason()
+                == crate::program::DtsExpansionReason::InterfaceHeritageResolution)
 }
 
 /// A written qualified name (`N.Hidden`) that surge's type table resolves

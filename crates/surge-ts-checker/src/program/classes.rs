@@ -1458,7 +1458,11 @@ fn constructor_writable_members(
 /// where every value declared before the class is bound.
 fn check_heritage_base_resolves(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
     for base in &class.extends {
-        if base.name.contains('.') || base.name == surge_ts_syntax::EXPRESSION_HERITAGE_BASE {
+        if base.name == surge_ts_syntax::EXPRESSION_HERITAGE_BASE {
+            continue;
+        }
+        if let Some((head, _)) = base.name.split_once('.') {
+            check_qualified_base_head_resolves(head, base.span, ctx);
             continue;
         }
         if ctx.symbols.get(&base.name).is_some() {
@@ -1510,6 +1514,42 @@ fn check_heritage_base_resolves(class: &ParsedClassDeclaration, ctx: &mut Checke
             );
         }
     });
+}
+
+/// The head of a qualified class base (`extends M.C`) is resolved as a value,
+/// as tsc's `checkExpression` does: a namespace with no value is TS2708, and a
+/// name that is no value at all fails like any unresolved value reference.
+/// What a present head does not have as a member is not modelled.
+fn check_qualified_base_head_resolves(
+    head: &str,
+    span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    let head_span = span.map(|span| surge_ts_syntax::TextSpan {
+        start: span.start,
+        end: span.start + head.len(),
+    });
+    if ctx.namespace_meaning(head) == Some(false) {
+        let diagnostic = Diagnostic::ts2708(head, ctx.file_name.clone());
+        ctx.push(crate::spans::diagnostic_with_syntax_span(diagnostic, head_span));
+        return;
+    }
+    if ctx.symbols.get(head).is_some()
+        || ctx.namespace_meaning(head).is_some()
+        || ctx.is_import_binding(head)
+        || ctx.is_umd_global_value_reference(head)
+        || ctx.ambient_global_symbols.get(head).is_some()
+    {
+        return;
+    }
+    let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    crate::checks::expr::report_unresolved_value_name(
+        head,
+        head_span,
+        crate::checks::expr::UnresolvedNameSite::Reference,
+        &symbols,
+        ctx,
+    );
 }
 
 /// tsc's `isPrimitiveTypeName`: the keywords `resolveName` reports specially

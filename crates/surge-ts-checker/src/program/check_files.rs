@@ -1635,6 +1635,13 @@ pub(super) fn check_program_file(
             }
         }
         ctx.set_symbols(script_sym);
+        // A script imports nothing, but its per-file import sets must still
+        // describe it: the qualified-name checks only judge a file they do.
+        ctx.set_file_type_only_import_names(std::iter::empty());
+        ctx.set_file_import_names(
+            crate::program::ambient::import_bound_names(&parsed_file.statements),
+            crate::program::ambient::namespace_import_names(&parsed_file.statements),
+        );
 
         let current_type_declarations = ctx.type_declarations.clone();
         let current_symbols = ctx
