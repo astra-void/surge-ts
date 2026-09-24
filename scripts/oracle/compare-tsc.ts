@@ -1054,6 +1054,7 @@ export const fixturePresets: Record<string, string> = {
   'optional-property-source-index-signature': path.join(workspaceRoot, 'tests/compat-projects/optional-property-source-index-signature/tsconfig.json'),
   'namespace-member-declarations-checked': path.join(workspaceRoot, 'tests/compat-projects/namespace-member-declarations-checked/tsconfig.json'),
   'type-variable-arithmetic-operand': path.join(workspaceRoot, 'tests/compat-projects/type-variable-arithmetic-operand/tsconfig.json'),
+  'compound-assignment-not-definite': path.join(workspaceRoot, 'tests/compat-projects/compound-assignment-not-definite/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -24,6 +24,11 @@ pub(crate) fn check_function_assignment(
     ctx: &mut CheckerContext,
 ) {
     let target_name = assignment.target_name.clone();
+    let compound = crate::flow::is_compound_assignment(
+        &assignment.target_name,
+        assignment.target_span,
+        &assignment.value,
+    );
 
     let (target_blocked, value_blocked) = if flow_state.tracked_local_count() > 0 {
         (
@@ -80,7 +85,10 @@ pub(crate) fn check_function_assignment(
         }
     }
 
-    if !target_blocked.is_blocked() && flow_state.tracked_local_count() > 0 {
+    if !target_blocked.is_blocked()
+        && flow_state.tracked_local_count() > 0
+        && !compound
+    {
         mark_assignment_state(&target_name, flow_state);
     }
 }

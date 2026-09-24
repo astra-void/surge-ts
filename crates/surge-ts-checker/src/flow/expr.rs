@@ -721,6 +721,27 @@ pub(crate) fn assignment_value_read(
     }
 }
 
+/// `x op= v`, which the parser lowers to `x = x op v` with the target itself as
+/// the operator's left operand. tsc's `getTypeAtFlowAssignment` gives the
+/// target of a compound assignment the flow type it had before
+/// (`AssignmentKindCompound`), so it does not make the target definitely
+/// assigned; `??=`, `||=` and `&&=` do.
+pub(crate) fn is_compound_assignment(
+    target_name: &str,
+    target_span: Option<SyntaxTextSpan>,
+    value: &ParsedExpression,
+) -> bool {
+    matches!(
+        value,
+        ParsedExpression::Binary { left, .. }
+            if matches!(
+                left.as_ref(),
+                ParsedExpression::Identifier { name, span }
+                    if name == target_name && *span == target_span
+            )
+    )
+}
+
 /// The assignments evaluating `expression` performs, innermost-first in
 /// evaluation order (`a = b = c` assigns `b` before `a`), outside nested
 /// functions, each flagged when it runs only on some paths through the
@@ -793,10 +814,15 @@ pub(crate) fn certainly_assigned_names(expression: &ParsedExpression) -> Vec<&st
     }
     match expression {
         ParsedExpression::Assignment {
-            target_name, value, ..
+            target_name,
+            target_span,
+            value,
+            ..
         } => {
             names.extend(certainly_assigned_names(value));
-            names.push(target_name.as_str());
+            if !is_compound_assignment(target_name, *target_span, value) {
+                names.push(target_name.as_str());
+            }
         }
         ParsedExpression::Logical { left, .. } | ParsedExpression::NullishCoalescing { left, .. } => {
             names.extend(certainly_assigned_names(left));

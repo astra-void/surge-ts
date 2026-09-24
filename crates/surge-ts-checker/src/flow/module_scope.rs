@@ -16,6 +16,7 @@ use surge_ts_syntax::{
 
 use super::{
     AssignmentState, FunctionFlowState, analyze_function_body_flow, assignment_value_read,
+    is_compound_assignment,
     check_expression_flow, collect_hoisted_vars_with, type_assumed_initialized,
 };
 use crate::context::CheckerContext;
@@ -312,7 +313,9 @@ fn check_statement(
         ParsedStatement::Assignment(assignment) => {
             let (read, read_span) = assignment_value_read(assignment);
             let _ = check_expression_flow_marking(read, read_span, flow, index, ctx);
-            flow.mark_assigned(&assignment.target_name);
+            if !is_compound_assignment(&assignment.target_name, assignment.target_span, &assignment.value) {
+                flow.mark_assigned(&assignment.target_name);
+            }
         }
         ParsedStatement::MemberAssignment(assignment) => {
             let _ = check_expression_flow_marking(
@@ -463,7 +466,9 @@ fn walk_statement(
         ParsedFunctionBodyStatement::Assignment(assignment) => {
             let (read, read_span) = assignment_value_read(assignment);
             let _ = check_expression_flow_marking(read, read_span, flow, index, ctx);
-            flow.mark_assigned(&assignment.target_name);
+            if !is_compound_assignment(&assignment.target_name, assignment.target_span, &assignment.value) {
+                flow.mark_assigned(&assignment.target_name);
+            }
             true
         }
         ParsedFunctionBodyStatement::MemberAssignment(assignment) => {
