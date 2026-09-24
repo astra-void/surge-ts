@@ -739,7 +739,11 @@ fn merge_intersection_members_now(
     // `ZodIssue = ZodIssueOptionalMessage & { fatal?; message }` merged down to
     // `{ fatal, message }` and made `path` a false TS2353.
     let undistributed_union_operand = members.iter().any(|ty| matches!(ty, Type::Union(_)));
-    let dropped_unmodelled_operand = dropped_unmodelled_operand || undistributed_union_operand;
+    // So does a reference operand that peels to the degradation sentinel: the
+    // caller saw a reference and could not know it would fail to expand.
+    let peeled_to_sentinel = members.iter().any(|ty| matches!(ty, Type::Unknown));
+    let dropped_unmodelled_operand =
+        dropped_unmodelled_operand || undistributed_union_operand || peeled_to_sentinel;
 
     let open_if_unmodelled = |ty: Type| -> Type {
         match ty {

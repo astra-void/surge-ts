@@ -395,6 +395,16 @@ pub(crate) fn check_variable_declaration_against_symbols(
             crate::checks::function::function_type_signature_info(function_type, &ctx.file_name)
         })
     });
+    // `const alias = identity` binds the very signature it reads, type
+    // parameters and all: Go types the binding as its initializer's type.
+    let function_signature = function_signature.or_else(|| {
+        let (None, Some(surge_ts_syntax::ParsedExpression::Identifier { name, .. })) =
+            (&declared_type, variable.initializer.as_ref())
+        else {
+            return None;
+        };
+        symbols.get(name)?.function_signature.clone()
+    });
 
     // Go carries an unresolved import's error type through every binding that
     // reads from it, so `const q = trpc.post.all.useQuery()` is `any` there too

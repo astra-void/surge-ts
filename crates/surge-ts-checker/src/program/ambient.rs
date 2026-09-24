@@ -41,18 +41,19 @@ pub(crate) struct AmbientModuleEntry {
     block_scope: Arc<TypeDeclarationScope>,
 }
 
-/// Collects the program's UMD global names: every `export as namespace X` in a
-/// file that is itself a module. `X` is then reachable from script files but is
-/// TS2686 from a module, which is what [`CheckerContext::umd_global_names`]
-/// drives. A `export as namespace` in a script file declares nothing extra —
-/// the file's declarations are already global — so only modules contribute.
+/// Collects the program's UMD globals: every `export as namespace X` in a file
+/// that is itself a module, with that file. `X` is a global naming the module:
+/// its types are reachable from every file, and a value reference to it from a
+/// module is TS2686, which is what [`CheckerContext::umd_global_names`] drives.
+/// A `export as namespace` in a script file declares nothing extra — the file's
+/// declarations are already global — so only modules contribute.
 pub(crate) fn collect_umd_global_names(
     parsed_files: &[ParsedProgramFile],
     ctx: &mut CheckerContext,
 ) {
-    let mut names: surge_ts_types::fx::FxHashSet<Arc<str>> = Default::default();
+    let mut names: surge_ts_types::fx::FxHashMap<Arc<str>, usize> = Default::default();
 
-    for parsed_file in parsed_files {
+    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
         if !parsed_file.is_module {
             continue;
         }
@@ -64,7 +65,9 @@ pub(crate) fn collect_umd_global_names(
                     ..
                 } = export.as_ref()
             {
-                names.insert(Arc::from(exported_name.as_str()));
+                names
+                    .entry(Arc::from(exported_name.as_str()))
+                    .or_insert(file_index);
             }
         }
     }

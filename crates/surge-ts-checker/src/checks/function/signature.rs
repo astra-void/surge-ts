@@ -1721,6 +1721,7 @@ pub(crate) fn function_signature_info(
         predicate_overload: None,
         overload_alternatives: Vec::new(),
         inferred_predicate: None,
+        body_return: None,
     })
 }
 
@@ -1739,6 +1740,16 @@ pub(crate) fn function_declaration_signature_info(
         function.return_type.as_ref(),
         &ctx.file_name.clone(),
     );
+    if !function.type_parameters.is_empty()
+        && crate::checks::function::return_type_comes_from_body(function)
+    {
+        let mut carried = (*info).clone();
+        carried.body_return = Some(Arc::new(crate::symbols::BodyReturnSource {
+            function: function.clone(),
+            instantiations: std::sync::Mutex::default(),
+        }));
+        return Arc::new(carried);
+    }
     if function.return_type.is_some()
         || function.is_async
         || function.is_generator
@@ -1804,6 +1815,7 @@ pub(crate) fn function_type_signature_info(
         predicate_overload: None,
         overload_alternatives: Vec::new(),
         inferred_predicate: None,
+        body_return: None,
     })
 }
 
@@ -2534,6 +2546,28 @@ fn signature_over_type_variables(
     collected.with_signature_types(remapped.parameters().to_vec(), return_type)
 }
 
+thread_local! {
+    static DECLARATION_BODY_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static BODY_RETURN_CAPTURE: std::cell::RefCell<Option<(usize, Option<(Vec<Type>, bool)>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `check`, which checks one declaration body, and hands back what that
+/// body's `return`s produced and whether its end is reachable: the inputs of
+/// tsc's `getReturnTypeFromBody`, read off the real body check. Bodies nested
+/// inside it record into their own frames and are not captured.
+pub(crate) fn capture_declaration_body_returns<R>(
+    check: impl FnOnce() -> R,
+) -> (R, Option<(Vec<Type>, bool)>) {
+    let depth = DECLARATION_BODY_DEPTH.with(std::cell::Cell::get);
+    let saved = BODY_RETURN_CAPTURE.with(|slot| slot.replace(Some((depth, None))));
+    let result = check();
+    let captured = BODY_RETURN_CAPTURE
+        .with(|slot| slot.replace(saved))
+        .and_then(|(_, captured)| captured);
+    (result, captured)
+}
+
 /// Like [`check_function_body_with_signature`], but optionally binds a `this`
 /// symbol (the class instance or static side) into the body scope so class
 /// method and constructor bodies can resolve `this.<member>` references.
@@ -2561,6 +2595,18 @@ pub(crate) fn check_function_body_with_signature_and_this(
     has_this_parameter: bool,
     ctx: &mut CheckerContext,
 ) {
+    let body_depth = DECLARATION_BODY_DEPTH.with(|depth| {
+        let current = depth.get();
+        depth.set(current + 1);
+        current
+    });
+    struct LeaveBody;
+    impl Drop for LeaveBody {
+        fn drop(&mut self) {
+            DECLARATION_BODY_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        }
+    }
+    let _leave_body = LeaveBody;
     let type_variables = enter_body_type_variables(type_parameters, ctx);
     let body_function_type;
     let function_type = match (&type_variables, function_signature.as_deref()) {
@@ -2707,6 +2753,13 @@ pub(crate) fn check_function_body_with_signature_and_this(
         );
         ctx.in_async_body = outer_async_body;
         ctx.in_generator_body = outer_generator_body;
+        BODY_RETURN_CAPTURE.with(|slot| {
+            if let Some((depth, captured)) = slot.borrow_mut().as_mut()
+                && *depth == body_depth
+            {
+                *captured = Some((ctx.body_return_types().to_vec(), !body_flow.guarantees_exit));
+            }
+        });
         ctx.close_contextual_return_frame()
     });
     ctx.inherited_never_initialized = saved_never_initialized;

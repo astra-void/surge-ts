@@ -649,6 +649,31 @@ fn optional_chain_contained_receiver<'a>(
 }
 
 /// The expression written before the chain's innermost `?.`.
+/// The references an optional chain reads through before its last `?.`, in
+/// tsc's `optionalChainContainsReference` order: `a?.b.c` yields `a?.b`, then
+/// `a`. Empty for an expression that is not an optional chain.
+pub(super) fn optional_chain_contained_references(chain: &ParsedExpression) -> Vec<&ParsedExpression> {
+    let mut references = Vec::new();
+    let mut link = chain;
+    while link.continues_optional_chain() {
+        let receiver = match link {
+            ParsedExpression::OptionalPropertyAccess { object, .. }
+            | ParsedExpression::OptionalIndexAccess { object, .. }
+            | ParsedExpression::OptionalPropertyCall { object, .. }
+            | ParsedExpression::PropertyAccess { object, .. }
+            | ParsedExpression::ElementAccess { object, .. }
+            | ParsedExpression::PropertyCall { object, .. } => object.as_ref(),
+            ParsedExpression::OptionalCall { callee, .. }
+            | ParsedExpression::ExpressionCall { callee, .. } => callee.as_ref(),
+            ParsedExpression::NonNullAssertion { expression, .. } => expression.as_ref(),
+            _ => break,
+        };
+        references.push(receiver);
+        link = receiver;
+    }
+    references
+}
+
 fn optional_chain_receiver(chain: &ParsedExpression) -> Option<&ParsedExpression> {
     match chain {
         ParsedExpression::OptionalPropertyAccess { object, .. }
@@ -970,6 +995,25 @@ pub(super) fn collect_reference_guards<'a>(
         && let Some((base, path)) = reference_path(receiver)
     {
         guards.push((base, path, ReferenceGuard::Truthy));
+    }
+    // A truthy chain proves each reference it reads through non-nullish
+    // (tsc's `optionalChainContainsReference` in `narrowTypeByTruthiness`).
+    if branch_is_true && surge_ts_types::strict_null_checks() {
+        for receiver in optional_chain_contained_references(condition) {
+            if let Some((base, path)) = reference_path(receiver) {
+                guards.push((
+                    base,
+                    path,
+                    ReferenceGuard::Nullish {
+                        keep_matching: false,
+                        test: super::guards::NullishTest {
+                            null: true,
+                            undefined: true,
+                        },
+                    },
+                ));
+            }
+        }
     }
 
     if let Some(((base, path), ctor_name, eq)) = parse_constructor_equality(condition) {

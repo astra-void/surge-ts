@@ -289,6 +289,18 @@ impl DeclarationEnvironmentStore {
         })
     }
 
+    /// The per-file module value tables as the program last published them. A
+    /// context recovered from an environment holds the map it was captured
+    /// with, which can predate the final import bindings.
+    pub(crate) fn published_module_local_values(
+        &self,
+    ) -> Option<Arc<FxHashMap<Arc<str>, Arc<SymbolTable>>>> {
+        self.module_local_values
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .upgrade()
+    }
+
     pub(super) fn publish_module_local_values(
         &self,
         values: &Arc<FxHashMap<Arc<str>, Arc<SymbolTable>>>,

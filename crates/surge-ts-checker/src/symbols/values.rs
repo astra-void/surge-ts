@@ -88,6 +88,20 @@ pub(crate) struct FunctionSignatureInfo {
     /// parameter types are known; guard narrowing reads it as it reads a
     /// written `x is T`.
     pub(crate) inferred_predicate: Option<InferredPredicate>,
+    /// A generic declaration with a body and no written return type: tsc reads
+    /// its return from the body (`getReturnTypeFromBody`) and instantiates it
+    /// per call, so each call infers the body under its own type arguments.
+    pub(crate) body_return: Option<Arc<BodyReturnSource>>,
+}
+
+/// The body behind [`FunctionSignatureInfo::body_return`], with the returns
+/// read from it so far, one per set of type-parameter bindings — Go keeps a
+/// signature's instantiations on the signature (`sig.instantiations`), so each
+/// is computed once however many calls reach it.
+#[derive(Debug)]
+pub(crate) struct BodyReturnSource {
+    pub(crate) function: surge_ts_syntax::ParsedFunctionDeclaration,
+    pub(crate) instantiations: std::sync::Mutex<Vec<(Vec<Vec<(String, Type)>>, Type)>>,
 }
 
 #[derive(Debug, Clone)]

@@ -288,12 +288,20 @@ fn republish_value_export(
     }
 }
 
-/// The module specifier a `export = <local>` aliases when `<local>` is bound by
-/// `import <local> = require("<specifier>")`. `@types/node` builds every
-/// `node:*` module this way (`declare module "node:path" { import path =
-/// require("path"); export = path; }`), and the local pass binds nothing for it:
-/// the import-equals local is not a value declaration of this module.
-fn export_equals_import_alias_specifier(parsed_file: &ParsedProgramFile) -> Option<String> {
+/// What an `export = <local>` aliases when `<local>` is an import binding rather
+/// than a declaration of this module, which the local pass binds nothing for.
+/// `@types/node` builds its `node:*` modules this way: `import path =
+/// require("path"); export = path;`, and `import { strict } from "node:assert";
+/// export = strict;` for `node:assert/strict`.
+enum ExportEqualsImportAlias {
+    /// `import <local> = require("<specifier>")`: the whole module.
+    Module(String),
+    /// `import { <imported> as <local> } from "<specifier>"`: that one export,
+    /// as `resolveAlias` takes an import specifier to its target.
+    Member { specifier: String, imported_name: String },
+}
+
+fn export_equals_import_alias(parsed_file: &ParsedProgramFile) -> Option<ExportEqualsImportAlias> {
     let exported_name = parsed_file.statements.iter().find_map(|statement| {
         let ParsedStatement::ExportDeclaration(export) = statement else {
             return None;
@@ -310,8 +318,16 @@ fn export_equals_import_alias_specifier(parsed_file: &ParsedProgramFile) -> Opti
         };
         match &import.kind {
             ParsedImportKind::Equals { local_name, .. } if local_name == exported_name => {
-                Some(import.module_specifier.clone())
+                Some(ExportEqualsImportAlias::Module(import.module_specifier.clone()))
             }
+            ParsedImportKind::Named { is_type_only: false, specifiers }
+            | ParsedImportKind::DefaultAndNamed { is_type_only: false, specifiers, .. } => specifiers
+                .iter()
+                .find(|specifier| specifier.local_name == exported_name)
+                .map(|specifier| ExportEqualsImportAlias::Member {
+                    specifier: import.module_specifier.clone(),
+                    imported_name: specifier.imported_name.clone(),
+                }),
             _ => None,
         }
     })
@@ -1328,9 +1344,13 @@ pub(crate) fn resolve_module_export_table(
         timings.re_export_expansion += re_export_start.elapsed()
     });
 
-    if let Some(alias_module_specifier) = export_equals_import_alias_specifier(parsed_file) {
+    if let Some(alias) = export_equals_import_alias(parsed_file) {
+        let specifier = match &alias {
+            ExportEqualsImportAlias::Module(specifier)
+            | ExportEqualsImportAlias::Member { specifier, .. } => specifier,
+        };
         if let Some((target_export_table, _resolved_index)) = try_resolve_module_export_table(
-            &alias_module_specifier,
+            specifier,
             ctx,
             parsed_files,
             local_module_export_tables,
@@ -1339,7 +1359,17 @@ pub(crate) fn resolve_module_export_table(
             &parsed_file.file_name,
         ) {
             ctx.set_file_name(parsed_file.file_name.clone());
-            adopt_export_assignment_alias(&mut resolved_export_table, &target_export_table);
+            match &alias {
+                ExportEqualsImportAlias::Module(_) => {
+                    adopt_export_assignment_alias(&mut resolved_export_table, &target_export_table);
+                }
+                ExportEqualsImportAlias::Member { imported_name, .. } => {
+                    if resolved_export_table.export_assignment_symbol.is_none() {
+                        resolved_export_table.export_assignment_symbol =
+                            lookup_value_export(&target_export_table, imported_name);
+                    }
+                }
+            }
         }
     }
 

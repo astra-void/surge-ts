@@ -1226,10 +1226,11 @@ fn narrow_switch_case(
     narrow_tuple_destructure_siblings(condition, scopes, branch_is_true);
 }
 
-/// tsc's `isExhaustiveSwitchStatement`, recorded only on positive evidence: a
-/// discriminant typed as a union of literals (or `boolean`) with a member no
-/// case names, or an open primitive no finite set of cases covers. Any case test
-/// that is not a literal, or a discriminant of another kind, records nothing.
+/// tsc's `computeExhaustiveSwitchStatement`: only a discriminant of a literal
+/// type (`isLiteralType` — `boolean`, a unit type, or a union of them) can be
+/// covered, and it is when the cases name each of its members; any other type
+/// has values no finite set of cases names. A case test that is not a literal,
+/// or a discriminant surge could not type, records nothing.
 fn record_non_exhaustive_switch(
     discriminant: &ParsedExpression,
     span: Option<surge_ts_syntax::TextSpan>,
@@ -1253,8 +1254,27 @@ fn record_non_exhaustive_switch(
         else {
             return;
         };
-        let Some(tags) = crate::checks::function::narrowing::typeof_tags_of(&operand_type) else {
-            return;
+        // A top type is covered only by every tag `typeof` can produce.
+        let tags = if matches!(
+            operand_type.peeled(),
+            Type::Any | Type::ErrorType | Type::GenuineUnknown
+        ) {
+            vec![
+                "string",
+                "number",
+                "bigint",
+                "boolean",
+                "symbol",
+                "undefined",
+                "object",
+                "function",
+            ]
+        } else {
+            let Some(tags) = crate::checks::function::narrowing::typeof_tags_of(&operand_type)
+            else {
+                return;
+            };
+            tags
         };
         if tags
             .iter()
@@ -1270,34 +1290,51 @@ fn record_non_exhaustive_switch(
         return;
     };
     let members: Vec<Type> = match discriminant_type.peeled() {
-        // A discriminant surge could not type is one tsc usually can; its end
-        // point is left unreported rather than guessed reachable.
-        Type::Any | Type::Unknown | Type::ErrorType => {
+        // The degradation sentinel stands for a type tsc usually has, and so
+        // does an `any` read under a receiver surge could not type (a callback
+        // parameter walked without its contextual type); the end point is left
+        // unreported rather than guessed reachable.
+        Type::Unknown => {
             ctx.exhaustive_switches.push((span.start, span.end));
             return;
         }
-        Type::String | Type::Number | Type::BigInt => {
-            ctx.non_exhaustive_switches.push((span.start, span.end));
+        Type::Any if ctx.degraded_expected_type_depth > 0 => {
+            ctx.exhaustive_switches.push((span.start, span.end));
             return;
         }
+        Type::TypeParameter(_) | Type::Reference(_) => return,
         Type::Boolean => vec![Type::BooleanLiteral(true), Type::BooleanLiteral(false)],
+        unit @ (Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::Null
+        | Type::Undefined) => vec![unit.clone()],
         Type::Union(union) => {
             let mut members = Vec::new();
             for member in union.types() {
                 match member {
-                    Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => {
-                        members.push(member.clone())
-                    }
+                    Type::StringLiteral(_)
+                    | Type::NumberLiteral(_)
+                    | Type::BooleanLiteral(_)
+                    | Type::Null
+                    | Type::Undefined => members.push(member.clone()),
                     Type::Boolean => {
                         members.push(Type::BooleanLiteral(true));
                         members.push(Type::BooleanLiteral(false));
                     }
-                    _ => return,
+                    Type::Unknown | Type::TypeParameter(_) | Type::Reference(_) => return,
+                    _ => {
+                        ctx.non_exhaustive_switches.push((span.start, span.end));
+                        return;
+                    }
                 }
             }
             members
         }
-        _ => return,
+        _ => {
+            ctx.non_exhaustive_switches.push((span.start, span.end));
+            return;
+        }
     };
     if members.iter().any(|member| !case_literals.contains(member)) {
         ctx.non_exhaustive_switches.push((span.start, span.end));
@@ -1324,6 +1361,8 @@ fn switch_case_literals(
                 }))
             }
             ParsedExpression::BooleanLiteral(value) => Some(Type::BooleanLiteral(*value)),
+            ParsedExpression::NullLiteral => Some(Type::Null),
+            ParsedExpression::UndefinedLiteral => Some(Type::Undefined),
             ParsedExpression::Identifier { .. } | ParsedExpression::PropertyAccess { .. } => {
                 let diagnostics_before = ctx.diagnostics().len();
                 let inferred = crate::infer::infer_expression(test, &visible_symbols(scopes), ctx);
@@ -1332,7 +1371,8 @@ fn switch_case_literals(
                     InferredExpression::Known(
                         literal @ (Type::StringLiteral(_)
                         | Type::NumberLiteral(_)
-                        | Type::BooleanLiteral(_)),
+                        | Type::BooleanLiteral(_)
+                        | Type::Undefined),
                     ) => Some(literal),
                     _ => None,
                 }

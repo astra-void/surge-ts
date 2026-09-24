@@ -48,8 +48,34 @@ pub(crate) fn program_module_scope_for_file(
     slot.as_ref()?.get(file_name).cloned()
 }
 
+/// Program-global copy of the ambient global value table as the check phase
+/// sees it, published when that phase starts. A lazy body return resolves in an
+/// environment captured during module analysis, before global augmentations
+/// were merged (vitest's `declare global { let vi: … }`), and its body names
+/// the globals the file's own check does. Released in the end-of-run teardown.
+pub(super) static PROGRAM_AMBIENT_GLOBALS: std::sync::Mutex<Option<Arc<crate::symbols::SymbolTable>>> =
+    std::sync::Mutex::new(None);
+
+pub(crate) fn publish_program_ambient_globals(globals: Arc<crate::symbols::SymbolTable>) {
+    if let Ok(mut slot) = PROGRAM_AMBIENT_GLOBALS.lock() {
+        *slot = Some(globals);
+    }
+}
+
+pub(crate) fn program_ambient_globals() -> Option<Arc<crate::symbols::SymbolTable>> {
+    PROGRAM_AMBIENT_GLOBALS.lock().ok()?.clone()
+}
+
+pub(crate) fn program_module_scopes()
+-> Option<Arc<surge_ts_types::fx::FxHashMap<Arc<str>, Arc<crate::symbols::TypeDeclarationScope>>>> {
+    PROGRAM_MODULE_SCOPES.lock().ok()?.clone()
+}
+
 pub(crate) fn clear_program_module_scopes() {
     if let Ok(mut slot) = PROGRAM_MODULE_SCOPES.lock() {
+        *slot = None;
+    }
+    if let Ok(mut slot) = PROGRAM_AMBIENT_GLOBALS.lock() {
         *slot = None;
     }
 }

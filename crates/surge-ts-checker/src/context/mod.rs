@@ -197,6 +197,16 @@ impl CheckerContext {
                 _ => false,
             }
         }
+        // An async body returns the awaited value of what it `return`s: tsc's
+        // `getReturnTypeFromBody` awaits each return expression, and
+        // `isUnwrappedReturnTypeUndefinedVoidOrAny` tests that awaited type.
+        let awaited;
+        let ty = if self.in_async_body {
+            awaited = crate::checks::call::awaited_type(ty);
+            &awaited
+        } else {
+            ty
+        };
         if let Some(frame) = self.contextual_return_frames.last_mut() {
             if admits_undefined(ty) {
                 frame.returned_void_like = true;
@@ -408,9 +418,11 @@ pub(crate) struct CheckerContext {
     pub(crate) module_augmentations: Arc<FxHashMap<String, ModuleExportTable>>,
     pub(crate) ambient_global_symbols: SymbolTable,
     /// Names an in-program module declares as a UMD global (`export as namespace
-    /// X`). Referencing one as a value from a module file is TS2686; from a
-    /// script file it is legal. Program-lifetime, written once before checking.
-    pub(crate) umd_global_names: Arc<FxHashSet<Arc<str>>>,
+    /// X`), with the index of that module's file. Referencing one as a value
+    /// from a module file is TS2686; from a script file it is legal; its types
+    /// are reachable from every file. Program-lifetime, written once before
+    /// checking.
+    pub(crate) umd_global_names: Arc<FxHashMap<Arc<str>, usize>>,
     /// Every namespace in the program, by scope. See
     /// [`crate::program::NamespaceRegistry`].
     pub(crate) namespace_registry: Arc<crate::program::NamespaceRegistry>,
@@ -801,7 +813,7 @@ impl CheckerContext {
             ambient_file_type_scopes: Arc::new(FxHashMap::default()),
             module_augmentations: Arc::new(FxHashMap::default()),
             ambient_global_symbols: SymbolTable::new(),
-            umd_global_names: Arc::new(FxHashSet::default()),
+            umd_global_names: Arc::new(FxHashMap::default()),
             namespace_registry: Arc::default(),
             block_scoped_globals: Arc::default(),
             global_augmentation_only_names: Arc::default(),
@@ -981,7 +993,7 @@ impl CheckerContext {
             ambient_global_symbols: data.ambient_global_symbols.clone(),
             // A declaration environment only re-resolves types; it never runs the
             // expression checks that report TS2686, so it carries no UMD state.
-            umd_global_names: Arc::new(FxHashSet::default()),
+            umd_global_names: Arc::new(FxHashMap::default()),
             namespace_registry: Arc::default(),
             block_scoped_globals: Arc::default(),
             global_augmentation_only_names: Arc::default(),
@@ -1563,7 +1575,7 @@ impl CheckerContext {
             return;
         }
         self.file_umd_global_names_owner = Some(self.file_name.clone());
-        for name in self.umd_global_names.iter() {
+        for name in self.umd_global_names.keys() {
             if !is_shadowed(name) {
                 self.file_umd_global_names.insert(name.clone());
             }

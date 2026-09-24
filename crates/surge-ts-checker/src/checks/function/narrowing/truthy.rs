@@ -377,11 +377,17 @@ pub(crate) fn narrow_truthy_operand_symbol_table(
 /// [`narrow_discriminant_in_scope`] routes `if (!x)` else/fall-through here with
 /// `branch_is_true` already flipped. Returns whether the condition was such a
 /// reference (always handled, so equality-discriminant parsing is skipped).
+///
+/// A true branch first applies tsc's `optionalChainContainsReference` (in
+/// `narrowTypeByTruthiness`): see [`narrow_optional_chain_receivers_non_null`].
 pub(super) fn narrow_truthy_reference_in_scope(
     condition: &ParsedExpression,
     scopes: &mut ScopeStack,
     branch_is_true: bool,
 ) -> bool {
+    if branch_is_true && surge_ts_types::strict_null_checks() {
+        narrow_optional_chain_receivers_non_null(condition, scopes);
+    }
     // `if (a?.b())` proves `a` non-nullish in the true branch: had it been
     // nullish the whole chain would short-circuit to `undefined` and the test
     // would be false. `reference_path` stops at the call, so unwrap to its
@@ -410,6 +416,16 @@ pub(super) fn narrow_truthy_reference_in_scope(
         narrow_reference_in_scope(&base, &path, ReferenceGuard::Falsy, scopes);
     }
     true
+}
+
+/// tsc's `optionalChainContainsReference`: a truthy optional chain proves every
+/// reference it reads through non-nullish. The path narrowing cannot see this
+/// through a union receiver: `{ error: null } | { error: E }` has no `shape` to
+/// test on its first member, so `m.error?.shape` used to keep it.
+fn narrow_optional_chain_receivers_non_null(condition: &ParsedExpression, scopes: &mut ScopeStack) {
+    for receiver in super::reference::optional_chain_contained_references(condition) {
+        super::narrow_reference_non_null_in_scope(receiver, scopes);
+    }
 }
 
 /// The symbol-table form of [`narrow_union_by_property_truthiness_in_scope`],

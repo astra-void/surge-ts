@@ -541,13 +541,23 @@ pub(crate) fn instantiate_function_type_with_substitution<'a>(
             ));
         }
 
-        let instantiated_return_type = function_signature
-            .return_type
-            .as_ref()
-            .map(|return_type| {
+        let instantiated_return_type = match function_signature.return_type.as_ref() {
+            Some(return_type) => {
                 map_parsed_type_with_substitution(return_type.clone(), ctx, substitution)
-            })
-            .unwrap_or_else(|| function_type.return_type().clone());
+            }
+            None => function_signature
+                .body_return
+                .as_ref()
+                .and_then(|source| {
+                    crate::checks::function::instantiated_body_return(
+                        source,
+                        substitution,
+                        &instantiated_parameters,
+                        ctx,
+                    )
+                })
+                .unwrap_or_else(|| function_type.return_type().clone()),
+        };
 
         Cow::Owned(alloc_function_type(
             instantiated_parameters,
@@ -2885,10 +2895,19 @@ pub(crate) fn collect_inferred_type_argument(
                 // nothing (which left `TVariables` at its `void` default and
                 // rejected every `mutate(1)`).
                 let rest_element = match rest_index {
-                    Some(rest_index) if index >= rest_index => Some(rest_parameter_element_type(
-                        &actual_parameters[rest_index],
-                        index - rest_index,
-                    )),
+                    Some(rest_index) if index >= rest_index => {
+                        // A rest spelled as a fixed tuple (`...args: []`, which
+                        // `Parameters<() => R>` resolves to) has exactly its
+                        // elements' positions: tsc's `getParameterCount` counts
+                        // those, so nothing past them is inferred from.
+                        let rest_type = actual_parameters[rest_index].peeled();
+                        if let Type::Tuple(elements) = &rest_type
+                            && index - rest_index >= elements.len()
+                        {
+                            break;
+                        }
+                        Some(rest_parameter_element_type(&rest_type, index - rest_index))
+                    }
                     _ => None,
                 };
                 let Some(actual_parameter) = rest_element
@@ -2977,6 +2996,17 @@ pub(crate) fn collect_inferred_type_argument(
             }
         }
         ParsedType::Union(expected_types) => {
+            // `getUnionType` flattens a union written inside a union — the shape
+            // substituting `T := void | C2` into `MaybePromise<T> = T |
+            // Promise<T>` writes — so the naked member stays visible below.
+            let flattened;
+            let expected_types: &[ParsedType] =
+                if expected_types.iter().any(|member| matches!(member, ParsedType::Union(_))) {
+                    flattened = flatten_parsed_union_members(expected_types);
+                    &flattened
+                } else {
+                    expected_types
+                };
             // `T | PromiseLike<T>` (the lib's `then` callbacks, `Awaited`-style
             // parameters): a promise argument infers `T` from what it resolves
             // to, never as the whole promise — tsc pairs it with the
@@ -3236,6 +3266,17 @@ fn is_conditional_alias_reference(member: &ParsedType, ctx: &CheckerContext) -> 
 
 /// The `T` of a `T | PromiseLike<T>` / `T | Promise<T>` union, when the union
 /// has exactly that shape.
+fn flatten_parsed_union_members(members: &[ParsedType]) -> Vec<ParsedType> {
+    let mut flattened = Vec::with_capacity(members.len());
+    for member in members {
+        match member {
+            ParsedType::Union(inner) => flattened.extend(flatten_parsed_union_members(inner)),
+            other => flattened.push(other.clone()),
+        }
+    }
+    flattened
+}
+
 fn promise_like_member_target(members: &[ParsedType]) -> Option<&ParsedType> {
     let [first, second] = members else {
         return None;
@@ -3366,6 +3407,27 @@ fn infer_through_generic_reference(
         }
     }
 
+    // tsc infers from type arguments only between references to the same
+    // generic target, or two array types (`inferFromObjectTypes`); a reference
+    // to another declaration is inferred from as the structure it expands to.
+    // Zipping any reference by position bound `TQueryFnData` to the `() =>
+    // number` of a `Mock<() => number>` matched against `Query<TQueryFnData, …>`.
+    if let Type::Reference(reference) = argument_type
+        && !reference_targets_declaration(reference, named_type, ctx)
+    {
+        let resolved = argument_type.peeled();
+        if !matches!(&resolved, Type::Reference(_)) && !resolved.is_unknown() {
+            return infer_through_generic_reference(
+                named_type,
+                &resolved,
+                substitution,
+                widen_literals,
+                ctx,
+                depth + 1,
+            );
+        }
+        return;
+    }
     if let Type::Reference(reference) = argument_type {
         for (pattern_argument, actual_argument) in named_type
             .type_arguments
@@ -3537,6 +3599,49 @@ fn with_inference_scope_file<R>(
         files.borrow_mut().pop();
     });
     resolved
+}
+
+/// Whether `reference` instantiates the declaration `named_type` names: its
+/// nominal id is that declaration's `file\0Name`, or both are array types. A
+/// declaration surge cannot find proves nothing either way and keeps the
+/// positional reading.
+fn reference_targets_declaration(
+    reference: &surge_ts_types::TypeReference,
+    named_type: &ParsedNamedType,
+    ctx: &CheckerContext,
+) -> bool {
+    if matches!(named_type.name.as_str(), "Array" | "ReadonlyArray") && reference.is_readonly_array()
+    {
+        return true;
+    }
+    let Some(handle) = lookup_declaration_for_inference(&named_type.name, ctx) else {
+        return true;
+    };
+    let (file_name, declaration_name) = match handle.get() {
+        TypeDeclarationInfo::Alias(alias) => (alias.file_name.clone(), alias.name.clone()),
+        TypeDeclarationInfo::Interface(interface) => {
+            (interface.file_name.clone(), interface.name.clone())
+        }
+    };
+    reference
+        .id
+        .strip_prefix(file_name.as_ref() as &str)
+        .and_then(|rest| rest.strip_prefix('\u{0}'))
+        .is_some_and(|written| names_one_declaration(written, &declaration_name))
+}
+
+/// A reference's id carries the name as written where it was referenced
+/// (`core.$constructor` through a namespace import) and a declaration the name
+/// it declares; within one file they name one declaration when one is the
+/// other's dotted tail.
+fn names_one_declaration(written: &str, declared: &str) -> bool {
+    written == declared
+        || written
+            .strip_suffix(declared)
+            .is_some_and(|qualifier| qualifier.ends_with('.'))
+        || declared
+            .strip_suffix(written)
+            .is_some_and(|qualifier| qualifier.ends_with('.'))
 }
 
 fn lookup_declaration_for_inference(

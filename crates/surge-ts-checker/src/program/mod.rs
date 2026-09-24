@@ -1240,6 +1240,15 @@ pub(crate) fn build_module_local_values(
         }
         ctx.file_name = parsed_file.file_name.clone();
         ctx.type_declarations = analysis.local_type_declarations.as_ref().clone();
+        // The module's own scope, as its check installs it: an initializer typed
+        // from here later (`LazyInitializerValue`) names imported types.
+        let mut layers = vec![analysis.local_type_declarations.clone()];
+        if let Some(bindings) = module_import_bindings[file_index].as_ref() {
+            layers.extend(bindings.scope_layers());
+        }
+        let saved_scope = ctx
+            .type_declaration_scope
+            .replace(Arc::new(TypeDeclarationScope::new(layers)));
         let table = crate::modules::collect_exportable_value_symbols(
             &parsed_file.statements,
             &analysis.local_type_declarations,
@@ -1248,6 +1257,7 @@ pub(crate) fn build_module_local_values(
             parsed_file.is_module,
             &ctx,
         );
+        ctx.type_declaration_scope = saved_scope;
         module_local_values.insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(table));
     }
     ctx.file_name = saved_file_name;
@@ -1322,6 +1332,10 @@ fn run_check_phase(
 ) {
     let worker_count = resolve_worker_count(jobs, &parsed_files);
     crate::metrics::release_free_memory();
+    publish_program_ambient_globals(Arc::new(
+        ctx.ambient_global_symbols
+            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+    ));
     set_check_phase(true);
     let file_results = if worker_count <= 1 {
         check_program_files_serial(parsed_files, shared_state, &ctx, timings.clone())

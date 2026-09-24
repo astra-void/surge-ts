@@ -642,6 +642,14 @@ pub(crate) fn resolve_interface(
         .rsplit_once('.')
         .map(|(prefix, _)| prefix.to_string());
     let is_namespace_member = namespace_prefix.is_some();
+    // See `resolve_type_alias`: a top-level declaration's body does not see the
+    // members of the namespace whose member led here.
+    let enclosing_namespaces = (!is_namespace_member).then(|| {
+        (
+            std::mem::take(&mut ctx.namespace_member_prefix_stack),
+            std::mem::replace(&mut ctx.namespace_member_resolution_depth, 0),
+        )
+    });
     if let Some(prefix) = namespace_prefix {
         ctx.namespace_member_resolution_depth += 1;
         ctx.namespace_member_prefix_stack.push(prefix);
@@ -723,6 +731,10 @@ pub(crate) fn resolve_interface(
     if is_namespace_member {
         ctx.namespace_member_resolution_depth -= 1;
         ctx.namespace_member_prefix_stack.pop();
+    }
+    if let Some((stack, depth)) = enclosing_namespaces {
+        ctx.namespace_member_prefix_stack = stack;
+        ctx.namespace_member_resolution_depth = depth;
     }
     resolving.pop();
 

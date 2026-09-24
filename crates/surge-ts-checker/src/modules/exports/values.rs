@@ -22,6 +22,170 @@ thread_local! {
         const { std::cell::Cell::new(false) };
 }
 
+pub(crate) const LAZY_INITIALIZER_ID_TAG: &str = "\u{0}lazy-initializer\u{0}";
+
+thread_local! {
+    static LAZY_INITIALIZERS_IN_PROGRESS: std::cell::RefCell<Vec<Arc<str>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    static LAZY_READS_BEFORE_CHECK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts reads of a [`LazyInitializerValue`] answered before the check phase,
+/// so a binding pass can tell a declaration it typed around that timing gap.
+pub(crate) fn note_lazy_read_before_check() {
+    LAZY_READS_BEFORE_CHECK.with(|reads| reads.set(reads.get().wrapping_add(1)));
+}
+
+fn lazy_reads_before_check() -> u64 {
+    LAZY_READS_BEFORE_CHECK.with(std::cell::Cell::get)
+}
+
+/// A module variable the binding passes could not type: unannotated and left
+/// at the sentinel, or annotated with a type that reads such a value
+/// (`export const t: typeof router`). Typed when the check phase first reads it.
+///
+/// Go types a variable on demand (`getTypeOfVariableOrParameterOrProperty`,
+/// checker.go:16844), so an initializer reading an imported value always sees
+/// that value's type. surge publishes value exports from binding passes that run
+/// before the values they import are typed: `export const procedure =
+/// t.procedure`, with `t` built from an import, reached every importer as the
+/// sentinel. The earlier passes already tried, so only the check phase infers,
+/// against the declaring module's final value table (where `t` is itself one of
+/// these); a cycle answers the sentinel where Go reports TS7022 and answers `any`.
+struct LazyInitializerValue {
+    id: Arc<str>,
+    statement: ParsedStatement,
+    name: String,
+    file_name: Arc<str>,
+    environment: crate::context::DeclarationEnvironmentHandle,
+    creation_scope: Option<Arc<crate::symbols::TypeDeclarationScope>>,
+    memo: std::sync::OnceLock<Type>,
+}
+
+impl surge_ts_types::ResolveReference for LazyInitializerValue {
+    fn resolve(&self) -> Type {
+        if let Some(resolved) = self.memo.get() {
+            return resolved.clone();
+        }
+        // An answer given before the check phase, or to a re-entry, is a timing
+        // gap; noting it keeps every enclosing expansion from interning it.
+        if !crate::program::in_check_phase() {
+            crate::program::note_expansion_degradation();
+            note_lazy_read_before_check();
+            return Type::Unknown;
+        }
+        let re_entered = LAZY_INITIALIZERS_IN_PROGRESS.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if stack.iter().any(|id| **id == *self.id) {
+                return true;
+            }
+            stack.push(self.id.clone());
+            false
+        });
+        if re_entered {
+            crate::program::note_expansion_degradation();
+            return Type::Unknown;
+        }
+        struct PopInProgress;
+        impl Drop for PopInProgress {
+            fn drop(&mut self) {
+                LAZY_INITIALIZERS_IN_PROGRESS.with(|stack| {
+                    stack.borrow_mut().pop();
+                });
+            }
+        }
+        let _pop = PopInProgress;
+        let resolved = self.infer().unwrap_or(Type::Unknown);
+        let _ = self.memo.set(resolved.clone());
+        resolved
+    }
+}
+
+impl LazyInitializerValue {
+    fn infer(&self) -> Option<Type> {
+        let mut ctx = self.environment.checker_context()?;
+        ctx.set_file_name(self.file_name.to_string());
+        if self.creation_scope.is_some() {
+            ctx.type_declaration_scope = self.creation_scope.clone();
+        }
+        // Captured during module analysis, which runs without the per-file
+        // scope map; the check phase's is what every declaration resolves in.
+        if ctx.module_scope_by_file.is_empty()
+            && let Some(scopes) = crate::program::program_module_scopes()
+        {
+            ctx.module_scope_by_file = scopes;
+        }
+        let values = self.environment.current_module_local_values(&self.file_name)?;
+        let mut seed = values.as_ref().clone_with_reason(TypeCopyReason::ModuleExport);
+        // Seeded, this very reference would be kept as the variable's
+        // "existing" symbol instead of the inferred one.
+        seed.remove(&self.name);
+        // The sibling values it reads are read settled, as the check phase
+        // installs a file's imports: a call through `router` must see the
+        // builder, not the reference standing in for it.
+        let unsettled: Vec<(Arc<str>, crate::symbols::SymbolInfoHandle)> = seed
+            .iter_shared()
+            .filter(|(_, symbol)| is_lazy_initializer(&symbol.ty))
+            .map(|(name, symbol)| (name.clone(), symbol.clone()))
+            .collect();
+        for (name, symbol) in unsettled {
+            let _ = seed.insert_shared(
+                name,
+                Arc::new(SymbolInfo {
+                    ty: crate::checks::function::settle_lazy_read(symbol.ty.clone()),
+                    kind: symbol.kind,
+                    function_signature: symbol.function_signature.clone(),
+                }),
+            );
+        }
+        let declarations = ctx.type_declarations.clone();
+        // The answer outlives the collection's shadow context, so the lazy
+        // references it carries (`DecorateRouterRecord<TRoot, $Value>` for a
+        // router's nested record) must intern into a store that does too.
+        let table = with_source_exports_sharing_environment_store(|| {
+            collect_exportable_value_symbols(
+                std::slice::from_ref(&self.statement),
+                &declarations,
+                &seed,
+                None,
+                true,
+                &ctx,
+            )
+        });
+        table.get_own_shared(&self.name).map(|symbol| symbol.ty.clone())
+    }
+}
+
+pub(crate) fn is_lazy_initializer(ty: &Type) -> bool {
+    matches!(ty, Type::Reference(reference) if reference.id.contains(LAZY_INITIALIZER_ID_TAG))
+}
+
+fn lazy_initializer_reference(
+    variable: &surge_ts_syntax::ParsedVariableDeclaration,
+    origin: &CheckerContext,
+) -> Type {
+    let start = variable.name_span.map_or(0, |span| span.start);
+    let id: Arc<str> = Arc::from(format!(
+        "{}{LAZY_INITIALIZER_ID_TAG}{}\u{0}{start}",
+        origin.file_name, variable.name
+    ));
+    let reference = surge_ts_types::TypeReference::new(
+        id.clone(),
+        format!("typeof {}", variable.name),
+        Vec::new(),
+        Arc::new(LazyInitializerValue {
+            id,
+            statement: ParsedStatement::VariableDeclaration(Box::new(variable.clone())),
+            name: variable.name.clone(),
+            file_name: Arc::from(origin.file_name.as_str()),
+            environment: origin.declaration_environment(),
+            creation_scope: origin.type_declaration_scope.clone(),
+            memo: std::sync::OnceLock::new(),
+        }),
+    );
+    Type::Reference(reference.rendered_structurally())
+}
+
 /// Runs `f` with source-file value collection interning its lazy references
 /// into the caller's persistent declaration-environment store (see the store
 /// comment in [`collect_exportable_value_symbols`]).
@@ -682,6 +846,10 @@ pub(crate) fn collect_exportable_value_symbols(
             .clone_with_reason(TypeCopyReason::ModuleExport),
     ));
 
+    // Only the binding passes defer: the check phase infers every initializer
+    // itself, with its imports already typed.
+    let lazy_origin = (module_file && !library_file && !crate::program::in_check_phase())
+        .then_some(ctx);
     let merging_namespaces = merging_namespace_value_members(statements);
     for statement in statements {
         if is_merging_namespace_statement(statement, &merging_namespaces) {
@@ -693,6 +861,7 @@ pub(crate) fn collect_exportable_value_symbols(
             &mut shadow_ctx,
             !library_file,
             module_file,
+            lazy_origin,
         );
     }
     for hoisted in hoisted_nested_vars(statements) {
@@ -705,6 +874,7 @@ pub(crate) fn collect_exportable_value_symbols(
                 &mut shadow_ctx,
                 !library_file,
                 module_file,
+                lazy_origin,
             );
         }
     }
@@ -1051,6 +1221,7 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
     ctx: &mut CheckerContext,
     check_initializers: bool,
     module_file: bool,
+    lazy_origin: Option<&CheckerContext>,
 ) {
     match statement {
         ParsedStatement::VariableDeclaration(variable) => {
@@ -1111,6 +1282,7 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                 return;
             }
             let existing_symbol = exportable_values.get_own_shared(&variable.name);
+            let lazy_reads_before = lazy_reads_before_check();
             let _ = check_variable_declaration_with_symbols(
                 variable.as_ref().clone(),
                 exportable_values,
@@ -1120,9 +1292,31 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                     check_initializer: check_initializers,
                 },
             );
+            let untyped = |symbol: &SymbolInfo| {
+                if variable.declared_type.is_some() {
+                    lazy_reads_before_check() != lazy_reads_before
+                } else {
+                    variable.initializer.is_some() && matches!(symbol.ty, Type::Unknown)
+                }
+            };
 
             if let Some(existing_symbol) = existing_symbol {
                 exportable_values.insert_shared(variable.name.clone(), existing_symbol);
+            } else if let Some(origin) = lazy_origin
+                && check_initializers
+                && !variable.from_binding_pattern
+                && !variable.is_enum_object
+                && let Some(symbol) = exportable_values.get_own_shared(&variable.name)
+                && untyped(&symbol)
+            {
+                let _ = exportable_values.insert(
+                    variable.name.clone(),
+                    SymbolInfo {
+                        ty: lazy_initializer_reference(variable, origin),
+                        kind: symbol.kind,
+                        function_signature: None,
+                    },
+                );
             }
             if let Some(filter) = crate::infer::types::cache::lazy_value_trace_filter()
                 && variable.name.contains(filter)
@@ -1145,6 +1339,7 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                     ctx,
                     check_initializers,
                     module_file,
+                    lazy_origin,
                 )
             }
         }

@@ -808,12 +808,16 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
                 continue;
             }
             TSSignature::TSIndexSignature(index_signature) => {
-                // The last index signature of each kind wins, matching the
-                // interface path.
-                if let Some(value_type) = parse_index_signature_value_type(index_signature) {
-                    if index_signature_is_numeric(index_signature) {
-                        number_index_type = Some(Box::new(value_type));
-                    } else {
+                let slots = index_signature_slots(index_signature);
+                let fills_string = slots.string && string_index_type.is_none();
+                let fills_number = slots.number && number_index_type.is_none();
+                if (fills_string || fills_number)
+                    && let Some(value_type) = parse_index_signature_value_type(index_signature)
+                {
+                    if fills_number {
+                        number_index_type = Some(Box::new(value_type.clone()));
+                    }
+                    if fills_string {
                         string_index_type = Some(Box::new(value_type));
                     }
                 }
@@ -1153,6 +1157,38 @@ pub(crate) fn parse_index_signature_value_type(
     index_signature: &oxc_ast::ast::TSIndexSignature<'_>,
 ) -> Option<ParsedType> {
     parse_type(&index_signature.type_annotation.type_annotation)
+}
+
+pub(crate) struct IndexSignatureSlots {
+    pub(crate) string: bool,
+    pub(crate) number: bool,
+}
+
+/// The index slots an index signature declares. tsc gives every constituent of
+/// the key type its own index info, the first declaration per key type winning
+/// (`getIndexInfosOfIndexSymbol`): `[k: string | number]` declares both, and a
+/// `symbol` constituent declares a symbol index that answers no string or
+/// number key. Surge has no symbol slot, so that constituent fills nothing;
+/// pattern and aliased keys stay approximated by the string slot.
+pub(crate) fn index_signature_slots(
+    index_signature: &oxc_ast::ast::TSIndexSignature<'_>,
+) -> IndexSignatureSlots {
+    fn visit(key: &TSType<'_>, slots: &mut IndexSignatureSlots) {
+        match key {
+            TSType::TSUnionType(union) => {
+                union.types.iter().for_each(|member| visit(member, slots));
+            }
+            TSType::TSParenthesizedType(inner) => visit(&inner.type_annotation, slots),
+            TSType::TSNumberKeyword(_) => slots.number = true,
+            TSType::TSSymbolKeyword(_) => {}
+            _ => slots.string = true,
+        }
+    }
+    let mut slots = IndexSignatureSlots { string: false, number: false };
+    if let Some(parameter) = index_signature.parameters.first() {
+        visit(&parameter.type_annotation.type_annotation, &mut slots);
+    }
+    slots
 }
 
 /// Whether an index signature is keyed by `number`. tsc keeps the two kinds

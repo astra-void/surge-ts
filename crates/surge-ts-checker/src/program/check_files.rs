@@ -1417,7 +1417,18 @@ pub(super) fn check_program_file(
             crate::symbols::SymbolTable::file_check_root(globals_parent.clone());
         if let Some(imported_bindings) = imported_bindings {
             for (name, symbol) in imported_bindings.symbols.iter_shared() {
-                let _ = merged_symbols.insert_shared(name.clone(), symbol.clone());
+                // A value its module could not type before binding is typed on
+                // this first read (`LazyInitializerValue`).
+                let symbol = if crate::modules::is_lazy_initializer(&symbol.ty) {
+                    std::sync::Arc::new(crate::symbols::SymbolInfo {
+                        ty: crate::checks::function::settle_lazy_read(symbol.ty.clone()),
+                        kind: symbol.kind,
+                        function_signature: symbol.function_signature.clone(),
+                    })
+                } else {
+                    symbol.clone()
+                };
+                let _ = merged_symbols.insert_shared(name.clone(), symbol);
             }
         }
         for (name, symbol) in module_analysis.local_symbols.iter_shared() {

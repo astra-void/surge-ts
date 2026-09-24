@@ -172,6 +172,15 @@ fn name_is_genuine_any(name: &str, symbols: &SymbolTable, ctx: &CheckerContext) 
         || ctx.genuine_any_bindings.contains(name)
 }
 
+/// A member of a call's receiver: surge's own member tables, then the global
+/// interface the configured lib declares behind a built-in receiver.
+fn receiver_member_type(receiver: &Type, property_name: &str, ctx: &mut CheckerContext) -> Option<Type> {
+    (!crate::infer::expression::lib_lacks_builtin_member(receiver, property_name, ctx))
+        .then(|| receiver.get_property_access_type(property_name))
+        .flatten()
+        .or_else(|| crate::infer::expression::lib_builtin_member_type(receiver, property_name, ctx))
+}
+
 /// `Array.prototype.filter` narrows its element type when the callback is a type
 /// predicate (`rows.filter(isCode)` is `Code[]`). The predicate lives on the
 /// argument's collected signature, not on its resolved callable type, so it is
@@ -724,13 +733,13 @@ pub(crate) fn check_property_call_like(
             }
             // The property is looked up on the union before anything is called:
             // a member lacking it is the error, whatever the others hold.
-            let lacks_member = |ty: &Type| {
+            let lacks_member = |ty: &Type, ctx: &mut CheckerContext| {
                 !matches!(ty, Type::Undefined | Type::Null)
-                    && ty.get_property_access_type(property_name).is_none()
+                    && receiver_member_type(ty, property_name, ctx).is_none()
                     && !ty.peeled().is_unknown()
                     && !matches!(ty, Type::Array(_) | Type::Tuple(_))
             };
-            if union_type.types().iter().any(lacks_member)
+            if union_type.types().iter().any(|ty| lacks_member(ty, ctx))
                 && !union_type
                     .types()
                     .iter()
@@ -812,7 +821,7 @@ pub(crate) fn check_property_call_like(
                     continue;
                 }
 
-                let Some(property_type) = ty.get_property_access_type(property_name) else {
+                let Some(property_type) = receiver_member_type(ty, property_name, ctx) else {
                     // A member whose reference peels to the sentinel is a shape
                     // surge could not reconstruct, not a type without the member.
                     if ty.peeled().is_unknown()
@@ -905,18 +914,7 @@ pub(crate) fn check_property_call_like(
                 );
             }
 
-            let property_type =
-                (!crate::infer::expression::lib_lacks_builtin_member(&object_ty, property_name, ctx))
-                    .then(|| object_ty.get_property_access_type(property_name))
-                    .flatten()
-                    .or_else(|| {
-                        crate::infer::expression::lib_builtin_member_type(
-                            &object_ty,
-                            property_name,
-                            ctx,
-                        )
-                    });
-            let Some(property_type) = property_type else {
+            let Some(property_type) = receiver_member_type(&object_ty, property_name, ctx) else {
                 if no_lib_array_member(&object_ty, ctx) {
                     return Some(Type::Any);
                 }
@@ -1205,7 +1203,18 @@ fn awaited_type_at_depth(ty: &Type, depth: usize) -> Type {
         return ty.clone();
     }
 
-    if let Type::Union(union) = ty {
+    // tsc's `getAwaitedTypeNoAlias` awaits each member of a union — including
+    // one reached through an alias (`MaybePromise<T> = T | Promise<T>`), whose
+    // type in tsc simply is that union.
+    let union = match ty {
+        Type::Union(union) => Some(union.clone()),
+        Type::Reference(_) => match ty.peeled() {
+            Type::Union(union) => Some(union),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(union) = union {
         return union_type(
             union
                 .types()
@@ -1375,7 +1384,7 @@ pub(crate) fn check_optional_property_call(
                     continue;
                 }
 
-                let Some(property_type) = ty.get_property_access_type(property_name) else {
+                let Some(property_type) = receiver_member_type(ty, property_name, ctx) else {
                     // A member whose reference peels to the sentinel is a shape
                     // surge could not reconstruct, not a type without the member.
                     if ty.peeled().is_unknown()
@@ -1472,7 +1481,7 @@ pub(crate) fn check_optional_property_call(
                 .map(|ret| super::with_chain_undefined(ret, &object_type));
             }
 
-            let Some(property_type) = base_type.get_property_access_type(property_name) else {
+            let Some(property_type) = receiver_member_type(&base_type, property_name, ctx) else {
                 if no_lib_array_member(&base_type, ctx) {
                     return Some(Type::Any);
                 }
@@ -1589,6 +1598,13 @@ pub(super) fn instantiate_declared_member_signature<'a>(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> std::borrow::Cow<'a, surge_ts_types::FunctionType> {
+    // An overload group is resolved per candidate by the call (tsc's
+    // `chooseOverload`); a signature recovered for the group is its first
+    // member's, and instantiating that answered every call with the first
+    // member's return (`queryOptions()` against an overload requiring options).
+    if function_type.overloads().is_some() {
+        return std::borrow::Cow::Borrowed(function_type);
+    }
     if let Some(member) = function_type
         .declaration()
         .and_then(|declaration| declaration.downcast_ref::<super::DeclaredMemberSignature>())
@@ -1697,22 +1713,43 @@ pub(crate) fn callable_member_call_return_type(
         ctx,
     );
     Some(
-        overloaded_member_call_return_type(&declared, arguments, symbols, ctx)
-            .unwrap_or_else(|| function_type.return_type().clone()),
+        overloaded_member_call_return_type(
+            &declared,
+            type_arguments,
+            property_span,
+            arguments,
+            symbols,
+            ctx,
+        )
+        .unwrap_or_else(|| function_type.return_type().clone()),
     )
 }
 
-/// The return type of the overload an inferred member call lands on. Only a
-/// non-generic pick answers: an inferred call has no contextual type, and a
-/// generic candidate instantiated without one widens what the context would
-/// have kept (`() => Promise.resolve('data')` against `QueryFunction<'data'>`).
+/// The return type of the overload an inferred member call lands on: tsc's
+/// `chooseOverload`, as a checked call runs it — the candidates in declaration
+/// order, each with the right arity, a generic one instantiated for this call.
+/// Reading only non-generic picks left a generic group at its first member's
+/// return, which a call too short for it cannot resolve to
+/// (`queryOptions()` against a first overload that requires its options).
 pub(crate) fn overloaded_member_call_return_type(
     declared: &surge_ts_types::FunctionType,
+    type_arguments: &[ParsedType],
+    property_span: Option<SyntaxTextSpan>,
     arguments: &[ParsedCallArgument],
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    super::select_overload_return_type_for_inferred_call(declared, arguments, symbols, ctx)
+    let argument_types = super::inferred_argument_shapes(declared, arguments, symbols, ctx)?;
+    super::choose_overload_return_type(
+        declared,
+        &argument_types,
+        type_arguments,
+        property_span,
+        arguments,
+        None,
+        symbols,
+        ctx,
+    )
 }
 
 /// Under `noLib` the array member surface comes from the configured replacement

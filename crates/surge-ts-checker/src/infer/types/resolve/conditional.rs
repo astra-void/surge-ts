@@ -915,6 +915,20 @@ fn bind_infer_captures(
         ParsedType::Infer(infer) => {
             substitution.insert(infer.name.clone(), check.clone());
         }
+        // `readonly (infer E)[]` infers exactly as the mutable pattern does:
+        // tsc's `inferFromObjectTypes` relates `Array` and `ReadonlyArray`
+        // references by their type arguments (`isArrayType` on both sides).
+        ParsedType::Readonly(inner) if matches!(inner.as_ref(), ParsedType::Array(_)) => {
+            bind_infer_captures(
+                inner,
+                check,
+                substitution,
+                ctx,
+                resolving,
+                depth,
+                reference_positional,
+            );
+        }
         // `[infer head, ...infer tail]` / `[infer a, infer b]` against a tuple:
         // line up the fixed slots positionally and hand the spread slot the
         // middle as a tuple of its own. This is the list primitive every
@@ -2456,28 +2470,110 @@ fn parsed_type_contains_infer(ty: &ParsedType) -> bool {
     }
 }
 
-/// Expands a generic alias reference (`Name<A, B>`) to its declared body with the
-/// alias's type parameters textually substituted by the reference's type
-/// arguments. Pure AST rewriting — no resolution — so it is safe to run while
-/// structurally matching an `extends` pattern. Returns `None` when the name is
-/// not a type alias in scope.
+/// Expands a generic reference (`Name<A, B>`) to what it declares with the
+/// declaration's type parameters textually substituted by the reference's type
+/// arguments: an alias's body, or an interface's members as an object pattern —
+/// tsc infers from an interface the source is not an instance of member by
+/// member (`inferFromObjectTypes`), so `StandardSchemaV1<infer I, infer O>`
+/// captures through `'~standard'`. Pure AST rewriting — no resolution — so it
+/// is safe to run while structurally matching an `extends` pattern. Returns
+/// `None` when the name is not a declaration in scope.
 fn expand_named_alias_pattern(named: &ParsedNamedType, ctx: &CheckerContext) -> Option<ParsedType> {
-    let body = match ctx.lookup_type_declaration(&named.name)? {
-        TypeDeclarationInfo::Alias(info) => info.body.clone(),
-        TypeDeclarationInfo::Interface(_) => return None,
-    };
+    match ctx.lookup_type_declaration(&named.name)? {
+        TypeDeclarationInfo::Alias(info) => {
+            let map = pattern_argument_map(&info.body.type_parameters, &named.type_arguments);
+            Some(substitute_parsed_type_parameters_deep(&info.body.ty, &map))
+        }
+        TypeDeclarationInfo::Interface(info) => {
+            let map = pattern_argument_map(&info.body.type_parameters, &named.type_arguments);
+            Some(interface_members_pattern(&info.body, &map, ctx, 0))
+        }
+    }
+}
 
-    let mut map: surge_ts_types::fx::FxHashMap<String, ParsedType> =
-        surge_ts_types::fx::FxHashMap::default();
-    for (index, parameter) in body.type_parameters.iter().enumerate() {
-        if let Some(argument) = named.type_arguments.get(index) {
+fn pattern_argument_map(
+    type_parameters: &[surge_ts_syntax::ParsedTypeParameter],
+    arguments: &[ParsedType],
+) -> surge_ts_types::fx::FxHashMap<String, ParsedType> {
+    let mut map = surge_ts_types::fx::FxHashMap::default();
+    for (index, parameter) in type_parameters.iter().enumerate() {
+        if let Some(argument) = arguments.get(index) {
             map.insert(parameter.name.clone(), argument.clone());
         } else if let Some(default) = &parameter.default_type {
             map.insert(parameter.name.clone(), default.clone());
         }
     }
+    map
+}
 
-    Some(substitute_parsed_type_parameters_deep(&body.ty, &map))
+/// An interface's members, inherited ones included, as an object type pattern
+/// under `map`.
+fn interface_members_pattern(
+    body: &crate::symbols::InterfaceBody,
+    map: &surge_ts_types::fx::FxHashMap<String, ParsedType>,
+    ctx: &CheckerContext,
+    depth: usize,
+) -> ParsedType {
+    let substitute = |ty: &ParsedType| substitute_parsed_type_parameters_deep(ty, map);
+    let substitute_signature = |signature: &ParsedFunctionType| {
+        match substitute(&ParsedType::Function(std::sync::Arc::new(signature.clone()))) {
+            ParsedType::Function(substituted) => (*substituted).clone(),
+            _ => signature.clone(),
+        }
+    };
+    let mut properties: Vec<surge_ts_syntax::ParsedObjectTypeProperty> = body
+        .members
+        .iter()
+        .map(|member| surge_ts_syntax::ParsedObjectTypeProperty {
+            name: member.name.clone(),
+            name_span: None,
+            ty: substitute(&member.ty),
+            optional: member.optional,
+            is_method: member.is_method,
+            readonly: member.readonly,
+            write_ty: None,
+        })
+        .collect();
+    if depth < INFER_ALIAS_EXPANSION_LIMIT {
+        for heritage in &body.extends {
+            let Some(TypeDeclarationInfo::Interface(base)) = ctx.lookup_type_declaration(&heritage.name)
+            else {
+                continue;
+            };
+            let arguments: Vec<ParsedType> =
+                heritage.type_arguments.iter().map(|argument| substitute(argument)).collect();
+            let base_map = pattern_argument_map(&base.body.type_parameters, &arguments);
+            if let ParsedType::Object(inherited) =
+                interface_members_pattern(&base.body, &base_map, ctx, depth + 1)
+            {
+                for property in &inherited.properties {
+                    if !properties.iter().any(|own| own.name == property.name) {
+                        properties.push(property.clone());
+                    }
+                }
+            }
+        }
+    }
+    ParsedType::Object(std::sync::Arc::new(surge_ts_syntax::ParsedObjectType {
+        properties,
+        string_index_type: body.string_index_type.as_ref().map(|ty| Box::new(substitute(ty))),
+        number_index_type: body.number_index_type.as_ref().map(|ty| Box::new(substitute(ty))),
+        call_signature: body
+            .call_signature
+            .as_ref()
+            .map(|signature| Box::new(substitute_signature(signature))),
+        call_signature_overloads: body
+            .call_signature_overloads
+            .iter()
+            .map(substitute_signature)
+            .collect(),
+        construct_signature: body
+            .construct_signatures
+            .first()
+            .map(|signature| Box::new(substitute_signature(signature))),
+        non_primitive: false,
+        display_name: None,
+    }))
 }
 
 /// Recursively rewrites bare named references in a parsed type using `map`,

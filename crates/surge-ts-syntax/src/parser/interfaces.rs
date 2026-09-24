@@ -27,41 +27,22 @@ pub(crate) fn parse_interface_declaration(
 
     // An index signature (`[key: string]: T`, `[key: number]: T`) contributes
     // the object's index type rather than a named property, and the two kinds
-    // are kept apart: a numeric key prefers the number one. The last of each
-    // kind wins (interfaces rarely declare more than one).
+    // are kept apart: a numeric key prefers the number one.
     let index_signature_of = |numeric: bool| {
-        declaration
-            .body
-            .body
-            .iter()
-            .filter_map(|member| match member {
-                TSSignature::TSIndexSignature(index_signature)
-                    if super::types::index_signature_is_numeric(index_signature) == numeric =>
-                {
-                    parse_index_signature_value_type(index_signature)
+        declaration.body.body.iter().find_map(|member| match member {
+            TSSignature::TSIndexSignature(index_signature) => {
+                let slots = super::types::index_signature_slots(index_signature);
+                if !(if numeric { slots.number } else { slots.string }) {
+                    return None;
                 }
-                _ => None,
-            })
-            .next_back()
+                parse_index_signature_value_type(index_signature)
+                    .map(|value_type| (value_type, text_span_from_oxc_span(index_signature.span)))
+            }
+            _ => None,
+        })
     };
-    let string_index_type = index_signature_of(false);
-    let number_index_type = index_signature_of(true);
-    let index_span_of = |numeric: bool| {
-        declaration
-            .body
-            .body
-            .iter()
-            .filter_map(|member| match member {
-                TSSignature::TSIndexSignature(index_signature)
-                    if super::types::index_signature_is_numeric(index_signature) == numeric
-                        && parse_index_signature_value_type(index_signature).is_some() =>
-                {
-                    Some(text_span_from_oxc_span(index_signature.span))
-                }
-                _ => None,
-            })
-            .next_back()
-    };
+    let (string_index_type, string_index_span) = index_signature_of(false).unzip();
+    let (number_index_type, number_index_span) = index_signature_of(true).unzip();
 
     // A bare call signature (`(value?: any): number`) makes the interface
     // callable. Multiple overloads fold into one permissive signature the same
@@ -112,8 +93,8 @@ pub(crate) fn parse_interface_declaration(
         members,
         string_index_type,
         number_index_type,
-        string_index_span: index_span_of(false),
-        number_index_span: index_span_of(true),
+        string_index_span,
+        number_index_span,
         call_signature,
         call_signature_overloads: if call_signature_overloads.len() > 1 {
             call_signature_overloads

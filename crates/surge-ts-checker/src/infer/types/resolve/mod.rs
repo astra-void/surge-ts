@@ -523,22 +523,46 @@ pub(crate) fn resolve_parsed_type(
             // `unknown` would let the enclosing declaration intern that answer and
             // pin every later consumer to it — the shape behind a discriminant
             // written as `typeof Codes.invalid_string` losing its literal type.
+            let binding_pass = !crate::program::in_check_phase();
+            if binding_pass && matches!(ty, Type::Unknown) {
+                crate::modules::note_lazy_read_before_check();
+            }
             if ty.is_unknown() && !type_of.members.is_empty() {
                 return ResolvedType {
                     ty: Type::Unknown,
                     had_error: true,
                 };
             }
+            // A member the base does not carry yet, or carries at the sentinel, is
+            // the same timing gap: a namespace import's members are typed as their
+            // module's exports settle, so a clean answer here froze Radix's
+            // `typeof DialogPrimitive.Root` — and every props interface built on
+            // it — as an empty shape for the whole run.
             for member in &type_of.members {
                 match ty.get_property_access_type(member) {
-                    Some(member_ty) => ty = member_ty,
-                    None => {
+                    Some(member_ty) if !matches!(member_ty, Type::Unknown) => ty = member_ty,
+                    _ => {
+                        if binding_pass {
+                            crate::modules::note_lazy_read_before_check();
+                        }
                         return ResolvedType {
                             ty: Type::Unknown,
-                            had_error: false,
+                            had_error: true,
                         };
                     }
                 }
+            }
+            // A value typed from its initializer on first read is not typed at
+            // all before the check phase; anything built on it then is degraded.
+            if crate::modules::is_lazy_initializer(&ty) {
+                if binding_pass {
+                    crate::modules::note_lazy_read_before_check();
+                    return ResolvedType {
+                        ty: Type::Unknown,
+                        had_error: true,
+                    };
+                }
+                ty = crate::checks::function::settle_lazy_read(ty);
             }
 
             // `typeof f<A, B>` is an instantiation expression: it binds the
