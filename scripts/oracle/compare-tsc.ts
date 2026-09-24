@@ -1062,6 +1062,7 @@ export const fixturePresets: Record<string, string> = {
   'tsc-parser-javascript-only-syntax': path.join(workspaceRoot, 'tests/compat-projects/tsc-parser-javascript-only-syntax/tsconfig.json'),
   'script-namespace-qualified-members': path.join(workspaceRoot, 'tests/compat-projects/script-namespace-qualified-members/tsconfig.json'),
   'tsc-binder-declarations': path.join(workspaceRoot, 'tests/compat-projects/tsc-binder-declarations/tsconfig.json'),
+  'error-call-operands-checked': path.join(workspaceRoot, 'tests/compat-projects/error-call-operands-checked/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

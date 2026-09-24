@@ -120,6 +120,8 @@ pub(super) fn evaluate_index_access(
     if super::check_auto_array_read(object_name, object_span, symbols, ctx).is_some() {
         return InferredExpression::Known(Type::Any);
     }
+    // tsc's `checkElementAccessExpression` checks the index before it gives
+    // up on an error object.
     let Some(symbol) = symbols.get(object_name) else {
         if object_name != "super" {
             report_unresolved_value_name(
@@ -129,6 +131,7 @@ pub(super) fn evaluate_index_access(
                 symbols,
                 ctx,
             );
+            let _ = evaluate_expression(index, index_span.or(fallback_span), symbols, ctx);
         }
         return InferredExpression::Unknown;
     };
@@ -138,6 +141,7 @@ pub(super) fn evaluate_index_access(
             span: object_span,
         };
         super::report_unknown_operand(&object, choose_span(object_span, fallback_span), ctx);
+        let _ = evaluate_expression(index, index_span.or(fallback_span), symbols, ctx);
         return InferredExpression::Unknown;
     }
     // tsc's `checkElementAccessExpression`: a const enum object indexed by

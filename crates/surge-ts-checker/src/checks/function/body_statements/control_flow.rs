@@ -502,6 +502,26 @@ pub(crate) fn check_function_for_of_statement(
     }
     let mut element_type = Type::Unknown;
     let mut numeric_property_names = false;
+    // An existing binding at the head is checked as the expression it is
+    // (`checkExpression(varExpr)` in `checkForInStatement` and
+    // `checkForOfStatement`), so a name that resolves to nothing is reported.
+    if for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::ExistingBinding
+        && let surge_ts_syntax::ParsedBindingName::Identifier { name, span } = &for_of_statement.binding_name
+        && scopes.resolve(name).is_none()
+        && !ctx
+            .module_value_fallback
+            .as_ref()
+            .is_some_and(|fallback| fallback.get(name).is_some())
+    {
+        let visible_symbols = visible_symbols(scopes);
+        crate::checks::expr::report_unresolved_value_name(
+            name,
+            *span,
+            crate::checks::expr::UnresolvedNameSite::Reference,
+            &visible_symbols,
+            ctx,
+        );
+    }
     if !iterable_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);
         let iterable_type = evaluate_expression(

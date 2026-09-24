@@ -93,6 +93,14 @@ fn evaluate_arguments_under_degraded_callee(
     ctx.degraded_expected_type_depth = saved_depth;
 }
 
+/// `resolveUntypedCall` checks the type arguments an untyped call cannot
+/// take, for what they name.
+pub(super) fn check_untyped_call_type_arguments(type_arguments: &[ParsedType], ctx: &mut CheckerContext) {
+    for type_argument in type_arguments {
+        let _ = crate::infer::map_parsed_type(type_argument.clone(), ctx);
+    }
+}
+
 pub(crate) fn check_call_like_with_expected_type(
     callee_name: &str,
     callee_span: Option<SyntaxTextSpan>,
@@ -124,6 +132,7 @@ pub(crate) fn check_call_like_with_expected_type(
             symbols,
             ctx,
         );
+        property::check_error_call_operands(type_arguments, arguments, symbols, ctx);
         return None;
     };
 
@@ -164,6 +173,7 @@ pub(crate) fn check_call_like_with_expected_type(
                 Diagnostic::ts2347(ctx.file_name.clone()),
                 call_span.or(callee_span),
             ));
+            check_untyped_call_type_arguments(type_arguments, ctx);
         }
         for argument in arguments {
             let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
@@ -192,6 +202,7 @@ pub(crate) fn check_call_like_with_expected_type(
                 Diagnostic::ts2347(ctx.file_name.clone()),
                 call_span.or(callee_span),
             ));
+            check_untyped_call_type_arguments(type_arguments, ctx);
             evaluate_arguments_under_degraded_callee(callee_name, arguments, symbols, ctx);
             return Some(Type::Any);
         }

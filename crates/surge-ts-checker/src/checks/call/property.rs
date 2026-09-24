@@ -84,6 +84,18 @@ pub(super) fn evaluate_arguments_context_free(
     ctx.degraded_expected_type_depth = saved_depth;
 }
 
+/// `resolveErrorCall`: the type arguments and arguments of a call on tsc's
+/// error type are still checked.
+pub(super) fn check_error_call_operands(
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    super::check_untyped_call_type_arguments(type_arguments, ctx);
+    evaluate_arguments_on_error_type(arguments, symbols, ctx);
+}
+
 /// Arguments of a call on tsc's error type. `resolveErrorCall` checks each one
 /// with no contextual type, so a callback's parameters are implicit `any`
 /// whatever suppression an enclosing expression set up.
@@ -754,6 +766,7 @@ pub(crate) fn check_property_call_like(
                     ),
                     crate::spans::choose_span(property_span, object_span),
                 ));
+                check_error_call_operands(type_arguments, arguments, symbols, ctx);
                 return None;
             }
             if let Some(callee) = union_receiver_callee(&union_type, property_name) {
@@ -837,6 +850,7 @@ pub(crate) fn check_property_call_like(
                         Diagnostic::ts2339(property_name, &object_type_name, ctx.file_name.clone()),
                         crate::spans::choose_span(property_span, object_span),
                     ));
+                    check_error_call_operands(type_arguments, arguments, symbols, ctx);
                     return None;
                 };
 
@@ -966,6 +980,7 @@ pub(crate) fn check_property_call_like(
                     diagnostic,
                     crate::spans::choose_span(property_span, object_span),
                 ));
+                check_error_call_operands(type_arguments, arguments, symbols, ctx);
                 return None;
             };
 
@@ -1525,6 +1540,7 @@ pub(crate) fn check_optional_property_call(
                     diagnostic,
                     crate::spans::choose_span(property_span, object_span),
                 ));
+                check_error_call_operands(type_arguments, arguments, symbols, ctx);
                 return None;
             };
 

@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "noEmit": true, "strict": true, "target": "esnext", "lib": ["esnext"], "types": [] },
+  "include": ["src/**/*"]
+}
