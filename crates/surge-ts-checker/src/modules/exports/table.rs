@@ -1107,7 +1107,7 @@ pub(crate) fn resolve_module_export_table(
                 module_specifier_span,
                 ..
             } => {
-                let Some((target_export_table, _resolved_index)) = try_resolve_module_export_table(
+                let Some((target_export_table, resolved_index)) = try_resolve_module_export_table(
                     module_specifier,
                     ctx,
                     parsed_files,
@@ -1141,11 +1141,31 @@ pub(crate) fn resolve_module_export_table(
                 };
 
                 ctx.set_file_name(parsed_file.file_name.clone());
-                insert_namespace_export(
-                    &mut resolved_export_table.symbols,
-                    exported_name,
-                    &target_export_table,
-                );
+                if exported_name == "default" {
+                    // `export * as default` is the module's default export
+                    // (`isSyntacticDefault` counts a namespace export).
+                    if resolved_export_table.default_symbol.is_none() {
+                        let namespace_type = namespace_export_object_type(&target_export_table);
+                        let namespace_type =
+                            match resolved_index.and_then(|index| parsed_files.get(index)) {
+                                Some(file) => {
+                                    tag_namespace_type_with_module_path(namespace_type, &file.file_name)
+                                }
+                                None => namespace_type,
+                            };
+                        resolved_export_table.default_symbol = Some(Arc::new(SymbolInfo {
+                            ty: namespace_type,
+                            kind: SymbolKind::Const,
+                            function_signature: None,
+                        }));
+                    }
+                } else {
+                    insert_namespace_export(
+                        &mut resolved_export_table.symbols,
+                        exported_name,
+                        &target_export_table,
+                    );
+                }
                 copy_namespace_member_type_exports(
                     &target_export_table,
                     exported_name,

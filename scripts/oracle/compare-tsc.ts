@@ -1027,6 +1027,7 @@ export const fixturePresets: Record<string, string> = {
   'synthetic-default-overrides-default-export': path.join(workspaceRoot, 'tests/compat-projects/synthetic-default-overrides-default-export/tsconfig.json'),
   'synthetic-default-node-esm-import-cjs': path.join(workspaceRoot, 'tests/compat-projects/synthetic-default-node-esm-import-cjs/tsconfig.json'),
   'synthetic-default-namespace-import-member': path.join(workspaceRoot, 'tests/compat-projects/synthetic-default-namespace-import-member/tsconfig.json'),
+  'export-star-as-default': path.join(workspaceRoot, 'tests/compat-projects/export-star-as-default/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
