@@ -1055,6 +1055,7 @@ export const fixturePresets: Record<string, string> = {
   'namespace-member-declarations-checked': path.join(workspaceRoot, 'tests/compat-projects/namespace-member-declarations-checked/tsconfig.json'),
   'type-variable-arithmetic-operand': path.join(workspaceRoot, 'tests/compat-projects/type-variable-arithmetic-operand/tsconfig.json'),
   'compound-assignment-not-definite': path.join(workspaceRoot, 'tests/compat-projects/compound-assignment-not-definite/tsconfig.json'),
+  'unresolved-type-reference-arguments-checked': path.join(workspaceRoot, 'tests/compat-projects/unresolved-type-reference-arguments-checked/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -271,6 +271,13 @@ fn resolve_named_type_inner(
             } else {
                 emit_unknown_type_name(&named_type, ctx)
             };
+        // `checkTypeReferenceNode` checks the type arguments before it resolves
+        // the name, so an unresolved reference still reports inside them.
+        if reported {
+            for argument in &named_type.type_arguments {
+                let _ = resolve_parsed_type(argument.clone(), ctx, resolving, substitution);
+            }
+        }
         if crate::infer::types::interface::had_error_trace_enabled() {
             eprintln!(
                 "[had-error] lookup-miss '{}' scope_installed={} file_in_map={} map_len={} check_phase={} in file {}",
@@ -326,6 +333,9 @@ fn resolve_named_type_inner(
                 ty: Type::ErrorType,
                 had_error,
             };
+        }
+        for argument in &named_type.type_arguments {
+            let _ = resolve_parsed_type(argument.clone(), ctx, resolving, substitution);
         }
         let name = match declaration {
             TypeDeclarationInfo::Alias(alias) => &alias.name,
