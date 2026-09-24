@@ -543,12 +543,35 @@ pub(crate) fn summarize_function_statement_flow(
                 guarantees_exit: body_and_handler_exit || finalizer_summary.guarantees_exit,
             }
         }
+        // tsc ends the flow at a call statement whose callee returns `never`,
+        // as at a `throw` (`isReachableFlowNode` on a `FlowCall`).
+        ParsedFunctionBodyStatement::Expression(expression)
+            if call_statement_key(expression).is_some_and(is_known_never_call) =>
+        {
+            ReturnFlowSummary {
+                contains_return: false,
+                contains_return_with_value: false,
+                contains_throw: true,
+                guarantees_value_return: true,
+                guarantees_exit: true,
+            }
+        }
         ParsedFunctionBodyStatement::VariableDeclaration(_)
         | ParsedFunctionBodyStatement::Assignment(_)
         | ParsedFunctionBodyStatement::ThisPropertyAssignment(_)
         | ParsedFunctionBodyStatement::MemberAssignment(_)
         | ParsedFunctionBodyStatement::Expression(_) => ReturnFlowSummary::default(),
     }
+}
+
+/// The key a call statement is known by: its callee (or called member) span.
+pub(crate) fn call_statement_key(expression: &surge_ts_syntax::ParsedExpression) -> Option<(usize, usize)> {
+    let span = match expression {
+        surge_ts_syntax::ParsedExpression::Call { callee_span, .. } => *callee_span,
+        surge_ts_syntax::ParsedExpression::PropertyCall { property_span, .. } => *property_span,
+        _ => None,
+    }?;
+    Some((span.start, span.end))
 }
 
 pub(crate) fn collect_future_block_scoped_declarations(
@@ -632,6 +655,20 @@ pub(crate) fn report_read_flow_positioned(
             unassigned,
             circular_at,
         } => {
+            // tsc's `checkResolvedBlockScopedVariable`: an enum read before its
+            // declaration is TS2450, and a `const enum` (inlined, with no
+            // binding to be early of) is not reported outside isolatedModules.
+            if let Some(is_const) = flow_state.enum_object(name) {
+                if is_const {
+                    return FlowCheck::Clear;
+                }
+                let mut diagnostic = Diagnostic::ts2450(name, ctx.file_name.clone());
+                if let Some(span) = span {
+                    diagnostic = diagnostic.with_span(convert_span(span));
+                }
+                ctx.push(diagnostic);
+                return FlowCheck::Blocked;
+            }
             // A block-scoped (`let`/`const`) variable read before its declaration
             // is necessarily in its temporal dead zone, so it is also definitely
             // unassigned: tsc reports TS2454 beside TS2448 unless the binding's
@@ -670,6 +707,21 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
     static EXHAUSTIVE_SWITCHES: std::cell::RefCell<Vec<(usize, usize)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    static NEVER_CALLS: std::cell::RefCell<Vec<(usize, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn is_known_never_call(key: (usize, usize)) -> bool {
+    NEVER_CALLS.with(|keys| keys.borrow().contains(&key))
+}
+
+/// Runs `summarize` with the call statements known to return `never`, which
+/// the syntactic summary cannot tell from any other call.
+pub(crate) fn with_never_calls<R>(never_calls: &[(usize, usize)], summarize: impl FnOnce() -> R) -> R {
+    let previous = NEVER_CALLS.with(|installed| std::mem::replace(&mut *installed.borrow_mut(), never_calls.to_vec()));
+    let result = summarize();
+    NEVER_CALLS.with(|installed| *installed.borrow_mut() = previous);
+    result
 }
 
 fn is_known_exhaustive(span: Option<surge_ts_syntax::TextSpan>) -> bool {

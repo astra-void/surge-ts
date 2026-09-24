@@ -83,9 +83,7 @@ pub(super) fn contains_ignore_ascii_case(file_name: &str, needle: &str) -> bool 
 }
 
 pub(super) fn is_declaration_file_name(file_name: &str) -> bool {
-    ends_with_ignore_ascii_case(file_name, ".d.ts")
-        || ends_with_ignore_ascii_case(file_name, ".d.mts")
-        || ends_with_ignore_ascii_case(file_name, ".d.cts")
+    surge_ts_syntax::is_declaration_file_name(file_name)
 }
 
 pub(super) fn is_generated_declaration_file_name(file_name: &str) -> bool {

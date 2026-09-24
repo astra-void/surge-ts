@@ -193,6 +193,31 @@ fn evaluate_expression_with_expected_type_inner(
         return evaluate_expression(expression, fallback_span, symbols, ctx);
     };
 
+    // tsc relates an argument through `satisfies` (`getEffectiveCheckNode`),
+    // so a literal inside elaborates a mismatch at its members.
+    if _expected_diagnostic == ExpectedTypeDiagnostic::ArgumentNotAssignable
+        && let ParsedExpression::SatisfiesExpression {
+            expression: satisfied,
+            span,
+            ..
+        } = expression
+        && matches!(
+            satisfied.as_ref(),
+            ParsedExpression::ObjectLiteral { .. } | ParsedExpression::ArrayLiteral { .. }
+        )
+    {
+        let _ = evaluate_expression(expression, fallback_span, symbols, ctx);
+        return evaluate_expression_with_expected_type_anchored(
+            satisfied,
+            span.or(fallback_span),
+            target_span,
+            Some(expected_type),
+            _expected_diagnostic,
+            symbols,
+            ctx,
+        );
+    }
+
     // Before the expected type is peeled below: a template literal type
     // resolves to `string`, and the pattern is what this reads.
     if let Some(template) = contextual_template_literal_type(expression, expected_type, symbols, ctx)
@@ -331,6 +356,8 @@ fn evaluate_expression_with_expected_type_inner(
     {
         ctx.next_arrow_is_argument =
             matches!(_expected_diagnostic, ExpectedTypeDiagnostic::ArgumentNotAssignable);
+        ctx.next_arrow_context_only =
+            matches!(_expected_diagnostic, ExpectedTypeDiagnostic::ContextOnly);
         let function_type = crate::checks::function::check_arrow_function_expression_anchored(
             with_type_copy_reason(TypeCopyReason::ExpectedType, || arrow.as_ref().clone()),
             Some(expected_function_type),
@@ -350,6 +377,8 @@ fn evaluate_expression_with_expected_type_inner(
         if let Some(call_signature) = expected_object.call_signature() {
             ctx.next_arrow_is_argument =
                 matches!(_expected_diagnostic, ExpectedTypeDiagnostic::ArgumentNotAssignable);
+            ctx.next_arrow_context_only =
+                matches!(_expected_diagnostic, ExpectedTypeDiagnostic::ContextOnly);
             let function_type = crate::checks::function::check_arrow_function_expression_anchored(
                 with_type_copy_reason(TypeCopyReason::ExpectedType, || arrow.as_ref().clone()),
                 Some(call_signature),
@@ -470,6 +499,51 @@ fn evaluate_expression_with_expected_type_inner(
         );
     }
 
+    // tsc's `getContextualTypeForBinaryOperand`: the right operand of `&&`
+    // (and so of `&&=`) is contextually typed by the whole expression's
+    // contextual type, the left not at all. The result is the union with the
+    // left's falsy part, so the operand only takes the type as context.
+    if let ParsedExpression::Logical {
+        left,
+        left_span,
+        operator: operator @ surge_ts_syntax::ParsedLogicalOperator::And,
+        right,
+        right_span,
+        ..
+    } = expression
+    {
+        return crate::checks::expr::evaluate_logical_in_context(
+            left,
+            left_span,
+            operator,
+            right,
+            right_span,
+            fallback_span,
+            Some(expected_type),
+            symbols,
+            ctx,
+        );
+    }
+
+    // A comma expression's value is its last operand, which is the one the
+    // contextual type reaches.
+    if let ParsedExpression::Sequence { expressions } = expression
+        && let Some(((last, last_span), leading)) = expressions.split_last()
+    {
+        for (operand, span) in leading {
+            let _ = evaluate_expression(operand, span.or(fallback_span), symbols, ctx);
+        }
+        return evaluate_expression_with_expected_type_anchored(
+            last,
+            last_span.or(fallback_span),
+            target_span,
+            Some(expected_type),
+            _expected_diagnostic,
+            symbols,
+            ctx,
+        );
+    }
+
     if matches!(expression, ParsedExpression::Conditional { .. }) {
         return evaluate_conditional_expression_with_expected_type(
             expression,
@@ -491,6 +565,18 @@ fn evaluate_expression_with_expected_type_inner(
         && elements.iter().any(|element| element.spread)
     {
         return evaluate_spread_tuple_literal(elements, expected_type, symbols, ctx);
+    }
+
+    // An argument after a call's first failing one only types its elements —
+    // their callbacks' parameters — and relates none of them.
+    if _expected_diagnostic == ExpectedTypeDiagnostic::ContextOnly
+        && ctx.suppressed_argument_mismatch_span.is_some()
+        && matches!(expected_type, Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_))
+        && let ParsedExpression::ArrayLiteral { elements, .. } = expression
+        && !elements.is_empty()
+        && elements.iter().all(|element| !element.spread)
+    {
+        return evaluate_array_literal_in_context(elements, expected_type, fallback_span, symbols, ctx);
     }
 
     if let (Type::Tuple(expected_elements), ParsedExpression::ArrayLiteral { elements, span, .. }) =
@@ -1706,6 +1792,48 @@ fn is_contextual_callable(ty: &Type) -> bool {
     }
 }
 
+fn evaluate_array_literal_in_context(
+    elements: &[surge_ts_syntax::ParsedArrayElement],
+    expected_type: &Type,
+    fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let mut element_types = Vec::with_capacity(elements.len());
+    for (index, element) in elements.iter().enumerate() {
+        let slot = match expected_type {
+            Type::Array(element_type) => Some(element_type.as_ref()),
+            Type::Tuple(slots) => slots.get(index),
+            Type::OpenTuple(open) => open.leading.get(index).or(Some(open.rest.as_ref())),
+            _ => None,
+        };
+        let inferred = match slot {
+            Some(slot) => evaluate_expression_with_expected_type(
+                &element.expression,
+                element.span,
+                Some(slot),
+                ExpectedTypeDiagnostic::ContextOnly,
+                symbols,
+                ctx,
+            ),
+            None => crate::checks::expr::evaluate_expression(
+                &element.expression,
+                element.span.or(fallback_span),
+                symbols,
+                ctx,
+            ),
+        };
+        match inferred {
+            InferredExpression::Known(ty) => element_types.push(ty),
+            _ => return InferredExpression::Unknown,
+        }
+    }
+    InferredExpression::Known(match expected_type {
+        Type::Array(_) => Type::Array(Box::new(surge_ts_types::union_type(element_types))),
+        _ => Type::Tuple(element_types),
+    })
+}
+
 fn evaluate_array_literal_with_expected_type(
     elements: &[surge_ts_syntax::ParsedArrayElement],
     expected_element_type: &Type,
@@ -2403,7 +2531,13 @@ fn evaluate_object_literal_with_expected_type(
     // Taken, not read: it describes this literal only, and the properties
     // evaluated below are literals of their own.
     let union_target = ctx.union_literal_target.take();
-    crate::checks::expr::check_computed_property_keys(properties, fallback_span, symbols, ctx);
+    crate::checks::expr::check_computed_property_keys(
+        properties,
+        fallback_span,
+        Some(expected_object_type),
+        symbols,
+        ctx,
+    );
     let properties =
         &*crate::infer::expression::resolve_computed_property_names(properties, symbols, ctx);
     let object_start = Instant::now();

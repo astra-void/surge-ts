@@ -227,6 +227,9 @@ pub enum ParsedGrammarDiagnosticKind {
     RequiredParameterAfterOptional,
     /// An initializer in an ambient context — TS1039.
     AmbientInitializer,
+    /// An ambient `const` (or `readonly` property) initializer that is not a
+    /// literal or enum reference — TS1254.
+    AmbientConstInitializer,
     /// A `set` accessor whose parameter list is not exactly one — TS1049.
     SetAccessorParameterCount,
     /// A `set` accessor with a return type annotation — TS1095.
@@ -253,15 +256,21 @@ pub enum ParsedGrammarDiagnosticKind {
     Ts(u32),
     /// A [`Self::Ts`] error that holds only under `strictNullChecks`.
     TsUnderStrictNullChecks(u32),
+    /// A [`Self::Ts`] error that holds only under `experimentalDecorators`.
+    TsUnderLegacyDecorators(u32),
+    /// A [`Self::Ts`] error that holds only without `experimentalDecorators`.
+    TsUnderEsDecorators(u32),
 }
 
-/// A leading `/// <reference types="..." />` directive. Only the `types` form is
-/// modeled; `path`/`lib` references are not collected.
+/// A leading `/// <reference types="..." />` directive, or the `path` form
+/// (whose `resolution_mode` means nothing). `lib` references are not collected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReferenceTypeDirective {
-    /// The referenced type-package specifier, e.g. `node` or `@scope/pkg`.
+    /// The referenced type-package specifier, e.g. `node` or `@scope/pkg`, or
+    /// the referenced file's path.
     pub value: String,
-    /// Byte span of the specifier inside its quotes, used for TS2688 locations.
+    /// Byte span of the value inside its quotes, where the directive's
+    /// resolution errors (TS2688, TS6053) are reported.
     pub value_span: TextSpan,
     /// A valid `resolution-mode` attribute.
     pub resolution_mode: Option<ResolutionModeOverride>,
@@ -436,6 +445,7 @@ pub struct ParsedInferredMember {
 pub enum ParsedInferredMemberSource {
     Initializer(ParsedExpression),
     GetterBody(Vec<ParsedFunctionBodyStatement>),
+    ThisAssignments(ParsedThisAssignments),
 }
 
 impl PartialEq for ParsedInferredMember {
@@ -762,6 +772,9 @@ pub struct ParsedArrayBindingPattern {
     /// (`[, b]`). The element type is the source tuple element at that index, or
     /// the array element type for a non-tuple source.
     pub elements: Vec<Option<ParsedBindingName>>,
+    /// Whether each position carries a default (`[a = 1]`), parallel to
+    /// `elements`.
+    pub defaults: Vec<bool>,
     /// The `...rest` binding of `[a, ...rest]`, if present.
     pub rest: Option<Box<ParsedBindingName>>,
     pub span: Option<TextSpan>,
@@ -1032,6 +1045,19 @@ pub struct ParsedClassProperty {
     /// The member's whole source range, which is where a class type
     /// parameter is out of scope when the member is static (TS2302).
     pub span: Option<TextSpan>,
+    /// Set for a JavaScript member declared by `this.x = v` rather than
+    /// written in the class body.
+    pub this_assignments: Option<ParsedThisAssignments>,
+}
+
+/// The values a JavaScript class assigns to a member through `this`, which
+/// is how tsc declares it (`bindThisPropertyAssignment`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedThisAssignments {
+    pub values: Vec<ParsedExpression>,
+    /// Whether the values are the constructor's (or a static block's), which
+    /// then are the only ones that count (`isConstructorDeclaredThisProperty`).
+    pub in_constructor: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1045,6 +1071,8 @@ pub struct ParsedClassMethod {
     pub is_abstract: bool,
     pub type_parameters: Vec<ParsedTypeParameter>,
     pub parameters: Vec<ParsedFunctionParameter>,
+    /// See [`ParsedFunctionDeclaration::this_parameter_type`].
+    pub this_parameter_type: Option<ParsedType>,
     pub return_type: Option<ParsedType>,
     /// See [`ParsedFunctionDeclaration::return_type_span`]. tsc reports a
     /// missing return on the written return type, falling back to the name.
@@ -1348,6 +1376,11 @@ pub enum ParsedExpression {
     Update {
         operand: Box<ParsedExpression>,
         operand_span: Option<TextSpan>,
+        /// The operand is no reference (`++1`, `f()--`): oxc kept it past its
+        /// write-target error, which the checker answers as tsc does — TS2357
+        /// (TS2777 for an optional chain) once the operand passes the
+        /// arithmetic check.
+        rejected_target: bool,
     },
     /// `await x`. The operand is kept so the checker can unwrap the awaited
     /// type; erasing the `await` at parse time left every `await` expression
@@ -1392,6 +1425,11 @@ pub enum ParsedExpression {
         /// access for lookup reuse) rather than `obj.key`. Only dotted accesses
         /// are subject to TS4111 (`noPropertyAccessFromIndexSignature`).
         is_bracketed: bool,
+        /// A read a destructuring element makes of its source (tsc's
+        /// `getIndexedAccessType` at the element's name, with no access
+        /// expression): a missing property is TS2339 on the name, as for a
+        /// dotted access, while the rest of it behaves as bracketed.
+        binding_element: bool,
     },
     IndexAccess {
         object_name: String,
@@ -1438,6 +1476,10 @@ pub enum ParsedExpression {
         expression_span: Option<TextSpan>,
         ty: ParsedType,
         type_span: Option<TextSpan>,
+        /// Not written as an assertion: the annotation of a destructuring
+        /// declaration (`const { a }: T = init`), whose elements read from `T`.
+        /// `init` must be assignable to it (TS2322), not merely comparable.
+        annotation: bool,
     },
     SatisfiesExpression {
         expression: Box<ParsedExpression>,

@@ -46,6 +46,7 @@ fn lower_type_assertion(
         expression_span: Some(text_span_from_oxc_span(expression_span)),
         ty,
         type_span: Some(text_span_from_oxc_span(type_annotation.span())),
+        annotation: false,
     }
 }
 
@@ -360,6 +361,7 @@ fn jsx_member_tag_expression(member: &JSXMemberExpression<'_>) -> ParsedExpressi
         property_name: member.property.name.to_string(),
         property_span: Some(text_span_from_oxc_span(member.property.span)),
         is_bracketed: false,
+        binding_element: false,
     }
 }
 
@@ -374,8 +376,10 @@ fn parse_jsx_fragment(fragment: &JSXFragment<'_>) -> ParsedExpression {
 
 /// Returns `(tag_name, tag_name_span, component_name, component_span)`. The
 /// component name/span are populated only when the tag is a value reference (a
-/// capitalized component or a `Foo.Bar` member tag) so the checker can resolve it
-/// and report TS2304 for missing names; intrinsic lowercase tags carry `None`.
+/// capitalized component, a `Foo.Bar` member tag, or `this` and `this.x`, which
+/// tsc's `isJsxIntrinsicTagName` never takes for intrinsic) so the checker can
+/// resolve it and report TS2304 for missing names; intrinsic lowercase tags carry
+/// `None`.
 fn parse_jsx_element_name(
     name: &JSXElementName<'_>,
 ) -> (String, Option<TextSpan>, Option<String>, Option<TextSpan>) {
@@ -414,12 +418,10 @@ fn parse_jsx_element_name(
                 None,
             )
         }
-        JSXElementName::ThisExpression(this) => (
-            "this".to_string(),
-            Some(text_span_from_oxc_span(this.span)),
-            None,
-            None,
-        ),
+        JSXElementName::ThisExpression(this) => {
+            let span = Some(text_span_from_oxc_span(this.span));
+            ("this".to_string(), span, Some("this".to_string()), span)
+        }
     }
 }
 
@@ -433,8 +435,8 @@ fn jsx_member_expression_name(member: &JSXMemberExpression<'_>) -> String {
     format!("{}.{}", object, member.property.name)
 }
 
-/// Returns the head identifier of a member tag (the value that must resolve in
-/// scope). `<UI.Button />` resolves `UI`; `<this.Foo />` has no resolvable head.
+/// Returns the head of a member tag (the value that must resolve in scope):
+/// `<UI.Button />` resolves `UI`, `<this.Foo />` reads `this`.
 fn jsx_member_expression_head(
     member: &JSXMemberExpression<'_>,
 ) -> (Option<String>, Option<TextSpan>) {
@@ -450,7 +452,9 @@ fn jsx_member_expression_head(
             JSXMemberExpressionObject::MemberExpression(inner) => {
                 object = &inner.object;
             }
-            JSXMemberExpressionObject::ThisExpression(_) => return (None, None),
+            JSXMemberExpressionObject::ThisExpression(this) => {
+                return (Some("this".to_string()), Some(text_span_from_oxc_span(this.span)));
+            }
         }
     }
 }
@@ -1023,6 +1027,7 @@ fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
                     type_span: Some(text_span_from_oxc_span(
                         as_expression.type_annotation.span(),
                     )),
+                    annotation: false,
                 },
                 as_expression.span,
             )
@@ -1642,6 +1647,10 @@ pub(crate) fn parse_update_expression(
 ) -> Option<ParsedExpression> {
     // The operand is parsed into the same shape a *read* of it produces, so the
     // checker resolves the updated binding exactly as it resolves the read.
+    let rejected_target = matches!(
+        &update_expression.argument,
+        SimpleAssignmentTarget::TSNonNullExpression(recovered) if recovered.span == recovered.expression.span()
+    );
     let (operand, operand_span) = match &update_expression.argument {
         SimpleAssignmentTarget::AssignmentTargetIdentifier(identifier) => (
             ParsedExpression::Identifier {
@@ -1676,6 +1685,7 @@ pub(crate) fn parse_update_expression(
     Some(ParsedExpression::Update {
         operand: Box::new(operand),
         operand_span: Some(text_span_from_oxc_span(operand_span)),
+        rejected_target,
     })
 }
 
@@ -1700,6 +1710,7 @@ pub(crate) fn parse_static_member_expression(
         property_name: member_expression.property.name.to_string(),
         property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
         is_bracketed: false,
+        binding_element: false,
     })
 }
 
@@ -1804,6 +1815,7 @@ pub(super) fn parse_computed_member_expression(
                 property_name,
                 property_span,
                 is_bracketed: true,
+                binding_element: false,
             });
         }
     }

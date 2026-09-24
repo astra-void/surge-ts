@@ -252,6 +252,25 @@ fn parse_for_clause_statements(expression: &Expression<'_>) -> Vec<ParsedFunctio
 fn parse_expression_as_function_body_statements(
     statement_expression: &Expression<'_>,
 ) -> Option<Vec<ParsedFunctionBodyStatement>> {
+    // A comma expression's operands run in order, so a destructuring
+    // assignment among them assigns its targets as one standing alone does
+    // (`[a] = xs, f();`) — each operand is lowered as its own statement.
+    if let Expression::SequenceExpression(sequence) = statement_expression.without_parentheses()
+        && sequence
+            .expressions
+            .iter()
+            .any(|operand| !super::parse_destructuring_assignment(operand).is_empty())
+    {
+        return Some(
+            sequence
+                .expressions
+                .iter()
+                .flat_map(|operand| {
+                    parse_expression_as_function_body_statements(operand).unwrap_or_default()
+                })
+                .collect(),
+        );
+    }
     let destructured = super::parse_destructuring_assignment(statement_expression);
     if !destructured.is_empty() {
         return Some(
@@ -316,6 +335,7 @@ pub(super) fn parse_member_assignment(
                     property_name: member.property.name.to_string(),
                     property_span: Some(text_span_from_oxc_span(member.property.span)),
                     is_bracketed: false,
+                    binding_element: false,
                 },
                 member.span,
             )
@@ -389,6 +409,7 @@ fn parse_this_property_assignment(
         property_name: property_name.clone(),
         property_span,
         is_bracketed,
+        binding_element: false,
     };
     let value = super::logical_assignment_value(
         assignment.operator,
@@ -872,7 +893,12 @@ pub(crate) fn parse_function_parameter(
         declared_type,
         initializer,
         initializer_span,
-        optional: parameter.optional || parameter.initializer.is_some(),
+        // tsc's `isUntypedSignatureInJSFile`: every parameter of a JavaScript
+        // signature is optional. (A JSDoc `@param` would make it typed; surge
+        // does not read JSDoc, so it keeps the untyped reading.)
+        optional: parameter.optional
+            || parameter.initializer.is_some()
+            || super::spans::lowering_javascript(),
         rest: false,
         is_parameter_property: parameter.accessibility.is_some() || parameter.readonly,
         is_readonly_parameter_property: parameter.readonly,
@@ -925,6 +951,11 @@ fn parse_array_binding_pattern(
             .elements
             .iter()
             .map(|element| element.as_ref().map(|element| parse_binding_name(element)))
+            .collect(),
+        defaults: array_pattern
+            .elements
+            .iter()
+            .map(|element| matches!(element, Some(BindingPattern::AssignmentPattern(_))))
             .collect(),
         rest: array_pattern
             .rest

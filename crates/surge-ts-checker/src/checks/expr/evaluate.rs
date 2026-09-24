@@ -6,19 +6,54 @@ use surge_ts_syntax::{ParsedLogicalOperator, ParsedType, ParsedUnaryOperator};
 pub(crate) fn check_computed_property_keys(
     properties: &[surge_ts_syntax::ParsedObjectProperty],
     fallback_span: Option<SyntaxTextSpan>,
+    contextual: Option<&surge_ts_types::ObjectType>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
     for property in properties {
+        let mut key_type = None;
         if let Some(key) = property.computed_key.as_deref() {
             let key_span = property.name_span.or(property.span).or(fallback_span);
             let key_result = evaluate_expression(key, key_span, symbols, ctx);
             report_invalid_computed_key(&key_result, key_span, ctx);
+            if let InferredExpression::Known(ty) = key_result {
+                key_type = Some(ty);
+            }
         }
         if let Some(value) = property.unnamed_key_value.as_deref() {
-            let _ = evaluate_expression(value, property.span.or(fallback_span), symbols, ctx);
+            let span = property.span.or(fallback_span);
+            // tsc's `getContextualTypeForObjectLiteralElement`: a member whose
+            // name is no literal is contextually typed by the index signature
+            // its key applies to.
+            let index_type = contextual
+                .zip(key_type.as_ref())
+                .and_then(|(contextual, key)| applicable_index_type(contextual, key));
+            let _ = match index_type {
+                Some(index_type) => crate::checks::expected::evaluate_expression_with_expected_type(
+                    value,
+                    span,
+                    Some(&index_type),
+                    crate::checks::expected::ExpectedTypeDiagnostic::ContextOnly,
+                    symbols,
+                    ctx,
+                ),
+                None => evaluate_expression(value, span, symbols, ctx),
+            };
         }
     }
+}
+
+/// tsc's `findApplicableIndexInfo`: a numeric key reads the number index
+/// signature, falling back to the string one, and a string key the string one.
+fn applicable_index_type(object: &surge_ts_types::ObjectType, key: &Type) -> Option<Type> {
+    let is_number = matches!(key, Type::Number | Type::NumberLiteral(_));
+    if is_number && let Some(index) = object.number_index_type.as_deref() {
+        return Some(index.clone());
+    }
+    if is_number || matches!(key, Type::String | Type::StringLiteral(_)) {
+        return object.string_index_type.as_deref().cloned();
+    }
+    None
 }
 
 /// tsc's `checkComputedPropertyName`: a key must be `null`/`undefined`-free
@@ -159,7 +194,7 @@ fn evaluate_expression_unsettled(
         ParsedExpression::ObjectLiteral { properties, .. } => {
             let inferred_expression = infer_expression(expression, symbols, ctx);
 
-            check_computed_property_keys(properties, fallback_span, symbols, ctx);
+            check_computed_property_keys(properties, fallback_span, None, symbols, ctx);
             let mut explicit_properties: Vec<(&str, Option<SyntaxTextSpan>)> = Vec::new();
             for property in properties {
                 if !property.is_spread && !property.is_accessor && property.computed_key.is_none() {
@@ -503,13 +538,16 @@ fn evaluate_expression_unsettled(
         ParsedExpression::Update {
             operand,
             operand_span,
+            rejected_target,
         } => {
-            let operand_result =
-                evaluate_expression(operand, operand_span.or(fallback_span), symbols, ctx);
+            let operand_result = super::diagnostics::with_element_write_target(|| {
+                evaluate_expression(operand, operand_span.or(fallback_span), symbols, ctx)
+            });
 
             super::check_update_operand(
                 operand,
                 operand_span.or(fallback_span),
+                *rejected_target,
                 &operand_result,
                 symbols,
                 ctx,
@@ -645,6 +683,30 @@ fn evaluate_expression_unsettled(
             expression_span,
             ty,
             type_span: _,
+            annotation: true,
+        } => {
+            // A destructuring declaration's annotation: the initializer is
+            // checked against it like any declared type, and the elements read
+            // the declared type itself.
+            let declared = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+                crate::infer::map_parsed_type(ty.clone(), ctx)
+            });
+            let _ = crate::checks::expected::evaluate_expression_with_expected_type(
+                asserted_expression,
+                expression_span.or(fallback_span),
+                Some(&declared),
+                crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                symbols,
+                ctx,
+            );
+            InferredExpression::Known(declared)
+        }
+        ParsedExpression::TypeAssertion {
+            expression: asserted_expression,
+            expression_span,
+            ty,
+            type_span: _,
+            annotation: false,
         } => evaluate_type_assertion(
             asserted_expression,
             expression_span,
@@ -666,6 +728,8 @@ fn evaluate_expression_unsettled(
             let function_type = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
                 check_arrow_function_expression(arrow_function.as_ref().clone(), symbols, ctx)
             });
+            let function_type =
+                crate::infer::expression::with_written_predicate(function_type, arrow_function, ctx);
             InferredExpression::Known(Type::Function(function_type))
         }
         ParsedExpression::NonNullAssertion {
@@ -721,13 +785,14 @@ fn evaluate_expression_unsettled(
             property_name,
             property_span,
             is_bracketed,
-            ..
+            binding_element,
         } => evaluate_property_access(
             object,
             object_span,
             property_name,
             property_span,
             is_bracketed,
+            *binding_element,
             expression,
             fallback_span,
             symbols,
@@ -739,6 +804,8 @@ fn evaluate_expression_unsettled(
             index,
             index_span,
         } => {
+            // A write target's receiver is read.
+            let _ = super::diagnostics::take_element_write_target();
             let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
             check_property_receiver(object, &receiver, *object_span, fallback_span, symbols, ctx);
             if let InferredExpression::Known(receiver_type) = &receiver
@@ -782,7 +849,7 @@ fn evaluate_expression_unsettled(
                 value_span: *value_span,
             };
             let shadowed_locally = symbols.get_own(target_name).is_some();
-            crate::checks::assign::check_assignment_with_symbols(
+            let _ = crate::checks::assign::check_assignment_with_symbols(
                 assignment,
                 symbols,
                 shadowed_locally,
@@ -853,7 +920,9 @@ fn evaluate_nullish_coalescing(
     let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
     // With no outer contextual type, tsc contextually types the right
     // operand from the left's — that is what gives `opts.uri ?? ((id) =>
-    // id)`'s parameter a type instead of a false TS7006.
+    // id)`'s parameter a type instead of a false TS7006. It is a contextual
+    // type only (`getContextualTypeForBinaryOperand`): the operand is not
+    // required to fit it.
     let right_result = match contextual_default_operand_type(&left_result) {
         Some(contextual) => match empty_object_fallback_type(right, &contextual) {
             Some(fallback) => InferredExpression::Known(fallback),
@@ -861,7 +930,7 @@ fn evaluate_nullish_coalescing(
                 right,
                 right_span.or(fallback_span),
                 Some(&contextual),
-                crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                crate::checks::expected::ExpectedTypeDiagnostic::ContextOnly,
                 symbols,
                 ctx,
             ),
@@ -964,6 +1033,35 @@ fn evaluate_logical(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    evaluate_logical_in_context(
+        left,
+        left_span,
+        operator,
+        right,
+        right_span,
+        fallback_span,
+        None,
+        symbols,
+        ctx,
+    )
+}
+
+/// `a && b` / `a || b` where `contextual` is the whole expression's contextual
+/// type, which tsc's `getContextualTypeForBinaryOperand` hands the right
+/// operand of `&&` (as context only: the result also carries the left's falsy
+/// part).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_logical_in_context(
+    left: &Box<ParsedExpression>,
+    left_span: &Option<SyntaxTextSpan>,
+    operator: &ParsedLogicalOperator,
+    right: &Box<ParsedExpression>,
+    right_span: &Option<SyntaxTextSpan>,
+    fallback_span: Option<SyntaxTextSpan>,
+    contextual: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
     let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
     report_void_truthiness(&left_result, left_span.or(fallback_span), ctx);
     // The right operand runs after the left's assignments, and is narrowed by
@@ -1024,17 +1122,23 @@ fn evaluate_logical(
     .or(narrowed);
     let right_symbols = narrowed.as_ref().unwrap_or(symbols);
     // `a || b` hands `b` the same contextual type `a ?? b` does.
-    let right_contextual = matches!(operator, surge_ts_syntax::ParsedLogicalOperator::Or)
-        .then(|| contextual_default_operand_type(&left_result))
-        .flatten();
+    let (right_contextual, left_typed) = match operator {
+        surge_ts_syntax::ParsedLogicalOperator::Or => {
+            (contextual_default_operand_type(&left_result), true)
+        }
+        surge_ts_syntax::ParsedLogicalOperator::And => (contextual.cloned(), false),
+    };
     let right_result = match right_contextual {
-        Some(contextual) => match empty_object_fallback_type(right, &contextual) {
+        Some(contextual) => match left_typed
+            .then(|| empty_object_fallback_type(right, &contextual))
+            .flatten()
+        {
             Some(fallback) => InferredExpression::Known(fallback),
             None => crate::checks::expected::evaluate_expression_with_expected_type(
                 right,
                 right_span.or(fallback_span),
                 Some(&contextual),
-                crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                crate::checks::expected::ExpectedTypeDiagnostic::ContextOnly,
                 right_symbols,
                 ctx,
             ),
@@ -1209,6 +1313,7 @@ fn evaluate_optional_property_access(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    let is_write = super::diagnostics::take_element_write_target();
     if property_name == "length" && !is_bracketed {
         super::mark_evolving_array_operation(object, ctx);
     }
@@ -1231,7 +1336,7 @@ fn evaluate_optional_property_access(
             receiver_type,
             property_name,
             *property_span,
-            false,
+            super::is_property_write_target(*property_span),
             symbols,
             ctx,
         );
@@ -1246,6 +1351,7 @@ fn evaluate_optional_property_access(
             object_type,
             *property_span,
             element_access_span(*object_span, *property_span).or(fallback_span),
+            &super::diagnostics::ElementAccessSite::of(object, is_write),
             symbols,
             ctx,
         );
@@ -1551,11 +1657,13 @@ fn evaluate_property_access(
     property_name: &String,
     property_span: &Option<SyntaxTextSpan>,
     is_bracketed: &bool,
+    binding_element: bool,
     expression: &ParsedExpression,
     fallback_span: Option<SyntaxTextSpan>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    let is_write = super::diagnostics::take_element_write_target();
     if property_name == "length" && !is_bracketed {
         super::mark_evolving_array_operation(object, ctx);
     }
@@ -1580,13 +1688,14 @@ fn evaluate_property_access(
             receiver_type,
             property_name,
             *property_span,
-            false,
+            super::is_property_write_target(*property_span),
             symbols,
             ctx,
         );
     }
     let inferred_expression = infer_expression(expression, symbols, ctx);
     if *is_bracketed
+        && !binding_element
         && let InferredExpression::MissingProperty { object_type, .. } = &inferred_expression
     {
         report_missing_element(
@@ -1595,6 +1704,7 @@ fn evaluate_property_access(
             object_type,
             *property_span,
             element_access_span(*object_span, *property_span).or(fallback_span),
+            &super::diagnostics::ElementAccessSite::of(object, is_write),
             symbols,
             ctx,
         );
@@ -1774,16 +1884,18 @@ fn binary_operands_must_be_non_null(
     right_result: &InferredExpression,
 ) -> bool {
     use surge_ts_syntax::ParsedBinaryOperator as Op;
-    // surge types the `null` keyword as `any`, which would read as string-like.
-    // An operand surge could not type is tsc's error type, an `any`.
+    // tsc's `isTypeAssignableToKind(t, StringLike)` is the non-strict check, so
+    // without `strictNullChecks` the `null` keyword is string-like (surge types
+    // the keyword as `any`, which would read as string-like under it too). An
+    // operand surge could not type is tsc's error type, an `any`.
     let string_like = |operand: &ParsedExpression, result: &InferredExpression| {
-        !matches!(operand, ParsedExpression::NullLiteral)
-            && match result {
-                InferredExpression::Known(ty) => {
-                    surge_ts_types::is_assignable_to(ty, &Type::String)
-                }
-                _ => true,
-            }
+        if matches!(operand, ParsedExpression::NullLiteral) {
+            return !surge_ts_types::strict_null_checks();
+        }
+        match result {
+            InferredExpression::Known(ty) => surge_ts_types::is_assignable_to(ty, &Type::String),
+            _ => true,
+        }
     };
     let symbol_like = |result: &InferredExpression| matches!(result, InferredExpression::Known(ty) if type_may_be_symbol(&ty.peeled()));
     match operator {

@@ -617,6 +617,7 @@ fn entity_name_expression(
             property_name,
             property_span,
             is_bracketed: false,
+            ..
         } => {
             let object_name = entity_name_expression(object, parenthesized_expressions)?;
             let span = object_span

@@ -1,11 +1,14 @@
 //! Scanner and parser errors tsc raises that oxc does not: a legacy octal
 //! literal (TS1121) and a decimal with a leading zero (TS1489) are rejected by
 //! tsc's `scanNumber` in every file, strict or not, and type arguments on
-//! `super` (TS2754) by `parseSuperExpression`. Like any parse error they make
-//! the program report its syntactic diagnostics alone.
+//! `super` (TS2754) and a `super` followed by anything but an argument list or
+//! member access (TS1034) by `parseSuperExpression`, and a type that is only a
+//! `?` (TS1110) by `parseJSDocNullableType`. Like any parse error they make the
+//! program report its syntactic diagnostics alone.
 
 use oxc_ast::ast::{
-    BinaryExpression, CallExpression, Expression, NumericLiteral, Program, UnaryExpression,
+    BinaryExpression, CallExpression, Expression, JSDocUnknownType, NumericLiteral, Program,
+    SimpleAssignmentTarget, Super, UnaryExpression, UpdateExpression,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_syntax::operator::{BinaryOperator, UnaryOperator};
@@ -47,6 +50,63 @@ impl<'a> Visit<'a> for Collector<'_> {
             self.after_minus.push(literal.span.start);
         }
         walk::walk_binary_expression(self, expression);
+    }
+
+    fn visit_update_expression(&mut self, update: &UpdateExpression<'a>) {
+        // `--x--`: tsc's parser ends the statement after `--x` (TS1005 on the
+        // trailing operator; see `update_target_stop`) and begins the next at
+        // that operator, whose operand — a left-hand-side expression — is
+        // missing unless the token after it starts one: TS1109 there. oxc
+        // keeps the invalid operand in a same-span non-null wrapper.
+        if update.prefix
+            && let SimpleAssignmentTarget::TSNonNullExpression(wrapper) = &update.argument
+            && let Expression::UpdateExpression(inner) = &wrapper.expression
+            && !inner.prefix
+            && wrapper.span == inner.span
+        {
+            let next = skip_whitespace(self.source_text, inner.span.end as usize);
+            let starts_operand = self.source_text[next..].chars().next().is_some_and(|c| {
+                c.is_alphanumeric() || matches!(c, '_' | '$' | '(' | '[' | '{' | '"' | '\'' | '`' | '/' | '#' | '@')
+            });
+            if !starts_operand {
+                let end = super::grammar_context::first_token_end(self.source_text, next);
+                self.push(1109, "Expression expected.".to_string(), next, end);
+            }
+        }
+        walk::walk_update_expression(self, update);
+    }
+
+    fn visit_super(&mut self, keyword: &Super) {
+        // `parseSuperExpression` reads only the next token — past type
+        // arguments `parseTypeArgumentsInExpression` takes (TS2754) — and
+        // anything but `(`, `.` or `[`, `?.` included, is TS1034 on that
+        // token (`parseErrorAtCurrentToken`).
+        let mut start = skip_whitespace(self.source_text, keyword.span.end as usize);
+        if self.source_text[start..].starts_with('<')
+            && let Some(after) = type_arguments_end(self.source_text, start)
+        {
+            start = after;
+        }
+        if matches!(self.source_text[start..].chars().next(), Some('(' | '.' | '[')) {
+            return;
+        }
+        let end = super::grammar_context::first_token_end(self.source_text, start);
+        self.push(1034, "'super' must be followed by an argument list or member access.".to_string(), start, end);
+    }
+
+    /// tsc parses a `?` in type position as a nullable type and then requires
+    /// the type (`parseJSDocNullableType`); oxc reads a lone `?` before `,`,
+    /// `)`, `>`, `=`, `|` or `}` as JSDoc's unknown type. tsc reports the
+    /// missing type at that next token.
+    fn visit_js_doc_unknown_type(&mut self, it: &JSDocUnknownType) {
+        let after = it.span.end as usize;
+        let start = after
+            + self.source_text[after..]
+                .char_indices()
+                .find(|(_, c)| !c.is_whitespace())
+                .map_or(self.source_text.len() - after, |(offset, _)| offset);
+        let end = (start + 1).min(self.source_text.len()).max(start);
+        self.push(1110, "Type expected.".to_string(), start, end);
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
@@ -105,4 +165,50 @@ impl Collector<'_> {
             span_text: self.source_text.get(start..end).map(str::to_string),
         });
     }
+}
+
+fn skip_whitespace(text: &str, position: usize) -> usize {
+    position
+        + text[position..]
+            .char_indices()
+            .find(|(_, c)| !c.is_whitespace())
+            .map_or(text.len() - position, |(offset, _)| offset)
+}
+
+/// Where the token after `<…>` starts when tsc's
+/// `parseTypeArgumentsInExpression` takes the angle brackets at `open` as type
+/// arguments: they must close, and the next token must be one
+/// `canFollowTypeArgumentsInExpression` accepts — `(` or a template, or,
+/// after a line break, anything; otherwise anything but `<`, `>`, `+`, `-` or
+/// the start of an expression.
+fn type_arguments_end(text: &str, open: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut position = open;
+    let close = loop {
+        match *bytes.get(position)? {
+            b'<' => depth += 1,
+            // The arrow of a function type.
+            b'>' if bytes[position - 1] == b'=' => {}
+            b'>' => {
+                depth -= 1;
+                if depth == 0 {
+                    break position + 1;
+                }
+            }
+            _ => {}
+        }
+        position += 1;
+    };
+    let after = skip_whitespace(text, close);
+    let accepted = match text[after..].chars().next() {
+        Some('(' | '`') | None => true,
+        Some('<' | '>' | '+' | '-') => false,
+        Some(next) => {
+            text[close..after].contains('\n')
+                || !(next.is_alphanumeric()
+                    || matches!(next, '_' | '$' | '"' | '\'' | '[' | '{' | '!' | '~' | '/' | '@' | '#'))
+        }
+    };
+    accepted.then_some(after)
 }

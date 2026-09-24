@@ -51,18 +51,24 @@ pub(crate) fn check_function_assignment(
 
     if !target_blocked.is_blocked() && !value_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);
-        let inferred_value = evaluate_expression(
-            &assignment.value,
-            assignment.value_span,
-            &visible_symbols,
-            ctx,
-        );
         let shadowed_locally = scopes.declares_locally(&target_name);
         let assigns_empty_array = matches!(
             &assignment.value,
             ParsedExpression::ArrayLiteral { elements, .. } if elements.is_empty()
         );
-        check_assignment_with_symbols(assignment, &visible_symbols, shadowed_locally, ctx);
+        let value = assignment.value.clone();
+        let value_span = assignment.value_span;
+        // The value is checked in its target's context (tsc's
+        // `getContextualTypeForAssignmentExpression`), which types a callback's
+        // parameters; what it narrows the target to is read again without
+        // that context, and reports nothing the checked value did not.
+        let checked =
+            check_assignment_with_symbols(assignment, &visible_symbols, shadowed_locally, ctx);
+        let checkpoint = ctx.diagnostics().len();
+        let inferred_value = evaluate_expression(&value, value_span, &visible_symbols, ctx);
+        if checked {
+            ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+        }
         if !super::evolving_arrays::assign_evolving_array(
             &target_name,
             assigns_empty_array,
@@ -420,6 +426,53 @@ fn element_write_target_type(receiver: &Type, index_type: &Type) -> Option<Type>
     }
 }
 
+/// A property written through a union receiver whose members declare it as an
+/// accessor: tsc's synthetic union property writes against the union of its
+/// constituents' write types (`createUnionOrIntersectionProperty`), a setter's
+/// parameter type where a member has one.
+fn union_accessor_write_type(
+    receiver: &Type,
+    property_name: &str,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Type::Union(union) = receiver else {
+        return None;
+    };
+    let mut has_accessor = false;
+    let mut targets = Vec::with_capacity(union.types().len());
+    for member in union.types() {
+        match accessor_write_type(member, property_name, ctx) {
+            Some(target) => {
+                has_accessor = true;
+                targets.push(target);
+            }
+            None => targets.push(member.get_property_access_type(property_name)?),
+        }
+    }
+    has_accessor.then(|| union_type(targets))
+}
+
+/// A literal key written through a union receiver: tsc's synthetic union
+/// property writes against the union of its constituents' write types, an
+/// accessor's setter type included (`createUnionOrIntersectionProperty`).
+fn union_receiver_write_target_type(
+    receiver: &Type,
+    index_type: &Type,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Type::Union(union) = receiver else {
+        return None;
+    };
+    let key = literal_index_key(index_type)?;
+    let mut targets = Vec::with_capacity(union.types().len());
+    for member in union.types() {
+        let target = accessor_write_type(member, &key, ctx)
+            .or_else(|| element_write_target_type(member, index_type))?;
+        targets.push(target);
+    }
+    Some(union_type(targets))
+}
+
 /// A key that is itself a union (`o[k]` with `k: "a" | "b"`) writes against the
 /// *intersection* of what each key names — tsc's
 /// `getIndexedAccessTypeOrUndefined` intersects the constituents' types under
@@ -566,6 +619,7 @@ fn check_element_assignment(
             literal_index_key(&index_type)
                 .and_then(|key| accessor_write_type(&receiver_type, &key, ctx))
         })
+        .or_else(|| union_receiver_write_target_type(&receiver_type, &index_type, ctx))
         .or_else(|| union_index_write_target_type(&receiver_type, &index_type, ctx))
         .or_else(|| {
             element_write_target_type(
@@ -636,11 +690,12 @@ fn check_assigned_value(
     }
 
     let reported_target = crate::checks::expr::reported_relation_target(&value_type, &target_type);
-    let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+    let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
         &value_type,
         &reported_target,
         &crate::checks::expr::source_display_name(&value_type, &reported_target),
         &reported_target.name(),
+        false,
         ctx.file_name.clone(),
     );
     // tsc anchors the assignment's type error on the whole assignment, which
@@ -955,7 +1010,8 @@ fn check_member_assignment_itself(
     ) {
         return;
     }
-    let accessor_write_type = accessor_write_type(&receiver_for_declaration, property_name, ctx);
+    let accessor_write_type = accessor_write_type(&receiver_for_declaration, property_name, ctx)
+        .or_else(|| union_accessor_write_type(&receiver_for_declaration, property_name, ctx));
     let Some(target_type) = accessor_write_type.or_else(|| {
         declared_object_type
             .as_ref()
@@ -1036,15 +1092,17 @@ fn check_member_assignment_itself(
     let target_unresolved = crate::checks::assign::type_contains_unknown(&target_type);
     let checkpoint = ctx.diagnostics().len();
 
-    let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
-        &assignment.value,
-        assignment.value_span,
-        assignment.target_span,
-        Some(&target_type),
-        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
-        &visible_symbols,
-        ctx,
-    );
+    let inferred_value = crate::checks::expr::with_property_write_target(*property_span, || {
+        crate::checks::expected::evaluate_expression_with_expected_type_anchored(
+            &assignment.value,
+            assignment.value_span,
+            assignment.target_span,
+            Some(&target_type),
+            crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+            &visible_symbols,
+            ctx,
+        )
+    });
 
     if target_unresolved {
         ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
@@ -1066,11 +1124,12 @@ fn check_member_assignment_itself(
     if !is_assignable_to(&value_type, &target_type) {
         let reported_target =
             crate::checks::expr::reported_relation_target(&value_type, &target_type);
-        let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+        let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
             &value_type,
             &reported_target,
             &crate::checks::expr::source_display_name(&value_type, &reported_target),
             &reported_target.name(),
+            false,
             ctx.file_name.clone(),
         );
         let diagnostic = match assignment.target_span {
@@ -1127,6 +1186,7 @@ pub(crate) fn check_this_property_assignment(
             property_name: assignment.property_name.clone(),
             property_span: assignment.property_span,
             is_bracketed: false,
+            binding_element: false,
         };
         if let InferredExpression::MissingProperty {
             property_name,
@@ -1155,6 +1215,22 @@ pub(crate) fn check_this_property_assignment(
         return;
     };
 
+    // The write goes through the setter's accessibility
+    // (`getDeclarationModifierFlagsFromSymbol` with `isWrite`).
+    let this_receiver = visible_symbols
+        .declared_type("this")
+        .cloned()
+        .unwrap_or_else(|| this_symbol.ty.clone());
+    crate::checks::expr::check_member_accessibility(
+        &ParsedExpression::This { span: None },
+        &this_receiver,
+        &assignment.property_name,
+        assignment.property_span,
+        true,
+        &visible_symbols,
+        ctx,
+    );
+
     let constructor_may_write = ctx
         .constructor_writable_members
         .as_ref()
@@ -1179,15 +1255,18 @@ pub(crate) fn check_this_property_assignment(
     // a whole-value mismatch is reported on `this.<property>`.
     let target_unresolved = crate::checks::assign::type_contains_unknown(&property_type);
     let checkpoint = ctx.diagnostics().len();
-    let inferred_value = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
-        &assignment.value,
-        assignment.value_span,
-        assignment.target_span,
-        Some(&property_type),
-        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
-        &visible_symbols,
-        ctx,
-    );
+    let inferred_value =
+        crate::checks::expr::with_property_write_target(assignment.property_span, || {
+            crate::checks::expected::evaluate_expression_with_expected_type_anchored(
+                &assignment.value,
+                assignment.value_span,
+                assignment.target_span,
+                Some(&property_type),
+                crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                &visible_symbols,
+                ctx,
+            )
+        });
     if target_unresolved {
         ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
     }
@@ -1204,6 +1283,7 @@ pub(crate) fn check_this_property_assignment(
         property_name: assignment.property_name.clone(),
         property_span: assignment.property_span,
         is_bracketed: false,
+        binding_element: false,
     };
     if target_unresolved || value_type.is_unmodelled() || property_type.is_unmodelled() {
         crate::checks::function::narrowing::narrow_assignment_target_in_scope(&target, &value_type, scopes);
@@ -1215,11 +1295,12 @@ pub(crate) fn check_this_property_assignment(
     } else {
         let reported_target =
             crate::checks::expr::reported_relation_target(&value_type, &property_type);
-        let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+        let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
             &value_type,
             &reported_target,
             &crate::checks::expr::source_display_name(&value_type, &reported_target),
             &reported_target.name(),
+            false,
             ctx.file_name.clone(),
         );
         let diagnostic = match assignment.target_span.or(assignment.value_span) {

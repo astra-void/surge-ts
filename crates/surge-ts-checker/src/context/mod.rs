@@ -610,9 +610,20 @@ pub(crate) struct CheckerContext {
     /// The body being checked belongs to an `async` function, whose returns
     /// relate awaited value to awaited return type (tsc's `unwrapReturnType`).
     pub(crate) in_async_body: bool,
+    /// The body being checked belongs to a generator, whose returns relate to
+    /// its declared type's return type argument (tsc's `unwrapReturnType`).
+    pub(crate) in_generator_body: bool,
     /// The arrow about to be checked is a call argument, so a whole-signature
     /// mismatch is an argument error (TS2345). Taken by that arrow's check.
     pub(crate) next_arrow_is_argument: bool,
+    /// The arrow about to be checked is only contextually typed by its
+    /// expectation (the right operand of `&&`, `||`, `??`), so a return that
+    /// does not fit is no error of the arrow's own. Taken by that arrow's check.
+    pub(crate) next_arrow_context_only: bool,
+    /// The names the file being checked references anywhere, installed only
+    /// while a file with a namespace-local `import x = require()` is checked:
+    /// tsc resolves (and reports) such an alias only once something names it.
+    pub(crate) namespace_require_reads: Option<Arc<FxHashSet<String>>>,
     /// Set by a return-value check whose value is a conditional, consumed by
     /// that conditional: tsc checks each branch of a returned conditional
     /// against the return type on its own (`checkReturnExpression`).
@@ -836,7 +847,10 @@ impl CheckerContext {
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
             in_async_body: false,
+            in_generator_body: false,
             next_arrow_is_argument: false,
+            next_arrow_context_only: false,
+            namespace_require_reads: None,
             split_returned_conditional: false,
             allow_missing_tuple_element: false,
             non_exhaustive_switches: Vec::new(),
@@ -1013,7 +1027,10 @@ impl CheckerContext {
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
             in_async_body: false,
+            in_generator_body: false,
             next_arrow_is_argument: false,
+            next_arrow_context_only: false,
+            namespace_require_reads: None,
             split_returned_conditional: false,
             allow_missing_tuple_element: false,
             non_exhaustive_switches: Vec::new(),
@@ -1538,7 +1555,9 @@ impl CheckerContext {
         self.contextual_return_frames.clear();
         self.in_contextual_return_check = false;
         self.in_async_body = false;
+        self.in_generator_body = false;
         self.next_arrow_is_argument = false;
+        self.next_arrow_context_only = false;
         self.next_body_frame_active = false;
         if !is_module || self.options.allow_umd_global_access || self.umd_global_names.is_empty() {
             return;
@@ -1619,6 +1638,7 @@ impl CheckerContext {
         self.let_assignments = Default::default();
         self.module_declared_only_depth = 0;
         self.module_export_depth = 0;
+        self.namespace_require_reads = None;
         debug_assert!(
             self.diagnostics.is_empty(),
             "begin_file_check: previous file's diagnostics were not taken"

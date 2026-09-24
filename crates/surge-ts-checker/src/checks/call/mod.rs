@@ -153,10 +153,18 @@ pub(crate) fn check_call_like_with_expected_type(
         return None;
     }
 
-    // The global `Function` interface is callable with any arguments in tsc even
-    // though it declares no call signature, so it has to be answered before the
-    // peel below turns it into a signature-less object.
-    if surge_ts_types::is_global_function_interface(&symbol.ty) {
+    // tsc's `isUntypedFunctionCall`: `Function` — the global interface or a
+    // type deriving from it — is callable with any arguments though it
+    // declares no call signature, and takes no type arguments (TS2347). It has
+    // to be answered before the peel below turns it into a signature-less
+    // object.
+    if surge_ts_types::is_untyped_function_callee(&symbol.ty) {
+        if !type_arguments.is_empty() {
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2347(ctx.file_name.clone()),
+                call_span.or(callee_span),
+            ));
+        }
         for argument in arguments {
             let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
         }
@@ -1292,35 +1300,31 @@ pub(crate) fn check_new_like(
         // A function type has a call signature and no construct signature (a
         // constructor type is an object carrying one), so tsc resolves the call
         // signature and types the `new` as `any`: TS7009 under `noImplicitAny`,
-        // otherwise TS2350 unless the function returns `void`.
-        Type::Function(function_type) => {
-            let _ = check_function_type_call(
+        // otherwise TS2350 unless the function returns `void`. A callable object
+        // with no construct signature (a function merged with a namespace) is
+        // resolved the same way (`resolveNewExpression`).
+        Type::Function(function_type) => new_with_call_signature(
+            &function_type,
+            callee_span,
+            call_span,
+            type_arguments,
+            arguments,
+            symbols,
+            ctx,
+        ),
+        Type::Object(object)
+            if object.construct_signature().is_none() && object.call_signature().is_some() =>
+        {
+            let function_type = object.call_signature().expect("call signature present").clone();
+            new_with_call_signature(
                 &function_type,
                 callee_span,
                 call_span,
                 type_arguments,
                 arguments,
-                None,
                 symbols,
                 ctx,
-            );
-            let diagnostic = if ctx.options.no_implicit_any {
-                Some(Diagnostic::ts7009(ctx.file_name.clone()))
-            } else if *function_type.return_type() != Type::Void
-                // A return type surge has not inferred may well be `void`.
-                && !function_type.return_type().is_unmodelled()
-            {
-                Some(Diagnostic::ts2350(ctx.file_name.clone()))
-            } else {
-                None
-            };
-            if let Some(diagnostic) = diagnostic {
-                ctx.push(diagnostic_with_syntax_span(
-                    diagnostic,
-                    call_span.or(callee_span),
-                ));
-            }
-            Some(Type::Any)
+            )
         }
         // A class value (static side) carries a construct signature. Check the
         // constructor arguments against it and yield the instance type.
@@ -1385,6 +1389,12 @@ pub(crate) fn check_new_like(
         // already implied.
         Type::Any => generic_class_instance_type(callee, type_arguments, arguments, symbols, ctx)
             .or(Some(Type::Any)),
+        // `resolveNewExpression` resolves an error-typed target as an error
+        // call: the arguments are checked and nothing more is reported.
+        Type::ErrorType => {
+            property::evaluate_arguments_on_error_type(arguments, symbols, ctx);
+            Some(Type::ErrorType)
+        }
         // `checkNonNullType` has reported `unknown` under `strictNullChecks`;
         // without it `unknown` is simply not constructable.
         Type::GenuineUnknown => {
@@ -1666,6 +1676,43 @@ fn infer_generic_class_type_arguments(
     ))
 }
 
+fn new_with_call_signature(
+    function_type: &surge_ts_types::FunctionType,
+    callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let _ = check_function_type_call(
+        function_type,
+        callee_span,
+        call_span,
+        type_arguments,
+        arguments,
+        None,
+        symbols,
+        ctx,
+    );
+    // A return inferred from the body is a lazy reference until read.
+    let returned = function_type.return_type().peeled();
+    let diagnostic = if ctx.options.no_implicit_any {
+        Some(Diagnostic::ts7009(ctx.file_name.clone()))
+    } else if returned != Type::Void
+        // A return type surge has not inferred may well be `void`.
+        && !returned.is_unmodelled()
+    {
+        Some(Diagnostic::ts2350(ctx.file_name.clone()))
+    } else {
+        None
+    };
+    if let Some(diagnostic) = diagnostic {
+        ctx.push(diagnostic_with_syntax_span(diagnostic, call_span.or(callee_span)));
+    }
+    Some(Type::Any)
+}
+
 /// One of tsc's effective call arguments (`getEffectiveCallArguments`): a
 /// spread of a tuple type stands for one argument per element, and its rest
 /// element for a variadic one.
@@ -1738,9 +1785,11 @@ fn immediately_invoked_arrow_type(
         }
     }
     ctx.truncate_diagnostics(diagnostics_before);
+    // A spread of a generic body's own type variable (`...t` with `t: T`) is an
+    // argument like any other; only what surge could not model stops here.
     if effective.iter().any(|argument| match argument {
         EffectiveArgument::Plain(ty) | EffectiveArgument::Variadic(ty) | EffectiveArgument::Spread(ty) => {
-            ty.is_unknown()
+            ty.is_unmodelled()
         }
     }) {
         return None;
@@ -1919,6 +1968,31 @@ pub(crate) fn check_expression_call(
         return Some(Type::Void);
     }
 
+    if callee.continues_optional_chain()
+        && let Some((unmarked, root)) = unmarked_optional_chain(callee)
+    {
+        let result = check_expression_call(
+            &unmarked,
+            callee_span,
+            call_span,
+            type_arguments,
+            arguments,
+            symbols,
+            ctx,
+        )?;
+        let short_circuits = match crate::infer::infer_expression(root, symbols, ctx) {
+            InferredExpression::Known(receiver) => {
+                crate::checks::expr::receiver_nullability(&receiver).is_some()
+            }
+            _ => true,
+        };
+        return Some(if short_circuits {
+            union_type(vec![result, Type::Undefined])
+        } else {
+            result
+        });
+    }
+
     let callee_result = match immediately_invoked_arrow_type(callee, arguments, symbols, ctx) {
         Some(function_type) => InferredExpression::Known(Type::Function(function_type)),
         None => evaluate_expression(callee, callee_span, symbols, ctx),
@@ -1970,6 +2044,96 @@ pub(crate) fn check_expression_call(
             ctx.degraded_expected_type_depth -= 1;
             None
         }
+    }
+}
+
+/// tsc's `getOptionalExpressionType`: a call continuing an optional chain
+/// (`o?.["m"]()`) invokes the member as read off the non-nullish receiver, and
+/// the chain's short-circuit adds `undefined` to the call's result instead of
+/// to the callee. The chain rewritten with a non-optional access on a
+/// non-null receiver at its root reads the member that way; the root's
+/// receiver says whether the chain can short-circuit.
+fn unmarked_optional_chain(
+    expression: &ParsedExpression,
+) -> Option<(ParsedExpression, &ParsedExpression)> {
+    let non_null = |object: &ParsedExpression, span: Option<SyntaxTextSpan>| {
+        Box::new(ParsedExpression::NonNullAssertion {
+            expression: Box::new(object.clone()),
+            span,
+            in_optional_chain: false,
+        })
+    };
+    match expression {
+        ParsedExpression::OptionalPropertyAccess {
+            object,
+            object_span,
+            property_name,
+            property_span,
+            is_bracketed,
+        } => Some((
+            ParsedExpression::PropertyAccess {
+                object: non_null(object, *object_span),
+                object_span: *object_span,
+                property_name: property_name.clone(),
+                property_span: *property_span,
+                is_bracketed: *is_bracketed,
+                binding_element: false,
+            },
+            object,
+        )),
+        ParsedExpression::OptionalIndexAccess {
+            object,
+            object_span,
+            index,
+            index_span,
+        } => Some((
+            ParsedExpression::ElementAccess {
+                object: non_null(object, *object_span),
+                object_span: *object_span,
+                index: index.clone(),
+                index_span: *index_span,
+            },
+            object,
+        )),
+        ParsedExpression::PropertyAccess {
+            object,
+            object_span,
+            property_name,
+            property_span,
+            is_bracketed,
+            binding_element,
+        } if object.continues_optional_chain() => {
+            let (inner, root) = unmarked_optional_chain(object)?;
+            Some((
+                ParsedExpression::PropertyAccess {
+                    object: Box::new(inner),
+                    object_span: *object_span,
+                    property_name: property_name.clone(),
+                    property_span: *property_span,
+                    is_bracketed: *is_bracketed,
+                    binding_element: *binding_element,
+                },
+                root,
+            ))
+        }
+        ParsedExpression::ElementAccess {
+            object,
+            object_span,
+            index,
+            index_span,
+        } if object.continues_optional_chain() => {
+            let (inner, root) = unmarked_optional_chain(object)?;
+            Some((
+                ParsedExpression::ElementAccess {
+                    object: Box::new(inner),
+                    object_span: *object_span,
+                    index: index.clone(),
+                    index_span: *index_span,
+                },
+                root,
+            ))
+        }
+        _ => None,
     }
 }
 
@@ -2029,6 +2193,16 @@ fn report_uncallable_unknown(
     }
 }
 
+/// A call that continues an optional chain adds the chain's `undefined` only
+/// when the chain's receiver can be nullish (tsc's `getOptionalExpressionType`).
+pub(crate) fn with_chain_undefined(returned: Type, receiver: &Type) -> Type {
+    if crate::infer::expression::optional_chain_can_short_circuit(receiver) {
+        union_type(vec![returned, Type::Undefined])
+    } else {
+        returned
+    }
+}
+
 pub(crate) fn check_optional_call_like(
     callee: &surge_ts_syntax::ParsedExpression,
     callee_span: Option<SyntaxTextSpan>,
@@ -2082,7 +2256,7 @@ pub(crate) fn check_optional_call_like(
             symbols,
             ctx,
         )
-        .map(|ret| union_type(vec![ret, Type::Undefined])),
+        .map(|ret| with_chain_undefined(ret, &callee_type)),
         _ => {
             ctx.push(diagnostic_with_syntax_span(
                 Diagnostic::ts2349(ctx.file_name.clone()),
@@ -2349,10 +2523,30 @@ pub(crate) fn check_function_type_call(
     // `f(...xs)` supplies as many arguments as the spread's type has elements,
     // which is one for a tuple of one and any number for an array. Counting the
     // spread as a single argument made `three(...tupleOfThree)` a false TS2554,
-    // so a call carrying one has no statically known count and skips the check.
+    // so a call carrying one has no statically known count and skips the check —
+    // except an array literal spread, a tuple (`isSpreadIntoCallOrNew`) that
+    // tsc's `getEffectiveCallArguments` expands into one argument per element.
+    // Only the too-few bound is checked for it, since an excess element has no
+    // argument node of its own to anchor the error on.
+    let literal_spread_count = arguments
+        .iter()
+        .map(|argument| match &argument.expression {
+            _ if !argument.spread => Some(1),
+            ParsedExpression::ArrayLiteral { elements, .. }
+                if elements.iter().all(|element| !element.spread) =>
+            {
+                Some(elements.len())
+            }
+            _ => None,
+        })
+        .sum::<Option<usize>>();
     let has_spread_argument = arguments.iter().any(|argument| argument.spread);
-    let too_many = !function_type.is_variadic() && actual > expected;
-    if !has_spread_argument && (actual < required || too_many) {
+    let (actual, too_many) = match literal_spread_count {
+        Some(count) if has_spread_argument => (count, false),
+        _ => (actual, !function_type.is_variadic() && actual > expected),
+    };
+    let arity_known = !has_spread_argument || literal_spread_count.is_some();
+    if arity_known && (actual < required || too_many) {
         let expected_count = if actual < required {
             required
         } else {
@@ -2410,8 +2604,27 @@ pub(crate) fn check_function_type_call(
     let mut i = 0usize;
     for argument in arguments.iter() {
         if argument.spread {
-            let spread_result =
-                evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            let spread_result = match &argument.expression {
+                // tsc's `checkArrayLiteral`: an array literal spread straight
+                // into a call is a tuple (`isSpreadIntoCallOrNew`), one argument
+                // per element.
+                ParsedExpression::ArrayLiteral { elements, .. }
+                    if elements.iter().all(|element| !element.spread) =>
+                {
+                    InferredExpression::Known(Type::Tuple(
+                        elements
+                            .iter()
+                            .map(|element| {
+                                match evaluate_expression(&element.expression, element.span, symbols, ctx) {
+                                    InferredExpression::Known(ty) => ty,
+                                    _ => Type::Unknown,
+                                }
+                            })
+                            .collect(),
+                    ))
+                }
+                _ => evaluate_expression(&argument.expression, argument.span, symbols, ctx),
+            };
             crate::checks::expr::check_iterable_operand(
                 &spread_result,
                 argument.expression_span,
@@ -2522,7 +2735,11 @@ pub(crate) fn check_function_type_call(
             &argument.expression,
             argument.span,
             Some(&parameter_type),
-            ExpectedTypeDiagnostic::ArgumentNotAssignable,
+            if mismatch_reported {
+                ExpectedTypeDiagnostic::ContextOnly
+            } else {
+                ExpectedTypeDiagnostic::ArgumentNotAssignable
+            },
             symbols,
             ctx,
         );

@@ -58,6 +58,9 @@ struct GrammarCollector {
     /// Module-level enum declarations, which alone may consult
     /// `top_level_constants` (a nested one could see a shadowing binding).
     top_level_enums: std::collections::HashSet<(u32, u32)>,
+    /// Starts of the `(0, x.f)` sequences called indirectly; see
+    /// [`GrammarCollector::note_indirect_call`].
+    indirect_call_sequences: std::collections::HashSet<u32>,
     /// Block and namespace nesting; a computed type member name is answered
     /// only outside both, where the file's top-level scope is the one it reads.
     nested_scope_depth: usize,
@@ -254,6 +257,31 @@ fn to_int32(value: f64) -> i32 {
 }
 
 impl GrammarCollector {
+    /// tsc's `isIndirectCall`: `(0, x.f)(…)`, a tagged `(0, x.f)` or
+    /// `(0, eval)(…)` discards the `0` to call without a `this`, so the
+    /// unused-comma check leaves it alone.
+    fn note_indirect_call(&mut self, callee: &Expression<'_>) {
+        let Expression::ParenthesizedExpression(parenthesized) = callee else {
+            return;
+        };
+        let Expression::SequenceExpression(sequence) = &parenthesized.expression else {
+            return;
+        };
+        let [first, last] = &sequence.expressions[..] else {
+            return;
+        };
+        let zero = matches!(first, Expression::NumericLiteral(literal) if literal.raw.as_deref() == Some("0"));
+        let access = matches!(
+            last,
+            Expression::StaticMemberExpression(_)
+                | Expression::ComputedMemberExpression(_)
+                | Expression::PrivateFieldExpression(_)
+        ) || matches!(last, Expression::Identifier(identifier) if identifier.name == "eval");
+        if zero && access {
+            self.indirect_call_sequences.insert(sequence.span.start);
+        }
+    }
+
     /// tsc's `computeEnumMemberValues`: a member without an initializer takes
     /// the previous numeric value plus one, so it needs one after a string or
     /// computed member (TS1061), and a `const enum` initializer must be a
@@ -1354,10 +1382,20 @@ impl GrammarCollector {
                             None,
                         );
                     }
-                    if ambient
-                        && let Some(value) = property.value.as_ref() {
-                            self.push(Kind::AmbientInitializer, value.span(), None);
-                        }
+                    // A `declare` field is ambient itself. tsc checks the
+                    // initializer in `checkGrammarProperty`, which a decorator on
+                    // such a field never reaches (`checkGrammarModifiers` fails
+                    // first).
+                    if (ambient || property.declare)
+                        && !(property.declare && !property.decorators.is_empty())
+                        && let Some(value) = property.value.as_ref()
+                    {
+                        self.check_ambient_initializer(
+                            value,
+                            property.readonly,
+                            property.type_annotation.is_some(),
+                        );
+                    }
                     (&property.key, property.r#static, MemberKind::Property)
                 }
                 _ => continue,
@@ -1629,6 +1667,17 @@ impl GrammarCollector {
         }
     }
 
+    /// tsc's `checkAmbientInitializer`: only a `const` (or `readonly` property)
+    /// without a type annotation may be initialized in an ambient context, and
+    /// only with a constant (TS1254); any other initializer is TS1039.
+    fn check_ambient_initializer(&mut self, initializer: &Expression<'_>, const_or_readonly: bool, has_type: bool) {
+        if !const_or_readonly || has_type {
+            self.push(Kind::AmbientInitializer, initializer.span(), None);
+        } else if !is_ambient_constant_initializer(initializer) {
+            self.push(Kind::AmbientConstInitializer, initializer.span(), None);
+        }
+    }
+
     /// A signature has no body to run a default in.
     fn check_signature_parameters(&mut self, parameters: &FormalParameters<'_>) {
         for parameter in &parameters.items {
@@ -1645,11 +1694,20 @@ impl GrammarCollector {
     fn check_variable_initializers(&mut self, declaration: &VariableDeclaration<'_>) {
         if declaration.declare || self.is_ambient() {
             // An ambient declaration declares a value rather than producing
-            // one, so it may not carry an initializer — and its missing
-            // initializer is not the `const` grammar error either.
+            // one, so its missing initializer is not the `const` grammar error.
+            let const_like = matches!(
+                declaration.kind,
+                VariableDeclarationKind::Const
+                    | VariableDeclarationKind::Using
+                    | VariableDeclarationKind::AwaitUsing
+            );
             for declarator in &declaration.declarations {
                 if let Some(initializer) = declarator.init.as_ref() {
-                    self.push(Kind::AmbientInitializer, initializer.span(), None);
+                    self.check_ambient_initializer(
+                        initializer,
+                        const_like,
+                        declarator.type_annotation.is_some(),
+                    );
                 }
             }
             return;
@@ -2100,8 +2158,10 @@ fn syntactic_nullishness(expression: &Expression<'_>) -> Option<bool> {
     }
 }
 
+/// tsc's `isSideEffectFree`, which looks through parentheses only: an `as`
+/// or `satisfies` operand counts as having effects.
 fn is_side_effect_free(expression: &Expression<'_>) -> bool {
-    match expression.get_inner_expression() {
+    match expression.without_parentheses() {
         Expression::Identifier(_)
         | Expression::StringLiteral(_)
         | Expression::RegExpLiteral(_)
@@ -2116,15 +2176,19 @@ fn is_side_effect_free(expression: &Expression<'_>) -> bool {
         | Expression::ArrowFunctionExpression(_)
         | Expression::ArrayExpression(_)
         | Expression::ObjectExpression(_)
-        | Expression::JSXElement(_)
-        | Expression::JSXFragment(_) => true,
+        | Expression::JSXElement(_) => true,
         Expression::ConditionalExpression(conditional) => {
             is_side_effect_free(&conditional.consequent)
                 && is_side_effect_free(&conditional.alternate)
         }
+        // tsc's binary expressions include the logical and comma operators.
         Expression::BinaryExpression(binary) => {
             is_side_effect_free(&binary.left) && is_side_effect_free(&binary.right)
         }
+        Expression::LogicalExpression(logical) => {
+            is_side_effect_free(&logical.left) && is_side_effect_free(&logical.right)
+        }
+        Expression::SequenceExpression(sequence) => sequence.expressions.iter().all(is_side_effect_free),
         Expression::UnaryExpression(unary) => matches!(
             unary.operator,
             UnaryOperator::LogicalNot
@@ -2365,14 +2429,28 @@ impl<'a> Visit<'a> for GrammarCollector {
         oxc_ast_visit::walk::walk_logical_expression(self, logical);
     }
 
+    fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
+        self.note_indirect_call(&call.callee);
+        oxc_ast_visit::walk::walk_call_expression(self, call);
+    }
+
+    fn visit_tagged_template_expression(
+        &mut self,
+        expression: &oxc_ast::ast::TaggedTemplateExpression<'a>,
+    ) {
+        self.note_indirect_call(&expression.tag);
+        oxc_ast_visit::walk::walk_tagged_template_expression(self, expression);
+    }
+
     fn visit_sequence_expression(&mut self, sequence: &oxc_ast::ast::SequenceExpression<'a>) {
         // Every operand but the last has its value discarded.
+        let indirect_call = self.indirect_call_sequences.contains(&sequence.span.start);
         for expression in sequence
             .expressions
             .iter()
             .take(sequence.expressions.len().saturating_sub(1))
         {
-            if is_side_effect_free(expression) {
+            if !indirect_call && is_side_effect_free(expression) {
                 self.push(Kind::UnusedCommaOperand, expression.span(), None);
             }
         }
@@ -2620,5 +2698,39 @@ fn report_enum_forward_references(
             }
         }
         _ => {}
+    }
+}
+
+/// The constants tsc's `checkAmbientInitializer` accepts: a string, numeric,
+/// bigint or boolean literal (a numeric or bigint one possibly negated) or a
+/// literal enum reference. Whether a member access is enum-typed is the
+/// checker's to know (`isInitializerSimpleLiteralEnumReference`); the walker
+/// accepts every access of the enum-reference shape.
+fn is_ambient_constant_initializer(expression: &Expression<'_>) -> bool {
+    fn is_string_or_number(expression: &Expression<'_>) -> bool {
+        match expression {
+            Expression::StringLiteral(_) | Expression::NumericLiteral(_) => true,
+            Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+            _ => false,
+        }
+    }
+    fn is_entity_name(expression: &Expression<'_>) -> bool {
+        match expression {
+            Expression::Identifier(_) => true,
+            Expression::StaticMemberExpression(member) => is_entity_name(&member.object),
+            _ => false,
+        }
+    }
+    match expression {
+        Expression::BooleanLiteral(_) | Expression::BigIntLiteral(_) => true,
+        Expression::UnaryExpression(unary) => {
+            unary.operator == UnaryOperator::UnaryNegation
+                && matches!(unary.argument, Expression::NumericLiteral(_) | Expression::BigIntLiteral(_))
+        }
+        Expression::StaticMemberExpression(_) => true,
+        Expression::ComputedMemberExpression(member) => {
+            is_string_or_number(&member.expression) && is_entity_name(&member.object)
+        }
+        other => is_string_or_number(other),
     }
 }

@@ -64,10 +64,17 @@ pub(crate) fn emit_parameter_diagnostics(
     // once that gap is closed.
     if !ctx.options.no_implicit_any
         || parameter.declared_type.is_some()
-        || parameter.initializer.is_some()
         || (!tsc_implicit_any_rule()
             && (ctx.unmodelled_jsx_props_depth > 0 || ctx.degraded_expected_type_depth > 0))
     {
+        return;
+    }
+    if let Some(initializer) = &parameter.initializer {
+        if contextual_type.is_none()
+            && let ParsedBindingName::ArrayPattern(pattern) = &parameter.binding_name
+        {
+            emit_padded_array_binding_diagnostics(pattern, initializer, ctx);
+        }
         return;
     }
 
@@ -114,8 +121,38 @@ pub(crate) fn emit_array_binding_pattern_diagnostics(
     pattern: &ParsedArrayBindingPattern,
     ctx: &mut CheckerContext,
 ) {
-    for element in pattern.elements.iter().flatten() {
-        emit_array_binding_element_diagnostic(element, ctx);
+    // tsc's `getTypeFromBindingElement` types an element with an initializer
+    // from it; only one without is an implicit `any`.
+    for (index, element) in pattern.elements.iter().enumerate() {
+        if let Some(element) = element
+            && !pattern.defaults.get(index).copied().unwrap_or(false)
+        {
+            emit_array_binding_element_diagnostic(element, ctx);
+        }
+    }
+}
+
+/// A parameter's array literal initializer contextually typed by its binding
+/// pattern is padded to the pattern's length (tsc's `checkArrayLiteral`), and
+/// a padded position without its own default is an implicit `any` that
+/// `reportErrorsFromWidening` reports at the binding element.
+fn emit_padded_array_binding_diagnostics(
+    pattern: &ParsedArrayBindingPattern,
+    initializer: &surge_ts_syntax::ParsedExpression,
+    ctx: &mut CheckerContext,
+) {
+    let surge_ts_syntax::ParsedExpression::ArrayLiteral { elements, .. } = initializer else {
+        return;
+    };
+    if elements.iter().any(|element| element.spread) {
+        return;
+    }
+    for (index, element) in pattern.elements.iter().enumerate().skip(elements.len()) {
+        if let Some(element @ ParsedBindingName::Identifier { .. }) = element
+            && !pattern.defaults.get(index).copied().unwrap_or(false)
+        {
+            emit_array_binding_element_diagnostic(element, ctx);
+        }
     }
 }
 
@@ -1156,6 +1193,14 @@ impl<'p> ParameterListResolver<'p> {
             let inferred = evaluate_expression(initializer, parameter.initializer_span, &symbols, ctx);
             self.initializer_symbols = Some(symbols);
             match inferred {
+                // Only a variable initialized with `null` or `undefined` is
+                // auto-typed; a parameter keeps the initializer's type, which
+                // widens to `any` only without strictNullChecks.
+                InferredExpression::Known(ty @ (Type::Null | Type::Undefined))
+                    if ctx.options.strict_null_checks =>
+                {
+                    ty
+                }
                 InferredExpression::Known(ty) => {
                     widen_implicit_variable_initializer_type(SymbolKind::Let, initializer, &ty, false)
                 }
@@ -2018,10 +2063,21 @@ pub(crate) fn register_function_signature(
     }
 
     if !symbol_exists || replace_existing {
+        // tsc keeps one symbol for a function and the namespace (or expando
+        // properties) merged with it: re-registering the declaration replaces
+        // only the call signature, never the members.
+        let ty = match symbols.get(&name).map(|existing| &existing.ty) {
+            Some(Type::Object(object))
+                if replace_existing && object.call_signature().is_some() && !object.properties.is_empty() =>
+            {
+                Type::Object(object.clone().with_call_signature(function_type))
+            }
+            _ => Type::Function(function_type),
+        };
         symbols.insert(
             name,
             SymbolInfo {
-                ty: Type::Function(function_type),
+                ty,
                 kind: SymbolKind::Function,
                 function_signature,
             },
@@ -2377,6 +2433,9 @@ pub(crate) fn check_function_body_with_signature(
     this_parameter_type: Option<ParsedType>,
     ctx: &mut CheckerContext,
 ) {
+    let _this_class = crate::checks::expr::ThisParameterClassScope::enter(
+        crate::checks::expr::this_parameter_class(this_parameter_type.as_ref(), type_parameters, ctx),
+    );
     let this_type = this_parameter_type.map(|this_parameter_type| {
         with_type_parameter_scope(type_parameters, ctx, |ctx| {
             crate::infer::map_parsed_type(this_parameter_type, ctx)
@@ -2525,6 +2584,16 @@ pub(crate) fn check_function_body_with_signature_and_this(
         .then(|| body_has_defaultless_switch(&body).then(|| body.clone()))
         .flatten();
     let tail_call = crate::checks::expr::tail_call_key(&body);
+    // tsc's `checkReturnStatement`: without `strictNullChecks`, a bare `return;`
+    // is TS7030 under `noImplicitReturns` unless the (unwrapped) return type is
+    // `undefined`, `void` or `any`.
+    let bare_returns = (has_explicit_return_type
+        && !is_constructor
+        && !is_generator
+        && !ctx.options.strict_null_checks
+        && ctx.options.no_implicit_returns)
+        .then(|| super::body::bare_return_spans(&body))
+        .unwrap_or_default();
 
     let root = match ctx.nested_function_scope.take() {
         Some(enclosing) => SymbolTable::with_parent(enclosing),
@@ -2607,12 +2676,22 @@ pub(crate) fn check_function_body_with_signature_and_this(
         }
     });
 
+    // The flow summary cannot see a callee's return type; the declared ones in
+    // scope decide which call statements end the flow, as a `throw` does.
+    let never_calls = super::body_statements::never_call_statements(&body, &scopes);
+    let body_flow = if never_calls.is_empty() {
+        body_flow
+    } else {
+        crate::flow::with_never_calls(&never_calls, || analyze_function_body_flow(&body))
+    };
+
     let returned_void_like = with_type_parameter_scope(type_parameters, ctx, |ctx| {
         // A declaration's own frame, never active — it has a real signature, so
         // its returns are checked. Opening one stops a nested declaration from
         // recording into an enclosing arrow's frame.
         ctx.open_contextual_return_frame();
-        let outer_async_body = std::mem::replace(&mut ctx.in_async_body, is_async && !is_generator);
+        let outer_async_body = std::mem::replace(&mut ctx.in_async_body, is_async);
+        let outer_generator_body = std::mem::replace(&mut ctx.in_generator_body, is_generator);
         // Every caller is a declaration or a class member, neither of which is
         // ever contextually typed, so an unannotated one's returns relate to
         // nothing — Go checks a return only against the annotation.
@@ -2627,6 +2706,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
             ctx,
         );
         ctx.in_async_body = outer_async_body;
+        ctx.in_generator_body = outer_generator_body;
         ctx.close_contextual_return_frame()
     });
     ctx.inherited_never_initialized = saved_never_initialized;
@@ -2666,6 +2746,11 @@ pub(crate) fn check_function_body_with_signature_and_this(
     } else {
         function_type.return_type().clone()
     };
+    if !super::body::is_undefined_void_or_any(&unwrapped_return_type) {
+        for span in bare_returns {
+            emit_implicit_return_diagnostic(Some(span), ctx);
+        }
+    }
     if has_explicit_return_type && should_check_missing_return(&unwrapped_return_type) {
         emit_missing_return_diagnostic(
             body_flow,

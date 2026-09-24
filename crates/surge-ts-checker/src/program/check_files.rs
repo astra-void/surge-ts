@@ -1031,6 +1031,7 @@ pub(crate) fn unclaimed_parser_errors<'a>(
         })
         .map(|finding| finding.span)
         .collect();
+    let in_declaration_file = surge_ts_syntax::is_declaration_file_name(&ctx.file_name);
     // tsc's parser reports `super<T>` as TS2754 and still builds the
     // expression with its type arguments, so a `.member` after it is not the
     // instantiation-expression access oxc reports as TS1477.
@@ -1062,6 +1063,19 @@ pub(crate) fn unclaimed_parser_errors<'a>(
     };
     errors.iter().filter(move |error| {
         if error.code.is_some_and(|code| claimed.contains(&code)) {
+            return false;
+        }
+        // The grammar pass ports tsc's `checkAmbientInitializer` whole — which
+        // oxc applies too broadly (a decorated `declare` field never reaches
+        // it) — so where that pass runs, oxc's TS1039 is never the report. It
+        // does not run over a declaration file.
+        if error.code == Some(1039) && !in_declaration_file {
+            return false;
+        }
+        // Likewise `checkGrammarModifiers`' decorator rules: oxc also raises
+        // TS1249 for a decorated accessor without a body, which tsc reports as
+        // TS1206, so the grammar pass's verdict is the only one.
+        if error.code == Some(1249) && !in_declaration_file {
             return false;
         }
         if error.code == Some(1477)
@@ -1175,7 +1189,12 @@ fn grammar_finding_diagnostic(
         // `allowUnreachableCode: false`; unset makes it a suggestion.
         Kind::Ts(7027) if !ctx.options.report_unreachable_code => return None,
         Kind::TsUnderStrictNullChecks(_) if !ctx.options.strict_null_checks => return None,
-        Kind::Ts(number) | Kind::TsUnderStrictNullChecks(number) => {
+        Kind::TsUnderLegacyDecorators(_) if !ctx.options.experimental_decorators => return None,
+        Kind::TsUnderEsDecorators(_) if ctx.options.experimental_decorators => return None,
+        Kind::Ts(number)
+        | Kind::TsUnderStrictNullChecks(number)
+        | Kind::TsUnderLegacyDecorators(number)
+        | Kind::TsUnderEsDecorators(number) => {
             let args: Vec<surge_ts_diagnostics::DiagnosticArg> = finding
                 .name
                 .as_deref()
@@ -1232,6 +1251,7 @@ fn grammar_finding_diagnostic(
         Kind::OptionalParameterWithInitializer => Diagnostic::ts1015(ctx.file_name.clone()),
         Kind::RequiredParameterAfterOptional => Diagnostic::ts1016(ctx.file_name.clone()),
         Kind::AmbientInitializer => Diagnostic::ts1039(ctx.file_name.clone()),
+        Kind::AmbientConstInitializer => Diagnostic::ts1254(ctx.file_name.clone()),
         Kind::SetAccessorParameterCount => Diagnostic::ts1049(ctx.file_name.clone()),
         Kind::GetAccessorWithoutReturn => Diagnostic::ts2378(ctx.file_name.clone()),
         Kind::PropertyAccessorOverride
@@ -1535,12 +1555,15 @@ pub(super) fn check_program_file(
             &parsed_file.definite_writes,
             ctx,
         );
+        ctx.namespace_require_reads =
+            super::namespace_require_reads(&parsed_file.statements, &parsed_file.module_reads);
         check_program_file_statements(
             &parsed_file.statements,
             file_index,
             &final_function_signatures,
             ctx,
         );
+        ctx.namespace_require_reads = None;
         ctx.module_value_fallback = None;
 
         if ctx.options.no_unused_locals && ctx.current_file_kind == FileKind::RootSource {
@@ -1646,12 +1669,15 @@ pub(super) fn check_program_file(
             &parsed_file.definite_writes,
             ctx,
         );
+        ctx.namespace_require_reads =
+            super::namespace_require_reads(&parsed_file.statements, &parsed_file.module_reads);
         check_program_file_statements(
             &parsed_file.statements,
             file_index,
             &shared_state.function_signatures,
             ctx,
         );
+        ctx.namespace_require_reads = None;
         ctx.module_value_fallback = None;
         record_program_timing(timings, |timings| {
             timings.per_file_statement_checking += statement_check_start.elapsed()

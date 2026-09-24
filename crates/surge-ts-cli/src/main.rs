@@ -92,8 +92,9 @@ fn resolve_color(pretty: bool) -> bool {
 }
 
 /// The display label `tsc` would use for a file: relative to the current working
-/// directory when possible (with forward slashes), otherwise the path as-is.
-/// Empty for diagnostics with no real file (globals, command-line diagnostics).
+/// directory (with forward slashes), climbing with `..` out of it as
+/// `convertToRelativePath` does. Empty for diagnostics with no real file
+/// (globals, command-line diagnostics).
 fn tsc_path_label(file_name: &str) -> String {
     if file_name.is_empty() || file_name == "<command line>" {
         return String::new();
@@ -103,8 +104,37 @@ fn tsc_path_label(file_name: &str) -> String {
         if let Ok(relative) = path.strip_prefix(&cwd) {
             return relative.to_string_lossy().replace('\\', "/");
         }
+        if let Some(relative) = relative_path_outside(&cwd, path) {
+            return relative;
+        }
     }
     file_name.replace('\\', "/")
+}
+
+/// tsc's `getRelativePathToDirectoryOrUrl` for a file outside `directory`:
+/// climb to their common ancestor with `..`, then down to the file. A file on
+/// another root keeps its absolute path.
+fn relative_path_outside(directory: &std::path::Path, path: &std::path::Path) -> Option<String> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let directory: Vec<_> = directory.components().collect();
+    let target: Vec<_> = path.components().collect();
+    let common = directory
+        .iter()
+        .zip(&target)
+        .take_while(|(left, right)| left == right)
+        .count();
+    if common == 0 || !matches!(directory.first(), Some(std::path::Component::RootDir | std::path::Component::Prefix(_))) {
+        return None;
+    }
+    let mut segments = vec!["..".to_string(); directory.len() - common];
+    segments.extend(
+        target[common..]
+            .iter()
+            .map(|component| component.as_os_str().to_string_lossy().into_owned()),
+    );
+    Some(segments.join("/"))
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -515,6 +545,8 @@ fn run_single_file_mode(
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
             allow_importing_ts_extensions: false,
+            allow_arbitrary_extensions: false,
+            experimental_decorators: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,

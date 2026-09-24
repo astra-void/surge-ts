@@ -52,11 +52,11 @@ use self::functions::parse_function_declaration;
 use self::imports::{parse_import_declarations, parse_import_equals_declaration};
 use self::interfaces::parse_interface_declaration;
 pub use self::reference_directives::{
-    extract_reference_path_directives, extract_reference_type_directives,
+    extract_check_directive, extract_reference_path_directives, extract_reference_type_directives,
 };
 use self::spans::text_span_from_oxc_span;
 use self::types::{parse_type_alias_declaration, parse_type_annotation};
-pub use entry::{ParserWorker, parse_source};
+pub use entry::{ParserWorker, is_declaration_file_name, is_javascript_file_name, parse_source};
 pub use json::{is_json_file_name, parse_json_module_type};
 pub use jsx_uses::{JsxRuntimeOptions, entity_root as jsx_entity_root, jsx_runtime_import};
 pub use number_text::js_number_to_string;
@@ -192,6 +192,23 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                 }
             };
             let Some(init) = declarator.init.as_ref() else {
+                // A destructuring declaration with no initializer — an ambient
+                // one — declares its elements with the annotation's types.
+                if let (
+                    BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_),
+                    Some(ty),
+                ) = (&declarator.id, declared_type.clone())
+                {
+                    let mut declarations = Vec::new();
+                    annotated_pattern_declarations(
+                        &declarator.id,
+                        ty,
+                        declaration.declare,
+                        kind,
+                        &mut declarations,
+                    );
+                    return declarations;
+                }
                 return parse_binding_pattern_declarations_with_definite(
                     &declarator.id,
                     None,
@@ -205,12 +222,25 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
 
             let (initializer, initializer_span) = parse_expression(init);
             let initializer_span = Some(text_span_from_oxc_span(initializer_span));
-            // An annotation is the initializer's contextual type; otherwise the
-            // pattern is.
-            let initializer = if declarator.type_annotation.is_none() {
-                with_pattern_context(&declarator.id, initializer)
-            } else {
-                initializer
+            // An annotated pattern's elements read from the annotation, which
+            // the initializer must be assignable to; an unannotated pattern is
+            // the initializer's contextual type.
+            let initializer = match (&declarator.id, declared_type.clone(), declarator.type_annotation.as_ref()) {
+                (
+                    BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_),
+                    Some(ty),
+                    Some(annotation),
+                ) => ParsedExpression::TypeAssertion {
+                    expression: Box::new(initializer),
+                    expression_span: initializer_span,
+                    ty,
+                    type_span: Some(text_span_from_oxc_span(annotation.span)),
+                    annotation: true,
+                },
+                _ if declarator.type_annotation.is_none() => {
+                    with_pattern_context(&declarator.id, initializer)
+                }
+                _ => initializer,
             };
 
             parse_binding_pattern_declarations(
@@ -230,6 +260,81 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
             other => other,
         })
         .collect()
+}
+
+/// Each element of a pattern with no initializer is typed as the annotation
+/// indexed by its key (`T["a"]`, `T[0]`), the type tsc's
+/// `getTypeForBindingElement` reads off the annotated parent. A computed key
+/// and a rest element name no single member and are left out.
+fn annotated_pattern_declarations(
+    pattern: &BindingPattern<'_>,
+    parent: crate::ParsedType,
+    is_declare: bool,
+    kind: ParsedVariableKind,
+    declarations: &mut Vec<ParsedStatement>,
+) {
+    let indexed = |index: crate::ParsedType| {
+        crate::ParsedType::IndexedAccess(std::sync::Arc::new(crate::ParsedIndexedAccessType {
+            object_type: Box::new(parent.clone()),
+            index_type: Box::new(index),
+            span: None,
+            index_span: None,
+        }))
+    };
+    match pattern {
+        BindingPattern::BindingIdentifier(identifier) => {
+            declarations.push(ParsedStatement::VariableDeclaration(Box::new(
+                ParsedVariableDeclaration {
+                    is_enum_object: false,
+                    is_declare,
+                    kind,
+                    from_binding_pattern: true,
+                    has_definite_assertion: false,
+                    array_pattern_span: None,
+                    name: identifier.name.to_string(),
+                    name_span: Some(text_span_from_oxc_span(identifier.span)),
+                    declared_type: Some(parent),
+                    initializer: None,
+                    initializer_span: None,
+                    declaration_list: None,
+                },
+            )));
+        }
+        BindingPattern::AssignmentPattern(assignment) => {
+            annotated_pattern_declarations(&assignment.left, parent, is_declare, kind, declarations);
+        }
+        BindingPattern::ObjectPattern(object) => {
+            for property in &object.properties {
+                if property.computed {
+                    continue;
+                }
+                let Some(key) = property.key.static_name() else {
+                    continue;
+                };
+                annotated_pattern_declarations(
+                    &property.value,
+                    indexed(crate::ParsedType::StringLiteral(key.to_string())),
+                    is_declare,
+                    kind,
+                    declarations,
+                );
+            }
+        }
+        BindingPattern::ArrayPattern(array) => {
+            for (index, element) in array.elements.iter().enumerate() {
+                let Some(element) = element else {
+                    continue;
+                };
+                annotated_pattern_declarations(
+                    element,
+                    indexed(crate::ParsedType::NumberLiteral(index.to_string())),
+                    is_declare,
+                    kind,
+                    declarations,
+                );
+            }
+        }
+    }
 }
 
 fn declaration_list_shape(declaration: &VariableDeclaration<'_>) -> crate::ParsedDeclarationList {
@@ -559,31 +664,57 @@ fn lower_assignment_pattern(
             }
         }
         AssignmentTarget::ObjectAssignmentTarget(pattern) => {
-            let property_read = |name: &str, span| ParsedExpression::PropertyAccess {
-                object: Box::new(source.clone()),
-                object_span: source_span,
-                property_name: name.to_string(),
-                property_span: span,
-                is_bracketed: false,
+            // A defaulted element of an object-literal source that lacks it
+            // reads `undefined` (tsc's `AccessFlags.AllowMissing`); anything
+            // else missing is TS2339 on the element.
+            let literal_properties = static_object_literal(source);
+            let property_read = |name: &str, span, has_default: bool| {
+                if has_default
+                    && literal_properties.is_some_and(|properties| literal_lacks_property(properties, name))
+                {
+                    return ParsedExpression::UndefinedLiteral;
+                }
+                if is_numeric_literal_name(name) {
+                    return numeric_name_read(source.clone(), source_span, name, span);
+                }
+                ParsedExpression::PropertyAccess {
+                    object: Box::new(source.clone()),
+                    object_span: source_span,
+                    property_name: name.to_string(),
+                    property_span: span,
+                    is_bracketed: true,
+                    binding_element: true,
+                }
             };
             for property in &pattern.properties {
                 match property {
                     AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(shorthand) => {
                         let identifier = &shorthand.binding;
                         let span = Some(text_span_from_oxc_span(identifier.span));
-                        let read = property_read(&identifier.name, span);
+                        let read = property_read(&identifier.name, span, shorthand.init.is_some());
                         let value = with_default(read, shorthand.init.as_ref());
                         assign_identifier(identifier, value, assignments);
                     }
                     AssignmentTargetProperty::AssignmentTargetPropertyProperty(property) => {
-                        let Some(name) = property.name.static_name() else {
-                            continue;
-                        };
                         let Some((target, default)) = split_default(&property.binding) else {
                             continue;
                         };
                         let span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(target)));
-                        let value = with_default(property_read(&name, span), default);
+                        let read = match property.name.static_name() {
+                            Some(name) => property_read(&name, span, default.is_some()),
+                            // A computed key's target reads the source indexed by
+                            // the key, evaluated where the pattern reaches it.
+                            None => match property.name.as_expression() {
+                                Some(key) => ParsedExpression::ElementAccess {
+                                    object: Box::new(source.clone()),
+                                    object_span: source_span,
+                                    index: Box::new(parse_expression(key).0),
+                                    index_span: Some(text_span_from_oxc_span(oxc_span::GetSpan::span(key))),
+                                },
+                                None => continue,
+                            },
+                        };
+                        let value = with_default(read, default);
                         assign(target, value, assignments);
                     }
                 }
@@ -807,7 +938,24 @@ fn parse_object_binding_property_declarations(
     kind: ParsedVariableKind,
 ) -> Vec<ParsedStatement> {
     let Some((property_name, key_span)) = binding_property_key(&property.key) else {
-        return Vec::new();
+        // A computed key's element reads the source indexed by the key.
+        let Some(key) = property.key.as_expression() else {
+            return Vec::new();
+        };
+        let key_span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(&property.key)));
+        return parse_binding_pattern_declarations(
+            &property.value,
+            Some(ParsedExpression::ElementAccess {
+                object: Box::new(source_initializer),
+                object_span: source_initializer_span,
+                index: Box::new(parse_expression(key).0),
+                index_span: key_span,
+            }),
+            key_span,
+            is_declare,
+            kind,
+            None,
+        );
     };
 
     // An object literal initializer is contextually typed by the pattern, whose
@@ -863,6 +1011,7 @@ fn parse_object_binding_property_declarations(
             property_name,
             property_span: Some(text_span_from_oxc_span(key_span)),
             is_bracketed: true,
+            binding_element: true,
         }
     };
 
@@ -874,6 +1023,36 @@ fn parse_object_binding_property_declarations(
         kind,
         None,
     )
+}
+
+/// A numeric name read from `source`. An array literal source is
+/// contextually a tuple under a pattern with numeric names (tsc's
+/// `isTupleLikeType`), so the name takes its own element.
+fn numeric_name_read(
+    source: ParsedExpression,
+    source_span: Option<crate::TextSpan>,
+    name: &str,
+    span: Option<crate::TextSpan>,
+) -> ParsedExpression {
+    if let ParsedExpression::ArrayLiteral { elements, .. } = &source
+        && let Ok(index) = name.parse::<usize>()
+        && index < elements.len()
+        && elements.iter().take(index + 1).all(|element| !element.spread)
+    {
+        return elements[index].expression.clone();
+    }
+    ParsedExpression::ElementAccess {
+        object: Box::new(source),
+        object_span: source_span,
+        index: Box::new(ParsedExpression::NumberLiteral(name.to_string())),
+        index_span: span,
+    }
+}
+
+/// tsc's `isNumericLiteralName`: the name is the canonical text of a number.
+fn is_numeric_literal_name(name: &str) -> bool {
+    name.parse::<f64>()
+        .is_ok_and(|value| number_text::js_number_to_string(value) == name)
 }
 
 /// The property a non-computed binding property reads. A quoted or numeric key
@@ -916,6 +1095,31 @@ fn static_object_literal(expression: &ParsedExpression) -> Option<&[crate::Parse
     }
 }
 
+/// The elements of the array literal `expression` statically evaluates to, as
+/// [`static_object_literal`] finds an object literal.
+fn static_array_literal(expression: &ParsedExpression) -> Option<&[crate::ParsedArrayElement]> {
+    match expression {
+        ParsedExpression::ArrayLiteral { elements, .. } => Some(elements),
+        ParsedExpression::ConstAssertion { expression, .. } => static_array_literal(expression),
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } => {
+            let properties = static_object_literal(object)?;
+            let property = properties
+                .iter()
+                .find(|property| property.name == *property_name && !property.is_spread)?;
+            static_array_literal(&property.value)
+        }
+        ParsedExpression::NullishCoalescing { left, right, .. } => match left.as_ref() {
+            ParsedExpression::UndefinedLiteral => static_array_literal(right),
+            left => static_array_literal(left),
+        },
+        _ => None,
+    }
+}
+
 /// Whether a literal certainly does not write `name`: a spread or a computed key
 /// could supply it.
 fn literal_lacks_property(properties: &[crate::ParsedObjectProperty], name: &str) -> bool {
@@ -944,7 +1148,14 @@ fn parse_array_pattern_declarations(
 
         // tsc reports an element the source lacks on the binding element itself.
         let element_span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(element)));
-        let element_initializer = match &initializer {
+        // An array literal initializer is contextually typed by the pattern as
+        // a tuple (`getTypeFromArrayBindingPattern`), so each element reads its
+        // own entry rather than the union of all of them.
+        let literal_element = static_array_literal(&initializer).and_then(|elements| {
+            (index < elements.len() && elements.iter().take(index + 1).all(|element| !element.spread))
+                .then(|| elements[index].expression.clone())
+        });
+        let element_initializer = literal_element.unwrap_or_else(|| match &initializer {
             ParsedExpression::Identifier { name, .. } => ParsedExpression::IndexAccess {
                 object_name: name.clone(),
                 object_span: initializer_span,
@@ -960,7 +1171,7 @@ fn parse_array_pattern_declarations(
                 index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
                 index_span: element_span,
             },
-        };
+        });
 
         declarations.extend(parse_binding_pattern_declarations(
             element,

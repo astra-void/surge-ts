@@ -31,7 +31,6 @@ impl<'a> ContextCollector<'a, '_> {
     /// Runs before `kind` is pushed, so `self.stack` holds its ancestors.
     pub(super) fn check_member_placement(&mut self, kind: &AstKind<'a>) {
         match kind {
-            AstKind::Super(expression) => self.check_super_follower(expression.span),
             AstKind::PrivateInExpression(expression) => {
                 if !self.in_class() {
                     self.push(18016, expression.left.span, &[]);
@@ -152,21 +151,6 @@ impl<'a> ContextCollector<'a, '_> {
             }
             _ => {}
         }
-    }
-
-    /// The parser's `parseSuperExpression`: after `super` only `(`, `.`, or
-    /// `[` may follow (a `<` starts type arguments, which it reports
-    /// separately); TS1034 lands on whatever token came instead.
-    fn check_super_follower(&mut self, span: Span) {
-        let start = skip_trivia(self.source_text, span.end as usize);
-        if matches!(
-            self.source_text[start..].chars().next(),
-            Some('(' | '.' | '[' | '<')
-        ) {
-            return;
-        }
-        let end = first_token_end(self.source_text, start);
-        self.push(1034, Span::new(start as u32, end as u32), &[]);
     }
 
     fn check_method_definition(&mut self, method: &MethodDefinition<'a>) {
@@ -659,9 +643,10 @@ impl<'a> ContextCollector<'a, '_> {
 
     /// The modifier keywords written on the same line right before `start`,
     /// for a node whose span oxc begins after them. `floor` bounds the scan
-    /// (a decorator's end).
+    /// (a decorator's end); a span that already covers its decorators, as a
+    /// decorated rest parameter's does, has nothing before it to read.
     fn preceding_modifiers(&self, start: u32, floor: Option<u32>) -> Vec<(&'a str, Span)> {
-        let floor = floor.unwrap_or(0) as usize;
+        let floor = floor.unwrap_or(0).min(start) as usize;
         let mut words = Vec::new();
         let mut end = start as usize;
         loop {

@@ -274,8 +274,10 @@ fn infer_member_type(
         },
     );
     match &member.source {
+        // tsc's `getReturnTypeFromBody` widens what the body returns.
         surge_ts_syntax::ParsedInferredMemberSource::GetterBody(body) => {
             infer_statements_return(body, scope, ctx)
+                .map(|ty| crate::checks::var::widen_nullable_type(&ty))
         }
         surge_ts_syntax::ParsedInferredMemberSource::Initializer(initializer) => {
             let mut shadow = body_inference_shadow_context(ctx);
@@ -289,6 +291,35 @@ fn infer_member_type(
             } else {
                 crate::checks::expr::widen_type(&ty)
             };
+            let ty = crate::checks::var::widen_nullable_type(&ty);
+            type_is_deeply_concrete(&ty).then_some(ty)
+        }
+        // tsc's `getWidenedTypeForAssignmentDeclaration` for `this.x = v`: the
+        // union of what is assigned, widened, with `undefined` for a member
+        // only methods assign; an empty array is `any[]`, and a member
+        // assigned nothing but `null` or `undefined` is `any`.
+        surge_ts_syntax::ParsedInferredMemberSource::ThisAssignments(assignments) => {
+            let mut shadow = body_inference_shadow_context(ctx);
+            let mut types = Vec::with_capacity(assignments.values.len() + 1);
+            for value in &assignments.values {
+                if matches!(value, surge_ts_syntax::ParsedExpression::ArrayLiteral { elements, .. } if elements.is_empty()) {
+                    types.push(Type::Array(Box::new(Type::Any)));
+                    continue;
+                }
+                let crate::infer::InferredExpression::Known(ty) =
+                    crate::infer::infer_expression(value, &scope, &mut shadow)
+                else {
+                    return None;
+                };
+                types.push(crate::checks::expr::widen_type(&ty));
+            }
+            if types.iter().all(|ty| matches!(ty, Type::Null | Type::Undefined)) {
+                return Some(Type::Any);
+            }
+            if !assignments.in_constructor && surge_ts_types::strict_null_checks() {
+                types.push(Type::Undefined);
+            }
+            let ty = surge_ts_types::union_type(types);
             type_is_deeply_concrete(&ty).then_some(ty)
         }
     }
@@ -607,12 +638,16 @@ fn infer_statements_return(
         &mut shadow,
     );
     drop(shadow);
+    // A body that returns nothing is `void` (`getReturnTypeFromBody`).
+    if usable && returned.is_empty() {
+        return Some(Type::Void);
+    }
     // tsc widens the fresh literals a returned expression carries
     // (`getReturnTypeFromBody` runs the result through the widening machinery),
     // so `return { importName: "trpc" }` is `{ importName: string }`. Freezing
     // the literal instead publishes a type far narrower than the declaration's,
     // and every consumer compares against the wrong one.
-    let inferred = (usable && !returned.is_empty())
+    let inferred = usable
         .then(|| crate::checks::expr::widen_type(&surge_ts_types::union_type(returned)))
         .filter(usable_type)?;
     Some(inferred)
@@ -1607,6 +1642,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
         span: arrow_span,
     } = arrow;
     let is_argument = std::mem::take(&mut ctx.next_arrow_is_argument);
+    let context_only = std::mem::take(&mut ctx.next_arrow_context_only);
     check_type_parameter_declarations(&type_parameters, ctx);
 
     // An arrow does not bind `this`, so it keeps whatever the enclosing function
@@ -1619,6 +1655,8 @@ pub(crate) fn check_arrow_function_expression_anchored(
         surge_ts_syntax::ParsedThisBinding::Own => ctx.this_is_implicitly_any = false,
         surge_ts_syntax::ParsedThisBinding::ImplicitAny => ctx.this_is_implicitly_any = true,
     }
+    let _this_class = (!matches!(this_binding, surge_ts_syntax::ParsedThisBinding::Inherited))
+        .then(|| crate::checks::expr::ThisParameterClassScope::enter(None));
 
     let mut expanded_contextual_parameter_types = expected_type
         .map(|expected_type| contextual_parameter_types(expected_type, parameters.len()));
@@ -1909,8 +1947,13 @@ pub(crate) fn check_arrow_function_expression_anchored(
                         if matches!(body_type, Type::ErrorType) {
                             return_type = Type::ErrorType;
                         } else if !body_type.is_unknown() {
+                            // An argument after a call's first failing one is
+                            // related to nothing, its body included.
+                            let withheld_argument = context_only
+                                && ctx.suppressed_argument_mismatch_span.is_some();
                             if expected_type.is_some()
                                 && !is_async
+                                && !withheld_argument
                                 && parameters
                                     .iter()
                                     .all(|parameter| parameter.declared_type.is_none())
@@ -1985,8 +2028,16 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     ctx.activate_next_body_frame();
                 }
                 ctx.open_contextual_return_frame();
-                let outer_async_body =
-                    std::mem::replace(&mut ctx.in_async_body, is_async && !is_generator);
+                // tsc relates a generator's returns to its `TReturn` only under a
+                // return type annotation (`getReturnTypeFromAnnotation`); a
+                // contextually typed one is related by its whole signature.
+                let annotated_generator = is_generator && has_explicit_return_type;
+                let outer_async_body = std::mem::replace(
+                    &mut ctx.in_async_body,
+                    is_async && (!is_generator || annotated_generator),
+                );
+                let outer_generator_body =
+                    std::mem::replace(&mut ctx.in_generator_body, annotated_generator);
                 check_function_body(
                     statements,
                     return_type_for_body,
@@ -1995,6 +2046,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     ctx,
                 );
                 ctx.in_async_body = outer_async_body;
+                ctx.in_generator_body = outer_generator_body;
                 let body_flow = match recheck_body {
                     Some(body)
                         if !ctx.non_exhaustive_switches.is_empty()
@@ -2031,6 +2083,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 // that instead.
                 if let Some(returned_types) = ctx.take_contextual_return_mismatch()
                     && let Some(expected_type) = expected_type
+                    && !context_only
                 {
                     emit_contextual_signature_mismatch(
                         &parameter_types,

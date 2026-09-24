@@ -337,15 +337,24 @@ pub(crate) fn resolve_parsed_type(
                 ctx,
             );
 
+            // Inside another file's declaration the name is that module's
+            // lexically: its own value wins over anything the consumer binds
+            // under the same name (`interface Thing { n: typeof x }` read from
+            // a file with its own `x`).
+            let declaring_module_symbol = (ctx.cross_file_resolution_depth > 0)
+                .then(|| {
+                    let file_name = ctx.file_name.clone();
+                    ctx.module_local_values_for_file(&file_name)
+                        .and_then(|table| table.get(&type_of.name).cloned())
+                })
+                .flatten();
             // `typeof X` references a value. During type-declaration resolution the
             // file's imported value bindings may not yet be in `ctx.symbols`, so on
             // a miss consult the module's full value table (the same forward-ref
             // fallback used when checking expressions); genuinely-missing names
             // still report TS2304.
-            let symbol = ctx
-                .symbols
-                .get(&type_of.name)
-                .cloned()
+            let symbol = declaring_module_symbol
+                .or_else(|| ctx.symbols.get(&type_of.name).cloned())
                 .or_else(|| {
                     ctx.signature_parameter_bindings
                         .iter()

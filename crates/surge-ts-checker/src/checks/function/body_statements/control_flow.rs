@@ -1452,20 +1452,14 @@ pub(crate) fn check_function_try_statement(
             widen_assigned_bindings(&[&try_block_for_widening], scopes);
             scopes.push_child();
             if let Some(binding_name) = handler_clause.binding_name.as_ref() {
-                let declared_type = handler_clause
-                    .declared_type
-                    .clone()
-                    .map(|ty| map_parsed_type(ty, ctx));
-                report_catch_annotation(
-                    declared_type.as_ref(),
-                    handler_clause.declared_type_span,
-                    ctx,
-                );
                 // tsc types an unannotated catch variable `unknown` under
                 // `strict` (`useUnknownInCatchVariables`), and rejects it as a
                 // source for any parameter that is not `unknown`/`any`.
-                let catch_type =
-                    declared_type.unwrap_or(if ctx.options.use_unknown_in_catch_variables {
+                let catch_type = handler_clause
+                    .declared_type
+                    .as_ref()
+                    .map(|declared| catch_annotation_type(declared, handler_clause.declared_type_span, ctx))
+                    .unwrap_or(if ctx.options.use_unknown_in_catch_variables {
                         Type::GenuineUnknown
                     } else {
                         Type::Any
@@ -1556,20 +1550,14 @@ pub(crate) fn check_function_try_statement(
             widen_assigned_bindings(&[&try_block_for_widening], scopes);
             scopes.push_child();
             if let Some(binding_name) = handler_clause.binding_name.as_ref() {
-                let declared_type = handler_clause
-                    .declared_type
-                    .clone()
-                    .map(|ty| map_parsed_type(ty, ctx));
-                report_catch_annotation(
-                    declared_type.as_ref(),
-                    handler_clause.declared_type_span,
-                    ctx,
-                );
                 // tsc types an unannotated catch variable `unknown` under
                 // `strict` (`useUnknownInCatchVariables`), and rejects it as a
                 // source for any parameter that is not `unknown`/`any`.
-                let catch_type =
-                    declared_type.unwrap_or(if ctx.options.use_unknown_in_catch_variables {
+                let catch_type = handler_clause
+                    .declared_type
+                    .as_ref()
+                    .map(|declared| catch_annotation_type(declared, handler_clause.declared_type_span, ctx))
+                    .unwrap_or(if ctx.options.use_unknown_in_catch_variables {
                         Type::GenuineUnknown
                     } else {
                         Type::Any
@@ -1644,26 +1632,25 @@ pub(crate) fn check_function_throw_statement(
     );
 }
 
-/// tsc's `checkCatchClause`: TS1196 on the annotation's type node unless it
-/// resolves to `any` or `unknown`. An alias of either passes, and a type
-/// surge could not model is not reported against.
-fn report_catch_annotation(
-    declared_type: Option<&Type>,
+/// tsc's `checkTryStatement` and its catch variable's type: the annotation
+/// must resolve to `any` or `unknown` (an alias of either is fine), TS1196 on
+/// it otherwise, and a rejected annotation types the variable as the error
+/// type rather than as what it names.
+fn catch_annotation_type(
+    declared: &surge_ts_syntax::ParsedType,
     span: Option<surge_ts_syntax::TextSpan>,
     ctx: &mut CheckerContext,
-) {
-    let Some(declared_type) = declared_type else {
-        return;
-    };
-    if matches!(
-        declared_type,
-        Type::Any | Type::GenuineUnknown | Type::Unknown | Type::ErrorType
-    ) {
-        return;
+) -> Type {
+    let ty = map_parsed_type(declared.clone(), ctx);
+    if matches!(ty.peeled(), Type::Any | Type::GenuineUnknown | Type::ErrorType)
+        || ty.peeled().is_unmodelled()
+    {
+        return ty;
     }
     let mut diagnostic = Diagnostic::ts1196(ctx.file_name.clone());
     if let Some(span) = span {
         diagnostic = diagnostic.with_span(convert_span(span));
     }
     ctx.push(diagnostic);
+    Type::ErrorType
 }

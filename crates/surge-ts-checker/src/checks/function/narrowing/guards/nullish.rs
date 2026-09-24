@@ -185,46 +185,71 @@ pub(crate) fn narrow_nullish_equality_symbol_table(
                 return None;
             };
             let symbol = symbols.get(name)?;
-            let symbol_ty = symbol.ty.peeled();
-            let Type::Object(object_type) = &symbol_ty else {
-                return None;
-            };
-            let property = object_type.properties.get(property_name.as_str())?;
-            // An optional property carries its `undefined` in the `optional` flag
-            // rather than the type, so splitting on it also clears the flag.
-            let (narrowed_ty, narrowed_optional) =
-                match narrow_union_by_nullish(&property.ty, keep_matching, test) {
-                    Some(narrowed) => {
-                        (narrowed, property.optional && keep_matching == test.undefined)
-                    }
-                    None if property.optional && test.undefined => {
-                        if keep_matching {
-                            (Type::Undefined, true)
-                        } else {
-                            (property.ty.clone(), false)
+            let narrow_object = |object_type: &surge_ts_types::ObjectType| {
+                let property = object_type.properties.get(property_name.as_str())?;
+                // An optional property carries its `undefined` in the `optional`
+                // flag rather than the type, so splitting on it also clears the flag.
+                let (narrowed_ty, narrowed_optional) =
+                    match narrow_union_by_nullish(&property.ty, keep_matching, test) {
+                        Some(narrowed) => {
+                            (narrowed, property.optional && keep_matching == test.undefined)
                         }
+                        None if property.optional && test.undefined => {
+                            if keep_matching {
+                                (Type::Undefined, true)
+                            } else {
+                                (property.ty.clone(), false)
+                            }
+                        }
+                        None => return None,
+                    };
+                let mut new_object = object_type.clone();
+                let properties = std::sync::Arc::make_mut(&mut new_object.properties);
+                properties.insert(
+                    property_name.as_str().into(),
+                    surge_ts_types::ObjectProperty {
+                        ty: narrowed_ty,
+                        optional: narrowed_optional,
+                        method: property.method,
+                        readonly: property.readonly,
+                        restriction: property.restriction.clone(),
+                        index_slot: property.index_slot,
+                    },
+                );
+                Some(new_object)
+            };
+            // tsc narrows the reference `o.p` itself; surge rewrites the property
+            // on the base's type instead, and on a union base in every member.
+            let narrowed = match symbol.ty.peeled() {
+                Type::Object(object_type) => Type::Object(narrow_object(&object_type)?),
+                Type::Union(union) => {
+                    let mut changed = false;
+                    let members: Vec<Type> = union
+                        .types()
+                        .iter()
+                        .map(|member| match member.peeled() {
+                            Type::Object(object_type) => match narrow_object(&object_type) {
+                                Some(narrowed) => {
+                                    changed = true;
+                                    Type::Object(narrowed)
+                                }
+                                None => member.clone(),
+                            },
+                            _ => member.clone(),
+                        })
+                        .collect();
+                    if !changed {
+                        return None;
                     }
-                    None => return None,
-                };
-
-            let mut new_object = object_type.clone();
-            let properties = std::sync::Arc::make_mut(&mut new_object.properties);
-            properties.insert(
-                property_name.as_str().into(),
-                surge_ts_types::ObjectProperty {
-                    ty: narrowed_ty,
-                    optional: narrowed_optional,
-                    method: property.method,
-                    readonly: property.readonly,
-                    restriction: property.restriction.clone(),
-                    index_slot: property.index_slot,
-                },
-            );
+                    union_type(members)
+                }
+                _ => return None,
+            };
             let mut narrowed_symbols = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
             narrowed_symbols.insert_narrowed(
                 name.clone(),
                 SymbolInfo {
-                    ty: Type::Object(new_object),
+                    ty: narrowed,
                     kind: symbol.kind,
                     function_signature: symbol.function_signature.clone(),
                 },

@@ -303,6 +303,8 @@ impl Project {
         let mut reference_type_resolver = package_declarations::ReferenceTypeDirectiveResolver::new(
             &loaded.root_dir,
             &loaded.compiler_options.type_roots,
+            loaded.compiler_options.allow_js,
+            loaded.compiler_options.no_resolve,
         );
 
         let mut specifier_scanner =
@@ -635,12 +637,6 @@ impl Project {
             checker_types.push("*".to_string());
         }
 
-        if loaded.compiler_options.allow_synthetic_default_imports {
-            resolved_modules.insert(
-                CheckerOptions::ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL.to_string(),
-                String::new(),
-            );
-        }
         if loaded
             .compiler_options
             .lib
@@ -683,7 +679,11 @@ impl Project {
                 .compiler_options
                 .no_property_access_from_index_signature,
             no_unchecked_indexed_access: loaded.compiler_options.no_unchecked_indexed_access,
-            allow_importing_ts_extensions: loaded.compiler_options.allow_importing_ts_extensions,
+            // tsc's `GetAllowImportingTsExtensions`.
+            allow_importing_ts_extensions: loaded.compiler_options.allow_importing_ts_extensions
+                || loaded.compiler_options.rewrite_relative_import_extensions,
+            allow_arbitrary_extensions: loaded.compiler_options.allow_arbitrary_extensions,
+            experimental_decorators: loaded.compiler_options.experimental_decorators,
             no_unused_locals: loaded.compiler_options.no_unused_locals,
             no_unused_parameters: loaded.compiler_options.no_unused_parameters,
             allow_unreachable_code: loaded.compiler_options.allow_unreachable_code,
@@ -757,6 +757,14 @@ impl Project {
             result.diagnostics
         } else if !program_diagnostics.is_empty() {
             program_diagnostics
+        } else if loaded.compiler_options.no_check {
+            // tsc's `SkipTypeChecking`: every file's bind, check and inclusion
+            // diagnostics are skipped, leaving the location-less ones.
+            result
+                .diagnostics
+                .into_iter()
+                .filter(|diagnostic| diagnostic.file_name.is_empty())
+                .collect()
         } else {
             let mut diagnostics = apply_project_no_lib_compatibility_diagnostics(
                 result.diagnostics,
@@ -773,6 +781,26 @@ impl Project {
                         TextSpan {
                             start: missing.value_span.start,
                             end: missing.value_span.end,
+                        },
+                    ),
+                );
+            }
+            // tsc's `checkGrammarForUseStrictSimpleParameterList` runs from
+            // ES2016 on, a target the grammar pass that finds these cannot see.
+            if loaded.compiler_options.target < ScriptTarget::ES2016 {
+                diagnostics.retain(|diagnostic| {
+                    !matches!(diagnostic.code, surge_ts_diagnostics::DiagnosticCode::TypeScript(1346 | 1347))
+                });
+            }
+            for unresolved in &reference_type_resolution.unresolved_paths {
+                if loaded.compiler_options.skip_lib_check && unresolved.from_declaration_file {
+                    continue;
+                }
+                diagnostics.push(
+                    reference_path_diagnostic(unresolved, reference_type_resolution.allow_js).with_span(
+                        TextSpan {
+                            start: unresolved.value_span.start,
+                            end: unresolved.value_span.end,
                         },
                     ),
                 );
@@ -866,6 +894,32 @@ fn read_project_sources(
         sources.extend(chunk?);
     }
     Ok(sources)
+}
+
+/// tsgo's `getSourceFileFromReference` messages for a `/// <reference path>`
+/// that names no file: the path as written with its slashes normalized, and
+/// every supported extension, flattened.
+fn reference_path_diagnostic(
+    unresolved: &package_declarations::UnresolvedReferencePath,
+    allow_js: bool,
+) -> Diagnostic {
+    use package_declarations::ReferencePathFailure;
+    let path = unresolved.path.replace('\\', "/");
+    let file_name = unresolved.file_name.clone();
+    let extensions = || {
+        package_declarations::supported_extensions(allow_js)
+            .iter()
+            .map(|extension| format!("'{extension}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match unresolved.failure {
+        ReferencePathFailure::NotFound => Diagnostic::ts6053(path, file_name),
+        ReferencePathFailure::NoExtensionMatched => Diagnostic::ts6231(path, extensions(), file_name),
+        ReferencePathFailure::JavaScriptFile => Diagnostic::ts6504(path, file_name),
+        ReferencePathFailure::UnsupportedExtension => Diagnostic::ts6054(path, extensions(), file_name),
+        ReferencePathFailure::SelfReference => Diagnostic::ts1006(file_name),
+    }
 }
 
 /// `TS5102`/`TS5108` for every compiler option TypeScript 7 removed, spanned
@@ -1055,8 +1109,9 @@ fn checker_module_emit(kind: surge_ts_config::ModuleKind) -> surge_ts_checker::M
 }
 
 /// The files whose implied module format under node16/nodenext resolution is
-/// ESM: an `.mts`, or a `.ts`/`.tsx` whose nearest `package.json` says
-/// `"type": "module"` (tsgo's `getImpliedNodeFormatForFile`).
+/// ESM: an `.mts`/`.mjs`, or a `.ts`/`.tsx`/`.js`/`.jsx` — declaration files
+/// included — whose nearest `package.json` says `"type": "module"` (tsgo's
+/// `GetImpliedNodeFormatForFile`).
 fn esm_format_files<'a>(
     files: impl Iterator<Item = (&'a std::path::Path, &'a str)>,
 ) -> std::collections::HashSet<String> {
@@ -1090,11 +1145,14 @@ fn esm_format_files<'a>(
     let mut esm = std::collections::HashSet::new();
     for (path, name) in files {
         let lower = name.to_ascii_lowercase();
-        let is_esm = if lower.ends_with(".mts") {
+        let is_esm = if lower.ends_with(".mts") || lower.ends_with(".mjs") {
             true
-        } else if lower.ends_with(".cts") || lower.ends_with(".d.ts") {
+        } else if lower.ends_with(".cts") || lower.ends_with(".cjs") {
             false
-        } else if lower.ends_with(".ts") || lower.ends_with(".tsx") {
+        } else if [".ts", ".tsx", ".js", ".jsx"]
+            .iter()
+            .any(|extension| lower.ends_with(extension))
+        {
             path.parent().is_some_and(&mut is_module_package)
         } else {
             false

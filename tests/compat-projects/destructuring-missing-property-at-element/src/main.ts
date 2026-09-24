@@ -1,0 +1,13 @@
+declare const source: { a: number; nested: { b: string } };
+const { a, missing } = source;
+const { nested: { b, gone } } = source;
+const { fallback = 1 } = {};
+const { absent } = {};
+const empty = {};
+const { later = 2 } = empty;
+let x: number, y: string;
+({ x = 5 } = {});
+({ y } = {});
+const { f: [first, second, { third, fourth }] } = { f: [1, 2, { third: 3, fourth: "4" }] };
+const [one, [two, three], { deep }] = [1, [2, 3], { deep: true }];
+export const used = [a, missing, b, gone, fallback, absent, later, x, y, first, second, third, fourth, one, two, three, deep];

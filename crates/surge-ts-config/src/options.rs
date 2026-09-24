@@ -93,6 +93,16 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
         support: TsConfigOptionSupport::Supported,
     },
     TsConfigOptionDefinition {
+        name: "noCheck",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
+        name: "noResolve",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
         name: "skipLibCheck",
         value_kind: TsConfigOptionValueKind::Boolean,
         support: TsConfigOptionSupport::Supported,

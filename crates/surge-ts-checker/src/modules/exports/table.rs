@@ -204,6 +204,7 @@ pub(crate) fn build_module_export_table(
         default_symbol,
         export_assignment_symbol,
         writes_export_assignment: parsed_file.statements.iter().any(is_export_assignment),
+        export_assignment_names_module: false,
         namespace_export_object_type: None,
         has_unresolved_star_export: false,
         has_incomplete_declaration_surface: module_has_incomplete_declaration_surface(parsed_file),
@@ -255,6 +256,7 @@ fn build_json_module_export_table(
         default_symbol: Some(Arc::new(value_symbol(value_type.clone()))),
         export_assignment_symbol: Some(Arc::new(value_symbol(value_type.clone()))),
         writes_export_assignment: true,
+        export_assignment_names_module: false,
         has_unresolved_star_export: false,
         namespace_export_object_type: Some(value_type),
         has_incomplete_declaration_surface: false,
@@ -324,6 +326,11 @@ fn adopt_export_assignment_alias(
     if resolved_export_table.export_assignment_symbol.is_none() {
         resolved_export_table.export_assignment_symbol =
             target_export_table.export_assignment_symbol.clone();
+        resolved_export_table.export_assignment_names_module = target_export_table
+            .export_assignment_symbol
+            .is_none()
+            && (!target_export_table.writes_export_assignment
+                || target_export_table.export_assignment_names_module);
     }
 
     if resolved_export_table.default_symbol.is_none() {
@@ -872,6 +879,45 @@ pub(crate) fn resolve_module_export_table(
                 };
                 for specifier in specifiers {
                     let specifier_is_type_only = *is_type_only || specifier.is_type_only;
+                    // `getTargetOfExportSpecifier` sends `default` through
+                    // `getTargetOfModuleDefault`, where a synthetic default wins.
+                    if specifier.local_name == "default"
+                        && can_have_synthetic_default(
+                            ctx,
+                            resolved_index.and_then(|index| parsed_files.get(index)),
+                            &target_export_table,
+                        )
+                    {
+                        let value = external_module_value(
+                            &target_export_table,
+                            resolved_index,
+                            module_specifier,
+                            parsed_files,
+                            ctx,
+                        );
+                        republish_value_export(
+                            &mut resolved_export_table,
+                            &specifier.exported_name,
+                            value,
+                        );
+                        if specifier_is_type_only {
+                            resolved_export_table.mark_type_only_export(
+                                &specifier.exported_name,
+                                TypeOnlyAliasKind::Export,
+                            );
+                        }
+                        if let Some(type_export) =
+                            lookup_type_export(&target_export_table, EXPORT_ASSIGNMENT_NAME)
+                        {
+                            export_local_type_declaration(
+                                type_export,
+                                &specifier.exported_name,
+                                None,
+                                Arc::make_mut(&mut resolved_export_table.type_declarations),
+                            );
+                        }
+                        continue;
+                    }
                     let type_export =
                         lookup_type_export(&target_export_table, &specifier.local_name);
                     let value_export =
@@ -1061,7 +1107,7 @@ pub(crate) fn resolve_module_export_table(
                 module_specifier_span,
                 ..
             } => {
-                let Some((target_export_table, _resolved_index)) = try_resolve_module_export_table(
+                let Some((target_export_table, resolved_index)) = try_resolve_module_export_table(
                     module_specifier,
                     ctx,
                     parsed_files,
@@ -1095,11 +1141,31 @@ pub(crate) fn resolve_module_export_table(
                 };
 
                 ctx.set_file_name(parsed_file.file_name.clone());
-                insert_namespace_export(
-                    &mut resolved_export_table.symbols,
-                    exported_name,
-                    &target_export_table,
-                );
+                if exported_name == "default" {
+                    // `export * as default` is the module's default export
+                    // (`isSyntacticDefault` counts a namespace export).
+                    if resolved_export_table.default_symbol.is_none() {
+                        let namespace_type = namespace_export_object_type(&target_export_table);
+                        let namespace_type =
+                            match resolved_index.and_then(|index| parsed_files.get(index)) {
+                                Some(file) => {
+                                    tag_namespace_type_with_module_path(namespace_type, &file.file_name)
+                                }
+                                None => namespace_type,
+                            };
+                        resolved_export_table.default_symbol = Some(Arc::new(SymbolInfo {
+                            ty: namespace_type,
+                            kind: SymbolKind::Const,
+                            function_signature: None,
+                        }));
+                    }
+                } else {
+                    insert_namespace_export(
+                        &mut resolved_export_table.symbols,
+                        exported_name,
+                        &target_export_table,
+                    );
+                }
                 copy_namespace_member_type_exports(
                     &target_export_table,
                     exported_name,

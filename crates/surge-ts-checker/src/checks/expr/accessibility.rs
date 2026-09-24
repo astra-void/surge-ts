@@ -1,11 +1,12 @@
 //! `private`/`protected` member access (tsc's `checkPropertyAccessibility`).
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
     ParsedAccessorSide, ParsedClassDeclaration, ParsedExpression, ParsedMemberAccessibility,
-    TextSpan as SyntaxTextSpan,
+    ParsedType, ParsedTypeParameter, TextSpan as SyntaxTextSpan,
 };
 use surge_ts_types::Type;
 
@@ -46,6 +47,64 @@ fn display_name(info: &InterfaceInfo) -> String {
         .as_deref()
         .unwrap_or(&info.name)
         .to_string()
+}
+
+/// The class named by the `this` parameter of the function being checked
+/// (tsc's `getEnclosingClassFromThisParameter`), with the classes it extends,
+/// which it reaches the protected instance members of.
+#[derive(Clone)]
+pub(crate) struct ThisParameterClass {
+    lineage: Vec<ClassIdentity>,
+}
+
+thread_local! {
+    static THIS_PARAMETER_CLASS: RefCell<Option<ThisParameterClass>> = const { RefCell::new(None) };
+}
+
+/// Makes `class` the `this`-parameter class until dropped. A function binds its
+/// own `this`, so every function body enters one, `None` when it has no `this`
+/// parameter; an arrow keeps its enclosing function's.
+pub(crate) struct ThisParameterClassScope(Option<ThisParameterClass>);
+
+impl ThisParameterClassScope {
+    pub(crate) fn enter(class: Option<ThisParameterClass>) -> Self {
+        Self(THIS_PARAMETER_CLASS.with(|current| current.replace(class)))
+    }
+}
+
+impl Drop for ThisParameterClassScope {
+    fn drop(&mut self) {
+        let outer = self.0.take();
+        THIS_PARAMETER_CLASS.with(|current| *current.borrow_mut() = outer);
+    }
+}
+
+/// The class or interface a written `this` parameter names, the constraint's
+/// when it names one of the function's type parameters.
+pub(crate) fn this_parameter_class(
+    written: Option<&ParsedType>,
+    type_parameters: &[ParsedTypeParameter],
+    ctx: &mut CheckerContext,
+) -> Option<ThisParameterClass> {
+    let mut written = written?;
+    if let ParsedType::Named(named) = written
+        && named.type_arguments.is_empty()
+        && let Some(parameter) = type_parameters
+            .iter()
+            .find(|parameter| parameter.name == named.name)
+    {
+        written = parameter.constraint.as_ref()?;
+    }
+    // The annotation reports its own errors where the signature is resolved.
+    let checkpoint = ctx.diagnostics().len();
+    let ty = crate::checks::function::with_type_parameter_scope(type_parameters, ctx, |ctx| {
+        crate::infer::map_parsed_type(written.clone(), ctx)
+    });
+    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    let class = instance_class(&ty, ctx)?;
+    Some(ThisParameterClass {
+        lineage: class_lineage(&class, ctx),
+    })
 }
 
 pub(crate) fn base_interface(info: &InterfaceInfo, ctx: &CheckerContext) -> Option<InterfaceInfo> {
@@ -151,7 +210,18 @@ fn receiver_class(
     symbols: &SymbolTable,
     ctx: &CheckerContext,
 ) -> Option<(InterfaceInfo, bool)> {
-    if let Type::Reference(reference) = receiver_type {
+    if let Type::Reference(_) = receiver_type {
+        return instance_class(receiver_type, ctx).map(|class| (class, false));
+    }
+    if let Some(class) = static_receiver_class(object, symbols, ctx) {
+        return Some((class, true));
+    }
+    instance_class(receiver_type, ctx).map(|class| (class, false))
+}
+
+/// The class (or interface) whose instance `ty` is.
+fn instance_class(ty: &Type, ctx: &CheckerContext) -> Option<InterfaceInfo> {
+    if let Type::Reference(reference) = ty {
         let mut parts = reference.id.split('\u{0}');
         let file = parts.next()?;
         let name = parts.next_back()?;
@@ -160,21 +230,18 @@ fn receiver_class(
         };
         // A different declaration that merely shares the name is not the
         // receiver's class.
-        return (info.file_name.as_ref() == file).then(|| (info.clone(), false));
-    }
-    if let Some(class) = static_receiver_class(object, symbols, ctx) {
-        return Some((class, true));
+        return (info.file_name.as_ref() == file).then(|| info.clone());
     }
     // Narrowing one of an instance's members materializes the instance as an
     // object that keeps only the class's name.
     // An instantiation (a generic class's own `C<T>` inside its body) keeps
     // its arguments in the name.
-    if let Type::Object(object) = receiver_type
+    if let Type::Object(object) = ty
         && let Some(name) = object.alias_name.as_deref()
         && let Some(TypeDeclarationInfo::Interface(info)) =
             ctx.lookup_type_declaration(name.split('<').next().unwrap_or(name))
     {
-        return Some((info.clone(), false));
+        return Some(info.clone());
     }
     None
 }
@@ -203,9 +270,10 @@ fn static_receiver_class(
     }
 }
 
-/// tsc's `checkPropertyAccessibility` for a named member read: a `private`
-/// member is reachable only inside the class that declares it (TS2341), a
-/// `protected` one inside that class or a class deriving from it (TS2445).
+/// tsc's `checkPropertyAccessibilityAtLocation` for a named member read: a
+/// `private` member is reachable only inside the class that declares it
+/// (TS2341), a `protected` one from a class deriving from it (TS2445) and only
+/// through an instance of that class (TS2446).
 pub(crate) fn check_member_accessibility(
     object: &ParsedExpression,
     receiver_type: &Type,
@@ -235,63 +303,62 @@ pub(crate) fn check_member_accessibility(
     let Some(declaring_identity) = identity(&declaring) else {
         return;
     };
-    let accessible = ctx.enclosing_classes.iter().any(|lineage| match accessibility {
-        ParsedMemberAccessibility::Private => lineage.first() == Some(&declaring_identity),
-        ParsedMemberAccessibility::Protected => lineage.contains(&declaring_identity),
-    });
-    if accessible {
-        if accessibility == ParsedMemberAccessibility::Protected && !is_static {
-            check_protected_instance_receiver(object, &class, &declaring_identity, member, member_span, ctx);
-        }
-        return;
-    }
-    let class_name = display_name(&declaring);
     let diagnostic = match accessibility {
         ParsedMemberAccessibility::Private => {
-            Diagnostic::ts2341(member, class_name, ctx.file_name.clone())
+            if ctx
+                .enclosing_classes
+                .iter()
+                .any(|lineage| lineage.first() == Some(&declaring_identity))
+            {
+                return;
+            }
+            Diagnostic::ts2341(member, display_name(&declaring), ctx.file_name.clone())
         }
         ParsedMemberAccessibility::Protected => {
-            Diagnostic::ts2445(member, class_name, ctx.file_name.clone())
+            // A `super` access reaches every protected member of the base.
+            if matches!(object, ParsedExpression::Identifier { name, .. } if name == "super") {
+                return;
+            }
+            let Some(enclosing) = protected_access_class(&declaring_identity, is_static, ctx)
+            else {
+                let diagnostic =
+                    Diagnostic::ts2445(member, display_name(&declaring), ctx.file_name.clone());
+                ctx.push(diagnostic_with_syntax_span(diagnostic, member_span));
+                return;
+            };
+            if is_static || class_lineage(&class, ctx).contains(&enclosing) {
+                return;
+            }
+            Diagnostic::ts2446(member, &enclosing.name, receiver_type.name(), ctx.file_name.clone())
         }
     };
     ctx.push(diagnostic_with_syntax_span(diagnostic, member_span));
 }
 
-/// tsc's instance rule for a protected member: from inside a class, it may be
-/// read only off an instance of that class (or a subclass), never off a
-/// plain instance of the base (TS2446). `super.x` is exempt, and so is a
-/// static member, which the caller already excludes.
-fn check_protected_instance_receiver(
-    object: &ParsedExpression,
-    receiver: &InterfaceInfo,
-    declaring_identity: &ClassIdentity,
-    member: &str,
-    member_span: Option<SyntaxTextSpan>,
-    ctx: &mut CheckerContext,
-) {
-    if matches!(object, ParsedExpression::Identifier { name, .. } if name == "super") {
-        return;
-    }
-    // The innermost enclosing class deriving from the declaring class.
-    let Some(enclosing) = ctx
+/// The class a protected member is reached from: the innermost enclosing class
+/// that derives from the member's declaring class, or else — for an instance
+/// member — the class the enclosing function's `this` parameter names.
+fn protected_access_class(
+    declaring: &ClassIdentity,
+    is_static: bool,
+    ctx: &CheckerContext,
+) -> Option<ClassIdentity> {
+    if let Some(lineage) = ctx
         .enclosing_classes
         .iter()
         .rev()
-        .find(|lineage| lineage.contains(declaring_identity))
-        .and_then(|lineage| lineage.first())
-    else {
-        return;
-    };
-    if class_lineage(receiver, ctx).contains(enclosing) {
-        return;
+        .find(|lineage| lineage.contains(declaring))
+    {
+        return lineage.first().cloned();
     }
-    let diagnostic = Diagnostic::ts2446(
-        member,
-        &enclosing.name,
-        display_name(receiver),
-        ctx.file_name.clone(),
-    );
-    ctx.push(diagnostic_with_syntax_span(diagnostic, member_span));
+    if is_static {
+        return None;
+    }
+    THIS_PARAMETER_CLASS.with(|current| {
+        let current = current.borrow();
+        let class = current.as_ref().filter(|class| class.lineage.contains(declaring))?;
+        class.lineage.first().cloned()
+    })
 }
 
 /// A class and every class it extends.

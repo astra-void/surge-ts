@@ -278,6 +278,75 @@ pub(crate) fn module_script_globals(
     (!empty).then(|| Arc::new(globals))
 }
 
+fn declared_global_names<'a>(
+    statements: &'a [ParsedStatement],
+    names: &mut std::collections::HashSet<&'a str>,
+) {
+    for statement in statements {
+        match crate::modules::peel_exported_statement(statement) {
+            ParsedStatement::VariableDeclaration(variable) => {
+                names.insert(variable.name.as_str());
+            }
+            ParsedStatement::FunctionDeclaration(function) => {
+                names.insert(function.name.as_str());
+            }
+            ParsedStatement::ClassDeclaration(class) => {
+                names.insert(class.name.as_str());
+            }
+            ParsedStatement::InterfaceDeclaration(interface) => {
+                names.insert(interface.name.as_str());
+            }
+            ParsedStatement::TypeAliasDeclaration(alias) => {
+                names.insert(alias.name.as_str());
+            }
+            ParsedStatement::NamespaceDeclaration(namespace) => {
+                names.insert(namespace.name.as_str());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The names declared globally, by syntax alone: a script's top level and a
+/// global augmentation (`declare global { … }`, or `global { … }` inside
+/// `declare module "x"`), as `(script top level, augmentations)`.
+fn global_declaration_names(
+    parsed_files: &[ParsedProgramFile],
+) -> (std::collections::HashSet<&str>, std::collections::HashSet<&str>) {
+    let mut script_top_level = std::collections::HashSet::new();
+    let mut augmented = std::collections::HashSet::new();
+    for parsed_file in parsed_files {
+        for statement in &parsed_file.statements {
+            match statement {
+                ParsedStatement::DeclareModuleDeclaration(module) if module.module_specifier == "global" => {
+                    declared_global_names(&module.statements, &mut augmented);
+                }
+                ParsedStatement::DeclareModuleDeclaration(module) => {
+                    for nested in &module.statements {
+                        if let ParsedStatement::DeclareModuleDeclaration(inner) = nested
+                            && inner.module_specifier == "global"
+                        {
+                            declared_global_names(&inner.statements, &mut augmented);
+                        }
+                    }
+                }
+                _ if !parsed_file.is_module => {
+                    declared_global_names(std::slice::from_ref(statement), &mut script_top_level);
+                }
+                _ => {}
+            }
+        }
+    }
+    (script_top_level, augmented)
+}
+
+/// Every name some global declaration binds (see [`global_declaration_names`]).
+pub(crate) fn globally_declared_names(parsed_files: &[ParsedProgramFile]) -> std::collections::HashSet<&str> {
+    let (mut names, augmented) = global_declaration_names(parsed_files);
+    names.extend(augmented);
+    names
+}
+
 /// The names only a global augmentation declares — a `declare global { … }`,
 /// or a `global { … }` block inside `declare module "x"`. tsc merges the
 /// augmentations into the globals after every script file's own declarations
@@ -287,55 +356,7 @@ pub(crate) fn module_script_globals(
 pub(crate) fn global_augmentation_only_names(
     parsed_files: &[ParsedProgramFile],
 ) -> surge_ts_types::fx::FxHashSet<Arc<str>> {
-    fn declared_names<'a>(statements: &'a [ParsedStatement], names: &mut std::collections::HashSet<&'a str>) {
-        for statement in statements {
-            match crate::modules::peel_exported_statement(statement) {
-                ParsedStatement::VariableDeclaration(variable) => {
-                    names.insert(variable.name.as_str());
-                }
-                ParsedStatement::FunctionDeclaration(function) => {
-                    names.insert(function.name.as_str());
-                }
-                ParsedStatement::ClassDeclaration(class) => {
-                    names.insert(class.name.as_str());
-                }
-                ParsedStatement::InterfaceDeclaration(interface) => {
-                    names.insert(interface.name.as_str());
-                }
-                ParsedStatement::TypeAliasDeclaration(alias) => {
-                    names.insert(alias.name.as_str());
-                }
-                ParsedStatement::NamespaceDeclaration(namespace) => {
-                    names.insert(namespace.name.as_str());
-                }
-                _ => {}
-            }
-        }
-    }
-    let mut script_top_level = std::collections::HashSet::new();
-    let mut augmented = std::collections::HashSet::new();
-    for parsed_file in parsed_files {
-        for statement in &parsed_file.statements {
-            match statement {
-                ParsedStatement::DeclareModuleDeclaration(module) if module.module_specifier == "global" => {
-                    declared_names(&module.statements, &mut augmented);
-                }
-                ParsedStatement::DeclareModuleDeclaration(module) => {
-                    for nested in &module.statements {
-                        if let ParsedStatement::DeclareModuleDeclaration(inner) = nested
-                            && inner.module_specifier == "global"
-                        {
-                            declared_names(&inner.statements, &mut augmented);
-                        }
-                    }
-                }
-                _ if !parsed_file.is_module => {
-                    declared_names(std::slice::from_ref(statement), &mut script_top_level);
-                }
-                _ => {}
-            }
-        }
-    }
+    let (script_top_level, augmented) = global_declaration_names(parsed_files);
     augmented
         .into_iter()
         .filter(|name| !script_top_level.contains(name))
@@ -413,6 +434,7 @@ pub(crate) fn collect_function_signatures_from_statements(
     // Expando members are hoisted with the function they are written on, so a
     // function declared earlier in the file can already read them.
     crate::modules::exports::apply_expando_members(statements, symbols, ctx);
+    crate::modules::exports::apply_namespace_members_to_declarations(statements, symbols);
     ctx.collecting_signatures = outer_collecting_signatures;
 }
 

@@ -45,6 +45,8 @@ pub fn parse_source(source_text: &str, file_name: &str) -> ParsedSource {
     parse_source_in(&allocator, source_text, file_name)
 }
 
+const FOR_AWAIT_IN_MESSAGE: &str = "await can only be used in conjunction with `for...of` statements";
+
 /// Parse `source_text` into fully owned surge structures. Every borrow of
 /// `allocator` ends inside this function: the returned [`ParsedSource`] holds
 /// no references, pointers, or arena-backed strings, which is what makes
@@ -62,6 +64,9 @@ fn classify_uncoded_parser_error(
     let text = source_text.get(span.start..span.end)?;
     match message {
         "Cannot assign to this expression" => {
+            if let Some(stop) = update_target_stop(text, span, source_text) {
+                return Some(stop);
+            }
             // tsc's target node keeps the parentheses oxc's label drops.
             let mut span = span;
             loop {
@@ -104,6 +109,18 @@ fn classify_uncoded_parser_error(
                 (false, false) => 2364,
             };
             Some((code, span))
+        }
+        // tsc's parser expects `of` where `for await (x in y)` has `in`.
+        FOR_AWAIT_IN_MESSAGE => {
+            let open = span.start + source_text.get(span.start..)?.find('(')?;
+            let bytes = source_text.as_bytes();
+            let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+            let start = (open + 1..source_text.len().saturating_sub(1)).find(|&at| {
+                &bytes[at..at + 2] == b"in"
+                    && !is_word(bytes[at - 1])
+                    && bytes.get(at + 2).is_none_or(|&next| !is_word(next))
+            })?;
+            Some((1005, crate::TextSpan { start, end: start + 2 }))
         }
         "A rest parameter must be last in a parameter list" => Some((1014, span)),
         "Identifier expected. 'this' is a reserved word that cannot be used here." => {
@@ -200,6 +217,66 @@ fn parameter_property_modifiers_start(source_text: &str, position: usize) -> Opt
         .all(|word| PARAMETER_PROPERTY_MODIFIERS.contains(&word))
         .then_some(start)
 }
+
+/// Where tsc's parser stops at a write target it cannot take, and with what.
+/// tsc parses an assignment's target and a prefix `++`/`--` operand as a
+/// left-hand-side expression only. A prefix operand that cannot begin one —
+/// another update, a unary operator, `await` (`++ ++x`, `++await x`) — is
+/// TS1109 `Expression expected` on its first token (`parsePrimaryExpression`).
+/// An update expression that ends where the statement must end is TS1005
+/// `';' expected` on the next token (`parseExpressionStatement`'s
+/// `parseSemicolon`): the assignment operator after it, or the trailing
+/// `++`/`--` of `--x--`. Parenthesized, the operand is a left-hand-side
+/// expression and the checker's to judge.
+fn update_target_stop(text: &str, span: crate::TextSpan, source_text: &str) -> Option<(u32, crate::TextSpan)> {
+    let before = source_text.get(..span.start)?.trim_end();
+    let under_prefix = before.ends_with("++") || before.ends_with("--");
+    let missing_operand = |start: usize| {
+        let end = super::grammar_context::first_token_end(source_text, start);
+        Some((1109, crate::TextSpan { start, end }))
+    };
+    // oxc starts a prefix update nested in another at the outer operator.
+    if let Some(rest) = text.strip_prefix("++").or_else(|| text.strip_prefix("--")) {
+        let inner = rest.trim_start();
+        if begins_no_left_hand_side(inner) {
+            return missing_operand(span.start + (text.len() - inner.len()));
+        }
+    }
+    if under_prefix && begins_no_left_hand_side(text) {
+        return missing_operand(span.start);
+    }
+    let postfix = text.ends_with("++") || text.ends_with("--");
+    let prefix = text.starts_with("++") || text.starts_with("--");
+    if !postfix && !prefix {
+        return None;
+    }
+    let after = source_text.get(span.end..)?.trim_start();
+    let after_start = source_text.len() - after.len();
+    let assignment = ASSIGNMENT_OPERATORS
+        .iter()
+        .find(|operator| after.starts_with(**operator))
+        .filter(|operator| **operator != "=" || !matches!(after.as_bytes().get(1), Some(b'=' | b'>')));
+    if let Some(operator) = assignment {
+        return Some((1005, crate::TextSpan { start: after_start, end: after_start + operator.len() }));
+    }
+    (postfix && under_prefix).then(|| (1005, crate::TextSpan { start: span.end - 2, end: span.end }))
+}
+
+/// Whether `text` begins with a token no left-hand-side expression starts
+/// with: an update or unary operator, or a keyword operator.
+fn begins_no_left_hand_side(text: &str) -> bool {
+    if text.starts_with(['+', '-', '!', '~']) {
+        return true;
+    }
+    ["typeof", "void", "delete", "await", "yield"].iter().any(|keyword| {
+        text.strip_prefix(keyword)
+            .is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$'))
+    })
+}
+
+const ASSIGNMENT_OPERATORS: [&str; 16] = [
+    ">>>=", "**=", "<<=", ">>=", "&&=", "||=", "??=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "=",
+];
 
 /// The code tsc gives a failure oxc numbers differently. tsc's parser
 /// reports a decorator or modifier on a `this` parameter as TS1433 at the
@@ -323,18 +400,19 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     // (it would otherwise run over every dependency `.d.ts`). The conversion
     // still asks each body for its reads; without an index those calls fall back
     // to walking the body, which for a `.d.ts` is nothing.
-    let (module_reads, statements) = if file_name.ends_with(".d.ts") {
+    let (mut module_reads, statements) = if is_declaration_file_name(file_name) {
         (Vec::new(), collect_statements())
     } else {
-        super::spans::with_lowering_source(source_text, || {
+        super::spans::with_lowering_source(source_text, is_javascript_file_name(file_name), || {
             super::reads::with_body_read_index(&parsed.program, collect_statements)
         })
     };
+    module_reads.extend(jsdoc_link_reads(&parsed.program.comments, source_text));
 
     let mut parser_errors: Vec<crate::ParserError> = parsed
         .errors
         .into_iter()
-        .map(|error| {
+        .filter_map(|error| {
             let code = error
                 .code
                 .scope
@@ -362,7 +440,20 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             let span_text = span
                 .and_then(|span| source_text.get(span.start..span.end))
                 .map(str::to_string);
-            crate::ParserError { code, message: error.to_string(), span, span_text }
+            let mut message = error.to_string();
+            // The checker reports an update expression's rejected operand once
+            // it passes the arithmetic check (`ParsedExpression::Update`).
+            if matches!(code, Some(2357 | 2777)) && message == "Cannot assign to this expression" {
+                return None;
+            }
+            if message == FOR_AWAIT_IN_MESSAGE {
+                message = "'of' expected.".to_string();
+            } else if code == Some(1005) && message == "Cannot assign to this expression" {
+                message = "';' expected.".to_string();
+            } else if code == Some(1109) && message == "Cannot assign to this expression" {
+                message = "Expression expected.".to_string();
+            }
+            Some(crate::ParserError { code, message, span, span_text })
         })
         .collect();
     parser_errors.extend(super::scanner_checks::collect_missing_parser_errors(
@@ -421,8 +512,57 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     }
 }
 
-fn is_declaration_file_name(file_name: &str) -> bool {
-    file_name.ends_with(".d.ts") || file_name.ends_with(".d.mts") || file_name.ends_with(".d.cts")
+/// tsc's `IsDeclarationFileName`: a `.d.ts`/`.d.mts`/`.d.cts` file, or a `.ts`
+/// file whose base name carries `.d.` — the `{name}.d.{extension}.ts` form
+/// `allowArbitraryExtensions` resolves `{name}.{extension}` imports to.
+pub fn is_declaration_file_name(file_name: &str) -> bool {
+    let base = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
+    let ends_with = |suffix: &str| {
+        let bytes = base.as_bytes();
+        bytes.len() >= suffix.len() && bytes[bytes.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+    };
+    ends_with(".d.ts") || ends_with(".d.mts") || ends_with(".d.cts") || (base.ends_with(".ts") && base.contains(".d."))
+}
+
+/// The names JSDoc `{@link X}`, `{@linkcode X}` and `{@linkplain X}` tags
+/// refer to (the first identifier of an entity name): tsc resolves each
+/// (`checkJSDocLinkLikeTag`), which counts as a use of the import it names.
+fn jsdoc_link_reads(comments: &[oxc_ast::Comment], source_text: &str) -> Vec<String> {
+    let mut reads = Vec::new();
+    for comment in comments.iter().filter(|comment| comment.is_jsdoc()) {
+        let Some(mut rest) = source_text.get(comment.span.start as usize..comment.span.end as usize)
+        else {
+            continue;
+        };
+        while let Some(at) = rest.find("{@link") {
+            rest = &rest[at + "{@link".len()..];
+            let after_tag = rest
+                .strip_prefix("code")
+                .or_else(|| rest.strip_prefix("plain"))
+                .unwrap_or(rest);
+            if !after_tag.starts_with(char::is_whitespace) {
+                continue;
+            }
+            let name: String = after_tag
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+                .collect();
+            if !name.is_empty() {
+                reads.push(name);
+            }
+        }
+    }
+    reads
+}
+
+/// A JavaScript source file: `.js`, `.jsx`, `.mjs` or `.cjs`.
+pub fn is_javascript_file_name(file_name: &str) -> bool {
+    let bytes = file_name.as_bytes();
+    [".js", ".jsx", ".mjs", ".cjs"].iter().any(|suffix| {
+        bytes.len() >= suffix.len()
+            && bytes[bytes.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+    })
 }
 
 fn collects_grammar_diagnostics(file_name: &str) -> bool {

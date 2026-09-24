@@ -88,6 +88,13 @@ oracle = [
   "member-accessibility-basic",
 ]
 
+[TS2446]
+status = "emitted"
+oracle = [
+  "protected-access-through-instance",
+  "restricted-constructor-access-basic",
+]
+
 [TS2456]
 status = "emitted"
 oracle = [
@@ -592,6 +599,7 @@ fixtures = [
 ]
 oracle = [
   "increment-operand-write-rules-basic",
+  "update-operand-arithmetic-first",
 ]
 
 [TS2362]
@@ -1208,8 +1216,10 @@ oracle = [
 ]
 
 [TS7052]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "element-access-missing-key-selection",
+]
 
 [TS7053]
 status = "emitted"
@@ -1894,8 +1904,12 @@ oracle = [
 ]
 
 [TS1249]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "decorator-targets-legacy",
+  "decorator-targets-es",
+]
+
 [TS1263]
 status = "emitted"
 oracle = [
@@ -2547,6 +2561,8 @@ oracle = [
 status = "emitted"
 oracle = [
   "self-reference-and-placement-basic",
+  "decorator-targets-legacy",
+  "decorator-targets-es",
 ]
 
 [TS1147]
@@ -2688,6 +2704,7 @@ status = "emitted"
 oracle = [
   "invalid-write-target-basic",
   "invalid-write-target-recovery-basic",
+  "update-operand-arithmetic-first",
 ]
 
 [TS2779]
@@ -2702,6 +2719,7 @@ status = "emitted"
 oracle = [
   "invalid-write-target-basic",
   "invalid-write-target-recovery-basic",
+  "update-operand-arithmetic-first",
 ]
 
 [TS1014]
@@ -2806,36 +2824,42 @@ oracle = [
 status = "emitted"
 oracle = [
   "module-element-context-basic",
+  "module-element-wrong-context",
 ]
 
 [TS1233]
 status = "emitted"
 oracle = [
   "module-element-context-basic",
+  "module-element-wrong-context",
 ]
 
 [TS1234]
 status = "emitted"
 oracle = [
   "module-element-context-basic",
+  "module-element-wrong-context",
 ]
 
 [TS1235]
 status = "emitted"
 oracle = [
   "module-element-context-basic",
+  "module-element-wrong-context",
 ]
 
 [TS1258]
 status = "emitted"
 oracle = [
   "module-element-context-basic",
+  "module-element-wrong-context",
 ]
 
 [TS1231]
 status = "emitted"
 oracle = [
   "export-assignment-context-basic",
+  "module-element-wrong-context",
 ]
 
 [TS2435]
@@ -2930,6 +2954,7 @@ oracle = [
 status = "emitted"
 oracle = [
   "super-type-arguments-basic",
+  "super-type-arguments-follower",
 ]
 
 [TS2848]
@@ -3074,6 +3099,8 @@ oracle = [
 status = "emitted"
 oracle = [
   "super-follower-grammar-basic",
+  "bare-super-parse-error",
+  "super-type-arguments-follower",
 ]
 
 [TS1225]
@@ -3140,12 +3167,6 @@ oracle = [
 status = "emitted"
 oracle = [
   "class-heritage-non-constructor-basic",
-]
-
-[TS2446]
-status = "emitted"
-oracle = [
-  "restricted-constructor-access-basic",
 ]
 
 [TS2673]
@@ -3430,4 +3451,84 @@ oracle = [
 status = "emitted"
 oracle = [
   "unused-declaration-list-grouping",
+]
+
+[TS1005]
+status = "emitted"
+oracle = [
+  "for-await-in-parse-error",
+  "update-expression-write-target",
+]
+
+[TS2846]
+status = "emitted"
+oracle = [
+  "explicit-ts-extension-imports",
+]
+
+[TS6263]
+status = "emitted"
+oracle = [
+  "arbitrary-extension-imports",
+]
+
+[TS1254]
+status = "emitted"
+oracle = [
+  "ambient-initializer-constants",
+]
+
+[TS17019]
+status = "emitted"
+oracle = [
+  "jsdoc-nullability-in-typescript",
+]
+
+[TS17020]
+status = "emitted"
+oracle = [
+  "jsdoc-nullability-in-typescript",
+]
+
+[TS1110]
+status = "emitted"
+oracle = [
+  "jsdoc-unknown-type-in-typescript",
+]
+
+[TS6053]
+status = "emitted"
+oracle = [
+  "reference-path-unresolved",
+  "reference-path-skip-lib-check",
+]
+
+[TS6054]
+status = "emitted"
+oracle = [
+  "reference-path-unresolved",
+]
+
+[TS6231]
+status = "emitted"
+oracle = [
+  "reference-path-unresolved",
+]
+
+[TS6504]
+status = "emitted"
+oracle = [
+  "reference-path-unresolved",
+]
+
+[TS1006]
+status = "emitted"
+oracle = [
+  "reference-path-unresolved",
+]
+
+[TS1109]
+status = "emitted"
+oracle = [
+  "update-expression-write-target",
 ]

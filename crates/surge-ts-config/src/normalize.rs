@@ -94,6 +94,21 @@ pub(crate) fn normalize_compiler_options(
                     parse_bool_option(key, value, config_dir, diagnostics)
                         .unwrap_or(normalized.allow_importing_ts_extensions);
             }
+            "rewriteRelativeImportExtensions" => {
+                normalized.rewrite_relative_import_extensions =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.rewrite_relative_import_extensions);
+            }
+            "allowArbitraryExtensions" => {
+                normalized.allow_arbitrary_extensions =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.allow_arbitrary_extensions);
+            }
+            "experimentalDecorators" => {
+                normalized.experimental_decorators =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.experimental_decorators);
+            }
             "noUnusedLocals" => {
                 normalized.no_unused_locals =
                     parse_bool_option(key, value, config_dir, diagnostics)
@@ -160,6 +175,14 @@ pub(crate) fn normalize_compiler_options(
             "noEmit" => {
                 normalized.no_emit = parse_bool_option(key, value, config_dir, diagnostics)
                     .unwrap_or(normalized.no_emit);
+            }
+            "noCheck" => {
+                normalized.no_check = parse_bool_option(key, value, config_dir, diagnostics)
+                    .unwrap_or(normalized.no_check);
+            }
+            "noResolve" => {
+                normalized.no_resolve = parse_bool_option(key, value, config_dir, diagnostics)
+                    .unwrap_or(normalized.no_resolve);
             }
             "skipLibCheck" => {
                 normalized.skip_lib_check = parse_bool_option(key, value, config_dir, diagnostics)

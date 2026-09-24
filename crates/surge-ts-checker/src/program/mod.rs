@@ -13,7 +13,6 @@ pub(crate) use crate::metrics::*;
 
 use crate::context::{CheckerContext, CheckerOptions, CompatibilityStats, FileKind};
 use crate::default_lib::load_generated_default_lib_inputs;
-use crate::driver::sync_global_this_symbol;
 use crate::modules::{ModuleExportTable, ModuleImportBindings, resolve_module_export_tables};
 use crate::paths::canonicalize_if_exists_string;
 use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
@@ -291,6 +290,19 @@ fn check_program_with_stats_and_jobs_inner(
         };
     }
 
+    // tsc's `SkipTypeChecking`: a `// @ts-nocheck` file keeps only its
+    // syntactic diagnostics. So does a JavaScript file: it declares what a
+    // TypeScript file may use, but surge does not model JavaScript's own
+    // semantics (JSDoc types, CommonJS exports, `this` members), so the
+    // semantic diagnostics tsc gives it under `checkJs` are not reported.
+    let unchecked_files: HashSet<String> = files
+        .iter()
+        .filter(|file| {
+            surge_ts_syntax::extract_check_directive(&file.source_text) == Some(false)
+                || surge_ts_syntax::is_javascript_file_name(&file.file_name)
+        })
+        .map(|file| file.file_name.clone())
+        .collect();
     let ProgramRun {
         timings,
         timings_enabled,
@@ -395,6 +407,12 @@ fn check_program_with_stats_and_jobs_inner(
         result.diagnostics.retain(diagnostics::is_syntactic_diagnostic);
         result.syntax_errors = true;
     }
+    if !unchecked_files.is_empty() {
+        result.diagnostics.retain(|diagnostic| {
+            !unchecked_files.contains(&diagnostic.file_name)
+                || diagnostics::is_syntactic_diagnostic(diagnostic)
+        });
+    }
     result
 }
 
@@ -431,6 +449,7 @@ fn start_program_run(
             .node_module_resolution
             .then(|| Arc::new(options.esm_module_files.clone())),
     );
+    crate::modules::set_allow_arbitrary_extensions(options.allow_arbitrary_extensions);
 
     let parse_start = Instant::now();
     let parsed_files = parse_program_files(files, prescanned, jobs, timings.as_ref());
@@ -906,6 +925,59 @@ fn bind_and_analyze_modules(
     }
 }
 
+/// What the program's scripts put on the global object (tsc's `globalThis`
+/// members skip the block-scoped globals): each `var`, function and
+/// instantiated namespace, with its type; and the `let`, `const`, class and
+/// enum names, which reading through `globalThis` reports as missing. A
+/// script `var` whose type is only inferred when its file is checked is a
+/// member all the same, typed as the unmodelled sentinel.
+fn script_global_object_members(
+    parsed_files: &[ParsedProgramFile],
+    global_symbols: &SymbolTable,
+    script_values: &[Option<Arc<SymbolTable>>],
+) -> (Vec<(String, surge_ts_types::Type)>, Vec<String>) {
+    let mut members = Vec::new();
+    let mut block_scoped = Vec::new();
+    for (file_index, file) in parsed_files.iter().enumerate() {
+        if file.is_module || file.file_kind != FileKind::RootSource {
+            continue;
+        }
+        for statement in &file.statements {
+            let (name, is_block_scoped) = match statement {
+                ParsedStatement::VariableDeclaration(variable) => (
+                    variable.name.as_str(),
+                    !matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Var),
+                ),
+                ParsedStatement::FunctionDeclaration(function) => (function.name.as_str(), false),
+                ParsedStatement::ClassDeclaration(class) => (class.name.as_str(), true),
+                ParsedStatement::NamespaceDeclaration(namespace) => (
+                    namespace.name.split('.').next().unwrap_or(&namespace.name),
+                    false,
+                ),
+                _ => continue,
+            };
+            if is_block_scoped {
+                block_scoped.push(name.to_string());
+                continue;
+            }
+            let known = global_symbols.get(name).or_else(|| {
+                script_values
+                    .get(file_index)
+                    .and_then(Option::as_ref)
+                    .and_then(|values| values.get(name))
+            });
+            match (known, statement) {
+                (Some(symbol), _) => members.push((name.to_string(), symbol.ty.clone())),
+                (None, ParsedStatement::VariableDeclaration(_)) => {
+                    members.push((name.to_string(), surge_ts_types::Type::Unknown));
+                }
+                _ => {}
+            }
+        }
+    }
+    (members, block_scoped)
+}
+
 fn finalize_module_bindings(
     parsed_files: &mut Vec<ParsedProgramFile>,
     ctx: &mut CheckerContext,
@@ -998,6 +1070,12 @@ fn finalize_module_bindings(
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_resolution_scope_construction += scope_build_start.elapsed()
     });
+    bind_umd_globals(
+        &parsed_files,
+        &module_export_tables,
+        &module_resolution_scopes,
+        ctx,
+    );
     let module_scope_map = module_scope_by_file_map(&parsed_files, &module_resolution_scopes, &ctx);
     ctx.set_module_scope_by_file(module_scope_map);
     ctx.jsx_namespace_modules = Arc::new(crate::checks::jsx::collect_jsx_namespace_modules(
@@ -1010,7 +1088,15 @@ fn finalize_module_bindings(
     // import binding and the JSX namespace modules; the check phase reads the
     // analyses' local export tables through `shared_state`.
     drop(module_export_tables);
-    sync_global_this_symbol(ctx);
+    let (script_members, script_block_scoped) =
+        script_global_object_members(&parsed_files, &global_symbols, &script_values);
+    if !script_block_scoped.is_empty() {
+        let block_scoped = Arc::make_mut(&mut ctx.block_scoped_globals);
+        for name in script_block_scoped {
+            block_scoped.insert(Arc::from(name));
+        }
+    }
+    crate::driver::sync_global_this_symbol_with_scripts(ctx, &script_members);
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_binding += module_binding_start.elapsed()
     });
@@ -1294,6 +1380,7 @@ fn finish_program_run(
         crate::modules::clear_star_export_unresolved_cache();
         crate::modules::clear_namespace_alias_table_cache();
         crate::modules::set_node_esm_files(None);
+        crate::modules::set_allow_arbitrary_extensions(false);
         crate::metrics::release_free_memory();
     }
     emit_type_graph_census("after_cache_cleanup", Some(&ctx), &store, census_external);

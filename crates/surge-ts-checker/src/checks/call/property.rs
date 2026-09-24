@@ -1318,7 +1318,7 @@ pub(crate) fn check_optional_property_call(
             evaluate_arguments_context_free(object, arguments, symbols, ctx);
             Some(base_type)
         };
-        return continued.map(|ty| union_type(vec![ty, Type::Undefined]));
+        return continued.map(|ty| super::with_chain_undefined(ty, &object_type));
     }
 
     match base_type {
@@ -1342,7 +1342,7 @@ pub(crate) fn check_optional_property_call(
             symbols,
             ctx,
         )
-        .map(|ret| union_type(vec![ret, Type::Undefined])),
+        .map(|ret| super::with_chain_undefined(ret, &object_type)),
         Type::Array(element_type) if property_name == "find" => check_array_find_call(
             element_type.as_ref(),
             property_span,
@@ -1351,7 +1351,7 @@ pub(crate) fn check_optional_property_call(
             symbols,
             ctx,
         )
-        .map(|ret| union_type(vec![ret, Type::Undefined])),
+        .map(|ret| super::with_chain_undefined(ret, &object_type)),
         Type::Union(union_type) => {
             let mut result_types = vec![];
             for ty in union_type.types() {
@@ -1438,10 +1438,10 @@ pub(crate) fn check_optional_property_call(
                 }
             }
 
-            Some(surge_ts_types::union_type(vec![
+            Some(super::with_chain_undefined(
                 surge_ts_types::union_type(result_types),
-                Type::Undefined,
-            ]))
+                &object_type,
+            ))
         }
         _ => {
             if property_name == "map"
@@ -1455,7 +1455,7 @@ pub(crate) fn check_optional_property_call(
                     symbols,
                     ctx,
                 )
-                .map(|ret| surge_ts_types::union_type(vec![ret, Type::Undefined]));
+                .map(|ret| super::with_chain_undefined(ret, &object_type));
             }
 
             if property_name == "find"
@@ -1469,12 +1469,12 @@ pub(crate) fn check_optional_property_call(
                     symbols,
                     ctx,
                 )
-                .map(|ret| surge_ts_types::union_type(vec![ret, Type::Undefined]));
+                .map(|ret| super::with_chain_undefined(ret, &object_type));
             }
 
             let Some(property_type) = base_type.get_property_access_type(property_name) else {
                 if no_lib_array_member(&base_type, ctx) {
-                    return Some(surge_ts_types::union_type(vec![Type::Any, Type::Undefined]));
+                    return Some(Type::Any);
                 }
                 // Same rule as the plain-call arms: a reference that peels to the
                 // sentinel is a shape surge could not reconstruct, not a type
@@ -1544,7 +1544,7 @@ pub(crate) fn check_optional_property_call(
                         symbols,
                         ctx,
                     )
-                    .map(|ret| union_type(vec![ret, Type::Undefined]))
+                    .map(|ret| super::with_chain_undefined(ret, &object_type))
                 }
                 Type::ErrorType => {
                     evaluate_arguments_on_error_type(arguments, symbols, ctx);

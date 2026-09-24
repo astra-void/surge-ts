@@ -22,7 +22,7 @@ use super::types::{parse_type_annotation, parse_type_arguments, parse_type_param
 pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDeclaration> {
     let id = class.id.as_ref()?;
 
-    let members = merge_class_accessors(
+    let mut members = merge_class_accessors(
         class
             .body
             .body
@@ -30,6 +30,10 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
             .filter_map(parse_class_member)
             .collect(),
     );
+    if super::spans::lowering_javascript() {
+        let assigned = javascript_this_members(class, &members);
+        members.extend(assigned);
+    }
 
     // The last signature of each key kind and side wins, as for an interface.
     // A `symbol` or pattern key answers no named member (Prisma's client class
@@ -368,6 +372,12 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                             method.value.type_parameters.as_deref(),
                         ),
                         parameters,
+                        this_parameter_type: method
+                            .value
+                            .this_param
+                            .as_ref()
+                            .and_then(|this_param| this_param.type_annotation.as_ref())
+                            .and_then(|annotation| parse_type_annotation(annotation)),
                         return_type,
                         return_type_span,
                         body,
@@ -480,6 +490,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 declared_type,
                 initializer,
                 initializer_span,
+                this_assignments: None,
             }))
         }
         ClassElement::StaticBlock(block) => {
@@ -531,10 +542,155 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 declared_type,
                 initializer,
                 initializer_span,
+                this_assignments: None,
             }))
         }
         // Index signatures are not part of this slice.
         ClassElement::TSIndexSignature(_) => None,
+    }
+}
+
+/// tsc's `bindThisPropertyAssignment` for a JavaScript class: `this.x = v` in
+/// a constructor, method, accessor, static block or property initializer — or
+/// an arrow function within one — declares `x` on the instance (on the class,
+/// in a static one) unless the class declares it. An assignment whose value
+/// reads the same member declares it without typing it
+/// (`containsSameNamedThisProperty`).
+fn javascript_this_members(
+    class: &Class<'_>,
+    declared: &[ParsedClassMember],
+) -> Vec<ParsedClassMember> {
+    use oxc_ast::ast::{AssignmentTarget, Expression};
+    use oxc_ast_visit::{Visit, walk};
+
+    struct Found {
+        name: String,
+        name_span: oxc_span::Span,
+        value: Option<crate::ParsedExpression>,
+        is_static: bool,
+        in_constructor: bool,
+    }
+    struct Collector {
+        found: Vec<Found>,
+        is_static: bool,
+        in_constructor: bool,
+    }
+    impl<'a> Visit<'a> for Collector {
+        fn visit_assignment_expression(&mut self, assignment: &oxc_ast::ast::AssignmentExpression<'a>) {
+            if assignment.operator == oxc_syntax::operator::AssignmentOperator::Assign
+                && let AssignmentTarget::StaticMemberExpression(member) = &assignment.left
+                && matches!(member.object, Expression::ThisExpression(_))
+            {
+                self.found.push(Found {
+                    name: member.property.name.to_string(),
+                    name_span: member.property.span,
+                    value: (!reads_same_this_member(&assignment.right, &member.property.name))
+                        .then(|| parse_expression(&assignment.right).0),
+                    is_static: self.is_static,
+                    in_constructor: self.in_constructor,
+                });
+            }
+            walk::walk_assignment_expression(self, assignment);
+        }
+        // A nested function or class has a `this` of its own.
+        fn visit_function(&mut self, _: &oxc_ast::ast::Function<'a>, _: oxc_syntax::scope::ScopeFlags) {}
+        fn visit_class(&mut self, _: &Class<'a>) {}
+    }
+
+    let mut collector = Collector { found: Vec::new(), is_static: false, in_constructor: false };
+    for element in &class.body.body {
+        match element {
+            ClassElement::MethodDefinition(method) => {
+                let Some(body) = &method.value.body else { continue };
+                collector.is_static = method.r#static;
+                collector.in_constructor = method.kind == MethodDefinitionKind::Constructor;
+                collector.visit_function_body(body);
+            }
+            ClassElement::StaticBlock(block) => {
+                collector.is_static = true;
+                collector.in_constructor = true;
+                for statement in &block.body {
+                    collector.visit_statement(statement);
+                }
+            }
+            ClassElement::PropertyDefinition(property) => {
+                let Some(value) = &property.value else { continue };
+                collector.is_static = property.r#static;
+                collector.in_constructor = false;
+                collector.visit_expression(value);
+            }
+            _ => {}
+        }
+    }
+
+    let is_declared = |name: &str, is_static: bool| {
+        declared.iter().any(|member| match member {
+            ParsedClassMember::Property(property) => property.name == name && property.is_static == is_static,
+            ParsedClassMember::Method(method) => method.name == name && method.is_static == is_static,
+            ParsedClassMember::Accessor(accessor) => accessor.name == name && accessor.is_static == is_static,
+            _ => false,
+        })
+    };
+    let mut members: Vec<ParsedClassMember> = Vec::new();
+    let mut seen: Vec<(String, bool)> = Vec::new();
+    for found in &collector.found {
+        let key = (found.name.clone(), found.is_static);
+        if seen.contains(&key) || is_declared(&found.name, found.is_static) {
+            continue;
+        }
+        seen.push(key);
+        let assignments: Vec<&Found> = collector
+            .found
+            .iter()
+            .filter(|other| other.name == found.name && other.is_static == found.is_static)
+            .collect();
+        let in_constructor = assignments.iter().any(|assignment| assignment.in_constructor);
+        let values = assignments
+            .iter()
+            .filter(|assignment| !in_constructor || assignment.in_constructor)
+            .filter_map(|assignment| assignment.value.clone())
+            .collect();
+        let span = Some(text_span_from_oxc_span(found.name_span));
+        members.push(ParsedClassMember::Property(ParsedClassProperty {
+            span,
+            name: found.name.clone(),
+            name_span: span,
+            has_literal_name: false,
+            is_static: found.is_static,
+            is_override: false,
+            is_abstract: false,
+            is_declare: false,
+            has_definite_assertion: false,
+            optional: false,
+            readonly: false,
+            declared_type: None,
+            initializer: None,
+            initializer_span: None,
+            this_assignments: Some(crate::ParsedThisAssignments { values, in_constructor }),
+        }));
+    }
+    members
+}
+
+/// tsc's `containsSameNamedThisProperty`: whether `this.<name>` is one of the
+/// value's direct operands (`this.x = this.x || {}`).
+fn reads_same_this_member(value: &oxc_ast::ast::Expression<'_>, name: &str) -> bool {
+    use oxc_ast::ast::Expression;
+    let is_same = |operand: &Expression<'_>| {
+        matches!(operand, Expression::StaticMemberExpression(member)
+            if matches!(member.object, Expression::ThisExpression(_)) && member.property.name == name)
+    };
+    match value {
+        Expression::LogicalExpression(logical) => is_same(&logical.left) || is_same(&logical.right),
+        Expression::BinaryExpression(binary) => is_same(&binary.left) || is_same(&binary.right),
+        Expression::ConditionalExpression(conditional) => {
+            is_same(&conditional.test) || is_same(&conditional.consequent) || is_same(&conditional.alternate)
+        }
+        Expression::CallExpression(call) => {
+            is_same(&call.callee)
+                || call.arguments.iter().any(|argument| argument.as_expression().is_some_and(is_same))
+        }
+        other => is_same(other),
     }
 }
 

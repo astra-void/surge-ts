@@ -1,0 +1,9 @@
+/// <reference path="../types/present.d.ts" />
+/// <reference path="../types/extensionless" />
+/// <reference path="missing.d.ts" />
+/// <reference path="./nothing" />
+/// <reference path="main.ts" />
+/// <reference path="styles.css" />
+/// <reference path="helper.js" />
+/// <reference path="/.lib/react16.d.ts" />
+export const value: number = presentValue + extensionlessValue;

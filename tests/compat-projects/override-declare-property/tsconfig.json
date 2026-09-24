@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "es2022",
+    "noImplicitOverride": true,
+    "useDefineForClassFields": false,
+    "types": []
+  },
+  "include": ["src/**/*.ts"]
+}

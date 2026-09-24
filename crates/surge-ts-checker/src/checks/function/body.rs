@@ -221,6 +221,61 @@ pub(crate) fn emit_missing_return_diagnostic(
 /// TS7030 under `noImplicitReturns`: an un-annotated function where some path
 /// returns a value but the end point is still reachable. The annotated analogue
 /// is [`emit_missing_return_diagnostic`]'s TS2366 branch.
+/// The `return;` statements of a body, nested blocks included; a nested
+/// function is its own body.
+pub(crate) fn bare_return_spans(body: &[ParsedFunctionBodyStatement]) -> Vec<surge_ts_syntax::TextSpan> {
+    let mut spans = Vec::new();
+    collect_bare_return_spans(body, &mut spans);
+    spans
+}
+
+fn collect_bare_return_spans(
+    body: &[ParsedFunctionBodyStatement],
+    spans: &mut Vec<surge_ts_syntax::TextSpan>,
+) {
+    for statement in body {
+        match statement {
+            ParsedFunctionBodyStatement::Return(statement) => {
+                if statement.expression.is_none()
+                    && let Some(span) = statement.span
+                {
+                    spans.push(span);
+                }
+            }
+            ParsedFunctionBodyStatement::Block(statements) => collect_bare_return_spans(statements, spans),
+            ParsedFunctionBodyStatement::If(statement) => {
+                collect_bare_return_spans(&statement.then_body, spans);
+                collect_bare_return_spans(&statement.else_body, spans);
+            }
+            ParsedFunctionBodyStatement::While(statement) => collect_bare_return_spans(&statement.body, spans),
+            ParsedFunctionBodyStatement::ForOf(statement) => collect_bare_return_spans(&statement.body, spans),
+            ParsedFunctionBodyStatement::Switch(statement) => {
+                for case in &statement.cases {
+                    collect_bare_return_spans(&case.consequent, spans);
+                }
+            }
+            ParsedFunctionBodyStatement::Try(statement) => {
+                collect_bare_return_spans(&statement.block, spans);
+                if let Some(handler) = &statement.handler {
+                    collect_bare_return_spans(&handler.body, spans);
+                }
+                collect_bare_return_spans(&statement.finalizer, spans);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// tsc's `isUnwrappedReturnTypeUndefinedVoidOrAny`, with surge's sentinel read
+/// as `any`.
+pub(crate) fn is_undefined_void_or_any(return_type: &Type) -> bool {
+    match return_type.peeled() {
+        Type::Void | Type::Any | Type::Undefined | Type::GenuineUnknown => true,
+        Type::Union(union) => union.types().iter().any(|member| matches!(member, Type::Void)),
+        other => other.is_unknown(),
+    }
+}
+
 pub(crate) fn emit_implicit_return_diagnostic(
     missing_return_span: Option<surge_ts_syntax::TextSpan>,
     ctx: &mut CheckerContext,
@@ -302,6 +357,7 @@ pub(crate) fn check_function_body(
         let future_block_scoped_declarations = collect_future_block_scoped_declarations(&body);
         if !future_block_scoped_declarations.is_empty() {
             flow_state.push_scope(future_block_scoped_declarations);
+            flow_state.record_enum_objects(&body);
             pushed_scope = true;
         }
     } else {

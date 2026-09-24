@@ -35,9 +35,20 @@ pub(crate) fn collect_context_grammar_diagnostics(
         source_text: program.source_text,
         external_module: is_external_module(program),
         ambient_depth: 0,
+        with_bodies: Vec::new(),
         const_enum_names: unshadowed_const_enum_names(program),
     };
     collector.visit_program(program);
+    // tsc's `checkWithStatement` checks the object but never the body, so no
+    // checker grammar error comes from inside one.
+    let with_bodies = std::mem::take(&mut collector.with_bodies);
+    if !with_bodies.is_empty() {
+        collector.out.retain(|finding| {
+            !with_bodies.iter().any(|body| {
+                body.start as usize <= finding.span.start && finding.span.end <= body.end as usize
+            })
+        });
+    }
 }
 
 /// tsc's `ExternalModuleIndicator` under the default `moduleDetection: auto`:
@@ -70,6 +81,8 @@ struct ContextCollector<'a, 'o> {
     external_module: bool,
     /// How many enclosing nodes carry tsc's `NodeFlagsAmbient`.
     ambient_depth: usize,
+    /// The bodies of the file's `with` statements, which tsc never checks.
+    with_bodies: Vec<Span>,
     /// Top-level `const enum` names no other binding in the file reuses, so
     /// an identifier reference to one is the const enum object and nothing
     /// else — what tsc's `isConstEnumObjectType` sees on the expression.
@@ -198,6 +211,36 @@ pub(super) fn first_token_end(text: &str, start: usize) -> usize {
         .find(|(_, ch)| !(ch.is_alphanumeric() || *ch == '_' || *ch == '$'))
         .map_or(rest.len(), |(index, _)| index);
     start + word.max(rest.chars().next().map_or(0, char::len_utf8))
+}
+
+/// Whether tsc's `nodeCanBeDecorated` accepts a node's decorators with
+/// `experimentalDecorators` (`legacy`) and without it (`es`).
+#[derive(Clone, Copy)]
+struct DecoratorLegality {
+    legacy: bool,
+    es: bool,
+}
+
+impl DecoratorLegality {
+    /// `code` under whichever settings reject the decorators.
+    fn unless_legal(self, code: u32) -> Option<Kind> {
+        match (self.legacy, self.es) {
+            (true, true) => None,
+            (false, false) => Some(Kind::Ts(code)),
+            (false, true) => Some(Kind::TsUnderLegacyDecorators(code)),
+            (true, false) => Some(Kind::TsUnderEsDecorators(code)),
+        }
+    }
+
+    /// `code` under whichever settings accept the decorators.
+    fn if_legal(self, code: u32) -> Option<Kind> {
+        match (self.legacy, self.es) {
+            (true, true) => Some(Kind::Ts(code)),
+            (false, false) => None,
+            (true, false) => Some(Kind::TsUnderLegacyDecorators(code)),
+            (false, true) => Some(Kind::TsUnderEsDecorators(code)),
+        }
+    }
 }
 
 /// What tsc's `getThisContainer(node, false, false)` stops at.
@@ -1177,8 +1220,10 @@ impl<'a> ContextCollector<'a, '_> {
     }
 
     /// tsc's `checkGrammarForDisallowedBlockScopedVariableStatement`: a
-    /// `const`/`using` declaration as the whole body of an `if`, loop, or
-    /// label — TS1156. (A `let` there does not survive oxc's parse.)
+    /// `const`/`using` declaration as the whole body of an `if`, a loop or a
+    /// `with` — through any labels in between (`allowLetAndConstDeclarations`
+    /// looks past a label to its parent) — is TS1156. (A `let` there does not
+    /// survive oxc's parse.)
     fn check_single_statement_declaration(&mut self, declaration: &oxc_ast::ast::VariableDeclaration<'_>) {
         let keyword = match declaration.kind {
             VariableDeclarationKind::Const => "const",
@@ -1186,18 +1231,26 @@ impl<'a> ContextCollector<'a, '_> {
             VariableDeclarationKind::AwaitUsing => "await using",
             _ => return,
         };
-        let is_body = match self.stack.last() {
+        let mut child = declaration.span;
+        let mut ancestors = self.stack.iter().rev();
+        let mut parent = ancestors.next();
+        while let Some(AstKind::LabeledStatement(label)) = parent
+            && label.body.span() == child
+        {
+            child = label.span;
+            parent = ancestors.next();
+        }
+        let is_body = match parent {
             Some(AstKind::IfStatement(statement)) => {
-                statement.consequent.span() == declaration.span
-                    || statement.alternate.as_ref().is_some_and(|alternate| alternate.span() == declaration.span)
+                statement.consequent.span() == child
+                    || statement.alternate.as_ref().is_some_and(|alternate| alternate.span() == child)
             }
-            Some(AstKind::WhileStatement(statement)) => statement.body.span() == declaration.span,
-            Some(AstKind::DoWhileStatement(statement)) => statement.body.span() == declaration.span,
-            Some(AstKind::ForStatement(statement)) => statement.body.span() == declaration.span,
-            Some(AstKind::ForInStatement(statement)) => statement.body.span() == declaration.span,
-            Some(AstKind::ForOfStatement(statement)) => statement.body.span() == declaration.span,
-            Some(AstKind::LabeledStatement(statement)) => statement.body.span() == declaration.span,
-            Some(AstKind::WithStatement(statement)) => statement.body.span() == declaration.span,
+            Some(AstKind::WhileStatement(statement)) => statement.body.span() == child,
+            Some(AstKind::DoWhileStatement(statement)) => statement.body.span() == child,
+            Some(AstKind::ForStatement(statement)) => statement.body.span() == child,
+            Some(AstKind::ForInStatement(statement)) => statement.body.span() == child,
+            Some(AstKind::ForOfStatement(statement)) => statement.body.span() == child,
+            Some(AstKind::WithStatement(statement)) => statement.body.span() == child,
             _ => false,
         };
         if is_body {
@@ -1533,27 +1586,150 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
-    /// A decorator on a parameter of a plain function — TS1206. (A class
-    /// method's parameter decorators depend on `experimentalDecorators`.)
-    fn check_parameter_decorator(&mut self, decorator: &oxc_ast::ast::Decorator<'_>) {
-        let mut ancestors = self.stack.iter().rev();
-        if !matches!(ancestors.next(), Some(AstKind::FormalParameter(_) | AstKind::FormalParameterRest(_))) {
+    /// tsc's `checkJSDocTypeIsInJsFile`: a JSDoc `T!`, `!T`, `T?` or `?T` in
+    /// TypeScript is TS17019 (postfix) or TS17020 (prefix), suggesting the
+    /// written `T` — for `?`, with `undefined` added when postfix and both
+    /// `null` and `undefined` when prefix.
+    fn check_jsdoc_nullability(
+        &mut self,
+        token: &str,
+        postfix: bool,
+        span: Span,
+        inner: &oxc_ast::ast::TSType<'_>,
+    ) {
+        let inner_span = inner.span();
+        let text = self.source_text[inner_span.start as usize..inner_span.end as usize].trim();
+        let meant = match (token, postfix) {
+            ("?", _) if matches!(text, "never" | "void") => text.to_string(),
+            ("?", true) => format!("{text} | undefined"),
+            ("?", false) => format!("{text} | null | undefined"),
+            _ => text.to_string(),
+        };
+        self.push(if postfix { 17019 } else { 17020 }, span, &[token, &meant]);
+    }
+
+    /// tsc's `findFirstIllegalDecorator`: TS1206 (TS1249 for a method
+    /// overload) on the first decorator of a node that `nodeCanBeDecorated`
+    /// rejects.
+    fn check_decorator_target(&mut self, decorator: &oxc_ast::ast::Decorator<'_>) {
+        let Some(target) = self.stack.last().copied() else {
+            return;
+        };
+        let Some((decorators, legality)) = self.decorator_legality(target, self.stack.len() - 1) else {
+            return;
+        };
+        if decorators.first().map(|first| first.span) != Some(decorator.span) {
             return;
         }
-        ancestors.next();
-        let function = ancestors.next();
-        let owner = ancestors.next();
-        let in_class_member = matches!(owner, Some(AstKind::MethodDefinition(_)));
-        if matches!(function, Some(AstKind::Function(_) | AstKind::ArrowFunctionExpression(_))) && !in_class_member {
-            self.push(1206, decorator.span, &[]);
+        // `checkGrammarModifiers` names a method without a body an overload.
+        let code = match target {
+            AstKind::MethodDefinition(method)
+                if method.kind == MethodDefinitionKind::Method && method.value.body.is_none() =>
+            {
+                1249
+            }
+            _ => 1206,
+        };
+        if let Some(kind) = legality.unless_legal(code) {
+            let start = decorator.span.start;
+            self.out.push(ParsedGrammarDiagnostic {
+                kind,
+                span: text_span_from_oxc_span(Span::new(start, start + 1)),
+                name: None,
+            });
+        }
+    }
+
+    /// The decorators of `target`, the node at `index` in the stack, and
+    /// whether tsc's `nodeCanBeDecorated` accepts them.
+    fn decorator_legality(
+        &self,
+        target: AstKind<'a>,
+        index: usize,
+    ) -> Option<(&'a [oxc_ast::ast::Decorator<'a>], DecoratorLegality)> {
+        let class_at = |position: Option<usize>| {
+            position
+                .and_then(|position| self.stack.get(position))
+                .is_some_and(|kind| {
+                    matches!(kind, AstKind::Class(class)
+                        if class.r#type == oxc_ast::ast::ClassType::ClassDeclaration)
+                })
+        };
+        let member_of_declaration = class_at(index.checked_sub(2));
+        let private = |key: &oxc_ast::ast::PropertyKey<'_>| {
+            matches!(key, oxc_ast::ast::PropertyKey::PrivateIdentifier(_))
+        };
+        match target {
+            AstKind::Class(class) => Some((
+                &class.decorators[..],
+                DecoratorLegality {
+                    legacy: class.r#type == oxc_ast::ast::ClassType::ClassDeclaration,
+                    es: true,
+                },
+            )),
+            AstKind::PropertyDefinition(property) => Some((
+                &property.decorators[..],
+                DecoratorLegality {
+                    legacy: member_of_declaration && !private(&property.key),
+                    es: property.r#type != oxc_ast::ast::PropertyDefinitionType::TSAbstractPropertyDefinition
+                        && !property.declare,
+                },
+            )),
+            AstKind::AccessorProperty(property) => Some((
+                &property.decorators[..],
+                DecoratorLegality {
+                    legacy: member_of_declaration && !private(&property.key),
+                    es: property.r#type != oxc_ast::ast::AccessorPropertyType::TSAbstractAccessorProperty,
+                },
+            )),
+            AstKind::MethodDefinition(method) => {
+                let has_body = method.value.body.is_some();
+                Some((
+                    &method.decorators[..],
+                    DecoratorLegality {
+                        legacy: has_body && member_of_declaration && !private(&method.key),
+                        es: has_body,
+                    },
+                ))
+            }
+            // tsc's parser reports any decorator on a `this` parameter as
+            // TS1433 (`parseParameterWorker`), so the checker never weighs
+            // where it sits.
+            AstKind::FormalParameter(parameter)
+                if matches!(&parameter.pattern, BindingPattern::BindingIdentifier(id) if id.name == "this") =>
+            {
+                None
+            }
+            // Parameter decorators are legacy-only: a constructor, method or
+            // setter with a body, in a class declaration.
+            AstKind::FormalParameter(_) | AstKind::FormalParameterRest(_) => {
+                let function = index.checked_sub(2).and_then(|position| self.stack.get(position));
+                let owner = index.checked_sub(3).and_then(|position| self.stack.get(position));
+                let legacy = match (function, owner) {
+                    (Some(AstKind::Function(function)), Some(AstKind::MethodDefinition(method))) => {
+                        function.body.is_some()
+                            && method.kind != MethodDefinitionKind::Get
+                            && class_at(index.checked_sub(5))
+                    }
+                    _ => false,
+                };
+                let decorators = match target {
+                    AstKind::FormalParameter(parameter) => &parameter.decorators[..],
+                    AstKind::FormalParameterRest(parameter) => &parameter.decorators[..],
+                    _ => return None,
+                };
+                Some((decorators, DecoratorLegality { legacy, es: false }))
+            }
+            _ => None,
         }
     }
 
     /// `import x = require("m")` inside a namespace — TS1147 on the module
-    /// name. An ambient external module (`declare module "m"`) may.
-    fn check_import_require_in_namespace(&mut self, declaration: &oxc_ast::ast::TSImportEqualsDeclaration<'_>) {
+    /// name. An ambient external module (`declare module "m"`) may. Whether it
+    /// was reported.
+    fn check_import_require_in_namespace(&mut self, declaration: &oxc_ast::ast::TSImportEqualsDeclaration<'_>) -> bool {
         let oxc_ast::ast::TSModuleReference::ExternalModuleReference(reference) = &declaration.module_reference else {
-            return;
+            return false;
         };
         let in_namespace = self.stack.iter().rev().find_map(|kind| match kind {
             AstKind::TSModuleDeclaration(module) => Some(matches!(
@@ -1565,7 +1741,9 @@ impl<'a> ContextCollector<'a, '_> {
         });
         if in_namespace == Some(true) {
             self.push(1147, reference.expression.span, &[]);
+            return true;
         }
+        false
     }
 
     /// tsc's `isContainedByNamespace`: the statement's container is a
@@ -1700,15 +1878,19 @@ impl<'a> ContextCollector<'a, '_> {
     /// TS1166 on a class property, TS1169/TS1170 on an interface or type
     /// literal member, reported on the bracketed name.
     fn check_dynamic_property_name(&mut self, code: u32, key: &oxc_ast::ast::PropertyKey<'_>) {
-        let Some(expression) = key.as_expression() else {
-            return;
-        };
-        let expression = expression.without_parentheses();
-        if is_literal_name(expression) || is_entity_name_expression(expression) {
-            return;
+        if let Some(span) = self.dynamic_property_name_span(key) {
+            self.push(code, span, &[]);
         }
-        let span = self.member_name_span(key, true);
-        self.push(code, span, &[]);
+    }
+
+    /// The bracketed name of a computed key that is neither a literal nor an
+    /// entity name.
+    fn dynamic_property_name_span(&self, key: &oxc_ast::ast::PropertyKey<'_>) -> Option<Span> {
+        let expression = key.as_expression()?.without_parentheses();
+        if is_literal_name(expression) || is_entity_name_expression(expression) {
+            return None;
+        }
+        Some(self.member_name_span(key, true))
     }
 
     /// A member name as tsc's `getErrorSpanForNode` reports it: a computed
@@ -2307,7 +2489,10 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             }
             AstKind::LabeledStatement(statement) => self.check_labeled_statement(statement),
             AstKind::FormalParameter(parameter) => self.check_parameter_property(parameter),
-            AstKind::WithStatement(statement) => self.check_with_statement(statement),
+            AstKind::WithStatement(statement) => {
+                self.check_with_statement(statement);
+                self.with_bodies.push(statement.body.span());
+            }
             AstKind::BindingRestElement(rest) => self.check_rest_binding_property_name(rest),
             AstKind::BindingIdentifier(identifier) => {
                 self.check_contextual_identifier(&identifier.name, identifier.span);
@@ -2371,8 +2556,26 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 if property.definite && property.value.is_some() {
                     self.push_at_exclamation(1263, property.key.span());
                 }
-                if property.computed && !self.check_mapped_type_member(&property.key) {
-                    self.check_dynamic_property_name(1166, &property.key);
+                // tsc checks the name only once `checkGrammarModifiers` passes,
+                // so not under a decorator TS1206 rejects; a `[k in T]` name is
+                // a misplaced mapped type instead (TS7061).
+                if property.computed
+                    && !self.check_mapped_type_member(&property.key)
+                    && let Some(span) = self.dynamic_property_name_span(&property.key)
+                {
+                    let kind = if property.decorators.is_empty() {
+                        Some(Kind::Ts(1166))
+                    } else {
+                        self.decorator_legality(kind, self.stack.len())
+                            .and_then(|(_, legality)| legality.if_legal(1166))
+                    };
+                    if let Some(kind) = kind {
+                        self.out.push(ParsedGrammarDiagnostic {
+                            kind,
+                            span: text_span_from_oxc_span(span),
+                            name: None,
+                        });
+                    }
                 }
             }
             AstKind::AccessorProperty(property) if property.computed => {
@@ -2442,18 +2645,26 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_type_parameter_defaults(declaration);
             }
             AstKind::TSMappedType(mapped) => self.check_circular_mapped_key(mapped),
-            AstKind::Decorator(decorator) => self.check_parameter_decorator(decorator),
+            AstKind::Decorator(decorator) => self.check_decorator_target(decorator),
+            AstKind::JSDocNonNullableType(node) => {
+                self.check_jsdoc_nullability("!", node.postfix, node.span, &node.type_annotation);
+            }
+            AstKind::JSDocNullableType(node) => {
+                self.check_jsdoc_nullability("?", node.postfix, node.span, &node.type_annotation);
+            }
             AstKind::TSImportEqualsDeclaration(declaration) => {
                 // tsc's `checkGrammarModuleElementContext` bails first.
                 if !self.at_module_element_level() {
                     let span = self.first_token(self.statement_start(declaration.span.start));
                     self.push(1232, span, &[]);
                 } else {
-                    self.check_import_require_in_namespace(declaration);
+                    let require_in_namespace = self.check_import_require_in_namespace(declaration);
                     self.check_import_alias_name(declaration);
                     // Gated on `module` by the checker: ES2015..ESNext cannot emit it.
-                    // Inside a namespace it is TS1147 instead, and tsc stops there.
-                    if !matches!(self.stack.last(), Some(AstKind::TSModuleBlock(_)))
+                    // Inside a namespace it is TS1147 instead, and tsc stops there
+                    // (`checkExternalImportOrExportDeclaration`).
+                    if !require_in_namespace
+                        && !matches!(self.stack.last(), Some(AstKind::TSModuleBlock(_)))
                         && matches!(
                             declaration.module_reference,
                             oxc_ast::ast::TSModuleReference::ExternalModuleReference(_)
@@ -2489,10 +2700,22 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             AstKind::ExportNamedDeclaration(declaration) => {
                 if !self.at_module_element_level() {
                     // A wrapped declaration's `export` is a misplaced modifier;
-                    // an export list is a misplaced export declaration.
-                    let code = if declaration.declaration.is_some() { 1184 } else { 1233 };
-                    let start = declaration.span.start;
-                    self.push(code, Span::new(start, start + 6), &[]);
+                    // an export list is a misplaced export declaration. A
+                    // namespace, global augmentation or import alias reports
+                    // its own context error on this `export` instead.
+                    let code = match &declaration.declaration {
+                        Some(
+                            oxc_ast::ast::Declaration::TSModuleDeclaration(_)
+                            | oxc_ast::ast::Declaration::TSGlobalDeclaration(_)
+                            | oxc_ast::ast::Declaration::TSImportEqualsDeclaration(_),
+                        ) => None,
+                        Some(_) => Some(1184),
+                        None => Some(1233),
+                    };
+                    if let Some(code) = code {
+                        let start = declaration.span.start;
+                        self.push(code, Span::new(start, start + 6), &[]);
+                    }
                 } else if let Some(clause) = &declaration.with_clause {
                     self.check_import_assertion(clause);
                 }
@@ -2662,6 +2885,13 @@ impl<'a> ContextCollector<'a, '_> {
             AstKind::TSInstantiationExpression(expression) => {
                 if matches!(expression.expression, oxc_ast::ast::Expression::Super(_)) {
                     self.push(2754, expression.type_arguments.span, &[]);
+                }
+            }
+            AstKind::TaggedTemplateExpression(tagged) => {
+                if let Some(type_arguments) = &tagged.type_arguments
+                    && matches!(tagged.tag, oxc_ast::ast::Expression::Super(_))
+                {
+                    self.push(2754, type_arguments.span, &[]);
                 }
             }
             AstKind::CallExpression(call) => {
@@ -3007,7 +3237,8 @@ impl<'a> ContextCollector<'a, '_> {
     /// tsc's `checkGrammarForUseStrictSimpleParameterList`: a `"use strict"`
     /// prologue in a function whose parameter list is not simple — TS1346
     /// on each such parameter and TS1347 on the directive. tsc skips this
-    /// below target ES2016, which this pass does not see.
+    /// below target ES2016, which this pass does not see: the driver drops
+    /// them there.
     fn check_use_strict_parameters(
         &mut self,
         parameters: &oxc_ast::ast::FormalParameters<'_>,

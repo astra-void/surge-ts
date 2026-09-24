@@ -1093,7 +1093,7 @@
     "message": "Element implicitly has an 'any' type because type '{0}' has no index signature. Did you mean to call '{1}'?",
     "source": "typescript",
     "arity": 2,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS7053",
@@ -1933,7 +1933,7 @@
     "message": "A decorator can only decorate a method implementation, not an overload.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1257",
@@ -4203,6 +4203,110 @@
     "code": "TS2487",
     "category": "Error",
     "message": "The left-hand side of a 'for...of' statement must be a variable or a property access.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1005",
+    "category": "Error",
+    "message": "'{0}' expected.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2846",
+    "category": "Error",
+    "message": "A declaration file cannot be imported without 'import type'. Did you mean to import an implementation file '{0}' instead?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6263",
+    "category": "Error",
+    "message": "Module '{0}' was resolved to '{1}', but '--allowArbitraryExtensions' is not set.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1254",
+    "category": "Error",
+    "message": "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17019",
+    "category": "Error",
+    "message": "'{0}' at the end of a type is not valid TypeScript syntax. Did you mean to write '{1}'?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17020",
+    "category": "Error",
+    "message": "'{0}' at the start of a type is not valid TypeScript syntax. Did you mean to write '{1}'?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1110",
+    "category": "Error",
+    "message": "Type expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6053",
+    "category": "Error",
+    "message": "File '{0}' not found.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6054",
+    "category": "Error",
+    "message": "File '{0}' has an unsupported extension. The only supported extensions are {1}.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6231",
+    "category": "Error",
+    "message": "Could not resolve the path '{0}' with the extensions: {1}.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6504",
+    "category": "Error",
+    "message": "File '{0}' is a JavaScript file. Did you mean to enable the 'allowJs' option?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1006",
+    "category": "Error",
+    "message": "A file cannot have a reference to itself.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1109",
+    "category": "Error",
+    "message": "Expression expected.",
     "source": "typescript",
     "arity": 0,
     "support": "emitted"

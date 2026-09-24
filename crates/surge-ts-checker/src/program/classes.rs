@@ -34,10 +34,11 @@ pub(crate) fn class_instance_interface_info(
     // member inference does not model yet; those members stay `any`.
     let infer_members =
         class.type_parameters.is_empty() && crate::checks::function::lazy_body_returns(&file_name);
+    let javascript = surge_ts_syntax::is_javascript_file_name(&file_name);
     let mut members: Vec<_> = class
         .members
         .iter()
-        .filter_map(|member| class_member_to_interface_member(class, member, infer_members))
+        .filter_map(|member| class_member_to_interface_member(class, member, infer_members, javascript))
         .collect();
     members.extend(constructor_parameter_property_members(class));
 
@@ -74,6 +75,7 @@ fn class_member_to_interface_member(
     class: &ParsedClassDeclaration,
     member: &ParsedClassMember,
     infer_members: bool,
+    javascript: bool,
 ) -> Option<ParsedInterfaceMember> {
     match member {
         ParsedClassMember::Property(property) if !property.is_static => {
@@ -86,7 +88,7 @@ fn class_member_to_interface_member(
                 ty: property
                     .declared_type
                     .clone()
-                    .unwrap_or_else(|| inferred_property_type(class, property, infer_members)),
+                    .unwrap_or_else(|| inferred_property_type(class, property, infer_members, javascript)),
                 readonly: property.readonly,
                 write_ty: None,
             })
@@ -192,10 +194,18 @@ fn inferred_property_type(
     class: &ParsedClassDeclaration,
     property: &ParsedClassProperty,
     infer_members: bool,
+    javascript: bool,
 ) -> ParsedType {
+    if let Some(assignments) = &property.this_assignments {
+        return this_assigned_member_type(class, property, assignments, infer_members);
+    }
+    // A JavaScript initializer is inferred where it is written, so an object
+    // literal in it is open-ended (`isJSLiteralType`) as the syntax alone
+    // cannot say.
     let syntactic = property
         .initializer
         .as_ref()
+        .filter(|_| !javascript)
         .and_then(|initializer| syntactic_initializer_type(initializer, property.readonly));
     match (syntactic, &property.initializer) {
         (Some(syntactic), _) => syntactic,
@@ -212,6 +222,26 @@ fn inferred_property_type(
         }
         _ => ParsedType::Any,
     }
+}
+
+/// A JavaScript member declared by `this.x = v`, typed from what is assigned
+/// (`getWidenedTypeForAssignmentDeclaration`).
+fn this_assigned_member_type(
+    class: &ParsedClassDeclaration,
+    property: &ParsedClassProperty,
+    assignments: &surge_ts_syntax::ParsedThisAssignments,
+    infer_members: bool,
+) -> ParsedType {
+    if !infer_members {
+        return ParsedType::Any;
+    }
+    ParsedType::InferredMember(Arc::new(surge_ts_syntax::ParsedInferredMember {
+        class_name: class.name.clone(),
+        member_start: property.name_span.map_or(0, |span| span.start),
+        member_name: property.name.clone(),
+        keep_literal: false,
+        source: surge_ts_syntax::ParsedInferredMemberSource::ThisAssignments(assignments.clone()),
+    }))
 }
 
 /// A getter with no annotation on either half of the pair takes its body's
@@ -250,31 +280,28 @@ fn accessor_property_type(accessor: &ParsedClassAccessor) -> ParsedType {
         .unwrap_or(ParsedType::Any)
 }
 
+/// A declaration's parameters as its callers see them. tsc's `addOptionality`,
+/// as `build_function_type` applies it: a defaulted parameter a required one
+/// follows is written `T | undefined`.
+fn declared_signature_parameters(parameters: &[ParsedFunctionParameter]) -> Vec<ParsedFunctionTypeParameter> {
+    let required = crate::checks::function::required_parameter_count(parameters);
+    parameters
+        .iter()
+        .enumerate()
+        .map(|(index, parameter)| {
+            let mut lowered = parameter_to_type_parameter(parameter);
+            if parameter.initializer.is_some() && index < required && !matches!(lowered.ty, ParsedType::Any) {
+                lowered.ty = ParsedType::Union(std::sync::Arc::new(vec![lowered.ty, ParsedType::Undefined]));
+                lowered.optional = false;
+            }
+            lowered
+        })
+        .collect()
+}
+
 fn method_function_type(class: &ParsedClassDeclaration, method: &ParsedClassMethod) -> ParsedType {
-    // tsc's `addOptionality`, as `build_function_type` applies it to a
-    // declaration: a defaulted parameter a required one follows is written
-    // `T | undefined` for its callers.
-    let required = crate::checks::function::required_parameter_count(&method.parameters);
     ParsedType::Function(std::sync::Arc::new(ParsedFunctionType {
-        parameters: method
-            .parameters
-            .iter()
-            .enumerate()
-            .map(|(index, parameter)| {
-                let mut lowered = parameter_to_type_parameter(parameter);
-                if parameter.initializer.is_some()
-                    && index < required
-                    && !matches!(lowered.ty, ParsedType::Any)
-                {
-                    lowered.ty = ParsedType::Union(std::sync::Arc::new(vec![
-                        lowered.ty,
-                        ParsedType::Undefined,
-                    ]));
-                    lowered.optional = false;
-                }
-                lowered
-            })
-            .collect(),
+        parameters: declared_signature_parameters(&method.parameters),
         return_type: Box::new(
             method
                 .return_type
@@ -457,7 +484,7 @@ fn collect_static_members(
     for member in &class.members {
         match member {
             ParsedClassMember::Property(property) if property.is_static => {
-                let property_type = static_property_type(property, ctx);
+                let property_type = static_property_type(class, property, ctx);
                 let object_property = if property.optional {
                     ObjectProperty::optional(property_type)
                 } else {
@@ -761,9 +788,31 @@ fn inherited_construct_signature(base: &FunctionType, instance_type: &Type) -> F
     }
 }
 
-fn static_property_type(property: &ParsedClassProperty, ctx: &mut CheckerContext) -> Type {
+fn static_property_type(
+    class: &ParsedClassDeclaration,
+    property: &ParsedClassProperty,
+    ctx: &mut CheckerContext,
+) -> Type {
+    if let Some(assignments) = &property.this_assignments {
+        let infer_members = class.type_parameters.is_empty()
+            && crate::checks::function::lazy_body_returns(&ctx.file_name);
+        return map_parsed_type(
+            this_assigned_member_type(class, property, assignments, infer_members),
+            ctx,
+        );
+    }
     match property.declared_type.clone() {
         Some(declared_type) => map_parsed_type(declared_type, ctx),
+        // An open-ended JavaScript object literal (`isJSLiteralType`) has no
+        // syntactic type; the static side infers nothing else either.
+        None if surge_ts_syntax::is_javascript_file_name(&ctx.file_name)
+            && matches!(
+                property.initializer,
+                Some(surge_ts_syntax::ParsedExpression::ObjectLiteral { .. })
+            ) =>
+        {
+            Type::Any
+        }
         None => map_parsed_type(initializer_property_type(property), ctx),
     }
 }
@@ -795,8 +844,13 @@ fn syntactic_initializer_type(initializer: &surge_ts_syntax::ParsedExpression, k
         }
         // An empty array literal is `never[]` under strictNullChecks: nothing
         // widens it to an evolving array the way a `let` binding would be.
+        // Without it the literal is `undefined[]`, which widens to `any[]`.
         ParsedExpression::ArrayLiteral { elements, .. } if elements.is_empty() => {
-            ParsedType::Array(Arc::new(ParsedType::Never))
+            if surge_ts_types::strict_null_checks() {
+                ParsedType::Array(Arc::new(ParsedType::Never))
+            } else {
+                ParsedType::Array(Arc::new(ParsedType::Any))
+            }
         }
         ParsedExpression::ArrayLiteral { elements, .. } => {
             let mut element_types = elements.iter().map(|element| match &element.expression {
@@ -811,6 +865,31 @@ fn syntactic_initializer_type(initializer: &surge_ts_syntax::ParsedExpression, k
                 return None;
             }
             ParsedType::Array(Arc::new(first))
+        }
+        // A function whose return type is written has the signature it spells.
+        // A class declaration's property initializer has no contextual type
+        // (`getContextualTypeForVariableLikeDeclaration` gives one to a class
+        // expression's static side alone), so an unannotated parameter is
+        // `any` and a defaulted one takes its initializer's widened type. oxc
+        // keeps a `this` parameter out of the list, so a function expression
+        // that writes one is not lowered.
+        ParsedExpression::ArrowFunction(function)
+            if function.this_binding != surge_ts_syntax::ParsedThisBinding::Own =>
+        {
+            let return_type = function.return_type.clone()?;
+            let mut parameters = function.parameters.clone();
+            for parameter in &mut parameters {
+                if parameter.declared_type.is_none()
+                    && let Some(initializer) = &parameter.initializer
+                {
+                    parameter.declared_type = Some(syntactic_initializer_type(initializer, false)?);
+                }
+            }
+            ParsedType::Function(Arc::new(ParsedFunctionType {
+                parameters: declared_signature_parameters(&parameters),
+                return_type: Box::new(return_type),
+                type_parameters: function.type_parameters.clone(),
+            }))
         }
         ParsedExpression::ObjectLiteral { properties, .. } => {
             let mut members = Vec::with_capacity(properties.len());
@@ -1566,6 +1645,14 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
         .collect();
 
     for member in &class.members {
+        let _this_class = crate::checks::expr::ThisParameterClassScope::enter(match member {
+            ParsedClassMember::Method(method) => crate::checks::expr::this_parameter_class(
+                method.this_parameter_type.as_ref(),
+                &method.type_parameters,
+                ctx,
+            ),
+            _ => None,
+        });
         let static_span = match member {
             ParsedClassMember::Method(method) => method.is_static.then_some(method.span),
             ParsedClassMember::Property(property) => property.is_static.then_some(property.span),
@@ -1646,10 +1733,15 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
                 if !method.has_body {
                     continue;
                 }
-                let this_type = if method.is_static {
-                    static_type.clone()
-                } else {
-                    instance_type.clone()
+                // A method's own `this` parameter is what `this` means in it.
+                let this_type = match &method.this_parameter_type {
+                    Some(written) => crate::checks::function::with_type_parameter_scope(
+                        &method.type_parameters,
+                        ctx,
+                        |ctx| map_parsed_type(written.clone(), ctx),
+                    ),
+                    None if method.is_static => static_type.clone(),
+                    None => instance_type.clone(),
                 };
                 check_function_body_with_signature_and_this(
                     None,
@@ -2147,6 +2239,9 @@ fn check_implicit_override(class: &ParsedClassDeclaration, ctx: &mut CheckerCont
                 method.is_static,
                 method.is_override,
             ),
+            // tsc's `checkMembersForOverrideModifier` skips a member with the
+            // `declare` modifier: it only redeclares the base's property.
+            ParsedClassMember::Property(property) if property.is_declare => continue,
             ParsedClassMember::Property(property) => (
                 &property.name,
                 property.name_span,

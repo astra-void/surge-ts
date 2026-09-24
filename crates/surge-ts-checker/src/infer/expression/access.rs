@@ -1152,7 +1152,7 @@ pub(crate) fn infer_new_expression(
 /// Whether an optional chain over a receiver of this type can short-circuit, and
 /// so contributes `undefined` to the access's type. The degradation sentinel and
 /// `any` are left alone: their result is already the sentinel/`any`.
-fn optional_chain_can_short_circuit(object_type: &Type) -> bool {
+pub(crate) fn optional_chain_can_short_circuit(object_type: &Type) -> bool {
     match object_type {
         Type::Undefined | Type::Null | Type::Void | Type::GenuineUnknown => true,
         Type::Union(union) => union

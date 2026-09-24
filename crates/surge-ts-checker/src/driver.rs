@@ -763,6 +763,15 @@ fn namespace_value_named(
 }
 
 pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
+    sync_global_this_symbol_with_scripts(ctx, &[]);
+}
+
+/// Builds `typeof globalThis` from the ambient globals and `script_members`,
+/// the values the program's scripts put on the global object.
+pub(crate) fn sync_global_this_symbol_with_scripts(
+    ctx: &mut CheckerContext,
+    script_members: &[(String, surge_ts_types::Type)],
+) {
     use surge_ts_types::PropertyMap;
 
     let mut properties = PropertyMap::default();
@@ -777,6 +786,14 @@ pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
             name.clone(),
             surge_ts_types::ObjectProperty::required(symbol.ty.clone()),
         );
+    }
+    for (name, ty) in script_members {
+        if properties.get(name.as_str()).is_none() {
+            properties.insert(
+                name.as_str().into(),
+                surge_ts_types::ObjectProperty::required(ty.clone()),
+            );
+        }
     }
 
     // The global object is a nominal reference, not a bare structural object,
@@ -1771,8 +1788,7 @@ fn validate_direct_utility_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
 }
 
 fn classify_file_kind(file_name: &str) -> FileKind {
-    let lower = file_name.to_ascii_lowercase();
-    if lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts") {
+    if surge_ts_syntax::is_declaration_file_name(file_name) {
         return FileKind::RootDeclaration;
     }
 

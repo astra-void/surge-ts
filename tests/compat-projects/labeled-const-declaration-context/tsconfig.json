@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "strict": true,
+    "allowUnusedLabels": true,
+    "types": [],
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"]
+}

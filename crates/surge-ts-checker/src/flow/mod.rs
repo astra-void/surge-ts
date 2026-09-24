@@ -240,6 +240,10 @@ pub(crate) struct FunctionFlowState {
     /// How many enclosing branches no flow reaches (`b` in `true ? a : b`),
     /// where tsc reads a local as its declared type.
     unreachable_depth: std::cell::Cell<u32>,
+    /// The body's enums, lowered to `const` objects, and whether each is a
+    /// `const enum`. Reading one before its declaration is tsc's TS2450, not a
+    /// variable's TS2448 and TS2454 (`checkResolvedBlockScopedVariable`).
+    enum_objects: HashMap<Arc<str>, bool>,
     /// The block-scoped bindings whose own declaration is being evaluated — a
     /// `let`/`const` initializer, a `for…in`/`for…of` head's expression. A read
     /// of one there is a use before the declaration (tsc's
@@ -281,6 +285,7 @@ impl Clone for FunctionFlowState {
             detached: self.detached,
             guarded_defined: self.guarded_defined.clone(),
             unreachable_depth: self.unreachable_depth.clone(),
+            enum_objects: self.enum_objects.clone(),
             initializing: self.initializing.clone(),
             assigned_bindings: Arc::clone(&self.assigned_bindings),
         }
@@ -377,9 +382,35 @@ impl FunctionFlowState {
             detached: false,
             guarded_defined: std::cell::RefCell::new(Vec::new()),
             unreachable_depth: std::cell::Cell::new(0),
+            enum_objects: HashMap::new(),
             initializing: Vec::new(),
             assigned_bindings: Arc::default(),
         }
+    }
+
+    /// Records the enums `body` declares at its own level.
+    pub(crate) fn record_enum_objects(&mut self, body: &[surge_ts_syntax::ParsedFunctionBodyStatement]) {
+        use surge_ts_syntax::ParsedFunctionBodyStatement;
+        for statement in body {
+            if let ParsedFunctionBodyStatement::VariableDeclaration(variable) = statement
+                && variable.is_enum_object
+            {
+                let is_const = body.iter().any(|statement| {
+                    matches!(
+                        statement,
+                        ParsedFunctionBodyStatement::TypeAlias(alias)
+                            if alias.enum_name.as_deref() == Some(variable.name.as_str()) && alias.enum_is_const
+                    )
+                });
+                self.enum_objects.insert(variable.name.as_str().into(), is_const);
+            }
+        }
+    }
+
+    /// Whether `name` is one of the body's enums, and if so whether it is a
+    /// `const enum`.
+    pub(crate) fn enum_object(&self, name: &str) -> Option<bool> {
+        self.enum_objects.get(name).copied()
     }
 
     pub(crate) fn set_assigned_bindings(&mut self, names: std::collections::HashSet<Arc<str>>) {

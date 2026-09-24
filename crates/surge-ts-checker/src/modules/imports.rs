@@ -812,8 +812,10 @@ pub(crate) fn resolve_import_declaration(
             program_files,
             module_export_tables,
             module_resolution_scopes,
+            local_symbol_exists,
             type_declarations,
             symbols,
+            namespace_alias_layers,
             type_only_aliases,
             ctx,
         ),
@@ -955,7 +957,12 @@ fn resolve_default_and_named_import(
                     program_files,
                     &ctx.module_file_index_by_identity,
                 )
-                .map(|resolution| resolution.resolved_file_index),
+                .map(|resolution| resolution.resolved_file_index)
+                .filter(|&index| {
+                    program_files
+                        .get(index)
+                        .is_some_and(|file| !file.file_kind.is_declaration())
+                }),
                 program_files,
             );
         }
@@ -1012,53 +1019,66 @@ fn resolve_default_and_named_import(
     // is an incomplete declaration surface) and binds an unknown placeholder,
     // but never returns early: the named specifiers below must still bind so a
     // missing default does not cascade into TS2304 on their usages.
-    bind_default_type_import(
+    let synthetic_default = can_have_synthetic_default(
+        ctx,
+        resolved_index.and_then(|index| program_files.get(index)),
         &export_table,
-        default_scope.as_ref(),
-        local_name,
-        type_declarations,
     );
+    if synthetic_default {
+        bind_external_module_symbol(
+            &export_table,
+            default_scope.as_ref(),
+            resolved_index,
+            &import.module_specifier,
+            local_name,
+            !*is_type_only,
+            program_files,
+            local_symbol_exists,
+            type_declarations,
+            symbols,
+            namespace_alias_layers,
+            ctx,
+        );
+    } else {
+        bind_default_type_import(
+            &export_table,
+            default_scope.as_ref(),
+            local_name,
+            type_declarations,
+        );
 
-    match export_table.get_shared_value("default") {
-        Some(default_symbol) => {
-            if *is_type_only {
-                let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
-                    local_name.clone(),
-                    ctx.file_name_arc(),
-                    *name_span,
-                    vec![],
-                    ParsedType::ErrorType,
-                    None,
-                ));
-                if type_declarations.get(local_name).is_none() {
-                    let _ = type_declarations.insert(local_name.clone(), declaration);
+        match export_table.get_shared_value("default") {
+            Some(default_symbol) => {
+                if *is_type_only {
+                    let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
+                        local_name.clone(),
+                        ctx.file_name_arc(),
+                        *name_span,
+                        vec![],
+                        ParsedType::ErrorType,
+                        None,
+                    ));
+                    if type_declarations.get(local_name).is_none() {
+                        let _ = type_declarations.insert(local_name.clone(), declaration);
+                    }
+                } else if !local_symbol_exists(local_name) {
+                    symbols.insert_shared(local_name.clone(), default_symbol);
                 }
-            } else if !local_symbol_exists(local_name) {
-                symbols.insert_shared(local_name.clone(), default_symbol);
             }
-        }
-        None => {
-            if allows_synthetic_default_import(ctx, resolved_index, program_files) && !*is_type_only
-            {
-                namespace_alias_layers.push(namespace_alias_table(
+            None => {
+                if !should_bind_unknown_for_missing_export(
                     &export_table,
-                    local_name,
-                    default_scope.as_ref(),
-                    resolved_index,
-                ));
-                bind_synthetic_default_import(local_name, local_symbol_exists, symbols);
-            } else if !should_bind_unknown_for_missing_export(
-                &export_table,
-                resolved_index,
-                program_files,
-            ) {
-                emit_no_default_export_diagnostic(
-                    ctx,
-                    local_name,
-                    *name_span,
                     resolved_index,
                     program_files,
-                );
+                ) {
+                    emit_no_default_export_diagnostic(
+                        ctx,
+                        local_name,
+                        *name_span,
+                        resolved_index,
+                        program_files,
+                    );
+                }
                 if *is_type_only {
                     let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
                         local_name.clone(),
@@ -1074,25 +1094,28 @@ fn resolve_default_and_named_import(
                 } else {
                     insert_unknown_value_import(local_name, symbols);
                 }
-            } else if *is_type_only {
-                let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(
-                    local_name.clone(),
-                    ctx.file_name_arc(),
-                    *name_span,
-                    vec![],
-                    ParsedType::ErrorType,
-                    None,
-                ));
-                if type_declarations.get(local_name).is_none() {
-                    let _ = type_declarations.insert(local_name.clone(), declaration);
-                }
-            } else {
-                insert_unknown_value_import(local_name, symbols);
             }
         }
     }
 
     for specifier in specifiers {
+        if synthetic_default && specifier.imported_name == "default" {
+            bind_external_module_symbol(
+                &export_table,
+                default_scope.as_ref(),
+                resolved_index,
+                &import.module_specifier,
+                &specifier.local_name,
+                !*is_type_only,
+                program_files,
+                local_symbol_exists,
+                type_declarations,
+                symbols,
+                namespace_alias_layers,
+                ctx,
+            );
+            continue;
+        }
         if imported_name_is_unexported_local(resolved_index, program_files, &specifier.imported_name) {
             emit_unexported_local_import_diagnostic(
                 ctx,
@@ -1293,7 +1316,12 @@ fn resolve_default_import(
                     program_files,
                     &ctx.module_file_index_by_identity,
                 )
-                .map(|resolution| resolution.resolved_file_index),
+                .map(|resolution| resolution.resolved_file_index)
+                .filter(|&index| {
+                    program_files
+                        .get(index)
+                        .is_some_and(|file| !file.file_kind.is_declaration())
+                }),
                 program_files,
             );
         }
@@ -1305,58 +1333,51 @@ fn resolve_default_import(
         return;
     };
 
-    let Some(default_symbol) = export_table.get_shared_value("default") else {
-        // `export = X` has no `default` *value* export, but under
-        // `esModuleInterop` a default import still names that target's type —
-        // `import EventEmitter from "events"` then `extends EventEmitter<T>` has
-        // to resolve. Only the type side: binding the value here instead of the
-        // synthetic `any` exposes express's unresolved handler overloads and
-        // costs ten implicit-any false positives for the three it saves.
-        bind_default_type_import(&export_table, scope.as_ref(), local_name, type_declarations);
-
-        if allows_synthetic_default_import(ctx, resolved_index, program_files) {
-            // The synthetic default *is* the module object, so its exported
-            // types are reachable as `local.Member` exactly as through
-            // `import * as local` (`import http from "http"` then
-            // `http.RequestListener`).
-            namespace_alias_layers.push(namespace_alias_table(
-                &export_table,
-                local_name,
-                scope.as_ref(),
-                resolved_index,
-            ));
-            if !type_only {
-                bind_synthetic_default_import(local_name, local_symbol_exists, symbols);
-            }
-            return;
-        }
-
-        if should_bind_unknown_for_missing_export(&export_table, resolved_index, program_files) {
-            if !type_only {
-                insert_unknown_value_import(local_name, symbols);
-            }
-            return;
-        }
-
-        emit_no_default_export_diagnostic(
-            ctx,
-            local_name,
-            *name_span,
+    // `getTargetOfModuleDefault`: a synthetic default overrides a real
+    // `default` export.
+    if can_have_synthetic_default(
+        ctx,
+        resolved_index.and_then(|index| program_files.get(index)),
+        &export_table,
+    ) {
+        bind_external_module_symbol(
+            &export_table,
+            scope.as_ref(),
             resolved_index,
+            &import.module_specifier,
+            local_name,
+            !type_only,
             program_files,
+            local_symbol_exists,
+            type_declarations,
+            symbols,
+            namespace_alias_layers,
+            ctx,
         );
+        return;
+    }
+
+    bind_default_type_import(&export_table, scope.as_ref(), local_name, type_declarations);
+
+    let Some(default_symbol) = export_table.get_shared_value("default") else {
+        if !should_bind_unknown_for_missing_export(&export_table, resolved_index, program_files) {
+            emit_no_default_export_diagnostic(
+                ctx,
+                local_name,
+                *name_span,
+                resolved_index,
+                program_files,
+            );
+        }
         if !type_only {
             insert_unknown_value_import(local_name, symbols);
         }
         return;
     };
 
-    bind_default_type_import(&export_table, scope.as_ref(), local_name, type_declarations);
-
     if !type_only && !local_symbol_exists(local_name) {
         symbols.insert_shared(local_name.clone(), default_symbol);
     }
-    return;
 }
 
 /// A default-exported class contributes a type as well as a value, so
@@ -1429,25 +1450,58 @@ fn resolve_import_equals(
         return;
     };
 
-    // `getTargetOfImportEqualsDeclaration` → `resolveExternalModuleSymbol`: the
-    // alias *is* the entity the module's `export =` names, with its value, its
-    // type and its namespace members alike.
-    let assignment_type = lookup_type_export(&export_table, EXPORT_ASSIGNMENT_NAME).cloned();
-    let assignment_members =
-        export_assignment_member_table(&export_table, local_name, scope.as_ref());
+    // `getTargetOfImportEqualsDeclaration` → `resolveExternalModuleSymbol`.
+    bind_external_module_symbol(
+        &export_table,
+        scope.as_ref(),
+        resolved_index,
+        &import.module_specifier,
+        local_name,
+        true,
+        program_files,
+        local_symbol_exists,
+        type_declarations,
+        symbols,
+        namespace_alias_layers,
+        ctx,
+    );
+}
+
+/// tsc's `resolveExternalModuleSymbol` as an import binds it: the entity the
+/// module's `export =` names, with its value, its type and its namespace
+/// members alike, or without an `export =` the module namespace.
+/// `import x = require("m")` binds it, and so does a default import of a
+/// module with a synthetic default.
+fn bind_external_module_symbol(
+    export_table: &ModuleExportTable,
+    scope: Option<&Arc<TypeDeclarationScope>>,
+    resolved_index: Option<usize>,
+    module_specifier: &str,
+    local_name: &str,
+    binds_value: bool,
+    program_files: &[ParsedProgramFile],
+    local_symbol_exists: &dyn Fn(&str) -> bool,
+    type_declarations: &mut TypeDeclarationTable,
+    symbols: &mut SymbolTable,
+    namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
+    ctx: &CheckerContext,
+) {
+    let assignment_type = lookup_type_export(export_table, EXPORT_ASSIGNMENT_NAME).cloned();
+    let assignment_members = export_assignment_member_table(export_table, local_name, scope);
     if export_table.export_assignment_symbol.is_some()
         || assignment_type.is_some()
         || assignment_members.is_some()
     {
-        if let Some(symbol) = export_table.export_assignment_symbol.clone()
+        if binds_value
+            && let Some(symbol) = export_table.export_assignment_symbol.clone()
             && !local_symbol_exists(local_name)
         {
-            symbols.insert_shared(local_name.clone(), symbol);
+            symbols.insert_shared(local_name, symbol);
         }
         if let Some(declaration) = assignment_type
             && type_declarations.get(local_name).is_none()
         {
-            insert_type_export(type_declarations, local_name, scope.as_ref(), declaration);
+            insert_type_export(type_declarations, local_name, scope, declaration);
         }
         if let Some(members) = assignment_members {
             namespace_alias_layers.push(members);
@@ -1459,72 +1513,112 @@ fn resolve_import_equals(
     // resolve keeps the unknown placeholder: its real shape is that value, not
     // the module namespace, and standing the (empty) namespace in its place
     // turns every use into a cascade.
-    if export_table.writes_export_assignment {
-        insert_unknown_value_import(local_name, symbols);
+    if export_table.writes_export_assignment && !export_table.export_assignment_names_module {
+        if binds_value {
+            insert_unknown_value_import(local_name, symbols);
+        }
         return;
     }
 
-    // Without an export assignment the target is an ordinary module, and
-    // `import x = require("m")` binds its namespace — the same object
-    // `import * as x` binds. Binding an unknown placeholder instead left every
-    // `x.member` and every `typeof x.member` silent, which is what opened the
-    // whole jscodeshift surface in tRPC's `upgrade` transforms: its `JSCodeshift`
-    // is an intersection over `typeof recast.types.namedTypes`, reached through
+    // Without an export assignment the target is an ordinary module, and the
+    // import binds its namespace — the same object `import * as x` binds.
+    // Binding an unknown placeholder instead left every `x.member` and every
+    // `typeof x.member` silent, which is what opened the whole jscodeshift
+    // surface in tRPC's `upgrade` transforms: its `JSCodeshift` is an
+    // intersection over `typeof recast.types.namedTypes`, reached through
     // `import recast = require("recast")`. An ambient `declare module "m"` is
     // such a module too (`resolveExternalModuleSymbol` returns the module
     // symbol when it has no `export =`).
     namespace_alias_layers.push(namespace_alias_table(
-        &export_table,
+        export_table,
         local_name,
-        scope.as_ref(),
+        scope,
         resolved_index,
     ));
-    crate::modules::exports::copy_namespace_alias_value_exports(
-        &export_table,
-        local_name,
-        symbols,
-    );
+    if !binds_value {
+        return;
+    }
+    crate::modules::exports::copy_namespace_alias_value_exports(export_table, local_name, symbols);
 
     if local_symbol_exists(local_name) {
         return;
     }
 
-    let namespace_type = namespace_export_object_type(&export_table);
-    let module_name = match resolved_index {
-        Some(index) => program_files.get(index).map(|file| file.file_name.as_str()),
-        None => ambient_module_name(ctx, &import.module_specifier),
-    };
-    let namespace_type = match module_name {
-        Some(module_name) => tag_namespace_type_with_module_path(namespace_type, module_name),
-        None => namespace_type,
-    };
     symbols.insert(
-        local_name.clone(),
+        local_name,
         SymbolInfo {
-            ty: namespace_type,
+            ty: module_namespace_type(export_table, resolved_index, module_specifier, program_files, ctx),
             kind: SymbolKind::Const,
             function_signature: None,
         },
     );
 }
 
-fn bind_synthetic_default_import(
+/// The type side [`bind_external_module_symbol`] binds under `local_name`: the
+/// `export =` entity's type and its namespace members, or without an
+/// `export =` the module namespace's members.
+pub(crate) fn external_module_type_bindings(
+    export_table: &ModuleExportTable,
+    scope: Option<&Arc<TypeDeclarationScope>>,
+    resolved_index: Option<usize>,
     local_name: &str,
-    local_symbol_exists: &dyn Fn(&str) -> bool,
-    symbols: &mut SymbolTable,
-) {
-    if local_symbol_exists(local_name) {
-        return;
+) -> (Option<TypeDeclarationInfo>, Option<Arc<TypeDeclarationTable>>) {
+    let assignment_type = lookup_type_export(export_table, EXPORT_ASSIGNMENT_NAME).cloned();
+    let assignment_members = export_assignment_member_table(export_table, local_name, scope);
+    if export_table.export_assignment_symbol.is_some()
+        || assignment_type.is_some()
+        || assignment_members.is_some()
+    {
+        return (assignment_type, assignment_members);
     }
+    if export_table.writes_export_assignment && !export_table.export_assignment_names_module {
+        return (None, None);
+    }
+    (
+        None,
+        Some(namespace_alias_table(export_table, local_name, scope, resolved_index)),
+    )
+}
 
-    symbols.insert(
-        local_name.to_string(),
-        SymbolInfo {
-            ty: Type::Any,
-            kind: SymbolKind::Const,
-            function_signature: None,
-        },
-    );
+/// The value [`bind_external_module_symbol`] binds, for a re-export of it.
+pub(crate) fn external_module_value(
+    export_table: &ModuleExportTable,
+    resolved_index: Option<usize>,
+    module_specifier: &str,
+    program_files: &[ParsedProgramFile],
+    ctx: &CheckerContext,
+) -> Arc<SymbolInfo> {
+    if let Some(symbol) = &export_table.export_assignment_symbol {
+        return symbol.clone();
+    }
+    let ty = if export_table.writes_export_assignment && !export_table.export_assignment_names_module {
+        Type::Unknown
+    } else {
+        module_namespace_type(export_table, resolved_index, module_specifier, program_files, ctx)
+    };
+    Arc::new(SymbolInfo {
+        ty,
+        kind: SymbolKind::Const,
+        function_signature: None,
+    })
+}
+
+fn module_namespace_type(
+    export_table: &ModuleExportTable,
+    resolved_index: Option<usize>,
+    module_specifier: &str,
+    program_files: &[ParsedProgramFile],
+    ctx: &CheckerContext,
+) -> Type {
+    let namespace_type = namespace_export_object_type(export_table);
+    let module_name = match resolved_index {
+        Some(index) => program_files.get(index).map(|file| file.file_name.as_str()),
+        None => ambient_module_name(ctx, module_specifier),
+    };
+    match module_name {
+        Some(module_name) => tag_namespace_type_with_module_path(namespace_type, module_name),
+        None => namespace_type,
+    }
 }
 
 thread_local! {
@@ -1706,6 +1800,22 @@ fn resolve_namespace_import(
             module_resolution_scopes,
         ) {
             let namespace_type = namespace_export_object_type(&export_table);
+            let namespace_type = if namespace_import_has_synthetic_default(
+                ctx,
+                resolved_index.and_then(|index| program_files.get(index)),
+                &export_table,
+            ) {
+                let default_value = external_module_value(
+                    &export_table,
+                    resolved_index,
+                    &import.module_specifier,
+                    program_files,
+                    ctx,
+                );
+                with_synthetic_default_member(namespace_type, default_value.ty.clone())
+            } else {
+                namespace_type
+            };
             // tsc displays a namespace import object as `typeof import("<path>")`
             // (absolute, without the source extension) rather than the structural
             // shape. Tag the object with that display form when we know the file.
@@ -1784,8 +1894,10 @@ fn resolve_named_import(
     program_files: &[ParsedProgramFile],
     module_export_tables: &[Option<ModuleExportTable>],
     module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
+    local_symbol_exists: &dyn Fn(&str) -> bool,
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
+    namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
     type_only_aliases: &mut Vec<(Arc<str>, TypeOnlyAliasKind)>,
     ctx: &mut CheckerContext,
 ) {
@@ -1967,7 +2079,34 @@ fn resolve_named_import(
             })
             .unwrap_or(false);
 
+    // `getTargetOfImportSpecifier` sends a `default` specifier through
+    // `getTargetOfModuleDefault`, where a synthetic default wins.
+    let synthetic_default = specifiers
+        .iter()
+        .any(|specifier| specifier.imported_name == "default")
+        && can_have_synthetic_default(
+            ctx,
+            resolved_index.and_then(|index| program_files.get(index)),
+            &export_table,
+        );
     for specifier in specifiers {
+        if synthetic_default && specifier.imported_name == "default" {
+            bind_external_module_symbol(
+                &export_table,
+                Some(&scope),
+                resolved_index,
+                &import.module_specifier,
+                &specifier.local_name,
+                !*is_type_only,
+                program_files,
+                local_symbol_exists,
+                type_declarations,
+                symbols,
+                namespace_alias_layers,
+                ctx,
+            );
+            continue;
+        }
         if imported_name_is_unexported_local(resolved_index, program_files, &specifier.imported_name) {
             emit_unexported_local_import_diagnostic(
                 ctx,
@@ -2171,24 +2310,28 @@ pub(crate) fn strip_typescript_extension(file_name: &str) -> &str {
     file_name
 }
 
-/// tsc's TS5097: an import path that resolves *by* its written TypeScript
-/// extension needs `allowImportingTsExtensions`. A type-only import and an
-/// import written in a declaration file are exempt, and a `.d.*` path is a
-/// different error, so it is not one of these extensions.
+/// tsc's `resolveExternalModule` for an emittable import (`IsEmittableImport`:
+/// one with an import clause that is not type-only) that resolves *by* its
+/// written TypeScript extension: a `.d.*` path is TS2846 wherever it is
+/// written, and any other TypeScript extension needs
+/// `allowImportingTsExtensions` (TS5097), which a declaration file always has.
 fn report_ts_extension_import(
     import: &ParsedImportDeclaration,
     program_files: &[ParsedProgramFile],
     ctx: &mut CheckerContext,
 ) {
-    if ctx.options.allow_importing_ts_extensions
-        || is_declaration_file_name(&ctx.file_name)
-        || import_is_type_only(&import.kind)
-    {
+    if import_is_type_only(&import.kind) || matches!(import.kind, ParsedImportKind::SideEffect) {
         return;
     }
     let Some(extension) = written_ts_extension(&import.module_specifier) else {
         return;
     };
+    let declaration_specifier = is_declaration_file_name(&import.module_specifier);
+    if !declaration_specifier
+        && (ctx.options.allow_importing_ts_extensions || is_declaration_file_name(&ctx.file_name))
+    {
+        return;
+    }
     let Some(resolved) = resolve_relative_module(
         &ctx.file_name,
         &import.module_specifier,
@@ -2205,20 +2348,40 @@ fn report_ts_extension_import(
     {
         return;
     }
-    let mut diagnostic = Diagnostic::ts5097(extension, ctx.file_name.clone());
+    let mut diagnostic = if declaration_specifier {
+        let suggestion = suggested_import_source(&import.module_specifier, extension, ctx);
+        Diagnostic::ts2846(suggestion, ctx.file_name.clone())
+    } else {
+        Diagnostic::ts5097(extension, ctx.file_name.clone())
+    };
     if let Some(span) = import.module_specifier_span {
         diagnostic = diagnostic.with_span(convert_span(span));
     }
     ctx.push(diagnostic);
 }
 
+/// tsc's `TryExtractTSExtension`: declaration extensions are tried first.
 fn written_ts_extension(specifier: &str) -> Option<&'static str> {
-    if is_declaration_file_name(specifier) {
-        return None;
-    }
-    [".ts", ".tsx", ".mts", ".cts"]
+    [".d.ts", ".d.cts", ".d.mts", ".ts", ".tsx", ".mts", ".cts"]
         .into_iter()
         .find(|extension| specifier.ends_with(extension))
+}
+
+/// tsc's `getSuggestedImportSource`: an ES module output imports the emitted
+/// JavaScript (or, with `allowImportingTsExtensions`, the TypeScript source a
+/// declaration specifier stands for); anything else imports extensionless.
+fn suggested_import_source(specifier: &str, extension: &str, ctx: &CheckerContext) -> String {
+    let stem = &specifier[..specifier.len() - extension.len()];
+    if !ctx.options.module_emit.is_ecmascript() && !resolves_in_node_esm_mode(&ctx.file_name) {
+        return stem.to_string();
+    }
+    let prefer_ts = is_declaration_file_name(specifier) && ctx.options.allow_importing_ts_extensions;
+    let suffix = match extension {
+        ".mts" | ".d.mts" => if prefer_ts { ".mts" } else { ".mjs" },
+        ".cts" | ".d.cts" => if prefer_ts { ".cts" } else { ".cjs" },
+        _ => if prefer_ts { ".ts" } else { ".js" },
+    };
+    format!("{stem}{suffix}")
 }
 
 fn import_is_type_only(kind: &ParsedImportKind) -> bool {

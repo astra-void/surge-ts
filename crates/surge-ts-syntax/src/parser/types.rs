@@ -95,6 +95,13 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         TSType::TSParenthesizedType(parenthesized_type) => {
             parse_type(&parenthesized_type.type_annotation)
         }
+        // A JSDoc `T!` or `?T` written in TypeScript is TS17019/TS17020, and
+        // tsc still reads it: `T`, or `T | null` (`getTypeFromTypeNode`).
+        TSType::JSDocNonNullableType(non_nullable) => parse_type(&non_nullable.type_annotation),
+        TSType::JSDocNullableType(nullable) => Some(ParsedType::Union(std::sync::Arc::new(vec![
+            parse_type(&nullable.type_annotation)?,
+            ParsedType::Null,
+        ]))),
         TSType::TSUnionType(union_type) => Some(parse_union_type(union_type)),
         TSType::TSIntersectionType(intersection_type) => {
             Some(parse_intersection_type(intersection_type))

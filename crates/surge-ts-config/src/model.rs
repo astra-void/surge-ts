@@ -43,6 +43,16 @@ pub struct NormalizedCompilerOptions {
     /// `compilerOptions.allowImportingTsExtensions`. Defaults off; without it an
     /// import path ending in a TypeScript extension is TS5097.
     pub allow_importing_ts_extensions: bool,
+    /// `compilerOptions.rewriteRelativeImportExtensions`. Defaults off; it
+    /// permits TypeScript-extension imports as `allowImportingTsExtensions`
+    /// does (tsc's `GetAllowImportingTsExtensions`).
+    pub rewrite_relative_import_extensions: bool,
+    /// `compilerOptions.allowArbitraryExtensions`. Defaults off; without it an
+    /// import of `./x.html` resolving to `./x.d.html.ts` is TS6263.
+    pub allow_arbitrary_extensions: bool,
+    /// `compilerOptions.experimentalDecorators`. Defaults off, which checks
+    /// decorators as ES decorators.
+    pub experimental_decorators: bool,
     /// `compilerOptions.noUnusedLocals`. Independent of `strict`; defaults off.
     pub no_unused_locals: bool,
     /// `compilerOptions.noUnusedParameters`. Independent of `strict`; defaults off.
@@ -74,6 +84,12 @@ pub struct NormalizedCompilerOptions {
     pub allow_js: bool,
     pub check_js: bool,
     pub no_emit: bool,
+    /// `compilerOptions.noCheck`: no file is type-checked, so only syntactic
+    /// diagnostics are reported.
+    pub no_check: bool,
+    /// `compilerOptions.noResolve`: a file's `/// <reference>` directives
+    /// neither add files nor report what they fail to name.
+    pub no_resolve: bool,
     pub skip_lib_check: bool,
     pub es_module_interop: bool,
     pub allow_synthetic_default_imports: bool,
@@ -128,6 +144,9 @@ impl Default for NormalizedCompilerOptions {
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
             allow_importing_ts_extensions: false,
+            rewrite_relative_import_extensions: false,
+            allow_arbitrary_extensions: false,
+            experimental_decorators: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,
@@ -146,6 +165,8 @@ impl Default for NormalizedCompilerOptions {
             allow_js: false,
             check_js: false,
             no_emit: false,
+            no_check: false,
+            no_resolve: false,
             skip_lib_check: false,
             es_module_interop: false,
             allow_synthetic_default_imports: false,

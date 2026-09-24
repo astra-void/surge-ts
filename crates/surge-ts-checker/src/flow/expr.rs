@@ -155,6 +155,7 @@ pub(crate) fn check_expression_flow_impl(
         ParsedExpression::Update {
             operand,
             operand_span,
+            ..
         }
         | ParsedExpression::Await {
             operand,

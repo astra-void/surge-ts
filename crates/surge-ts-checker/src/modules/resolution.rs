@@ -49,6 +49,45 @@ pub(crate) fn set_node_esm_files(files: Option<Arc<std::collections::HashSet<Str
     }
 }
 
+/// `allowArbitraryExtensions` of the program being checked, read by the
+/// relative resolver on every checking thread.
+static ALLOW_ARBITRARY_EXTENSIONS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn set_allow_arbitrary_extensions(allowed: bool) {
+    ALLOW_ARBITRARY_EXTENSIONS.store(allowed, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// tsc's `GetResolutionDiagnostic` for a `.d.{extension}.ts` resolution: it
+/// needs `allowArbitraryExtensions` unless the importer is a declaration file.
+pub(crate) fn arbitrary_extension_resolution_allowed(importer_file_name: &str) -> bool {
+    ALLOW_ARBITRARY_EXTENSIONS.load(std::sync::atomic::Ordering::Relaxed)
+        || is_declaration_file_name(importer_file_name)
+}
+
+/// tsc's `tryAddingExtensions` for an extension it does not know: `./x.html`
+/// names the declaration file `./x.d.html.ts`.
+pub(crate) fn arbitrary_extension_declaration(joined: &str, specifier: &str) -> Option<String> {
+    if super::candidates::classify_relative_specifier(specifier)
+        != super::candidates::RelativeSpecifierShape::Extensionless
+    {
+        return None;
+    }
+    let (directory, base) = match joined.rsplit_once('/') {
+        Some((directory, base)) => (Some(directory), base),
+        None => (None, joined),
+    };
+    let (stem, extension) = base.rsplit_once('.')?;
+    if extension.is_empty() || is_declaration_file_name(base) {
+        return None;
+    }
+    let file = format!("{stem}.d.{extension}.ts");
+    Some(match directory {
+        Some(directory) => format!("{directory}/{file}"),
+        None => file,
+    })
+}
+
 /// Whether node16/nodenext resolves this file's imports in ESM mode, where a
 /// relative specifier gets no extension appended and no directory lookup.
 pub(crate) fn resolves_in_node_esm_mode(importer_file_name: &str) -> bool {
@@ -215,6 +254,19 @@ pub(crate) fn resolve_relative_module_uncached(
         normalize_path_string(&format!("{importer_dir}/{normalized_specifier}"))
     };
 
+    if let Some(declaration) = arbitrary_extension_declaration(&joined_specifier, &normalized_specifier)
+        && let Some(resolved_file_index) =
+            file_index_by_identity.get(canonical_file_identity(&declaration).as_str())
+    {
+        if !arbitrary_extension_resolution_allowed(importer_file_name) {
+            return None;
+        }
+        return Some(ModuleResolution {
+            resolved_file_index: *resolved_file_index,
+            resolved_file_name: program_files[*resolved_file_index].file_name.clone(),
+        });
+    }
+
     let candidate_paths =
         super::candidates::relative_import_candidates(&joined_specifier, &normalized_specifier)?;
 
@@ -336,6 +388,5 @@ pub(crate) fn canonical_file_identity(file_name: &str) -> String {
 }
 
 pub(crate) fn is_declaration_file_name(file_name: &str) -> bool {
-    let lower = file_name.to_ascii_lowercase();
-    lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts")
+    surge_ts_syntax::is_declaration_file_name(file_name)
 }

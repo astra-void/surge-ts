@@ -1092,7 +1092,7 @@ arity = 2
 code = "TS7052"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Element implicitly has an 'any' type because type '{0}' has no index signature. Did you mean to call '{1}'?"
 arity = 2
 
@@ -1932,7 +1932,7 @@ arity = 0
 code = "TS1249"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "A decorator can only decorate a method implementation, not an overload."
 arity = 0
 
@@ -4206,5 +4206,109 @@ category = "Error"
 source = "typescript"
 support = "emitted"
 message = "The left-hand side of a 'for...of' statement must be a variable or a property access."
+arity = 0
+
+[[diagnostic]]
+code = "TS1005"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' expected."
+arity = 1
+
+[[diagnostic]]
+code = "TS2846"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A declaration file cannot be imported without 'import type'. Did you mean to import an implementation file '{0}' instead?"
+arity = 1
+
+[[diagnostic]]
+code = "TS6263"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Module '{0}' was resolved to '{1}', but '--allowArbitraryExtensions' is not set."
+arity = 2
+
+[[diagnostic]]
+code = "TS1254"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference."
+arity = 0
+
+[[diagnostic]]
+code = "TS17019"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' at the end of a type is not valid TypeScript syntax. Did you mean to write '{1}'?"
+arity = 2
+
+[[diagnostic]]
+code = "TS17020"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' at the start of a type is not valid TypeScript syntax. Did you mean to write '{1}'?"
+arity = 2
+
+[[diagnostic]]
+code = "TS1110"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS6053"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "File '{0}' not found."
+arity = 1
+
+[[diagnostic]]
+code = "TS6054"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "File '{0}' has an unsupported extension. The only supported extensions are {1}."
+arity = 2
+
+[[diagnostic]]
+code = "TS6231"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Could not resolve the path '{0}' with the extensions: {1}."
+arity = 2
+
+[[diagnostic]]
+code = "TS6504"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "File '{0}' is a JavaScript file. Did you mean to enable the 'allowJs' option?"
+arity = 1
+
+[[diagnostic]]
+code = "TS1006"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A file cannot have a reference to itself."
+arity = 0
+
+[[diagnostic]]
+code = "TS1109"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expression expected."
 arity = 0
 

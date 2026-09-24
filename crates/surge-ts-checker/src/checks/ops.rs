@@ -110,10 +110,21 @@ pub(crate) fn evaluate_logical_expression(
             crate::infer::truthy_part(left_ty),
             right_ty.clone(),
         ]),
-        surge_ts_syntax::ParsedLogicalOperator::And => surge_ts_types::union_type(vec![
-            crate::infer::falsy_part(left_ty),
-            right_ty.clone(),
-        ]),
+        // tsc's `checkBinaryLikeExpression`: the falsy part comes from the
+        // left under `strictNullChecks` and from the right's base type
+        // without it, and a left that is never truthy is the whole result.
+        surge_ts_syntax::ParsedLogicalOperator::And => {
+            if matches!(crate::infer::truthy_part(left_ty), Type::Never) {
+                left_ty.clone()
+            } else {
+                let falsy_source = if surge_ts_types::strict_null_checks() {
+                    left_ty.clone()
+                } else {
+                    crate::checks::expr::widen_type(right_ty)
+                };
+                surge_ts_types::union_type(vec![crate::infer::falsy_part(&falsy_source), right_ty.clone()])
+            }
+        }
     };
     InferredExpression::Known(result)
 }
@@ -268,10 +279,10 @@ fn evaluate_add_binary(
 }
 
 /// `isTypeAssignableToKindEx(ty, kind, strict = true)`: the operand relates to
-/// the kind's primitive, where `any`, `unknown`, `void` and `undefined` do not
-/// count on their own.
+/// the kind's primitive, where `any`, `unknown`, `void`, `undefined` and `null`
+/// do not count on their own.
 fn is_strictly_assignable_to(ty: &Type, target: &Type) -> bool {
-    !matches!(ty, Type::Any | Type::Void | Type::Undefined)
+    !matches!(ty, Type::Any | Type::Void | Type::Undefined | Type::Null)
         && !ty.is_unknown()
         && surge_ts_types::is_assignable_to(ty, target)
 }

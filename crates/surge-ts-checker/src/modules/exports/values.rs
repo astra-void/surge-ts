@@ -386,6 +386,28 @@ fn apply_merging_namespace_value_members(
     }
 }
 
+/// tsc merges a function declaration and a same-named namespace into one
+/// symbol. Hoisted signature collection binds the function alone; this
+/// overlays the namespace's value members onto it, and binds nothing a
+/// declaration of the scope did not. (A class merges the same way, but surge
+/// cannot yet tell its merged members from its `static` ones, which TS2576
+/// depends on.)
+pub(crate) fn apply_namespace_members_to_declarations(
+    statements: &[ParsedStatement],
+    symbols: &mut SymbolTable,
+) {
+    let merging: Vec<_> = merging_namespace_value_members(statements)
+        .into_iter()
+        .filter(|(name, _, declared_by_a_function)| {
+            *declared_by_a_function
+                && symbols
+                    .get_own(name)
+                    .is_some_and(|symbol| matches!(symbol.ty, Type::Function(_)))
+        })
+        .collect();
+    apply_merging_namespace_value_members(&merging, symbols);
+}
+
 /// tsc binds a top-level `fn.x = value` as a declaration of `x` on `fn` when
 /// `fn` is a function declaration or a `const` holding a function (an
 /// *expando*): the value's type is `{ (…): R; x: typeof value }` for every

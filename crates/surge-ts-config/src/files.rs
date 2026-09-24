@@ -19,11 +19,13 @@ pub(crate) fn resolve_source_files(
     compiler_options: &NormalizedCompilerOptions,
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) -> Vec<PathBuf> {
+    // tsc's `getAllowJSCompilerOption`: `checkJs` implies `allowJs`.
+    let allow_js = compiler_options.allow_js || compiler_options.check_js;
     if let Some(files) = files {
-        return resolve_explicit_files(root_dir, files, diagnostics);
+        return resolve_explicit_files(root_dir, files, allow_js, diagnostics);
     }
 
-    let include_patterns = match include {
+    let mut include_patterns = match include {
         Some(entries) => parse_pattern_list(
             entries,
             root_dir,
@@ -32,7 +34,43 @@ pub(crate) fn resolve_source_files(
         ),
         None => vec!["**/*".to_string()],
     };
-    let include_roots = collect_literal_include_roots(root_dir, &include_patterns);
+    let mut user_exclude_patterns = match exclude {
+        Some(entries) => parse_pattern_list(
+            entries,
+            root_dir,
+            ConfigDiagnosticCode::InvalidExcludeEntry,
+            diagnostics,
+        ),
+        None => Vec::new(),
+    };
+
+    // tsc's `getBasePaths`: an include that climbs out of the config directory
+    // (`../shared/**/*`) is walked from its own literal base. Every pattern is
+    // then matched relative to the nearest directory all of them sit under.
+    let mut base_dir = root_dir.to_path_buf();
+    let mut walk_roots = vec![root_dir.to_path_buf()];
+    let escape_depth = include_patterns
+        .iter()
+        .map(|pattern| escaping_depth(pattern))
+        .max()
+        .unwrap_or(0);
+    if escape_depth > 0
+        && let Some((ancestor, prefix)) = lexical_ancestor(root_dir, escape_depth)
+    {
+        include_patterns = include_patterns
+            .iter()
+            .map(|pattern| rebase_pattern(&prefix, pattern))
+            .collect();
+        user_exclude_patterns = user_exclude_patterns
+            .iter()
+            .map(|pattern| rebase_pattern(&prefix, pattern))
+            .collect();
+        walk_roots = include_walk_roots(&ancestor, &include_patterns);
+        base_dir = ancestor;
+    }
+    let base_dir = base_dir.as_path();
+
+    let include_roots = collect_literal_include_roots(base_dir, &include_patterns);
     let mut exclude_patterns = vec![
         "**/node_modules".to_string(),
         "**/node_modules/**".to_string(),
@@ -41,59 +79,137 @@ pub(crate) fn resolve_source_files(
         "**/jspm_packages".to_string(),
         "**/jspm_packages/**".to_string(),
     ];
-    if let Some(entries) = exclude {
-        exclude_patterns.extend(parse_pattern_list(
-            entries,
-            root_dir,
-            ConfigDiagnosticCode::InvalidExcludeEntry,
-            diagnostics,
-        ));
-    }
+    exclude_patterns.extend(user_exclude_patterns);
 
     let (include_set, include_depths) = build_include_globset(&include_patterns, diagnostics, root_dir);
     let exclude_set = build_globset(&exclude_patterns, diagnostics, root_dir);
 
     let mut files = Vec::new();
     let mut matched = Vec::new();
-    for entry in WalkDir::new(root_dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| {
-            !should_prune(entry.path(), root_dir, exclude_set.as_ref())
-                && !is_unreachable_dot_directory(entry, root_dir, &include_depths, &include_roots)
-        })
-    {
-        let Ok(entry) = entry else {
-            continue;
-        };
+    for walk_root in &walk_roots {
+        for entry in WalkDir::new(walk_root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| {
+                !should_prune(entry.path(), base_dir, exclude_set.as_ref())
+                    && !is_unreachable_dot_directory(entry, base_dir, &include_depths, &include_roots)
+            })
+        {
+            let Ok(entry) = entry else {
+                continue;
+            };
 
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        let path = entry.path();
-        let Some(relative) = path.strip_prefix(root_dir).ok() else {
-            continue;
-        };
-
-        if let Some(set) = include_set.as_ref() {
-            set.matches_into(relative, &mut matched);
-            let by_pattern = matched
-                .iter()
-                .any(|&index| wildcard_segments_are_visible(relative, include_depths[index]));
-            if !by_pattern && !is_under_any_include_root(relative, &include_roots) {
+            if !entry.file_type().is_file() {
                 continue;
             }
-        }
 
-        if is_supported_source_file(path, compiler_options.allow_js) {
-            files.push(canonicalize_if_exists(path));
+            let path = entry.path();
+            let Some(relative) = path.strip_prefix(base_dir).ok() else {
+                continue;
+            };
+
+            if let Some(set) = include_set.as_ref() {
+                set.matches_into(relative, &mut matched);
+                let by_pattern = matched
+                    .iter()
+                    .any(|&index| wildcard_segments_are_visible(relative, include_depths[index]));
+                if !by_pattern && !is_under_any_include_root(relative, &include_roots) {
+                    continue;
+                }
+            }
+
+            if is_supported_source_file(path, allow_js) {
+                files.push(canonicalize_if_exists(path));
+            }
         }
     }
 
     files.sort();
     files.dedup();
     files
+}
+
+/// How many directories a pattern climbs above the config directory once its
+/// `.` and `..` segments are folded: `../src/**/*` is 1, `a/../../b` is 1.
+fn escaping_depth(pattern: &str) -> usize {
+    let mut depth = 0usize;
+    let mut escaped = 0usize;
+    for segment in pattern.split(['/', '\\']) {
+        match segment {
+            "" | "." => {}
+            ".." if depth == 0 => escaped += 1,
+            ".." => depth -= 1,
+            _ => depth += 1,
+        }
+    }
+    escaped
+}
+
+/// The config directory's `depth`-th ancestor, and the config directory's path
+/// below it (`/repo/app` at depth 1 is `/repo` and `app`).
+fn lexical_ancestor(root_dir: &Path, depth: usize) -> Option<(PathBuf, String)> {
+    let ancestor = root_dir.ancestors().nth(depth)?.to_path_buf();
+    let prefix = root_dir
+        .strip_prefix(&ancestor)
+        .ok()?
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/");
+    Some((ancestor, prefix))
+}
+
+/// `pattern`, written relative to the config directory, rewritten relative to
+/// the ancestor that `prefix` leads down from, with `.` and `..` folded.
+fn rebase_pattern(prefix: &str, pattern: &str) -> String {
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in prefix.split('/').chain(pattern.split(['/', '\\'])) {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                if segments.last().is_some_and(|last| *last != "..") {
+                    segments.pop();
+                } else {
+                    segments.push("..");
+                }
+            }
+            _ => segments.push(segment),
+        }
+    }
+    segments.join("/")
+}
+
+/// tsc's `getIncludeBasePath` for each include: the literal directory before its
+/// first wildcard, the directory itself for a bare directory entry. Nested bases
+/// are walked once, through the outermost.
+fn include_walk_roots(base_dir: &Path, patterns: &[String]) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for pattern in patterns {
+        let segments: Vec<&str> = pattern.split('/').collect();
+        let literal = segments
+            .iter()
+            .position(|segment| contains_glob_metacharacters(segment))
+            .unwrap_or(segments.len());
+        let mut root = base_dir.to_path_buf();
+        for segment in &segments[..literal] {
+            root.push(segment);
+        }
+        if literal == segments.len() && !root.is_dir() {
+            root.pop();
+        }
+        if root.is_dir() {
+            roots.push(root);
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    let mut outermost: Vec<PathBuf> = Vec::new();
+    for root in roots {
+        if !outermost.iter().any(|kept| root.starts_with(kept)) {
+            outermost.push(root);
+        }
+    }
+    outermost
 }
 
 fn collect_literal_include_roots(root_dir: &Path, patterns: &[String]) -> Vec<PathBuf> {
@@ -204,6 +320,7 @@ fn is_unreachable_dot_directory(
 fn resolve_explicit_files(
     root_dir: &Path,
     files: &[Value],
+    allow_js: bool,
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) -> Vec<PathBuf> {
     let mut results = Vec::new();
@@ -229,7 +346,7 @@ fn resolve_explicit_files(
             continue;
         }
 
-        if !is_supported_source_file(&candidate, false) {
+        if !is_supported_source_file(&candidate, allow_js) {
             continue;
         }
 

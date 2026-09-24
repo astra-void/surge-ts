@@ -9,24 +9,41 @@ pub fn extract_reference_type_directives(source_text: &str) -> Vec<ReferenceType
     extract_reference_directives_named(source_text, "types")
 }
 
-/// Collect leading `/// <reference path="..." />` directive values. The path is a
+/// Collect leading `/// <reference path="..." />` directives. The path is a
 /// file specifier resolved relative to the referencing file; callers do the
 /// resolution. Like the `types` scanner, only leading trivia is examined.
-pub fn extract_reference_path_directives(source_text: &str) -> Vec<String> {
+pub fn extract_reference_path_directives(source_text: &str) -> Vec<ReferenceTypeDirective> {
     extract_reference_directives_named(source_text, "path")
-        .into_iter()
-        .map(|directive| directive.value)
-        .collect()
 }
 
-fn extract_reference_directives_named(
-    source_text: &str,
-    attribute: &str,
-) -> Vec<ReferenceTypeDirective> {
+/// tsc's `CheckJsDirective`: the last `// @ts-check` (`Some(true)`) or
+/// `// @ts-nocheck` (`Some(false)`) line comment in the file's leading trivia.
+pub fn extract_check_directive(source_text: &str) -> Option<bool> {
+    let mut directive = None;
+    for_each_leading_line_comment(source_text, |comment, _| {
+        let body = comment.strip_prefix("///").or_else(|| comment.strip_prefix("//"))?;
+        let name = body.trim_start_matches([' ', '\t']).strip_prefix('@')?;
+        let end = name
+            .find(|c: char| !(c.is_ascii_alphabetic() || c == '-'))
+            .unwrap_or(name.len());
+        match name[..end].to_ascii_lowercase().as_str() {
+            "ts-check" => directive = Some(true),
+            "ts-nocheck" => directive = Some(false),
+            _ => {}
+        }
+        None::<()>
+    });
+    directive
+}
+
+/// Calls `visit` with each line comment (and its byte offset) in the leading
+/// trivia of the file's first token: an optional hashbang, then any run of
+/// whitespace, line comments, and block comments.
+fn for_each_leading_line_comment<T>(source_text: &str, mut visit: impl FnMut(&str, usize) -> Option<T>) -> Vec<T> {
     let bytes = source_text.as_bytes();
     let len = bytes.len();
     let mut i = 0;
-    let mut directives = Vec::new();
+    let mut collected = Vec::new();
 
     if len >= 2 && bytes[0] == b'#' && bytes[1] == b'!' {
         while i < len && bytes[i] != b'\n' {
@@ -53,10 +70,8 @@ fn extract_reference_directives_named(
                 if text_end > start && bytes[text_end - 1] == b'\r' {
                     text_end -= 1;
                 }
-                if let Some(directive) =
-                    parse_reference_directive(&source_text[start..text_end], start, attribute)
-                {
-                    directives.push(directive);
+                if let Some(item) = visit(&source_text[start..text_end], start) {
+                    collected.push(item);
                 }
                 i = end;
             }
@@ -71,7 +86,16 @@ fn extract_reference_directives_named(
         }
     }
 
-    directives
+    collected
+}
+
+fn extract_reference_directives_named(
+    source_text: &str,
+    attribute: &str,
+) -> Vec<ReferenceTypeDirective> {
+    for_each_leading_line_comment(source_text, |comment, start| {
+        parse_reference_directive(comment, start, attribute)
+    })
 }
 
 /// Parse a single leading line comment as a `/// <reference types="..." />`

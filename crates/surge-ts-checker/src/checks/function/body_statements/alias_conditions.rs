@@ -334,6 +334,53 @@ pub(crate) fn body_ends_in_never_call(body: &[ParsedFunctionBodyStatement], scop
     }
 }
 
+/// The call statements of `body` (nested blocks included, nested functions
+/// not) whose callee is declared to return `never`, by
+/// [`crate::flow::call_statement_key`].
+pub(crate) fn never_call_statements(body: &[ParsedFunctionBodyStatement], scopes: &ScopeStack) -> Vec<(usize, usize)> {
+    let mut keys = Vec::new();
+    collect_never_call_statements(body, scopes, &mut keys);
+    keys
+}
+
+fn collect_never_call_statements(
+    body: &[ParsedFunctionBodyStatement],
+    scopes: &ScopeStack,
+    keys: &mut Vec<(usize, usize)>,
+) {
+    for statement in body {
+        match statement {
+            ParsedFunctionBodyStatement::Expression(expression) => {
+                if call_returns_never(expression, scopes)
+                    && let Some(key) = crate::flow::call_statement_key(expression)
+                {
+                    keys.push(key);
+                }
+            }
+            ParsedFunctionBodyStatement::Block(statements) => collect_never_call_statements(statements, scopes, keys),
+            ParsedFunctionBodyStatement::If(statement) => {
+                collect_never_call_statements(&statement.then_body, scopes, keys);
+                collect_never_call_statements(&statement.else_body, scopes, keys);
+            }
+            ParsedFunctionBodyStatement::While(statement) => collect_never_call_statements(&statement.body, scopes, keys),
+            ParsedFunctionBodyStatement::ForOf(statement) => collect_never_call_statements(&statement.body, scopes, keys),
+            ParsedFunctionBodyStatement::Switch(statement) => {
+                for case in &statement.cases {
+                    collect_never_call_statements(&case.consequent, scopes, keys);
+                }
+            }
+            ParsedFunctionBodyStatement::Try(statement) => {
+                collect_never_call_statements(&statement.block, scopes, keys);
+                if let Some(handler) = &statement.handler {
+                    collect_never_call_statements(&handler.body, scopes, keys);
+                }
+                collect_never_call_statements(&statement.finalizer, scopes, keys);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Whether a call expression's callee is declared to return `never`.
 pub(super) fn call_returns_never(expression: &ParsedExpression, scopes: &ScopeStack) -> bool {
     let returns_never = |ty: &Type| {
@@ -348,8 +395,10 @@ pub(super) fn call_returns_never(expression: &ParsedExpression, scopes: &ScopeSt
             property_name,
             ..
         } => {
-            let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
-                return false;
+            let name = match object.as_ref() {
+                ParsedExpression::Identifier { name, .. } => name.as_str(),
+                ParsedExpression::This { .. } => "this",
+                _ => return false,
             };
             scopes.resolve(name).is_some_and(|symbol| {
                 symbol

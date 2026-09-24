@@ -1,0 +1,11 @@
+export const fromLiteral = {}["hello"];
+declare const withGet: { get(key: string): string };
+export const viaGet = withGet["hello"];
+declare const nested: { inner: { get(key: string): number } };
+export const viaPath = nested.inner["key"];
+declare const withSet: { set(key: string): void };
+export const plain = withSet["hello"];
+declare const narrowGet: { get(key: number): string };
+export const mismatch = narrowGet["hello"];
+const stored = { a: 1 };
+export const widened = stored["b"];

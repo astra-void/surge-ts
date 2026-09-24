@@ -658,8 +658,11 @@ fn string_property_access_type(name: &str) -> Option<Type> {
             true,
             1,
         )),
-        "slice" | "substring" | "substr" => {
-            Some(function_type(vec![Type::Number], Type::String, true, 1))
+        // lib.es5: `slice(start?, end?)`, but `substring(start, end?)` and
+        // `substr(from, length?)`.
+        "slice" => Some(function_type(vec![Type::Number, Type::Number], Type::String, false, 0)),
+        "substring" | "substr" => {
+            Some(function_type(vec![Type::Number, Type::Number], Type::String, false, 1))
         }
         "startsWith" | "endsWith" | "includes" => Some(function_type(
             vec![Type::String, Type::Number],
@@ -667,9 +670,11 @@ fn string_property_access_type(name: &str) -> Option<Type> {
             false,
             1,
         )),
-        "toLowerCase" | "toUpperCase" | "toLocaleLowerCase" | "toLocaleUpperCase" | "trim"
-        | "trimStart" | "trimEnd" | "trimLeft" | "trimRight" => {
-            Some(function_type(vec![], Type::String, false, 0))
+        "toLowerCase" | "toUpperCase" | "trim" | "trimStart" | "trimEnd" | "trimLeft"
+        | "trimRight" => Some(function_type(vec![], Type::String, false, 0)),
+        // `(locales?)`, a string, a locale or a list of them.
+        "toLocaleLowerCase" | "toLocaleUpperCase" => {
+            Some(function_type(vec![Type::Any], Type::String, false, 0))
         }
         // `normalize(form?)` takes the optional Unicode normalization form.
         "normalize" => Some(function_type(vec![Type::String], Type::String, false, 0)),
@@ -692,7 +697,13 @@ fn string_property_access_type(name: &str) -> Option<Type> {
         "charCodeAt" | "codePointAt" => {
             Some(function_type(vec![Type::Number], Type::Number, false, 1))
         }
-        "localeCompare" => Some(function_type(vec![Type::String], Type::Number, true, 1)),
+        // `(that, locales?, options?)`.
+        "localeCompare" => Some(function_type(
+            vec![Type::String, Type::Any, Type::Any],
+            Type::Number,
+            false,
+            1,
+        )),
         _ => None,
     }
 }
@@ -1545,6 +1556,26 @@ pub fn is_global_function_interface(ty: &Type) -> bool {
     match ty.peeled() {
         Type::Object(object) => {
             object.call_signature().is_none()
+                && ["apply", "call", "bind"]
+                    .iter()
+                    .all(|member| object.properties.get(*member).is_some())
+        }
+        _ => false,
+    }
+}
+
+/// tsc's `isUntypedFunctionCall` for a callee that is not `any`: no call or
+/// construct signature, not a union, and assignable to the global `Function`
+/// interface, which surge reads off `Function`'s own `apply`, `call` and
+/// `bind` as [`is_global_function_interface`] does. Such a call is untyped.
+pub fn is_untyped_function_callee(ty: &Type) -> bool {
+    if is_global_function_interface(ty) {
+        return true;
+    }
+    match ty.peeled() {
+        Type::Object(object) => {
+            object.call_signature().is_none()
+                && object.construct_signature().is_none()
                 && ["apply", "call", "bind"]
                     .iter()
                     .all(|member| object.properties.get(*member).is_some())

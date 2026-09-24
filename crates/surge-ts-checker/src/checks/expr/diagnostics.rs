@@ -333,25 +333,187 @@ pub(crate) fn property_spelling_suggestion(name: &str, object_type: &Type) -> Op
     .map(str::to_string)
 }
 
+thread_local! {
+    static ELEMENT_WRITE_TARGET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static PROPERTY_WRITE_TARGET: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Evaluates an assignment's value while `span`, the member it writes, is the
+/// write target: a compound assignment folds a read of that member into its
+/// value (`this.x += 1` reads `this.x + 1`), and tsc checks the member's
+/// accessibility as the write it is (`isAssignmentTarget`), through the
+/// setter only.
+pub(crate) fn with_property_write_target<R>(
+    span: Option<SyntaxTextSpan>,
+    evaluate: impl FnOnce() -> R,
+) -> R {
+    let previous = PROPERTY_WRITE_TARGET
+        .with(|target| target.replace(span.map(|span| (span.start, span.end))));
+    let result = evaluate();
+    PROPERTY_WRITE_TARGET.with(|target| target.set(previous));
+    result
+}
+
+/// Whether the member read at `span` is the write target of the assignment
+/// whose value is being evaluated.
+pub(crate) fn is_property_write_target(span: Option<SyntaxTextSpan>) -> bool {
+    span.is_some_and(|span| {
+        PROPERTY_WRITE_TARGET.with(|target| target.get() == Some((span.start, span.end)))
+    })
+}
+
+/// Evaluates an update operand, which tsc checks as an assignment target: the
+/// element access at its top is a write.
+pub(crate) fn with_element_write_target<R>(evaluate: impl FnOnce() -> R) -> R {
+    ELEMENT_WRITE_TARGET.with(|flag| flag.set(true));
+    let result = evaluate();
+    ELEMENT_WRITE_TARGET.with(|flag| flag.set(false));
+    result
+}
+
+/// Whether the element access being evaluated is that write target. Taken on
+/// entry, so the receiver and key it evaluates are reads.
+pub(crate) fn take_element_write_target() -> bool {
+    ELEMENT_WRITE_TARGET.with(|flag| flag.replace(false))
+}
+
+/// What tsc reads off an element access itself when it reports a key the
+/// receiver lacks.
+pub(crate) struct ElementAccessSite {
+    /// The receiver as an access path (`c`, `m.prop`), which TS7052's
+    /// suggestion is spelled from (`tryGetPropertyAccessOrIdentifierToString`).
+    pub(crate) receiver_text: Option<String>,
+    /// The receiver is an object literal written in place (or a literal
+    /// property of one), whose type is still the object-literal type
+    /// (`isObjectLiteralType`).
+    pub(crate) receiver_is_object_literal: bool,
+    /// The access is an assignment target, whose receiver tsc widens first
+    /// and whose likely method is `set`.
+    pub(crate) is_write: bool,
+}
+
+impl ElementAccessSite {
+    pub(crate) fn of(receiver: &ParsedExpression, is_write: bool) -> Self {
+        Self {
+            receiver_text: access_path_text(receiver),
+            receiver_is_object_literal: object_literal_properties(receiver).is_some(),
+            is_write,
+        }
+    }
+
+    pub(crate) fn named(name: &str, is_write: bool) -> Self {
+        Self {
+            receiver_text: Some(name.to_string()),
+            receiver_is_object_literal: false,
+            is_write,
+        }
+    }
+}
+
+/// The properties of the object literal `expression` is, directly or as a
+/// literal-valued property of one.
+fn object_literal_properties(expression: &ParsedExpression) -> Option<&[surge_ts_syntax::ParsedObjectProperty]> {
+    match expression {
+        ParsedExpression::ObjectLiteral { properties, .. } => Some(properties),
+        ParsedExpression::ConstAssertion { expression, .. } => object_literal_properties(expression),
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } => {
+            let property = object_literal_properties(object)?
+                .iter()
+                .rev()
+                .find(|property| !property.is_spread && property.name == *property_name)?;
+            object_literal_properties(&property.value)
+        }
+        _ => None,
+    }
+}
+
+fn access_path_text(expression: &ParsedExpression) -> Option<String> {
+    match expression {
+        ParsedExpression::Identifier { name, .. } => Some(name.clone()),
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            ..
+        } => Some(format!("{}.{property_name}", access_path_text(object)?)),
+        _ => None,
+    }
+}
+
+/// tsc's `getSuggestionForNonexistentIndexSignature`: a receiver whose own `get`
+/// method takes the key as its first argument was probably meant to be called.
+fn index_signature_method_suggestion(
+    object_type: &Type,
+    key_type: &Type,
+    site: &ElementAccessSite,
+) -> Option<String> {
+    let method = if site.is_write { "set" } else { "get" };
+    let Type::Object(object) = object_type.peeled() else {
+        return None;
+    };
+    let property = object.properties.get(method)?;
+    let signature = match property.ty.peeled() {
+        Type::Function(function) if function.overloads().is_none_or(|members| members.len() <= 1) => function,
+        _ => return None,
+    };
+    let first = signature.parameters().first()?;
+    if signature.required_parameter_count() < 1 || !surge_ts_types::is_assignable_to(key_type, first) {
+        return None;
+    }
+    Some(match &site.receiver_text {
+        Some(text) => format!("{text}.{method}"),
+        None => method.to_string(),
+    })
+}
+
 /// tsc's `getPropertyTypeForIndexType` for a literal key that neither a member
 /// nor an index signature answers: under `noImplicitAny` the whole element
-/// access is an implicit `any` (TS7053, TS2576 for a static-member mixup, or
-/// TS7015 on the key when the receiver has only a number index); without it
-/// the access silently reads `any`.
+/// access is an implicit `any` (TS7053, TS2576 for a static-member mixup,
+/// TS7052 when a `get` method was likely meant, or TS7015 on the key when the
+/// receiver has only a number index), and on an object literal written in
+/// place the key is a missing property (TS2339); without `noImplicitAny` the
+/// access silently reads `any`. A block-scoped global read through
+/// `globalThis` is a missing property whatever the setting.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn report_missing_element(
     key: &str,
     key_type: &Type,
     object_type: &Type,
     key_span: Option<SyntaxTextSpan>,
     access_span: Option<SyntaxTextSpan>,
+    site: &ElementAccessSite,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
+    if matches!(object_type, Type::Reference(reference)
+        if &*reference.id == crate::driver::GLOBAL_THIS_REFERENCE_ID)
+        && ctx.block_scoped_globals.contains(key)
+    {
+        let file_name = ctx.file_name.clone();
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2339(key, "typeof globalThis", file_name),
+            access_span,
+        ));
+        return;
+    }
     if !ctx.options.no_implicit_any {
         return;
     }
     let object_type_name = object_type.name();
     let file_name = ctx.file_name.clone();
+    if site.receiver_is_object_literal
+        && !site.is_write
+        && matches!(key_type, Type::StringLiteral(_) | Type::NumberLiteral(_))
+    {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2339(key, &object_type_name, file_name),
+            access_span,
+        ));
+        return;
+    }
     let static_owner = static_member_owner_for_missing_instance_property(key, object_type, symbols);
     if static_owner.is_none()
         && matches!(object_type.peeled(), Type::Object(object) if object.number_index_type.is_some())
@@ -379,7 +541,10 @@ pub(crate) fn report_missing_element(
             };
             Diagnostic::ts2576(key, &object_type_name, format!("{class_name}[{written_key}]"), file_name)
         }
-        None => Diagnostic::ts7053(key_type.name(), &object_type_name, file_name),
+        None => match index_signature_method_suggestion(object_type, key_type, site) {
+            Some(suggestion) => Diagnostic::ts7052(&object_type_name, suggestion, file_name),
+            None => Diagnostic::ts7053(key_type.name(), &object_type_name, file_name),
+        },
     };
     ctx.push(diagnostic_with_syntax_span(diagnostic, access_span));
 }

@@ -123,7 +123,8 @@ pub struct CheckerOptions {
     /// relative path must spell its extension (TS2834/TS2835).
     pub node_module_resolution: bool,
     /// Under node16/nodenext resolution, the files whose implied format is
-    /// ESM (an `.mts`, or a `.ts` under a `"type": "module"` package.json).
+    /// ESM (an `.mts`/`.mjs`, or any other TypeScript or JavaScript file,
+    /// declaration files included, under a `"type": "module"` package.json).
     pub esm_module_files: std::collections::HashSet<String>,
     /// `strictNullChecks`. Off, `null` and `undefined` belong to every type:
     /// they drop out of unions and are assignable anywhere.
@@ -138,6 +139,10 @@ pub struct CheckerOptions {
     pub no_property_access_from_index_signature: bool,
     pub no_unchecked_indexed_access: bool,
     pub allow_importing_ts_extensions: bool,
+    pub allow_arbitrary_extensions: bool,
+    /// `experimentalDecorators`: which decorator targets tsc accepts
+    /// (`nodeCanBeDecorated`'s `useLegacyDecorators`).
+    pub experimental_decorators: bool,
     pub no_unused_locals: bool,
     pub no_unused_parameters: bool,
     /// `allowUnreachableCode: true`; unset and `false` both leave it off.
@@ -198,8 +203,6 @@ pub struct CheckerOptions {
 }
 
 impl CheckerOptions {
-    pub const ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL: &'static str =
-        "\0allowSyntheticDefaultImports";
     /// Present when `compilerOptions.lib` lists `dom`.
     pub const LIB_DOM_SENTINEL: &'static str = "\0lib.dom.d.ts";
 
@@ -215,11 +218,6 @@ impl CheckerOptions {
     /// (TS2301, TS2376, TS2401).
     pub(crate) fn emit_standard_class_fields(&self) -> bool {
         self.use_define_for_class_fields && self.target_es2022
-    }
-
-    pub(crate) fn allow_synthetic_default_imports(&self) -> bool {
-        self.resolved_modules
-            .contains_key(Self::ALLOW_SYNTHETIC_DEFAULT_IMPORTS_SENTINEL)
     }
 
     /// tsc's `slices.Contains(compilerOptions.Lib, "lib.dom.d.ts")`: the DOM
@@ -268,6 +266,8 @@ impl Default for CheckerOptions {
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
             allow_importing_ts_extensions: false,
+            allow_arbitrary_extensions: false,
+            experimental_decorators: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,

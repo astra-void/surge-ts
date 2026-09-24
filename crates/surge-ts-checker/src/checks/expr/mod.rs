@@ -15,8 +15,9 @@ mod operand_writes;
 mod unresolved;
 
 pub(crate) use accessibility::{
-    ClassIdentity, base_interface, check_member_accessibility, constructor_accessibility_error,
-    enclosing_class_lineage, restricted_member_owner,
+    ClassIdentity, ThisParameterClassScope, base_interface, check_member_accessibility,
+    constructor_accessibility_error, enclosing_class_lineage, restricted_member_owner,
+    this_parameter_class,
 };
 pub(crate) use diagnostics::*;
 pub(crate) use evaluate::*;

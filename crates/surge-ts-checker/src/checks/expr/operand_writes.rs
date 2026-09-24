@@ -167,9 +167,11 @@ pub(crate) fn check_delete_operand(
         return;
     }
 
-    // tsc gates this on `strictNullChecks`. surge models no such flag — it
-    // checks as if it were always on, which is what its possibly-undefined
-    // diagnostics already assume.
+    // tsc's `checkDeleteExpressionMustBeOptional` runs under `strictNullChecks`
+    // only: without it `undefined` is in every type's domain.
+    if !ctx.options.strict_null_checks {
+        return;
+    }
     let unnarrowed = unnarrowed_receiver(operand, symbols, ctx).unwrap_or(receiver);
     let Some(property_type) = declared_property_type(&unnarrowed, &property_name) else {
         return;
@@ -276,16 +278,30 @@ fn type_includes_undefined(ty: &Type) -> bool {
 /// `x++` / `--o.p`. Mirrors the `++`/`--` arms of `checkPre/PostfixUnaryExpression`:
 /// the write is rejected first (tsc's `checkIdentifier` reports it and hands back
 /// the error type, which then satisfies the arithmetic check), and only an
-/// accepted target has its operand type checked.
+/// accepted target has its operand type checked. An operand that is no
+/// reference at all (`rejected_target`) is reported by `checkReferenceExpression`
+/// only once that arithmetic check passes.
 pub(crate) fn check_update_operand(
     operand: &ParsedExpression,
     operand_span: Option<SyntaxTextSpan>,
+    rejected_target: bool,
     operand_result: &InferredExpression,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
     let Some(span) = operand_span else {
         return;
+    };
+    let report_rejected_target = |ctx: &mut CheckerContext| {
+        if rejected_target {
+            let file_name = ctx.file_name.clone();
+            let diagnostic = if is_optional_chain(operand) {
+                Diagnostic::ts2777(file_name)
+            } else {
+                Diagnostic::ts2357(file_name)
+            };
+            ctx.push(diagnostic.with_span(convert_span(span)));
+        }
     };
 
     if let ParsedExpression::Identifier { name, .. } = operand {
@@ -309,6 +325,7 @@ pub(crate) fn check_update_operand(
     }
 
     let InferredExpression::Known(operand_type) = operand_result else {
+        report_rejected_target(ctx);
         return;
     };
 
@@ -322,10 +339,12 @@ pub(crate) fn check_update_operand(
         symbols,
         ctx,
     ) {
+        report_rejected_target(ctx);
         return;
     }
 
     if operand_type.is_unknown() || is_arithmetic_operand(operand_type) {
+        report_rejected_target(ctx);
         return;
     }
 
@@ -361,5 +380,19 @@ pub(crate) fn update_result_type(operand_result: &InferredExpression) -> Inferre
             InferredExpression::Known(Type::BigInt)
         }
         _ => InferredExpression::Known(Type::Number),
+    }
+}
+
+/// tsc's `isOptionalChain`: the operand is, or continues, a `?.` chain.
+fn is_optional_chain(expression: &ParsedExpression) -> bool {
+    match expression {
+        ParsedExpression::OptionalPropertyAccess { .. }
+        | ParsedExpression::OptionalPropertyCall { .. }
+        | ParsedExpression::OptionalIndexAccess { .. }
+        | ParsedExpression::OptionalCall { .. } => true,
+        ParsedExpression::PropertyAccess { object, .. }
+        | ParsedExpression::ElementAccess { object, .. }
+        | ParsedExpression::PropertyCall { object, .. } => is_optional_chain(object),
+        _ => false,
     }
 }

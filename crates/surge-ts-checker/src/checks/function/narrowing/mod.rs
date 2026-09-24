@@ -1186,6 +1186,7 @@ fn destructured_discriminant_guard(
             property_name: property.to_string(),
             property_span: None,
             is_bracketed: false,
+            binding_element: false,
         })
     };
     let operand = |expression: &ParsedExpression| match expression {
@@ -1456,41 +1457,22 @@ fn narrow_value_guards_by_guard(
             let Some(symbol) = scopes.resolve(name) else {
                 return;
             };
-            // Peel a named-typed base (`draft: Draft`) to narrow its discriminant
-            // property in scope.
-            let symbol_ty = symbol.ty.peeled();
-            let Type::Object(object_type) = &symbol_ty else {
-                return;
-            };
-            let Some(base_property_type) = object_type.properties.get(base_property.as_str())
-            else {
-                return;
-            };
-            let Some(narrowed_property) = narrow_union_by_discriminant(
-                &base_property_type.ty,
+            // The helper peels a named-typed base (`draft: Draft`) to narrow its
+            // discriminant property in scope.
+            let Some(narrowed) = narrow_base_property_by_discriminant(
+                &symbol.ty,
+                base_property,
+                condition,
                 property,
                 &literal,
                 keep_matching,
             ) else {
                 return;
             };
-            let mut new_object = object_type.clone();
-            let properties = std::sync::Arc::make_mut(&mut new_object.properties);
-            properties.insert(
-                base_property.as_str().into(),
-                surge_ts_types::ObjectProperty {
-                    ty: narrowed_property,
-                    optional: base_property_type.optional,
-                    method: base_property_type.method,
-                    readonly: base_property_type.readonly,
-                    restriction: base_property_type.restriction.clone(),
-                    index_slot: base_property_type.index_slot,
-                },
-            );
             (
                 name.clone(),
                 SymbolInfo {
-                    ty: Type::Object(new_object),
+                    ty: narrowed,
                     kind: symbol.kind,
                     function_signature: symbol.function_signature.clone(),
                 },

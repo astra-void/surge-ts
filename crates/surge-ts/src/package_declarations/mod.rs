@@ -16,6 +16,7 @@ use crate::specifier::{is_external_specifier, is_relative_specifier};
 mod helpers;
 mod mode;
 use helpers::*;
+pub(crate) use helpers::supported_extensions;
 pub(crate) use mode::ImportUsage;
 use mode::{
     ResolutionMode, default_resolution_mode, resolves_with_import_condition,
@@ -549,11 +550,46 @@ pub(crate) struct MissingReferenceTypeDirective {
     pub from_declaration_file: bool,
 }
 
+/// A `/// <reference path="..." />` site that names no file the program can
+/// load, reported at `value_span` in `file_name` with that file's semantic
+/// diagnostics.
+pub(crate) struct UnresolvedReferencePath {
+    pub file_name: String,
+    /// The directive's value as written.
+    pub path: String,
+    pub value_span: TextSpan,
+    /// Whether the referencing file is a declaration file, whose diagnostics
+    /// `skipLibCheck` skips (tsgo's `SkipTypeChecking`).
+    pub from_declaration_file: bool,
+    pub failure: ReferencePathFailure,
+}
+
+/// Why a `/// <reference path>` names no file (tsgo's
+/// `getSourceFileFromReference`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReferencePathFailure {
+    /// TS6053: the named file does not exist.
+    NotFound,
+    /// TS6231: no extension of the first group completes an extensionless
+    /// path.
+    NoExtensionMatched,
+    /// TS6504: a JavaScript file without `allowJs`.
+    JavaScriptFile,
+    /// TS6054.
+    UnsupportedExtension,
+    /// TS1006.
+    SelfReference,
+}
+
 /// Outcome of resolving every `/// <reference types>` directive reachable from the
 /// program.
 pub(crate) struct ReferenceTypeDirectiveResolution {
     pub effective_type_names: Vec<String>,
     pub missing: Vec<MissingReferenceTypeDirective>,
+    pub unresolved_paths: Vec<UnresolvedReferencePath>,
+    /// `allowJs`, which widens the extensions an unresolved path's message
+    /// lists.
+    pub allow_js: bool,
 }
 
 /// Resolves explicit `/// <reference types="..." />` directives against the same
@@ -572,10 +608,15 @@ pub(crate) struct ReferenceTypeDirectiveResolver {
     effective_type_names: Vec<String>,
     seen_effective: HashSet<String>,
     missing: Vec<MissingReferenceTypeDirective>,
+    allow_js: bool,
+    /// `noResolve`: tsgo's file loader skips every file's reference
+    /// directives (`filesparser.go`), `path` and `types` alike.
+    no_resolve: bool,
+    unresolved_paths: Vec<UnresolvedReferencePath>,
 }
 
 impl ReferenceTypeDirectiveResolver {
-    pub fn new(root_dir: &Path, type_roots: &[PathBuf]) -> Self {
+    pub fn new(root_dir: &Path, type_roots: &[PathBuf], allow_js: bool, no_resolve: bool) -> Self {
         Self {
             roots: effective_type_roots(root_dir, type_roots),
             root_dir: root_dir.to_path_buf(),
@@ -584,6 +625,9 @@ impl ReferenceTypeDirectiveResolver {
             effective_type_names: Vec::new(),
             seen_effective: HashSet::new(),
             missing: Vec::new(),
+            allow_js,
+            no_resolve,
+            unresolved_paths: Vec::new(),
         }
     }
 
@@ -620,20 +664,31 @@ impl ReferenceTypeDirectiveResolver {
 
             for (file_name, source_text) in pending {
                 self.scanned_files.insert(file_name.clone());
+                if self.no_resolve {
+                    continue;
+                }
 
                 // `/// <reference path="..." />` pulls in a sibling declaration
                 // file relative to the referencing file. This is how a type
                 // package such as `@types/node` assembles its full surface
                 // (`index.d.ts` references `globals.d.ts`, `buffer.d.ts`, ...),
                 // where its ambient globals (`process`, `Buffer`) are declared.
-                for path_value in extract_reference_path_directives(&source_text) {
-                    load_reference_path_file(
+                for directive in extract_reference_path_directives(&source_text) {
+                    match resolve_reference_path(
                         &file_name,
-                        &path_value,
-                        inputs,
-                        sources,
-                        &mut known_file_names,
-                    );
+                        &directive.value,
+                        self.allow_js,
+                        opts.resolve_json_module,
+                    ) {
+                        Ok(path) => load_type_package_file(&path, inputs, sources, &mut known_file_names),
+                        Err(failure) => self.unresolved_paths.push(UnresolvedReferencePath {
+                            file_name: file_name.clone(),
+                            path: directive.value,
+                            value_span: directive.value_span,
+                            from_declaration_file: is_declaration_file_path_str(&file_name),
+                            failure,
+                        }),
+                    }
                 }
 
                 let directives = extract_reference_type_directives(&source_text);
@@ -726,6 +781,8 @@ impl ReferenceTypeDirectiveResolver {
         ReferenceTypeDirectiveResolution {
             effective_type_names: self.effective_type_names,
             missing: self.missing,
+            unresolved_paths: self.unresolved_paths,
+            allow_js: self.allow_js,
         }
     }
 }
