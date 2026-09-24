@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": []
+  },
+  "include": ["src/**/*.ts", "../shared/**/*.ts"],
+  "exclude": ["../shared/excluded.ts"]
+}
