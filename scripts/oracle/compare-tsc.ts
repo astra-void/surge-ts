@@ -1029,6 +1029,7 @@ export const fixturePresets: Record<string, string> = {
   'synthetic-default-namespace-import-member': path.join(workspaceRoot, 'tests/compat-projects/synthetic-default-namespace-import-member/tsconfig.json'),
   'export-star-as-default': path.join(workspaceRoot, 'tests/compat-projects/export-star-as-default/tsconfig.json'),
   'umd-global-binding': path.join(workspaceRoot, 'tests/compat-projects/umd-global-binding/tsconfig.json'),
+  'type-query-declaring-module-scope': path.join(workspaceRoot, 'tests/compat-projects/type-query-declaring-module-scope/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
