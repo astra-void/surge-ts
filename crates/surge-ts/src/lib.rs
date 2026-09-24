@@ -706,6 +706,10 @@ impl Project {
             // tsc's `GetAllowJS`: `checkJs` implies `allowJs`.
             allow_js: loaded.compiler_options.allow_js || loaded.compiler_options.check_js == Some(true),
             check_js: loaded.compiler_options.check_js,
+            module_detection: surge_ts_checker::ModuleDetection {
+                force: loaded.compiler_options.module_detection == surge_ts_config::ModuleDetectionKind::Force,
+                legacy: loaded.compiler_options.module_detection == surge_ts_config::ModuleDetectionKind::Legacy,
+            },
             jsx_configured: loaded.compiler_options.jsx.is_some(),
             jsx_factory_names: surge_ts_checker::JsxFactoryNames {
                 factory: loaded.compiler_options.jsx_factory.clone(),

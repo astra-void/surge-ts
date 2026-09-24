@@ -64,6 +64,10 @@ pub(super) struct TscFileErrors {
     /// program with any syntax error reports those alone.
     pub(super) syntactic: Vec<surge_ts_syntax::ParserError>,
     pub(super) bind: Vec<surge_ts_syntax::ParserError>,
+    /// What a TypeScript file adds to the global scope. A JavaScript file's
+    /// CommonJS use can make it a module, which the port does not see, so
+    /// its declarations are left out of the merge.
+    pub(super) globals: Option<surge_ts_tsc_syntax::FileGlobals>,
 }
 
 /// The binder's diagnostics are what tsc reports for a file without syntax
@@ -75,9 +79,21 @@ pub(super) struct TscFileErrors {
 pub(super) fn tsc_file_errors(
     source_text: &str,
     file_name: &str,
-    check_js: Option<bool>,
+    checker_options: &crate::CheckerOptions,
 ) -> Option<TscFileErrors> {
-    let options = surge_ts_tsc_syntax::ParseOptions::for_file_name(file_name)?;
+    let mut options = surge_ts_tsc_syntax::ParseOptions::for_file_name(file_name)?;
+    let detection = &checker_options.module_detection;
+    if !options.is_declaration_file {
+        if detection.legacy {
+            options.force_module = false;
+        } else if detection.force {
+            options.force_module = true;
+        } else {
+            options.force_module |= checker_options.esm_module_files.contains(file_name);
+            options.jsx_forces_module = checker_options.jsx_automatic_runtime;
+        }
+    }
+    let check_js = checker_options.check_js;
     let diagnostics = surge_ts_tsc_syntax::file_diagnostics(source_text, &options);
     let to_parser_error = |diagnostic: surge_ts_tsc_syntax::SyntaxDiagnostic| surge_ts_syntax::ParserError {
         code: Some(diagnostic.code),
@@ -92,6 +108,7 @@ pub(super) fn tsc_file_errors(
         return Some(TscFileErrors {
             syntactic: diagnostics.syntactic.into_iter().map(to_parser_error).collect(),
             bind: Vec::new(),
+            globals: None,
         });
     }
     let is_javascript = surge_ts_syntax::is_javascript_file_name(file_name);
@@ -110,7 +127,44 @@ pub(super) fn tsc_file_errors(
     Some(TscFileErrors {
         syntactic: Vec::new(),
         bind: bind.into_iter().map(to_parser_error).collect(),
+        globals: (!is_javascript).then_some(diagnostics.globals),
     })
+}
+
+/// tsc's `initializeChecker` merge of every file's global declarations: two
+/// files' declarations that cannot share a name are reported where each is
+/// declared, as the binder reports them within one file.
+pub(super) fn report_global_merge_conflicts(parsed_files: &mut [ParsedProgramFile]) {
+    let contributing: Vec<usize> = (0..parsed_files.len())
+        .filter(|&index| parsed_files[index].tsc_globals.is_some())
+        .collect();
+    if contributing.len() < 2 {
+        return;
+    }
+    let globals: Vec<std::sync::Arc<surge_ts_tsc_syntax::FileGlobals>> = contributing
+        .iter()
+        .filter_map(|&index| parsed_files[index].tsc_globals.clone())
+        .collect();
+    let inputs: Vec<surge_ts_tsc_syntax::GlobalsInput<'_>> = globals
+        .iter()
+        .map(|globals| surge_ts_tsc_syntax::GlobalsInput { globals, plain_js: false })
+        .collect();
+    let reports = surge_ts_tsc_syntax::merge_globals(&inputs);
+    for (&index, reports) in contributing.iter().zip(reports) {
+        let file = &mut parsed_files[index];
+        if file.no_check {
+            continue;
+        }
+        file.bind_errors.extend(reports.into_iter().map(|diagnostic| surge_ts_syntax::ParserError {
+            code: Some(diagnostic.code),
+            span_text: None,
+            span: Some(surge_ts_syntax::TextSpan {
+                start: diagnostic.start,
+                end: diagnostic.end,
+            }),
+            message: diagnostic.message,
+        }));
+    }
 }
 
 /// The binder codes in tsc's `plainJSErrors`: what it reports for a

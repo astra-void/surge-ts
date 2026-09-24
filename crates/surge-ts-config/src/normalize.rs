@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 
 use crate::diagnostics::{ConfigDiagnostic, ConfigDiagnosticCode};
 use crate::model::{
-    JsxMode, ModuleKind, ModuleResolutionKind, NormalizedCompilerOptions, PathMapping, ScriptTarget,
+    JsxMode, ModuleDetectionKind, ModuleKind, ModuleResolutionKind, NormalizedCompilerOptions, PathMapping, ScriptTarget,
 };
 use crate::options::{
     TsConfigOptionDefinition, TsConfigOptionSupport, TsConfigOptionValueKind, find_tsconfig_option,
@@ -146,6 +146,11 @@ pub(crate) fn normalize_compiler_options(
             }
             "jsx" => {
                 normalized.jsx = parse_jsx_option(value, config_dir, diagnostics);
+            }
+            "moduleDetection" => {
+                if let Some(kind) = parse_module_detection_option(value, config_dir, diagnostics) {
+                    normalized.module_detection = kind;
+                }
             }
             "jsxFactory" | "jsxFragmentFactory" | "reactNamespace" | "jsxImportSource" => {
                 let Some(text) = value.as_str() else {
@@ -481,6 +486,34 @@ fn parse_jsx_option(
             diagnostics.push(ConfigDiagnostic {
                 code: ConfigDiagnosticCode::InvalidCompilerOptionValue,
                 message: format!("unsupported jsx mode `{other}`"),
+                file_name: file_name.to_path_buf(),
+            });
+            None
+        }
+    }
+}
+
+fn parse_module_detection_option(
+    value: &Value,
+    file_name: &Path,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) -> Option<ModuleDetectionKind> {
+    let Some(raw) = value.as_str() else {
+        diagnostics.push(ConfigDiagnostic {
+            code: ConfigDiagnosticCode::InvalidCompilerOptionValue,
+            message: "`moduleDetection` must be a string".to_string(),
+            file_name: file_name.to_path_buf(),
+        });
+        return None;
+    };
+    match raw.to_ascii_lowercase().as_str() {
+        "auto" => Some(ModuleDetectionKind::Auto),
+        "legacy" => Some(ModuleDetectionKind::Legacy),
+        "force" => Some(ModuleDetectionKind::Force),
+        other => {
+            diagnostics.push(ConfigDiagnostic {
+                code: ConfigDiagnosticCode::InvalidCompilerOptionValue,
+                message: format!("unsupported moduleDetection `{other}`"),
                 file_name: file_name.to_path_buf(),
             });
             None

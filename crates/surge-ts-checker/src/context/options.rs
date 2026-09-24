@@ -198,6 +198,8 @@ pub struct CheckerOptions {
     /// `compilerOptions.checkJs`, unset when not written: a JavaScript file
     /// is "plain" JavaScript (`ast.IsPlainJSFile`) only when it is unset.
     pub check_js: Option<bool>,
+    /// What makes a file without an import or export a module to tsc.
+    pub module_detection: ModuleDetection,
     /// `compilerOptions.jsx` is set. Unset, a module that resolves to a `.jsx`
     /// file is TS6142 (`GetResolutionDiagnostic`).
     pub jsx_configured: bool,
@@ -249,6 +251,16 @@ impl CheckerOptions {
     }
 }
 
+/// tsc's `moduleDetection`. Under `auto`, a file whose format forces it
+/// (`.mts`/`.cts`/`.mjs`/`.cjs`, or an `esm_module_files` file) is a module,
+/// and so, under `jsx: react-jsx`, is one with a JSX tag; `force` makes every
+/// non-declaration file a module, `legacy` none without an import or export.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ModuleDetection {
+    pub force: bool,
+    pub legacy: bool,
+}
+
 impl Default for CheckerOptions {
     fn default() -> Self {
         Self {
@@ -289,6 +301,7 @@ impl Default for CheckerOptions {
             resolve_json_module: true,
             allow_js: false,
             check_js: None,
+            module_detection: Default::default(),
             jsx_configured: false,
             jsx_factory_names: Default::default(),
             diagnostic_profile: DiagnosticProfile::default(),

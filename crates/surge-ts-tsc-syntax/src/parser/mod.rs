@@ -134,6 +134,7 @@ pub(crate) struct Parser<'a> {
     pub not_parenthesized_arrow: HashSet<usize>,
     pub possible_await_spans: Vec<usize>,
     force_module: bool,
+    jsx_forces_module: bool,
     is_declaration_file: bool,
 }
 
@@ -208,6 +209,7 @@ pub(crate) fn parse(text: &str, options: &ParseOptions) -> ParsedFile {
         not_parenthesized_arrow: HashSet::new(),
         possible_await_spans: Vec::new(),
         force_module: options.force_module,
+        jsx_forces_module: options.jsx_forces_module,
         is_declaration_file: options.is_declaration_file,
     };
     parser.next_token();
@@ -338,7 +340,9 @@ impl<'a> Parser<'a> {
         let statements = self.parse_list_index(PC::SourceElements, Self::parse_toplevel_statement);
         let probably_module = statements.iter().any(|&statement| self.is_an_external_module_indicator_node(statement))
             || self.source_flags.has(NodeFlags::PossiblyContainsImportMeta);
-        let is_module = probably_module || !self.is_declaration_file && self.force_module;
+        let is_module = probably_module
+            || !self.is_declaration_file
+                && (self.jsx_forces_module && self.contains_jsx_tag(&statements) || self.force_module);
         if !self.is_declaration_file && is_module && !self.possible_await_spans.is_empty() {
             let statements = self.reparse_top_level_await(&statements);
             return (statements, is_module);
@@ -367,6 +371,21 @@ impl<'a> Parser<'a> {
             }
         }
         statement
+    }
+
+    /// `isFileModuleFromUsingJSXTag`.
+    fn contains_jsx_tag(&self, statements: &[NodeId]) -> bool {
+        let mut stack = statements.to_vec();
+        while let Some(id) = stack.pop() {
+            if matches!(
+                self.node(id).kind,
+                Kind::JsxOpeningElement | Kind::JsxSelfClosingElement | Kind::JsxFragment
+            ) {
+                return true;
+            }
+            stack.extend(child_ids(&self.nodes, id));
+        }
+        false
     }
 
     /// `reparseTopLevelAwait`: the statements that used `await` as an

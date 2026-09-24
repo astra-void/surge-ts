@@ -11,7 +11,7 @@ use surge_ts_syntax::{ParsedSource, ParserWorker};
 // the bare `record_*` calls throughout this file stay in scope.
 use crate::metrics::*;
 
-use crate::context::FileKind;
+use crate::context::{CheckerOptions, FileKind};
 use super::{AUTO_JOBS, ParsedProgramFile, SourceFileInput, classify_file_kind};
 
 /// Minimum source bytes assigned to a worker before `AUTO_JOBS` parallelizes the
@@ -44,7 +44,7 @@ pub(super) fn parse_program_files(
     files: Vec<SourceFileInput>,
     prescanned: Vec<ParsedSource>,
     jobs: usize,
-    check_js: Option<bool>,
+    options: &CheckerOptions,
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> Vec<ParsedProgramFile> {
     let prescanned = prescanned_by_file(prescanned, &files);
@@ -59,7 +59,7 @@ pub(super) fn parse_program_files(
                     &mut parser,
                     input,
                     reused.into_inner().ok().flatten(),
-                    check_js,
+                    options,
                     timings,
                 )
             })
@@ -99,7 +99,7 @@ pub(super) fn parse_program_files(
                             &mut parser,
                             &files[file_index],
                             reused,
-                            check_js,
+                            options,
                             timings.as_ref(),
                         ),
                     ));
@@ -167,7 +167,7 @@ pub(super) fn parse_program_file(
     parser: &mut ParserWorker,
     input: &SourceFileInput,
     prescanned: Option<ParsedSource>,
-    check_js: Option<bool>,
+    options: &CheckerOptions,
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> ParsedProgramFile {
     record_program_counter(|c| c.files_total += 1);
@@ -183,9 +183,11 @@ pub(super) fn parse_program_file(
     };
     let tsc_errors = match file_kind {
         FileKind::GeneratedDeclaration | FileKind::PhysicalDefaultLib => None,
-        _ => super::diagnostics::tsc_file_errors(&input.source_text, &input.file_name, check_js),
+        _ => super::diagnostics::tsc_file_errors(&input.source_text, &input.file_name, options),
     };
     let mut bind_errors = Vec::new();
+    let mut tsc_bound = false;
+    let mut tsc_globals = None;
     if let Some(tsc_errors) = tsc_errors {
         if !tsc_errors.syntactic.is_empty() {
             // The grammar walk reports tsc's checker grammar errors, which a
@@ -194,6 +196,8 @@ pub(super) fn parse_program_file(
             parsed.grammar_diagnostics.clear();
         } else {
             bind_errors = tsc_errors.bind;
+            tsc_bound = true;
+            tsc_globals = tsc_errors.globals.map(std::sync::Arc::new);
         }
     }
     let parse_duration = parse_start.elapsed();
@@ -234,6 +238,9 @@ pub(super) fn parse_program_file(
         statements: parsed.statements,
         parser_errors: parsed.parser_errors,
         bind_errors,
+        tsc_bound,
+        tsc_globals,
+        no_check: surge_ts_syntax::extract_check_directive(&input.source_text) == Some(false),
         is_module: parsed.is_module,
         import_call_specifiers: parsed.import_call_specifiers,
         file_kind,

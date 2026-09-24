@@ -27,10 +27,12 @@ for name, target in markers:
 lines += ['', '    pub const ALL: [Kind; ' + str(len(kinds)) + '] = [' + ', '.join(f'Kind::{k}' for k in kinds) + '];', '}', '']
 (out / 'kind.rs').write_text('\n'.join(lines))
 
-# Messages referenced by the parser and scanner.
+# Messages referenced by the parser, scanner and binder, and by the checker's
+# merge of the global symbol table (initializeChecker, mergeSymbol).
 used = set()
 for f in ['parser/parser.go', 'parser/utilities.go', 'parser/references.go', 'scanner/scanner.go', 'scanner/utilities.go', 'ast/utilities.go', 'binder/binder.go']:
     used |= set(re.findall(r'diagnostics\.(\w+)', (root / f).read_text()))
+used |= {'Declaration_name_conflicts_with_built_in_global_identifier_0'}
 diag = (root / 'diagnostics/diagnostics_generated.go').read_text()
 def rust_str(s):
     out = []

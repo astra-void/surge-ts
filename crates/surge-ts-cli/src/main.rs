@@ -565,6 +565,7 @@ fn run_single_file_mode(
             resolve_json_module: true,
             allow_js: false,
             check_js: None,
+            module_detection: Default::default(),
             jsx_configured: false,
             jsx_factory_names: Default::default(),
             diagnostic_profile,

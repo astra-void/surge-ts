@@ -825,11 +825,19 @@ fn emit_bind_diagnostics(parsed_file: &ParsedProgramFile, ctx: &mut CheckerConte
     }
 }
 
-/// The binder is tsc's only source of these reports for a declaration in the
-/// file, so a report surge's own checks make of the same code at the same
-/// place restates one the binder made first.
-fn drop_restated_bind_diagnostics(diagnostics: &mut Vec<Diagnostic>, parsed_file: &ParsedProgramFile) {
-    if parsed_file.bind_errors.is_empty() {
+/// Codes only tsc's binder reports (its parser reports TS1359 too, but only
+/// in a file with syntax errors, which is never bound).
+const BINDER_ONLY_CODES: &[u32] = &[
+    1100, 1101, 1102, 1210, 1212, 1213, 1214, 1215, 1262, 1314, 1315, 1316, 1344, 1359, 2528,
+    2668, 5061, 18012,
+];
+
+/// Reconciles surge's own reports with the binder's, which were pushed first.
+/// In a bound file the binder alone reports its own codes; for a code tsc's
+/// checker reports too, a report surge makes at the same place restates the
+/// binder's.
+fn reconcile_bind_diagnostics(diagnostics: &mut Vec<Diagnostic>, parsed_file: &ParsedProgramFile) {
+    if !parsed_file.tsc_bound {
         return;
     }
     let bound: HashSet<(u32, usize)> = parsed_file
@@ -842,10 +850,12 @@ fn drop_restated_bind_diagnostics(diagnostics: &mut Vec<Diagnostic>, parsed_file
         let surge_ts_diagnostics::DiagnosticCode::TypeScript(code) = diagnostic.code else {
             return true;
         };
-        let Some(span) = diagnostic.span else { return true };
+        let Some(span) = diagnostic.span else {
+            return !BINDER_ONLY_CODES.contains(&code);
+        };
         let key = (code, span.start);
         if !bound.contains(&key) {
-            return true;
+            return !BINDER_ONLY_CODES.contains(&code);
         }
         claimed.insert(key)
     });
@@ -1385,7 +1395,7 @@ pub(super) fn check_program_file(
         emit_grammar_diagnostics(&parsed_file.grammar_diagnostics, ctx);
         emit_unsupported_declaration_diagnostics(&parsed_file.statements, ctx);
         let mut diagnostics = std::mem::take(&mut ctx.diagnostics);
-        drop_restated_bind_diagnostics(&mut diagnostics, parsed_file);
+        reconcile_bind_diagnostics(&mut diagnostics, parsed_file);
         let stats = std::mem::take(&mut ctx.stats);
         return FileCheckResult {
             file_index,
@@ -1739,7 +1749,7 @@ pub(super) fn check_program_file(
 
     emit_deferred_grammar_diagnostics(ctx);
     let mut diagnostics = std::mem::take(&mut ctx.diagnostics);
-    drop_restated_bind_diagnostics(&mut diagnostics, parsed_file);
+    reconcile_bind_diagnostics(&mut diagnostics, parsed_file);
     apply_comment_directives(
         &mut diagnostics,
         &parsed_file.comment_directives,

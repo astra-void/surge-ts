@@ -86,6 +86,15 @@ pub(crate) struct ParsedProgramFile {
     /// tsc's binder diagnostics for the file (see
     /// [`diagnostics::tsc_file_errors`]), reported with its check.
     pub(crate) bind_errors: Vec<surge_ts_syntax::ParserError>,
+    /// tsc's binder ran over the file: its reports of the codes only the
+    /// binder makes are the file's only ones.
+    pub(crate) tsc_bound: bool,
+    /// What the file adds to tsc's global symbol table, for the program's
+    /// merge (see [`diagnostics::report_global_merge_conflicts`]); dropped
+    /// once merged.
+    pub(crate) tsc_globals: Option<std::sync::Arc<surge_ts_tsc_syntax::FileGlobals>>,
+    /// `// @ts-nocheck`: tsc reports nothing of the file's but its syntax.
+    pub(crate) no_check: bool,
     pub(crate) is_module: bool,
     /// Specifiers written as `import("…")` in type positions (see
     /// [`surge_ts_syntax::ParsedSource::import_call_specifiers`]).
@@ -321,6 +330,11 @@ fn check_program_with_stats_and_jobs_inner(
         for file in &mut parsed_files {
             file.bind_errors.clear();
         }
+    } else {
+        diagnostics::report_global_merge_conflicts(&mut parsed_files);
+    }
+    for file in &mut parsed_files {
+        file.tsc_globals = None;
     }
     let unchecked_bind_reports: HashSet<(String, u32, usize)> = parsed_files
         .iter()
@@ -484,7 +498,7 @@ fn start_program_run(
     crate::modules::set_allow_arbitrary_extensions(options.allow_arbitrary_extensions);
 
     let parse_start = Instant::now();
-    let parsed_files = parse_program_files(files, prescanned, jobs, options.check_js, timings.as_ref());
+    let parsed_files = parse_program_files(files, prescanned, jobs, &options, timings.as_ref());
     let ast_nodes = parsed_files
         .iter()
         .map(|file| file.statements.len() as u64)

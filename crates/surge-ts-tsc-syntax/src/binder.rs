@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use crate::ast::{self, NodeId};
 use crate::flags::NodeFlags;
 use crate::kind::Kind;
+use crate::merge::{FileGlobals, GlobalDeclaration, GlobalSymbol};
 use crate::messages as diagnostics;
 use crate::parser::ParsedFile;
 use crate::scanner::{self, Scanner};
@@ -135,7 +136,9 @@ enum Table {
     Members(SymbolId),
 }
 
-pub(crate) fn bind(file: &ParsedFile, text: &str) -> Vec<Diagnostic> {
+/// The file's binder diagnostics, and the symbols it contributes to the
+/// program's global scope.
+pub(crate) fn bind(file: &ParsedFile, text: &str) -> (Vec<Diagnostic>, FileGlobals) {
     let mut binder = Binder {
         file,
         text,
@@ -149,7 +152,8 @@ pub(crate) fn bind(file: &ParsedFile, text: &str) -> Vec<Diagnostic> {
         diagnostics: Vec::new(),
     };
     binder.bind(Some(file.root));
-    binder.diagnostics
+    let globals = binder.globals();
+    (binder.diagnostics, globals)
 }
 
 struct Binder<'a> {
@@ -976,6 +980,105 @@ impl<'a> Binder<'a> {
             _ => {
                 self.declare_symbol(Some(Table::Locals(block_scope_container)), false, node, flags, excludes);
             }
+        }
+    }
+
+    // --- global contributions ------------------------------------------------
+
+    /// What the checker's `initializeChecker` merges into the global symbol
+    /// table from this file: a script's locals, or a module's augmentations
+    /// (top-level `declare global` and `declare module "…"` blocks).
+    fn globals(&self) -> FileGlobals {
+        let mut out = FileGlobals::default();
+        let mut ids = HashMap::new();
+        if !self.file.external_module {
+            out.is_script = true;
+            out.locals = self.export_table(Table::Locals(self.file.root), &mut out, &mut ids);
+            return out;
+        }
+        let mut global_augmentations = Vec::new();
+        let mut module_augmentations: Vec<(String, SymbolId)> = Vec::new();
+        for statement in self.statements(self.file.root) {
+            if !self.is_ambient_module(statement)
+                || !(self.has_modifier(statement, Kind::DeclareKeyword) || self.file.is_declaration_file)
+            {
+                continue;
+            }
+            let Some(symbol) = self.symbol_of(statement) else { continue };
+            if self.is_global_scope_augmentation(statement) {
+                if !global_augmentations.contains(&symbol) {
+                    global_augmentations.push(symbol);
+                }
+            } else if !module_augmentations.iter().any(|&(_, s)| s == symbol) {
+                let name = self.name_of(statement).map(|n| self.node_text(n)).unwrap_or_default();
+                module_augmentations.push((name, symbol));
+            }
+        }
+        for symbol in global_augmentations {
+            let exports = self.export_table(Table::Exports(symbol), &mut out, &mut ids);
+            out.augmentations.push(exports);
+        }
+        for (module_name, symbol) in module_augmentations {
+            let name = format!("\"{module_name}\"");
+            let id = self.export_symbol(&name, symbol, &mut out, &mut ids);
+            out.module_augmentations.push((module_name, id));
+        }
+        out
+    }
+
+    fn export_table(&self, table: Table, out: &mut FileGlobals, ids: &mut HashMap<SymbolId, u32>) -> Vec<u32> {
+        let Some(entries) = self.tables.get(&table) else { return Vec::new() };
+        let mut entries: Vec<(&String, SymbolId)> = entries.iter().map(|(name, &symbol)| (name, symbol)).collect();
+        entries.sort_by_key(|&(name, symbol)| {
+            let first = self.symbols[symbol].declarations.first().map_or(usize::MAX, |&d| self.file.node(d).pos);
+            (first, name.clone())
+        });
+        entries.into_iter().map(|(name, symbol)| self.export_symbol(name, symbol, out, ids)).collect()
+    }
+
+    fn export_symbol(&self, name: &str, symbol: SymbolId, out: &mut FileGlobals, ids: &mut HashMap<SymbolId, u32>) -> u32 {
+        if let Some(&id) = ids.get(&symbol) {
+            return id;
+        }
+        let id = out.symbols.len() as u32;
+        out.symbols.push(GlobalSymbol::default());
+        ids.insert(symbol, id);
+        let declarations = self.symbols[symbol]
+            .declarations
+            .iter()
+            .map(|&declaration| GlobalDeclaration {
+                name_range: self.error_range_for_node(self.name_of_declaration(declaration).unwrap_or(declaration)),
+                node_range: self.error_range_for_node(declaration),
+                is_type_declaration: self.is_type_declaration(declaration),
+            })
+            .collect();
+        let members = self
+            .tables
+            .contains_key(&Table::Members(symbol))
+            .then(|| self.export_table(Table::Members(symbol), out, ids));
+        let exports = self
+            .tables
+            .contains_key(&Table::Exports(symbol))
+            .then(|| self.export_table(Table::Exports(symbol), out, ids));
+        out.symbols[id as usize] =
+            GlobalSymbol { name: name.to_string(), flags: self.symbols[symbol].flags, declarations, members, exports };
+        id
+    }
+
+    /// `ast.IsTypeDeclaration`.
+    fn is_type_declaration(&self, node: NodeId) -> bool {
+        match self.kind(node) {
+            Kind::TypeParameter
+            | Kind::ClassDeclaration
+            | Kind::InterfaceDeclaration
+            | Kind::TypeAliasDeclaration
+            | Kind::EnumDeclaration => true,
+            Kind::ImportClause => self.file.node(node).is_type_only,
+            Kind::ImportSpecifier | Kind::ExportSpecifier => self
+                .parent(node)
+                .and_then(|p| self.parent(p))
+                .is_some_and(|clause| self.file.node(clause).is_type_only),
+            _ => false,
         }
     }
 

@@ -219,6 +219,8 @@ pub const Unicode_escape_sequences_are_only_available_when_the_Unicode_u_flag_or
 #[allow(non_upper_case_globals, dead_code)]
 pub const Duplicate_identifier_0: &Message = &Message { code: 2300, text: "Duplicate identifier '{0}'." };
 #[allow(non_upper_case_globals, dead_code)]
+pub const Declaration_name_conflicts_with_built_in_global_identifier_0: &Message = &Message { code: 2397, text: "Declaration name conflicts with built-in global identifier '{0}'." };
+#[allow(non_upper_case_globals, dead_code)]
 pub const Interface_name_cannot_be_0: &Message = &Message { code: 2427, text: "Interface name cannot be '{0}'." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Cannot_redeclare_block_scoped_variable_0: &Message = &Message { code: 2451, text: "Cannot redeclare block-scoped variable '{0}'." };

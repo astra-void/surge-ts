@@ -35,7 +35,7 @@ mod symbols;
 pub use api::{CheckResult, Checker};
 pub use context::{
     CheckerOptions, CompatibilityStats, DiagnosticProfile, FileKind, JsxFactoryNames,
-    ModuleEmitKind,
+    ModuleDetection, ModuleEmitKind,
 };
 pub use program::set_fast_process_exit;
 pub use program::{ProgramCheckResult, SourceFileInput};

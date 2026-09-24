@@ -12,6 +12,7 @@ mod binder;
 mod chars;
 mod flags;
 mod kind;
+mod merge;
 mod messages;
 mod parser;
 mod scanner;
@@ -76,12 +77,19 @@ impl ScriptKind {
     }
 }
 
+/// `ast.SourceFileParseOptions`, with its `ExternalModuleIndicatorOptions`:
+/// what makes a file without an import or export a module.
 pub struct ParseOptions {
     pub script_kind: ScriptKind,
     pub is_declaration_file: bool,
-    /// Whether the file is a module whatever its statements say
-    /// (`moduleDetection: force`, or an `.mts`/`.cts`/`.mjs`/`.cjs` file).
+    /// The file is a module whatever its statements say: `moduleDetection:
+    /// force`, or a format that forces it (an `.mts`/`.cts`/`.mjs`/`.cjs`
+    /// file, or one a `"type": "module"` package holds). Never set for a
+    /// declaration file.
     pub force_module: bool,
+    /// A JSX tag makes the file a module (`jsx: react-jsx` or `react-jsxdev`
+    /// under `moduleDetection: auto`).
+    pub jsx_forces_module: bool,
 }
 
 impl ParseOptions {
@@ -92,8 +100,9 @@ impl ParseOptions {
             || lower.ends_with(".d.mts")
             || lower.ends_with(".d.cts")
             || lower.contains(".d.") && lower.ends_with(".ts");
-        let force_module = [".mts", ".cts", ".mjs", ".cjs"].iter().any(|ext| lower.ends_with(ext));
-        Some(Self { script_kind, is_declaration_file, force_module })
+        let force_module =
+            !is_declaration_file && [".mts", ".cts", ".mjs", ".cjs"].iter().any(|ext| lower.ends_with(ext));
+        Some(Self { script_kind, is_declaration_file, force_module, jsx_forces_module: false })
     }
 }
 
@@ -118,21 +127,26 @@ fn render<'d>(diagnostics: impl Iterator<Item = &'d Diagnostic>) -> Vec<SyntaxDi
     rendered
 }
 
+pub use merge::{FileGlobals, GlobalsInput, merge_globals};
+
 /// What tsc reports for a file before type checking: its syntactic
 /// diagnostics, and, for a file with none, what its binder reports
-/// (declarations that conflict, strict-mode restrictions).
+/// (declarations that conflict, strict-mode restrictions) and what it adds to
+/// the global scope, for [`merge_globals`].
 pub struct FileDiagnostics {
     pub syntactic: Vec<SyntaxDiagnostic>,
     pub bind: Vec<SyntaxDiagnostic>,
+    pub globals: FileGlobals,
 }
 
 pub fn file_diagnostics(text: &str, options: &ParseOptions) -> FileDiagnostics {
     let parsed = parser::parse(text, options);
     let syntactic = render(parsed.diagnostics.iter().chain(parsed.js_diagnostics.iter()));
-    let bind = if parsed.diagnostics.is_empty() {
-        render(binder::bind(&parsed, text).iter())
+    let (bind, globals) = if parsed.diagnostics.is_empty() {
+        let (bind, globals) = binder::bind(&parsed, text);
+        (render(bind.iter()), globals)
     } else {
-        Vec::new()
+        (Vec::new(), FileGlobals::default())
     };
-    FileDiagnostics { syntactic, bind }
+    FileDiagnostics { syntactic, bind, globals }
 }
