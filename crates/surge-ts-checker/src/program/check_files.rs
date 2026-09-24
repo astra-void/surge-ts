@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -840,12 +840,14 @@ fn reconcile_bind_diagnostics(diagnostics: &mut Vec<Diagnostic>, parsed_file: &P
     if !parsed_file.tsc_bound {
         return;
     }
-    let bound: HashSet<(u32, usize)> = parsed_file
-        .bind_errors
-        .iter()
-        .filter_map(|error| Some((error.code?, error.span?.start)))
-        .collect();
-    let mut claimed: HashSet<(u32, usize)> = HashSet::new();
+    // How many reports the binder made of each code at each place: the
+    // binder's own come first, and any beyond them restate one.
+    let mut bound: HashMap<(u32, usize), usize> = HashMap::new();
+    for error in &parsed_file.bind_errors {
+        if let (Some(code), Some(span)) = (error.code, error.span) {
+            *bound.entry((code, span.start)).or_default() += 1;
+        }
+    }
     diagnostics.retain(|diagnostic| {
         let surge_ts_diagnostics::DiagnosticCode::TypeScript(code) = diagnostic.code else {
             return true;
@@ -853,11 +855,14 @@ fn reconcile_bind_diagnostics(diagnostics: &mut Vec<Diagnostic>, parsed_file: &P
         let Some(span) = diagnostic.span else {
             return !BINDER_ONLY_CODES.contains(&code);
         };
-        let key = (code, span.start);
-        if !bound.contains(&key) {
-            return !BINDER_ONLY_CODES.contains(&code);
+        match bound.get_mut(&(code, span.start)) {
+            None => !BINDER_ONLY_CODES.contains(&code),
+            Some(0) => false,
+            Some(remaining) => {
+                *remaining -= 1;
+                true
+            }
         }
-        claimed.insert(key)
     });
 }
 

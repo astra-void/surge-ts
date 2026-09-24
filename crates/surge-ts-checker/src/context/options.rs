@@ -200,6 +200,8 @@ pub struct CheckerOptions {
     pub check_js: Option<bool>,
     /// What makes a file without an import or export a module to tsc.
     pub module_detection: ModuleDetection,
+    /// `GetEmitScriptTarget`: the language version tsc checks against.
+    pub language_version: surge_ts_tsc_syntax::ScriptTarget,
     /// `compilerOptions.jsx` is set. Unset, a module that resolves to a `.jsx`
     /// file is TS6142 (`GetResolutionDiagnostic`).
     pub jsx_configured: bool,
@@ -302,6 +304,7 @@ impl Default for CheckerOptions {
             allow_js: false,
             check_js: None,
             module_detection: Default::default(),
+            language_version: Default::default(),
             jsx_configured: false,
             jsx_factory_names: Default::default(),
             diagnostic_profile: DiagnosticProfile::default(),

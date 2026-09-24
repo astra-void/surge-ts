@@ -710,6 +710,7 @@ impl Project {
                 force: loaded.compiler_options.module_detection == surge_ts_config::ModuleDetectionKind::Force,
                 legacy: loaded.compiler_options.module_detection == surge_ts_config::ModuleDetectionKind::Legacy,
             },
+            language_version: language_version(loaded.compiler_options.target),
             jsx_configured: loaded.compiler_options.jsx.is_some(),
             jsx_factory_names: surge_ts_checker::JsxFactoryNames {
                 factory: loaded.compiler_options.jsx_factory.clone(),
@@ -960,6 +961,24 @@ fn referenced_lib_names(inputs: &[SourceFileInput]) -> Vec<String> {
     names
 }
 
+fn language_version(target: ScriptTarget) -> surge_ts_checker::LanguageVersion {
+    use surge_ts_checker::LanguageVersion as Version;
+    match target {
+        ScriptTarget::ES2015 => Version::ES2015,
+        ScriptTarget::ES2016 => Version::ES2016,
+        ScriptTarget::ES2017 => Version::ES2017,
+        ScriptTarget::ES2018 => Version::ES2018,
+        ScriptTarget::ES2019 => Version::ES2019,
+        ScriptTarget::ES2020 => Version::ES2020,
+        ScriptTarget::ES2021 => Version::ES2021,
+        ScriptTarget::ES2022 => Version::ES2022,
+        ScriptTarget::ES2023 => Version::ES2023,
+        ScriptTarget::ES2024 => Version::ES2024,
+        ScriptTarget::ES2025 => Version::ES2025,
+        ScriptTarget::ESNext => Version::ESNext,
+    }
+}
+
 /// Map a configured `target` to the lib name base used to derive the default
 /// `lib.<base>.full.d.ts` aggregate when `compilerOptions.lib` is unset.
 fn target_lib_basename(target: ScriptTarget) -> &'static str {
@@ -974,6 +993,7 @@ fn target_lib_basename(target: ScriptTarget) -> &'static str {
         ScriptTarget::ES2022 => "es2022",
         ScriptTarget::ES2023 => "es2023",
         ScriptTarget::ES2024 => "es2024",
+        ScriptTarget::ES2025 => "es2025",
         ScriptTarget::ESNext => "esnext",
     }
 }

@@ -17,6 +17,8 @@ mod expressions;
 mod statements;
 mod types;
 
+pub(crate) use statements::get_spelling_suggestion_for_strings;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum PC {
     SourceElements,
@@ -164,6 +166,20 @@ impl ParsedFile {
     /// `node.ForEachChild`: every child, in source order.
     pub fn children(&self, id: NodeId) -> Vec<NodeId> {
         child_ids(&self.nodes, id)
+    }
+
+    /// The full start of every regular expression literal in the tree, in
+    /// source order.
+    pub fn regular_expression_literals(&self) -> Vec<usize> {
+        let mut starts: Vec<usize> = (0..self.nodes.len())
+            .filter(|&id| {
+                self.nodes[id].kind == Kind::RegularExpressionLiteral
+                    && (self.parents[id].is_some() || id as NodeId == self.root)
+            })
+            .map(|id| self.nodes[id].pos)
+            .collect();
+        starts.sort_unstable();
+        starts
     }
 }
 
@@ -941,7 +957,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn re_scan_slash_token(&mut self) -> Kind {
-        self.token = self.scanner.re_scan_slash_token();
+        self.token = self.scanner.re_scan_slash_token(false);
         self.token
     }
 

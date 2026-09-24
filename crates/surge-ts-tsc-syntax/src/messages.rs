@@ -207,7 +207,73 @@ pub const Unknown_regular_expression_flag: &Message = &Message { code: 1499, tex
 #[allow(non_upper_case_globals, dead_code)]
 pub const Duplicate_regular_expression_flag: &Message = &Message { code: 1500, text: "Duplicate regular expression flag." };
 #[allow(non_upper_case_globals, dead_code)]
+pub const This_regular_expression_flag_is_only_available_when_targeting_0_or_later: &Message = &Message { code: 1501, text: "This regular expression flag is only available when targeting '{0}' or later." };
+#[allow(non_upper_case_globals, dead_code)]
 pub const The_Unicode_u_flag_and_the_Unicode_Sets_v_flag_cannot_be_set_simultaneously: &Message = &Message { code: 1502, text: "The Unicode (u) flag and the Unicode Sets (v) flag cannot be set simultaneously." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Named_capturing_groups_are_only_available_when_targeting_ES2018_or_later: &Message = &Message { code: 1503, text: "Named capturing groups are only available when targeting 'ES2018' or later." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Subpattern_flags_must_be_present_when_there_is_a_minus_sign: &Message = &Message { code: 1504, text: "Subpattern flags must be present when there is a minus sign." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Incomplete_quantifier_Digit_expected: &Message = &Message { code: 1505, text: "Incomplete quantifier. Digit expected." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Numbers_out_of_order_in_quantifier: &Message = &Message { code: 1506, text: "Numbers out of order in quantifier." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const There_is_nothing_available_for_repetition: &Message = &Message { code: 1507, text: "There is nothing available for repetition." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Unexpected_0_Did_you_mean_to_escape_it_with_backslash: &Message = &Message { code: 1508, text: "Unexpected '{0}'. Did you mean to escape it with backslash?" };
+#[allow(non_upper_case_globals, dead_code)]
+pub const This_regular_expression_flag_cannot_be_toggled_within_a_subpattern: &Message = &Message { code: 1509, text: "This regular expression flag cannot be toggled within a subpattern." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const X_k_must_be_followed_by_a_capturing_group_name_enclosed_in_angle_brackets: &Message = &Message { code: 1510, text: "'\\k' must be followed by a capturing group name enclosed in angle brackets." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const X_q_is_only_available_inside_character_class: &Message = &Message { code: 1511, text: "'\\q' is only available inside character class." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const X_c_must_be_followed_by_an_ASCII_letter: &Message = &Message { code: 1512, text: "'\\c' must be followed by an ASCII letter." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Undetermined_character_escape: &Message = &Message { code: 1513, text: "Undetermined character escape." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Expected_a_capturing_group_name: &Message = &Message { code: 1514, text: "Expected a capturing group name." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Named_capturing_groups_with_the_same_name_must_be_mutually_exclusive_to_each_other: &Message = &Message { code: 1515, text: "Named capturing groups with the same name must be mutually exclusive to each other." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const A_character_class_range_must_not_be_bounded_by_another_character_class: &Message = &Message { code: 1516, text: "A character class range must not be bounded by another character class." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Range_out_of_order_in_character_class: &Message = &Message { code: 1517, text: "Range out of order in character class." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Anything_that_would_possibly_match_more_than_a_single_character_is_invalid_inside_a_negated_character_class: &Message = &Message { code: 1518, text: "Anything that would possibly match more than a single character is invalid inside a negated character class." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Operators_must_not_be_mixed_within_a_character_class_Wrap_it_in_a_nested_class_instead: &Message = &Message { code: 1519, text: "Operators must not be mixed within a character class. Wrap it in a nested class instead." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Expected_a_class_set_operand: &Message = &Message { code: 1520, text: "Expected a class set operand." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const X_q_must_be_followed_by_string_alternatives_enclosed_in_braces: &Message = &Message { code: 1521, text: "'\\q' must be followed by string alternatives enclosed in braces." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const A_character_class_must_not_contain_a_reserved_double_punctuator_Did_you_mean_to_escape_it_with_backslash: &Message = &Message { code: 1522, text: "A character class must not contain a reserved double punctuator. Did you mean to escape it with backslash?" };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Expected_a_Unicode_property_name: &Message = &Message { code: 1523, text: "Expected a Unicode property name." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Unknown_Unicode_property_name: &Message = &Message { code: 1524, text: "Unknown Unicode property name." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Expected_a_Unicode_property_value: &Message = &Message { code: 1525, text: "Expected a Unicode property value." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Unknown_Unicode_property_value: &Message = &Message { code: 1526, text: "Unknown Unicode property value." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Expected_a_Unicode_property_name_or_value: &Message = &Message { code: 1527, text: "Expected a Unicode property name or value." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Any_Unicode_property_that_would_possibly_match_more_than_a_single_character_is_only_available_when_the_Unicode_Sets_v_flag_is_set: &Message = &Message { code: 1528, text: "Any Unicode property that would possibly match more than a single character is only available when the Unicode Sets (v) flag is set." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Unknown_Unicode_property_name_or_value: &Message = &Message { code: 1529, text: "Unknown Unicode property name or value." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Unicode_property_value_expressions_are_only_available_when_the_Unicode_u_flag_or_the_Unicode_Sets_v_flag_is_set: &Message = &Message { code: 1530, text: "Unicode property value expressions are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const X_0_must_be_followed_by_a_Unicode_property_value_expression_enclosed_in_braces: &Message = &Message { code: 1531, text: "'\\{0}' must be followed by a Unicode property value expression enclosed in braces." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const There_is_no_capturing_group_named_0_in_this_regular_expression: &Message = &Message { code: 1532, text: "There is no capturing group named '{0}' in this regular expression." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const This_backreference_refers_to_a_group_that_does_not_exist_There_are_only_0_capturing_groups_in_this_regular_expression: &Message = &Message { code: 1533, text: "This backreference refers to a group that does not exist. There are only {0} capturing groups in this regular expression." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const This_backreference_refers_to_a_group_that_does_not_exist_There_are_no_capturing_groups_in_this_regular_expression: &Message = &Message { code: 1534, text: "This backreference refers to a group that does not exist. There are no capturing groups in this regular expression." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const This_character_cannot_be_escaped_in_a_regular_expression: &Message = &Message { code: 1535, text: "This character cannot be escaped in a regular expression." };
 #[allow(non_upper_case_globals, dead_code)]

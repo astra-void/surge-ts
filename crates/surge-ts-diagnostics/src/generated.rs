@@ -6355,6 +6355,396 @@ pub const TS18012: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1499: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1499",
+    number: Some(1499),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Unknown regular expression flag.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1500: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1500",
+    number: Some(1500),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Duplicate regular expression flag.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1501: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1501",
+    number: Some(1501),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This regular expression flag is only available when targeting '{0}' or later.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1503: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1503",
+    number: Some(1503),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Named capturing groups are only available when targeting 'ES2018' or later.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1504: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1504",
+    number: Some(1504),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Subpattern flags must be present when there is a minus sign.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1505: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1505",
+    number: Some(1505),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Incomplete quantifier. Digit expected.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1506: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1506",
+    number: Some(1506),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Numbers out of order in quantifier.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1507: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1507",
+    number: Some(1507),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "There is nothing available for repetition.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1508: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1508",
+    number: Some(1508),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Unexpected '{0}'. Did you mean to escape it with backslash?",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1509: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1509",
+    number: Some(1509),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This regular expression flag cannot be toggled within a subpattern.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1510: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1510",
+    number: Some(1510),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'\\k' must be followed by a capturing group name enclosed in angle brackets.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1511: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1511",
+    number: Some(1511),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'\\q' is only available inside character class.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1512: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1512",
+    number: Some(1512),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'\\c' must be followed by an ASCII letter.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1513: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1513",
+    number: Some(1513),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Undetermined character escape.",
+    argument_count: 0,
+    support: DiagnosticSupport::CatalogOnly,
+};
+
+pub const TS1514: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1514",
+    number: Some(1514),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Expected a capturing group name.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1515: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1515",
+    number: Some(1515),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Named capturing groups with the same name must be mutually exclusive to each other.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1516: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1516",
+    number: Some(1516),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A character class range must not be bounded by another character class.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1517: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1517",
+    number: Some(1517),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Range out of order in character class.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1518: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1518",
+    number: Some(1518),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Anything that would possibly match more than a single character is invalid inside a negated character class.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1519: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1519",
+    number: Some(1519),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Operators must not be mixed within a character class. Wrap it in a nested class instead.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1520: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1520",
+    number: Some(1520),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Expected a class set operand.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1521: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1521",
+    number: Some(1521),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'\\q' must be followed by string alternatives enclosed in braces.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1522: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1522",
+    number: Some(1522),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A character class must not contain a reserved double punctuator. Did you mean to escape it with backslash?",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1523: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1523",
+    number: Some(1523),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Expected a Unicode property name.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1524: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1524",
+    number: Some(1524),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Unknown Unicode property name.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1525: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1525",
+    number: Some(1525),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Expected a Unicode property value.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1526: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1526",
+    number: Some(1526),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Unknown Unicode property value.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1527: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1527",
+    number: Some(1527),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Expected a Unicode property name or value.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1528: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1528",
+    number: Some(1528),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Any Unicode property that would possibly match more than a single character is only available when the Unicode Sets (v) flag is set.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1529: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1529",
+    number: Some(1529),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Unknown Unicode property name or value.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1530: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1530",
+    number: Some(1530),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Unicode property value expressions are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1531: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1531",
+    number: Some(1531),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'\\{0}' must be followed by a Unicode property value expression enclosed in braces.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1532: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1532",
+    number: Some(1532),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "There is no capturing group named '{0}' in this regular expression.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1533: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1533",
+    number: Some(1533),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This backreference refers to a group that does not exist. There are only {0} capturing groups in this regular expression.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1534: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1534",
+    number: Some(1534),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This backreference refers to a group that does not exist. There are no capturing groups in this regular expression.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1535: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1535",
+    number: Some(1535),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This character cannot be escaped in a regular expression.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1536: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1536",
+    number: Some(1536),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Octal escape sequences and backreferences are not allowed in a character class. If this was intended as an escape sequence, use the syntax '{0}' instead.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1537: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1537",
+    number: Some(1537),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Decimal escape sequences and backreferences are not allowed in a character class.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1538: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1538",
+    number: Some(1538),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Unicode escape sequences are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
     TS2411,
@@ -6991,6 +7381,45 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1316,
     TS5061,
     TS18012,
+    TS1499,
+    TS1500,
+    TS1501,
+    TS1503,
+    TS1504,
+    TS1505,
+    TS1506,
+    TS1507,
+    TS1508,
+    TS1509,
+    TS1510,
+    TS1511,
+    TS1512,
+    TS1513,
+    TS1514,
+    TS1515,
+    TS1516,
+    TS1517,
+    TS1518,
+    TS1519,
+    TS1520,
+    TS1521,
+    TS1522,
+    TS1523,
+    TS1524,
+    TS1525,
+    TS1526,
+    TS1527,
+    TS1528,
+    TS1529,
+    TS1530,
+    TS1531,
+    TS1532,
+    TS1533,
+    TS1534,
+    TS1535,
+    TS1536,
+    TS1537,
+    TS1538,
 ];
 
 impl Diagnostic {
@@ -11678,5 +12107,224 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts18012(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS18012, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1499(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1499, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1500(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1500, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1501(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1501,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1503(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1503, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1504(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1504, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1505(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1505, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1506(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1506, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1507(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1507, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1508(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1508,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1509(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1509, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1510(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1510, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1511(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1511, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1512(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1512, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1513(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1513, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1514(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1514, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1515(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1515, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1516(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1516, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1517(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1517, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1518(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1518, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1519(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1519, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1520(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1520, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1521(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1521, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1522(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1522, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1523(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1523, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1524(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1524, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1525(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1525, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1526(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1526, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1527(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1527, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1528(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1528, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1529(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1529, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1530(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1530, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1531(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1531,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1532(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1532,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1533(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1533,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1534(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1534, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1535(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1535, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1536(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1536,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1537(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1537, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1538(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1538, Vec::<DiagnosticArg>::new(), file_name)
     }
 }

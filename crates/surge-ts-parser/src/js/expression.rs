@@ -422,7 +422,18 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     pub(crate) fn parse_literal_regexp(&mut self) -> RegExpLiteral<'a> {
+        let lexer_errors = self.lexer.errors.len();
         let (pattern_end, flags, flags_error) = self.read_regex();
+        // surge: TS1499/TS1500 — tsc keeps a literal with an unknown or repeated flag and reports
+        // the flag from its checker (`checkGrammarRegularExpressionLiteral`), so the flag errors
+        // are recoverable here; an unterminated literal (the only other lexer error, which ends
+        // before any flag) still is not.
+        if flags_error {
+            let flag_errors: std::vec::Vec<_> = self.lexer.errors.drain(lexer_errors..).collect();
+            for error in flag_errors {
+                self.error(error);
+            }
+        }
         if !self.lexer.errors.is_empty() {
             return self.unexpected();
         }

@@ -566,6 +566,7 @@ fn run_single_file_mode(
             allow_js: false,
             check_js: None,
             module_detection: Default::default(),
+            language_version: Default::default(),
             jsx_configured: false,
             jsx_factory_names: Default::default(),
             diagnostic_profile,
@@ -1515,6 +1516,7 @@ fn script_target_to_string(target: surge_ts_config::ScriptTarget) -> &'static st
         surge_ts_config::ScriptTarget::ES2022 => "es2022",
         surge_ts_config::ScriptTarget::ES2023 => "es2023",
         surge_ts_config::ScriptTarget::ES2024 => "es2024",
+        surge_ts_config::ScriptTarget::ES2025 => "es2025",
         surge_ts_config::ScriptTarget::ESNext => "esnext",
     }
 }

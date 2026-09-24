@@ -38,6 +38,7 @@ pub use context::{
     ModuleDetection, ModuleEmitKind,
 };
 pub use program::set_fast_process_exit;
+pub use surge_ts_tsc_syntax::ScriptTarget as LanguageVersion;
 pub use program::{ProgramCheckResult, SourceFileInput};
 
 /// Diagnostic types are re-exported so embedders can read [`Checker`] output

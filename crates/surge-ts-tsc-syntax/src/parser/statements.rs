@@ -1756,7 +1756,7 @@ fn get_space_suggestion(expression_text: &str) -> String {
 }
 
 /// `core.GetSpellingSuggestionForStrings`.
-fn get_spelling_suggestion_for_strings(name: &str, candidates: &[&str]) -> String {
+pub(crate) fn get_spelling_suggestion_for_strings(name: &str, candidates: &[&str]) -> String {
     let rune_name: Vec<char> = name.chars().collect();
     let maximum_length_difference = std::cmp::max(2, (rune_name.len() as f64 * 0.34) as usize);
     // If the best result is worse than this, don't bother.

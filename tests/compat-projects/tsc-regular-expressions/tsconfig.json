@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "noEmit": true, "target": "es2015", "types": [] },
+  "include": ["src/**/*"]
+}

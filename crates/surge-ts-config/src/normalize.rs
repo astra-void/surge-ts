@@ -359,6 +359,7 @@ fn parse_target_option(
         "es2022" => ScriptTarget::ES2022,
         "es2023" => ScriptTarget::ES2023,
         "es2024" => ScriptTarget::ES2024,
+        "es2025" => ScriptTarget::ES2025,
         "esnext" => ScriptTarget::ESNext,
         "es3" | "es5" => {
             diagnostics.push(ConfigDiagnostic {

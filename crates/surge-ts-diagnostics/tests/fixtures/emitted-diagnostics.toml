@@ -4091,3 +4091,231 @@ status = "emitted"
 oracle = [
   "tsc-binder-declarations",
 ]
+
+[TS1499]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1500]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1501]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1503]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1504]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1505]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1506]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1507]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1508]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1509]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1510]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1511]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1512]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1514]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1515]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1516]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1517]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1518]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1519]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1520]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1521]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1522]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1523]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1524]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1525]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1526]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1527]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1528]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1529]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1530]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1531]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1532]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1533]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1534]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1535]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1536]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1537]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]
+
+[TS1538]
+status = "emitted"
+oracle = [
+  "tsc-regular-expressions",
+]

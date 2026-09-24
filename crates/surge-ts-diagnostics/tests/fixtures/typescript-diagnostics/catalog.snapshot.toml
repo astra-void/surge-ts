@@ -5080,3 +5080,315 @@ support = "emitted"
 message = "'#constructor' is a reserved word."
 arity = 0
 
+[[diagnostic]]
+code = "TS1499"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unknown regular expression flag."
+arity = 0
+
+[[diagnostic]]
+code = "TS1500"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Duplicate regular expression flag."
+arity = 0
+
+[[diagnostic]]
+code = "TS1501"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This regular expression flag is only available when targeting '{0}' or later."
+arity = 1
+
+[[diagnostic]]
+code = "TS1503"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Named capturing groups are only available when targeting 'ES2018' or later."
+arity = 0
+
+[[diagnostic]]
+code = "TS1504"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Subpattern flags must be present when there is a minus sign."
+arity = 0
+
+[[diagnostic]]
+code = "TS1505"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Incomplete quantifier. Digit expected."
+arity = 0
+
+[[diagnostic]]
+code = "TS1506"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Numbers out of order in quantifier."
+arity = 0
+
+[[diagnostic]]
+code = "TS1507"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "There is nothing available for repetition."
+arity = 0
+
+[[diagnostic]]
+code = "TS1508"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unexpected '{0}'. Did you mean to escape it with backslash?"
+arity = 1
+
+[[diagnostic]]
+code = "TS1509"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This regular expression flag cannot be toggled within a subpattern."
+arity = 0
+
+[[diagnostic]]
+code = "TS1510"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'\\k' must be followed by a capturing group name enclosed in angle brackets."
+arity = 0
+
+[[diagnostic]]
+code = "TS1511"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'\\q' is only available inside character class."
+arity = 0
+
+[[diagnostic]]
+code = "TS1512"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'\\c' must be followed by an ASCII letter."
+arity = 0
+
+[[diagnostic]]
+code = "TS1513"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Undetermined character escape."
+arity = 0
+
+[[diagnostic]]
+code = "TS1514"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expected a capturing group name."
+arity = 0
+
+[[diagnostic]]
+code = "TS1515"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Named capturing groups with the same name must be mutually exclusive to each other."
+arity = 0
+
+[[diagnostic]]
+code = "TS1516"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A character class range must not be bounded by another character class."
+arity = 0
+
+[[diagnostic]]
+code = "TS1517"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Range out of order in character class."
+arity = 0
+
+[[diagnostic]]
+code = "TS1518"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Anything that would possibly match more than a single character is invalid inside a negated character class."
+arity = 0
+
+[[diagnostic]]
+code = "TS1519"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Operators must not be mixed within a character class. Wrap it in a nested class instead."
+arity = 0
+
+[[diagnostic]]
+code = "TS1520"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expected a class set operand."
+arity = 0
+
+[[diagnostic]]
+code = "TS1521"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'\\q' must be followed by string alternatives enclosed in braces."
+arity = 0
+
+[[diagnostic]]
+code = "TS1522"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A character class must not contain a reserved double punctuator. Did you mean to escape it with backslash?"
+arity = 0
+
+[[diagnostic]]
+code = "TS1523"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expected a Unicode property name."
+arity = 0
+
+[[diagnostic]]
+code = "TS1524"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unknown Unicode property name."
+arity = 0
+
+[[diagnostic]]
+code = "TS1525"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expected a Unicode property value."
+arity = 0
+
+[[diagnostic]]
+code = "TS1526"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unknown Unicode property value."
+arity = 0
+
+[[diagnostic]]
+code = "TS1527"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expected a Unicode property name or value."
+arity = 0
+
+[[diagnostic]]
+code = "TS1528"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Any Unicode property that would possibly match more than a single character is only available when the Unicode Sets (v) flag is set."
+arity = 0
+
+[[diagnostic]]
+code = "TS1529"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unknown Unicode property name or value."
+arity = 0
+
+[[diagnostic]]
+code = "TS1530"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unicode property value expressions are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set."
+arity = 0
+
+[[diagnostic]]
+code = "TS1531"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'\\{0}' must be followed by a Unicode property value expression enclosed in braces."
+arity = 1
+
+[[diagnostic]]
+code = "TS1532"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "There is no capturing group named '{0}' in this regular expression."
+arity = 1
+
+[[diagnostic]]
+code = "TS1533"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This backreference refers to a group that does not exist. There are only {0} capturing groups in this regular expression."
+arity = 1
+
+[[diagnostic]]
+code = "TS1534"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This backreference refers to a group that does not exist. There are no capturing groups in this regular expression."
+arity = 0
+
+[[diagnostic]]
+code = "TS1535"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This character cannot be escaped in a regular expression."
+arity = 0
+
+[[diagnostic]]
+code = "TS1536"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Octal escape sequences and backreferences are not allowed in a character class. If this was intended as an escape sequence, use the syntax '{0}' instead."
+arity = 1
+
+[[diagnostic]]
+code = "TS1537"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Decimal escape sequences and backreferences are not allowed in a character class."
+arity = 0
+
+[[diagnostic]]
+code = "TS1538"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unicode escape sequences are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set."
+arity = 0
+

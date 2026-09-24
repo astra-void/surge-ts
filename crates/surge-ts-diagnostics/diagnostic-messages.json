@@ -5078,5 +5078,317 @@
     "source": "typescript",
     "arity": 0,
     "support": "emitted"
+  },
+  {
+    "code": "TS1499",
+    "category": "Error",
+    "message": "Unknown regular expression flag.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1500",
+    "category": "Error",
+    "message": "Duplicate regular expression flag.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1501",
+    "category": "Error",
+    "message": "This regular expression flag is only available when targeting '{0}' or later.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1503",
+    "category": "Error",
+    "message": "Named capturing groups are only available when targeting 'ES2018' or later.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1504",
+    "category": "Error",
+    "message": "Subpattern flags must be present when there is a minus sign.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1505",
+    "category": "Error",
+    "message": "Incomplete quantifier. Digit expected.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1506",
+    "category": "Error",
+    "message": "Numbers out of order in quantifier.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1507",
+    "category": "Error",
+    "message": "There is nothing available for repetition.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1508",
+    "category": "Error",
+    "message": "Unexpected '{0}'. Did you mean to escape it with backslash?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1509",
+    "category": "Error",
+    "message": "This regular expression flag cannot be toggled within a subpattern.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1510",
+    "category": "Error",
+    "message": "'\\k' must be followed by a capturing group name enclosed in angle brackets.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1511",
+    "category": "Error",
+    "message": "'\\q' is only available inside character class.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1512",
+    "category": "Error",
+    "message": "'\\c' must be followed by an ASCII letter.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1513",
+    "category": "Error",
+    "message": "Undetermined character escape.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS1514",
+    "category": "Error",
+    "message": "Expected a capturing group name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1515",
+    "category": "Error",
+    "message": "Named capturing groups with the same name must be mutually exclusive to each other.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1516",
+    "category": "Error",
+    "message": "A character class range must not be bounded by another character class.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1517",
+    "category": "Error",
+    "message": "Range out of order in character class.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1518",
+    "category": "Error",
+    "message": "Anything that would possibly match more than a single character is invalid inside a negated character class.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1519",
+    "category": "Error",
+    "message": "Operators must not be mixed within a character class. Wrap it in a nested class instead.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1520",
+    "category": "Error",
+    "message": "Expected a class set operand.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1521",
+    "category": "Error",
+    "message": "'\\q' must be followed by string alternatives enclosed in braces.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1522",
+    "category": "Error",
+    "message": "A character class must not contain a reserved double punctuator. Did you mean to escape it with backslash?",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1523",
+    "category": "Error",
+    "message": "Expected a Unicode property name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1524",
+    "category": "Error",
+    "message": "Unknown Unicode property name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1525",
+    "category": "Error",
+    "message": "Expected a Unicode property value.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1526",
+    "category": "Error",
+    "message": "Unknown Unicode property value.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1527",
+    "category": "Error",
+    "message": "Expected a Unicode property name or value.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1528",
+    "category": "Error",
+    "message": "Any Unicode property that would possibly match more than a single character is only available when the Unicode Sets (v) flag is set.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1529",
+    "category": "Error",
+    "message": "Unknown Unicode property name or value.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1530",
+    "category": "Error",
+    "message": "Unicode property value expressions are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1531",
+    "category": "Error",
+    "message": "'\\{0}' must be followed by a Unicode property value expression enclosed in braces.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1532",
+    "category": "Error",
+    "message": "There is no capturing group named '{0}' in this regular expression.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1533",
+    "category": "Error",
+    "message": "This backreference refers to a group that does not exist. There are only {0} capturing groups in this regular expression.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1534",
+    "category": "Error",
+    "message": "This backreference refers to a group that does not exist. There are no capturing groups in this regular expression.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1535",
+    "category": "Error",
+    "message": "This character cannot be escaped in a regular expression.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1536",
+    "category": "Error",
+    "message": "Octal escape sequences and backreferences are not allowed in a character class. If this was intended as an escape sequence, use the syntax '{0}' instead.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1537",
+    "category": "Error",
+    "message": "Decimal escape sequences and backreferences are not allowed in a character class.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1538",
+    "category": "Error",
+    "message": "Unicode escape sequences are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
   }
 ]

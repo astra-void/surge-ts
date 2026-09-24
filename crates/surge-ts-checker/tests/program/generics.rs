@@ -1060,6 +1060,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             allow_js: false,
             check_js: None,
             module_detection: Default::default(),
+            language_version: Default::default(),
             jsx_configured: false,
             jsx_factory_names: Default::default(),
             resolved_modules: Default::default(),

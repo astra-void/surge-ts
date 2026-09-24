@@ -1,10 +1,11 @@
-//! typescript-go's `scanner.Scanner`, without JSDoc and regular-expression
-//! validation (the parser reports neither as syntactic diagnostics).
+//! typescript-go's `scanner.Scanner`, without JSDoc (the parser does not
+//! report it as syntactic diagnostics).
 
 use crate::chars::{self, EOF, RUNE_ERROR};
 use crate::flags::TokenFlags;
 use crate::kind::Kind;
 use crate::messages as diagnostics;
+use crate::regexp;
 use crate::{Diagnostic, Message};
 
 #[derive(Clone, Default)]
@@ -18,15 +19,18 @@ pub struct ScannerState {
 }
 
 pub struct Scanner<'a> {
-    text: &'a str,
-    end: usize,
+    pub(crate) text: &'a str,
+    pub(crate) end: usize,
     pub jsx: bool,
     skip_trivia: bool,
-    state: ScannerState,
+    pub(crate) state: ScannerState,
     /// The parser's diagnostics: scan errors go straight into them, with the
     /// parser's same-position dedup (`parseErrorAtRange`).
     pub diagnostics: Vec<Diagnostic>,
     pub has_parse_error: bool,
+    /// `languageVersion()`: the checker's target, for what the regular
+    /// expression validator allows.
+    pub language_version: crate::ScriptTarget,
 }
 
 impl<'a> Scanner<'a> {
@@ -39,6 +43,7 @@ impl<'a> Scanner<'a> {
             state: ScannerState::default(),
             diagnostics: Vec::new(),
             has_parse_error: false,
+            language_version: crate::ScriptTarget::ESNext,
         }
     }
 
@@ -85,6 +90,13 @@ impl<'a> Scanner<'a> {
         self.state.token_start = pos;
     }
 
+    pub fn reset_token_state(&mut self, pos: usize) {
+        self.reset_pos(pos);
+        self.state.token = Kind::Unknown;
+        self.state.token_value = String::new();
+        self.state.token_flags = TokenFlags::None;
+    }
+
 
     pub fn has_unicode_escape(&self) -> bool {
         self.state.token_flags.has(TokenFlags::UnicodeEscape)
@@ -110,16 +122,16 @@ impl<'a> Scanner<'a> {
         self.error_at(message, self.state.pos, 0, Vec::new());
     }
 
-    fn error_at(&mut self, message: &'static Message, pos: usize, length: usize, args: Vec<String>) {
+    pub(crate) fn error_at(&mut self, message: &'static Message, pos: usize, length: usize, args: Vec<String>) {
         self.error_at_range(pos, pos + length, message, args);
     }
 
-    fn byte_at(&self, pos: usize) -> i32 {
+    pub(crate) fn byte_at(&self, pos: usize) -> i32 {
         if pos < self.end { self.text.as_bytes()[pos] as i32 } else { EOF }
     }
 
     /// Go's `char()`: the byte at the position, not the decoded character.
-    fn char(&self) -> i32 {
+    pub(crate) fn char(&self) -> i32 {
         self.byte_at(self.state.pos)
     }
 
@@ -127,8 +139,11 @@ impl<'a> Scanner<'a> {
         self.byte_at(self.state.pos + offset)
     }
 
+    /// Go decodes `text[pos:]`, not `text[pos:end]`: only the regular
+    /// expression validator narrows `end`, and there it can read the closing
+    /// slash.
     fn char_and_size(&self) -> (i32, usize) {
-        decode_rune(self.text, self.state.pos, self.end)
+        decode_rune(self.text, self.state.pos, self.text.len())
     }
 
     fn scan_ascii_while(&mut self, pred: impl Fn(u8) -> bool) {
@@ -639,9 +654,9 @@ impl<'a> Scanner<'a> {
         self.state.token
     }
 
-    /// `ReScanSlashToken()` as the parser calls it: without reporting the
-    /// regular expression's own errors, which the checker validates.
-    pub fn re_scan_slash_token(&mut self) -> Kind {
+    /// `ReScanSlashToken(reportErrors)`: the parser rescans without reporting
+    /// the regular expression's own errors, which the checker validates.
+    pub fn re_scan_slash_token(&mut self, report_errors: bool) -> Kind {
         if self.state.token != Kind::SlashToken && self.state.token != Kind::SlashEqualsToken {
             return self.state.token;
         }
@@ -649,6 +664,7 @@ impl<'a> Scanner<'a> {
         let start_of_body = self.state.token_start + 1;
         let mut p = start_of_body;
         let mut in_escape = false;
+        let mut named_capture_groups = false;
         let mut in_character_class = false;
         loop {
             if p >= self.end {
@@ -669,6 +685,15 @@ impl<'a> Scanner<'a> {
                 in_escape = true;
             } else if ch == ']' as i32 {
                 in_character_class = false;
+            } else if !in_character_class
+                && ch == '(' as i32
+                && p + 1 < self.end
+                && bytes[p + 1] == b'?'
+                && p + 2 < self.end
+                && bytes[p + 2] == b'<'
+                && (p + 3 >= self.end || (bytes[p + 3] != b'=' && bytes[p + 3] != b'!'))
+            {
+                named_capture_groups = true;
             }
             p += 1;
         }
@@ -718,12 +743,47 @@ impl<'a> Scanner<'a> {
             self.error_at(diagnostics::Unterminated_regular_expression_literal, token_start, p - token_start, Vec::new());
         } else {
             p += 1;
+            let mut reg_exp_flags = regexp::FLAGS_NONE;
             while p < self.end {
                 let (ch, size) = decode_rune(self.text, p, self.end);
                 if ch == RUNE_ERROR || !chars::is_identifier_part(ch) {
                     break;
                 }
+                if report_errors {
+                    match regexp::char_code_to_reg_exp_flag(ch) {
+                        None => self.error_at(diagnostics::Unknown_regular_expression_flag, p, size, Vec::new()),
+                        Some(flag) if reg_exp_flags & flag != 0 => {
+                            self.error_at(diagnostics::Duplicate_regular_expression_flag, p, size, Vec::new());
+                        }
+                        Some(flag) if (reg_exp_flags | flag) & regexp::FLAGS_ANY_UNICODE_MODE == regexp::FLAGS_ANY_UNICODE_MODE => {
+                            self.error_at(
+                                diagnostics::The_Unicode_u_flag_and_the_Unicode_Sets_v_flag_cannot_be_set_simultaneously,
+                                p,
+                                size,
+                                Vec::new(),
+                            );
+                        }
+                        Some(flag) => {
+                            reg_exp_flags |= flag;
+                            self.check_regular_expression_flag_availability(flag, p, size);
+                        }
+                    }
+                }
                 p += size;
+            }
+            if report_errors {
+                self.state.pos = start_of_body;
+                let save_end = self.end;
+                let save_token_pos = self.state.token_start;
+                let save_token_flags = self.state.token_flags;
+                self.end = end_of_body;
+                regexp::RegExpParser::new(self, end_of_body, reg_exp_flags, named_capture_groups).run();
+                self.end = save_end;
+                self.state.pos = p;
+                self.state.token_start = save_token_pos;
+                self.state.token_flags = save_token_flags;
+            } else {
+                self.state.pos = p;
             }
         }
         self.state.pos = p;
@@ -846,7 +906,7 @@ impl<'a> Scanner<'a> {
     }
 
 
-    fn scan_identifier(&mut self, prefix_length: usize) -> bool {
+    pub(crate) fn scan_identifier(&mut self, prefix_length: usize) -> bool {
         let start = self.state.pos;
         self.state.pos += prefix_length;
         let ch = self.char();
@@ -1005,23 +1065,40 @@ impl<'a> Scanner<'a> {
         token
     }
 
+    /// String and template literals keep a Rust string: a lone surrogate
+    /// (which Go keeps as its CESU-8 bytes) becomes U+FFFD, which only token
+    /// values ever see.
     fn scan_escape_sequence(&mut self, flags: u32) -> String {
+        let bytes = self.scan_escape_sequence_bytes(flags);
+        let mut out = String::new();
+        let mut rest = &bytes[..];
+        while !rest.is_empty() {
+            let (ch, size) = decode_js_string_rune(rest);
+            chars::push_rune(&mut out, ch);
+            rest = &rest[size.max(1)..];
+        }
+        out
+    }
+
+    /// `scanEscapeSequence`: the value as a Go string's bytes, where a lone
+    /// surrogate is `EncodeJSStringRune`'s CESU-8 sequence.
+    pub(crate) fn scan_escape_sequence_bytes(&mut self, flags: u32) -> Vec<u8> {
         let start = self.state.pos;
         self.state.pos += 1;
         let ch = self.char();
         if ch < 0 {
             self.error(diagnostics::Unexpected_end_of_text);
-            return String::new();
+            return Vec::new();
         }
         self.state.pos += 1;
         let report_invalid = flags & ESCAPE_REPORT_INVALID_ESCAPE_ERRORS != 0;
         match ch as u8 {
-            b'0'..=b'7' if ch < 0x80 => {
-                let c = ch as u8;
-                if c == b'0' && !chars::is_digit(self.char()) {
-                    return "\0".to_string();
+            // port: Go's `case '0'` falls through to `'1', '2', '3'`, which falls through to `'4'..'7'`.
+            b'0'..=b'7' => {
+                if ch == '0' as i32 && !chars::is_digit(self.char()) {
+                    return vec![0];
                 }
-                if c <= b'3' && chars::is_octal_digit(self.char()) {
+                if ch <= '3' as i32 && chars::is_octal_digit(self.char()) {
                     self.state.pos += 1;
                 }
                 if chars::is_octal_digit(self.char()) {
@@ -1031,30 +1108,51 @@ impl<'a> Scanner<'a> {
                 if report_invalid {
                     let code = i32::from_str_radix(&self.text[start + 1..self.state.pos], 8).unwrap_or(0);
                     let arg = format!("\\x{code:02x}");
-                    self.error_at(diagnostics::Octal_escape_sequences_are_not_allowed_Use_the_syntax_0, start, self.state.pos - start, vec![arg]);
-                    let mut out = String::new();
-                    chars::push_rune(&mut out, code);
-                    return out;
+                    if flags & ESCAPE_REGULAR_EXPRESSION != 0 && flags & ESCAPE_ATOM_ESCAPE == 0 && ch != '0' as i32 {
+                        self.error_at(
+                            diagnostics::Octal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class_If_this_was_intended_as_an_escape_sequence_use_the_syntax_0_instead,
+                            start,
+                            self.state.pos - start,
+                            vec![arg],
+                        );
+                    } else {
+                        self.error_at(
+                            diagnostics::Octal_escape_sequences_are_not_allowed_Use_the_syntax_0,
+                            start,
+                            self.state.pos - start,
+                            vec![arg],
+                        );
+                    }
+                    return go_rune_string(code);
                 }
-                self.text[start..self.state.pos].to_string()
+                self.text.as_bytes()[start..self.state.pos].to_vec()
             }
-            b'8' | b'9' if ch < 0x80 => {
+            b'8' | b'9' => {
                 self.state.token_flags |= TokenFlags::ContainsInvalidEscape;
                 if report_invalid {
-                    let text = self.text[start..self.state.pos].to_string();
-                    self.error_at(diagnostics::Escape_sequence_0_is_not_allowed, start, self.state.pos - start, vec![text]);
-                    return (ch as u8 as char).to_string();
+                    if flags & ESCAPE_REGULAR_EXPRESSION != 0 && flags & ESCAPE_ATOM_ESCAPE == 0 {
+                        self.error_at(
+                            diagnostics::Decimal_escape_sequences_and_backreferences_are_not_allowed_in_a_character_class,
+                            start,
+                            self.state.pos - start,
+                            Vec::new(),
+                        );
+                    } else {
+                        let text = self.text[start..self.state.pos].to_string();
+                        self.error_at(diagnostics::Escape_sequence_0_is_not_allowed, start, self.state.pos - start, vec![text]);
+                    }
+                    return go_rune_string(ch);
                 }
-                self.text[start..self.state.pos].to_string()
+                self.text.as_bytes()[start..self.state.pos].to_vec()
             }
-            b'b' => "\u{8}".to_string(),
-            b't' => "\t".to_string(),
-            b'n' => "\n".to_string(),
-            b'v' => "\u{b}".to_string(),
-            b'f' => "\u{c}".to_string(),
-            b'r' => "\r".to_string(),
-            b'\'' => "'".to_string(),
-            b'"' => "\"".to_string(),
+            b'b' => vec![0x08],
+            b't' => vec![b'\t'],
+            b'n' => vec![b'\n'],
+            b'v' => vec![0x0B],
+            b'f' => vec![0x0C],
+            b'r' => vec![b'\r'],
+            b'\'' => vec![b'\''],
+            b'"' => vec![b'"'],
             b'u' => {
                 let extended = self.char() == '{' as i32;
                 self.state.pos -= 2;
@@ -1062,34 +1160,49 @@ impl<'a> Scanner<'a> {
                 if extended {
                     if flags & ESCAPE_ALLOW_EXTENDED_UNICODE_ESCAPE == 0 {
                         self.state.token_flags |= TokenFlags::ContainsInvalidEscape;
+                        if report_invalid {
+                            self.error_at(
+                                diagnostics::Unicode_escape_sequences_are_only_available_when_the_Unicode_u_flag_or_the_Unicode_Sets_v_flag_is_set,
+                                start,
+                                self.state.pos - start,
+                                Vec::new(),
+                            );
+                        }
                     }
                     if code_point < 0 {
-                        return self.text[start..self.state.pos].to_string();
+                        return self.text.as_bytes()[start..self.state.pos].to_vec();
                     }
-                    if chars::is_high_surrogate(code_point)
+                    if flags & ESCAPE_REGULAR_EXPRESSION == 0
+                        && chars::is_high_surrogate(code_point)
                         && let Some(combined) = self.scan_low_surrogate_escape(code_point)
                     {
-                        let mut out = String::new();
-                        chars::push_rune(&mut out, combined);
-                        return out;
+                        return go_rune_string(combined);
                     }
-                    let mut out = String::new();
-                    chars::push_rune(&mut out, code_point);
-                    return out;
+                    return encode_js_string_rune(code_point);
                 }
                 if code_point < 0 {
-                    return self.text[start..self.state.pos].to_string();
+                    return self.text.as_bytes()[start..self.state.pos].to_vec();
+                } else if chars::is_high_surrogate(code_point) {
+                    if flags & ESCAPE_REGULAR_EXPRESSION == 0 {
+                        if let Some(combined) = self.scan_low_surrogate_escape(code_point) {
+                            return go_rune_string(combined);
+                        }
+                    } else if flags & ESCAPE_ANY_UNICODE_MODE != 0
+                        && self.char() == '\\' as i32
+                        && self.char_at(1) == 'u' as i32
+                        && self.char_at(2) != '{' as i32
+                    {
+                        // In a Unicode-mode regular expression `\uHigh\uLow` is one
+                        // character, so class ranges compare the pair.
+                        let saved_pos = self.state.pos;
+                        let next_code_point = self.scan_unicode_escape(report_invalid);
+                        if chars::is_low_surrogate(next_code_point) {
+                            return go_rune_string(chars::surrogate_pair_to_code_point(code_point, next_code_point));
+                        }
+                        self.state.pos = saved_pos;
+                    }
                 }
-                if chars::is_high_surrogate(code_point)
-                    && let Some(combined) = self.scan_low_surrogate_escape(code_point)
-                {
-                    let mut out = String::new();
-                    chars::push_rune(&mut out, combined);
-                    return out;
-                }
-                let mut out = String::new();
-                chars::push_rune(&mut out, code_point);
-                out
+                encode_js_string_rune(code_point)
             }
             b'x' => {
                 while self.state.pos < start + 4 {
@@ -1098,23 +1211,22 @@ impl<'a> Scanner<'a> {
                         if report_invalid {
                             self.error(diagnostics::Hexadecimal_digit_expected);
                         }
-                        return self.text[start..self.state.pos].to_string();
+                        return self.text.as_bytes()[start..self.state.pos].to_vec();
                     }
                     self.state.pos += 1;
                 }
                 self.state.token_flags |= TokenFlags::HexEscape;
                 let value = i32::from_str_radix(&self.text[start + 2..self.state.pos], 16).unwrap_or(0);
-                let mut out = String::new();
-                chars::push_rune(&mut out, value);
-                out
+                go_rune_string(value)
             }
+            // port: Go's `case '\r'` falls through to `case '\n'`.
             b'\r' => {
                 if self.char() == '\n' as i32 {
                     self.state.pos += 1;
                 }
-                String::new()
+                Vec::new()
             }
-            b'\n' => String::new(),
+            b'\n' => Vec::new(),
             _ => {
                 let mut ch = ch;
                 if ch >= 0x80 {
@@ -1124,11 +1236,21 @@ impl<'a> Scanner<'a> {
                     self.state.pos += size;
                 }
                 if ch == 0x2028 || ch == 0x2029 {
-                    return String::new();
+                    return Vec::new();
                 }
-                let mut out = String::new();
-                chars::push_rune(&mut out, ch);
-                out
+                if flags & ESCAPE_ANY_UNICODE_MODE != 0
+                    || flags & ESCAPE_REGULAR_EXPRESSION != 0
+                        && flags & ESCAPE_ANNEX_B == 0
+                        && chars::is_identifier_part(ch)
+                {
+                    self.error_at(
+                        diagnostics::This_character_cannot_be_escaped_in_a_regular_expression,
+                        start,
+                        self.state.pos - start,
+                        Vec::new(),
+                    );
+                }
+                go_rune_string(ch)
             }
         }
     }
@@ -1467,8 +1589,10 @@ impl<'a> Scanner<'a> {
 
 const ESCAPE_STRING: u32 = 1 << 0;
 const ESCAPE_REPORT_ERRORS: u32 = 1 << 1;
-const ESCAPE_REGULAR_EXPRESSION: u32 = 1 << 2;
-const ESCAPE_ANY_UNICODE_MODE: u32 = 1 << 4;
+pub(crate) const ESCAPE_REGULAR_EXPRESSION: u32 = 1 << 2;
+pub(crate) const ESCAPE_ANNEX_B: u32 = 1 << 3;
+pub(crate) const ESCAPE_ANY_UNICODE_MODE: u32 = 1 << 4;
+pub(crate) const ESCAPE_ATOM_ESCAPE: u32 = 1 << 5;
 const ESCAPE_REPORT_INVALID_ESCAPE_ERRORS: u32 = ESCAPE_REGULAR_EXPRESSION | ESCAPE_REPORT_ERRORS;
 const ESCAPE_ALLOW_EXTENDED_UNICODE_ESCAPE: u32 = ESCAPE_STRING | ESCAPE_ANY_UNICODE_MODE;
 const MERGE_CONFLICT_MARKER_LENGTH: usize = 7;
@@ -1484,6 +1608,54 @@ pub fn decode_rune(text: &str, pos: usize, end: usize) -> (i32, usize) {
     }
     match text[pos..].chars().next() {
         Some(ch) => (ch as i32, ch.len_utf8()),
+        None => (RUNE_ERROR, 1),
+    }
+}
+
+/// Go's `string(rune)`: the UTF-8 bytes of a code point, or of U+FFFD for
+/// one that is not valid (a surrogate, a negative or out-of-range value).
+pub(crate) fn go_rune_string(ch: i32) -> Vec<u8> {
+    let ch = u32::try_from(ch).ok().and_then(char::from_u32).unwrap_or('\u{FFFD}');
+    let mut buffer = [0u8; 4];
+    ch.encode_utf8(&mut buffer).as_bytes().to_vec()
+}
+
+/// `stringutil.EncodeJSStringRune`: a lone surrogate as the 3-byte CESU-8
+/// sequence UTF-8 cannot hold.
+pub(crate) fn encode_js_string_rune(ch: i32) -> Vec<u8> {
+    if (0xD800..0xE000).contains(&ch) {
+        return vec![0xED, (0x80 | ((ch >> 6) & 0x3F)) as u8, (0x80 | (ch & 0x3F)) as u8];
+    }
+    go_rune_string(ch)
+}
+
+/// `stringutil.DecodeJSStringRune`.
+pub(crate) fn decode_js_string_rune(s: &[u8]) -> (i32, usize) {
+    if s.len() >= 3 && s[0] == 0xED && (0xA0..=0xBF).contains(&s[1]) && (0x80..=0xBF).contains(&s[2]) {
+        return (0xD000 | ((s[1] & 0x3F) as i32) << 6 | (s[2] & 0x3F) as i32, 3);
+    }
+    go_decode_rune(s, 0)
+}
+
+/// `utf8.DecodeRuneInString(s[pos:])` over bytes that need not be valid
+/// UTF-8 or start at a character boundary: `(RuneError, 1)` for a byte that
+/// does not begin a valid sequence, `(RuneError, 0)` at the end.
+pub(crate) fn go_decode_rune(s: &[u8], pos: usize) -> (i32, usize) {
+    if pos >= s.len() {
+        return (RUNE_ERROR, 0);
+    }
+    let b = s[pos];
+    if b < 0x80 {
+        return (b as i32, 1);
+    }
+    let width = match b {
+        0xC2..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF4 => 4,
+        _ => return (RUNE_ERROR, 1),
+    };
+    match s.get(pos..pos + width).and_then(|bytes| std::str::from_utf8(bytes).ok()).and_then(|text| text.chars().next()) {
+        Some(ch) => (ch as i32, width),
         None => (RUNE_ERROR, 1),
     }
 }

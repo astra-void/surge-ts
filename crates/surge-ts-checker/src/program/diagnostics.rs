@@ -82,6 +82,7 @@ pub(super) fn tsc_file_errors(
     checker_options: &crate::CheckerOptions,
 ) -> Option<TscFileErrors> {
     let mut options = surge_ts_tsc_syntax::ParseOptions::for_file_name(file_name)?;
+    options.language_version = checker_options.language_version;
     let detection = &checker_options.module_detection;
     if !options.is_declaration_file {
         if detection.legacy {
@@ -95,14 +96,23 @@ pub(super) fn tsc_file_errors(
     }
     let check_js = checker_options.check_js;
     let diagnostics = surge_ts_tsc_syntax::file_diagnostics(source_text, &options);
-    let to_parser_error = |diagnostic: surge_ts_tsc_syntax::SyntaxDiagnostic| surge_ts_syntax::ParserError {
-        code: Some(diagnostic.code),
-        span_text: source_text.get(diagnostic.start..diagnostic.end).map(str::to_string),
-        span: Some(surge_ts_syntax::TextSpan {
-            start: diagnostic.start,
-            end: diagnostic.end,
-        }),
-        message: diagnostic.message,
+    // The regular expression check reads a pattern without `u` or `v` byte by
+    // byte, so an error can start inside a character; it is anchored at the
+    // character's start.
+    let boundary = |mut offset: usize| {
+        while !source_text.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        offset
+    };
+    let to_parser_error = |diagnostic: surge_ts_tsc_syntax::SyntaxDiagnostic| {
+        let (start, end) = (boundary(diagnostic.start), boundary(diagnostic.end.max(diagnostic.start)));
+        surge_ts_syntax::ParserError {
+            code: Some(diagnostic.code),
+            span_text: source_text.get(start..end).map(str::to_string),
+            span: Some(surge_ts_syntax::TextSpan { start, end }),
+            message: diagnostic.message,
+        }
     };
     if !diagnostics.syntactic.is_empty() {
         return Some(TscFileErrors {
@@ -112,15 +122,14 @@ pub(super) fn tsc_file_errors(
         });
     }
     let is_javascript = surge_ts_syntax::is_javascript_file_name(file_name);
+    let reported = diagnostics.bind.into_iter().chain(diagnostics.regular_expressions);
     let bind = match (surge_ts_syntax::extract_check_directive(source_text), check_js) {
         (Some(false), _) => Vec::new(),
-        (Some(true), _) => diagnostics.bind,
-        (None, _) if !is_javascript => diagnostics.bind,
-        (None, Some(true)) => diagnostics.bind,
+        (Some(true), _) => reported.collect(),
+        (None, _) if !is_javascript => reported.collect(),
+        (None, Some(true)) => reported.collect(),
         (None, Some(false)) => Vec::new(),
-        (None, None) => diagnostics
-            .bind
-            .into_iter()
+        (None, None) => reported
             .filter(|diagnostic| PLAIN_JS_BIND_CODES.contains(&diagnostic.code))
             .collect(),
     };

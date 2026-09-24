@@ -19,6 +19,8 @@ pub struct ParsedSource {
     pub file_name: String,
     pub statements: Vec<ParsedStatement>,
     pub parser_errors: Vec<ParserError>,
+    /// oxc gave up at a fatal error, so `statements` holds nothing of the file.
+    pub parse_aborted: bool,
     pub is_module: bool,
     /// Leading `/// <reference types="..." />` directives, in source order.
     pub reference_type_directives: Vec<ReferenceTypeDirective>,

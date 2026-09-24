@@ -195,6 +195,18 @@ pub(super) fn parse_program_file(
             parsed.parser_errors = tsc_errors.syntactic;
             parsed.grammar_diagnostics.clear();
         } else {
+            // tsc's parser accepts the file, so the syntax errors oxc reports
+            // are its own, and so is its verdict on a regular expression,
+            // which tsc's checker gives (see `tsc_file_errors`). The rest are
+            // grammar errors tsc's checker reports. A file oxc gave up on
+            // keeps them: its statements are gone, and checking it as empty
+            // would misreport every use of what it declares.
+            if !parsed.parse_aborted {
+                parsed.parser_errors.retain(|error| {
+                    !super::diagnostics::is_syntactic_parser_error(error)
+                        && !error.code.is_some_and(|code| (1499..=1538).contains(&code))
+                });
+            }
             bind_errors = tsc_errors.bind;
             tsc_bound = true;
             tsc_globals = tsc_errors.globals.map(std::sync::Arc::new);

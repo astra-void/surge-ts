@@ -15,6 +15,7 @@ mod kind;
 mod merge;
 mod messages;
 mod parser;
+mod regexp;
 mod scanner;
 
 pub struct Message {
@@ -47,6 +48,53 @@ impl Diagnostic {
             message = message.replace(&format!("{{{index}}}"), arg);
         }
         SyntaxDiagnostic { start: self.start, end: self.end, code: self.message.code, message }
+    }
+}
+
+/// `core.ScriptTarget`: the language version a file is checked against.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum ScriptTarget {
+    ES5 = 1,
+    ES2015 = 2,
+    ES2016 = 3,
+    ES2017 = 4,
+    ES2018 = 5,
+    ES2019 = 6,
+    ES2020 = 7,
+    ES2021 = 8,
+    ES2022 = 9,
+    ES2023 = 10,
+    ES2024 = 11,
+    ES2025 = 12,
+    ESNext = 99,
+}
+
+impl Default for ScriptTarget {
+    /// `ScriptTargetLatestStandard`, what `GetEmitScriptTarget` gives an unset
+    /// `target`.
+    fn default() -> Self {
+        Self::ES2025
+    }
+}
+
+impl ScriptTarget {
+    /// The name tsc's messages use (`strings.ToLower(target.String())`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ES5 => "es5",
+            Self::ES2015 => "es2015",
+            Self::ES2016 => "es2016",
+            Self::ES2017 => "es2017",
+            Self::ES2018 => "es2018",
+            Self::ES2019 => "es2019",
+            Self::ES2020 => "es2020",
+            Self::ES2021 => "es2021",
+            Self::ES2022 => "es2022",
+            Self::ES2023 => "es2023",
+            Self::ES2024 => "es2024",
+            Self::ES2025 => "es2025",
+            Self::ESNext => "esnext",
+        }
     }
 }
 
@@ -90,6 +138,9 @@ pub struct ParseOptions {
     /// A JSX tag makes the file a module (`jsx: react-jsx` or `react-jsxdev`
     /// under `moduleDetection: auto`).
     pub jsx_forces_module: bool,
+    /// The checker's language version, for what its regular expression
+    /// check allows.
+    pub language_version: ScriptTarget,
 }
 
 impl ParseOptions {
@@ -102,7 +153,13 @@ impl ParseOptions {
             || lower.contains(".d.") && lower.ends_with(".ts");
         let force_module =
             !is_declaration_file && [".mts", ".cts", ".mjs", ".cjs"].iter().any(|ext| lower.ends_with(ext));
-        Some(Self { script_kind, is_declaration_file, force_module, jsx_forces_module: false })
+        Some(Self {
+            script_kind,
+            is_declaration_file,
+            force_module,
+            jsx_forces_module: false,
+            language_version: ScriptTarget::default(),
+        })
     }
 }
 
@@ -136,17 +193,34 @@ pub use merge::{FileGlobals, GlobalsInput, merge_globals};
 pub struct FileDiagnostics {
     pub syntactic: Vec<SyntaxDiagnostic>,
     pub bind: Vec<SyntaxDiagnostic>,
+    /// The checker's grammar check of each regular expression literal.
+    pub regular_expressions: Vec<SyntaxDiagnostic>,
     pub globals: FileGlobals,
 }
 
 pub fn file_diagnostics(text: &str, options: &ParseOptions) -> FileDiagnostics {
     let parsed = parser::parse(text, options);
     let syntactic = render(parsed.diagnostics.iter().chain(parsed.js_diagnostics.iter()));
-    let (bind, globals) = if parsed.diagnostics.is_empty() {
-        let (bind, globals) = binder::bind(&parsed, text);
-        (render(bind.iter()), globals)
-    } else {
-        (Vec::new(), FileGlobals::default())
-    };
-    FileDiagnostics { syntactic, bind, globals }
+    if !parsed.diagnostics.is_empty() {
+        return FileDiagnostics {
+            syntactic,
+            bind: Vec::new(),
+            regular_expressions: Vec::new(),
+            globals: FileGlobals::default(),
+        };
+    }
+    let (bind, globals) = binder::bind(&parsed, text);
+    let regular_expressions: Vec<Diagnostic> = parsed
+        .regular_expression_literals()
+        .into_iter()
+        .flat_map(|start| {
+            regexp::regular_expression_literal_diagnostics(text, parsed.jsx, options.language_version, start)
+        })
+        .collect();
+    FileDiagnostics {
+        syntactic,
+        bind: render(bind.iter()),
+        regular_expressions: render(regular_expressions.iter()),
+        globals,
+    }
 }
