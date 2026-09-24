@@ -1417,6 +1417,26 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
             let key_type = crate::checks::expr::evaluate_expression(key, *span, &symbols, ctx);
             crate::checks::expr::report_invalid_computed_key(&key_type, *span, ctx);
         }
+        // tsc's `checkDecorators`: the expression of every decorator on a
+        // declaration that can be decorated. How the decorator is then called
+        // (TS1238, TS1270, ...) is not modelled, and neither is the contextual
+        // type that call gives the expression (`getContextualTypeForDecorator`),
+        // so a function written as the decorator is checked as one whose
+        // contextual type surge does not know.
+        let legacy_decorators = ctx.options.experimental_decorators;
+        for decorator in &class.decorators {
+            if !super::forward_references::decorator_is_checked(decorator.target, legacy_decorators) {
+                continue;
+            }
+            let contextually_typed = matches!(decorator.expression, surge_ts_syntax::ParsedExpression::ArrowFunction(_));
+            if contextually_typed {
+                ctx.degraded_expected_type_depth += 1;
+            }
+            let _ = crate::checks::expr::evaluate_expression(&decorator.expression, decorator.span, &symbols, ctx);
+            if contextually_typed {
+                ctx.degraded_expected_type_depth -= 1;
+            }
+        }
     });
     // Everything checked from here on is lexically inside the class, which is
     // what decides whether its `private`/`protected` members are reachable.

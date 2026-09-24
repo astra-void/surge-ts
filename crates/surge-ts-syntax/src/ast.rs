@@ -935,6 +935,29 @@ pub struct ParsedClassDeclaration {
     /// each is checked as an expression (tsc's `checkComputedPropertyName`)
     /// whether or not the member it names could be modelled.
     pub computed_keys: Vec<(ParsedExpression, Option<TextSpan>)>,
+    /// The decorators on the class, its members and their parameters, in
+    /// source order.
+    pub decorators: Vec<ParsedDecorator>,
+}
+
+/// A decorator's expression, and what tsc's `nodeCanBeDecorated` asks of the
+/// declaration it decorates (which decides whether it is checked at all).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedDecorator {
+    pub expression: ParsedExpression,
+    pub span: Option<TextSpan>,
+    pub target: ParsedDecoratorTarget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParsedDecoratorTarget {
+    Class,
+    /// A property, or an auto-accessor.
+    Property { is_abstract: bool, is_declare: bool, private_name: bool },
+    /// A method or a `get`/`set` accessor.
+    Method { has_body: bool, private_name: bool },
+    /// A parameter of a constructor, method or `set` accessor that has a body.
+    Parameter,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

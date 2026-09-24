@@ -8,8 +8,8 @@ use oxc_span::GetSpan;
 
 use crate::{
     ParsedClassAccessor, ParsedClassConstructor, ParsedClassDeclaration, ParsedClassMember,
-    ParsedAccessorSide, ParsedClassMethod, ParsedClassProperty, ParsedMemberAccessibility,
-    ParsedNamedType, ParsedRestrictedMember,
+    ParsedAccessorSide, ParsedClassMethod, ParsedClassProperty, ParsedDecorator,
+    ParsedDecoratorTarget, ParsedMemberAccessibility, ParsedNamedType, ParsedRestrictedMember,
 };
 
 use super::expressions::parse_expression;
@@ -137,7 +137,56 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
                 ))
             })
             .collect(),
+        decorators: class_decorators(class),
     })
+}
+
+fn class_decorators(class: &Class<'_>) -> Vec<ParsedDecorator> {
+    let lower = |decorators: &[oxc_ast::ast::Decorator<'_>], target: ParsedDecoratorTarget| {
+        decorators
+            .iter()
+            .map(|decorator| ParsedDecorator {
+                expression: parse_expression(&decorator.expression).0,
+                span: Some(text_span_from_oxc_span(decorator.expression.span())),
+                target,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut out = lower(&class.decorators, ParsedDecoratorTarget::Class);
+    for element in &class.body.body {
+        match element {
+            ClassElement::MethodDefinition(method) => {
+                let target = ParsedDecoratorTarget::Method {
+                    has_body: method.value.body.is_some(),
+                    private_name: matches!(method.key, PropertyKey::PrivateIdentifier(_)),
+                };
+                out.extend(lower(&method.decorators, target));
+                if method.value.body.is_some() && method.kind != MethodDefinitionKind::Get {
+                    for parameter in &method.value.params.items {
+                        out.extend(lower(&parameter.decorators, ParsedDecoratorTarget::Parameter));
+                    }
+                }
+            }
+            ClassElement::PropertyDefinition(property) => {
+                let target = ParsedDecoratorTarget::Property {
+                    is_abstract: property.r#type == PropertyDefinitionType::TSAbstractPropertyDefinition,
+                    is_declare: property.declare,
+                    private_name: matches!(property.key, PropertyKey::PrivateIdentifier(_)),
+                };
+                out.extend(lower(&property.decorators, target));
+            }
+            ClassElement::AccessorProperty(accessor) => {
+                let target = ParsedDecoratorTarget::Property {
+                    is_abstract: accessor.r#type == oxc_ast::ast::AccessorPropertyType::TSAbstractAccessorProperty,
+                    is_declare: false,
+                    private_name: matches!(accessor.key, PropertyKey::PrivateIdentifier(_)),
+                };
+                out.extend(lower(&accessor.decorators, target));
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn is_in_expression(expression: &Expression<'_>) -> bool {

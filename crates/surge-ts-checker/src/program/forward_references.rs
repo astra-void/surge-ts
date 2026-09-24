@@ -16,8 +16,8 @@
 
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
-    ParsedClassDeclaration, ParsedClassMember, ParsedExportDeclaration, ParsedExpression,
-    ParsedStatement, TextSpan,
+    ParsedClassDeclaration, ParsedClassMember, ParsedDecoratorTarget, ParsedExportDeclaration,
+    ParsedExpression, ParsedStatement, TextSpan,
 };
 
 use crate::context::{CheckerContext, convert_span};
@@ -86,6 +86,9 @@ pub(crate) fn check_statement_forward_references(
     for_each_statement_expression(statement, &mut |expression| {
         walk(expression, classes, &mut reported);
     });
+    if let Some(class) = declared_class(statement) {
+        walk_class_head(class, classes, ctx.options.experimental_decorators, &mut reported);
+    }
     for (name, span, is_enum) in reported {
         let diagnostic = if is_enum {
             Diagnostic::ts2450(&name, ctx.file_name.clone())
@@ -93,6 +96,73 @@ pub(crate) fn check_statement_forward_references(
             Diagnostic::ts2449(&name, ctx.file_name.clone())
         };
         ctx.push(diagnostic.with_span(convert_span(span)));
+    }
+}
+
+fn declared_class(statement: &ParsedStatement) -> Option<&ParsedClassDeclaration> {
+    match statement {
+        ParsedStatement::ClassDeclaration(class) => Some(class),
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => declared_class(declaration),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// What a class declaration evaluates before its binding is initialized: its
+/// members' computed names and the decorators tsc checks. Besides a class
+/// declared later, `isBlockScopedNameDeclaredBeforeUse` rejects the class
+/// itself there — in a decorator (other than a legacy one) only outside a
+/// function it defers to.
+fn walk_class_head(
+    class: &ParsedClassDeclaration,
+    classes: &FxHashMap<String, ForwardDeclaration>,
+    legacy_decorators: bool,
+    reported: &mut Vec<(String, TextSpan, bool)>,
+) {
+    if class.is_declare {
+        return;
+    }
+    for (key, _) in &class.computed_keys {
+        walk(key, classes, reported);
+        walk_self_reference(key, &class.name, reported);
+    }
+    for decorator in &class.decorators {
+        if !decorator_is_checked(decorator.target, legacy_decorators) {
+            continue;
+        }
+        walk(&decorator.expression, classes, reported);
+        if !legacy_decorators {
+            walk_self_reference(&decorator.expression, &class.name, reported);
+        }
+    }
+}
+
+fn walk_self_reference(expression: &ParsedExpression, class_name: &str, reported: &mut Vec<(String, TextSpan, bool)>) {
+    if let ParsedExpression::Identifier { name, span: Some(span) } = expression
+        && name == class_name
+    {
+        reported.push((name.clone(), *span, false));
+        return;
+    }
+    for_each_child_expression(expression, &mut |child| walk_self_reference(child, class_name, reported));
+}
+
+/// tsc's `nodeCanBeDecorated` for a declaration of a class declaration: a
+/// decorator anywhere else has its grammar error and is not checked.
+pub(crate) fn decorator_is_checked(target: ParsedDecoratorTarget, legacy_decorators: bool) -> bool {
+    match target {
+        ParsedDecoratorTarget::Class => true,
+        ParsedDecoratorTarget::Property { is_abstract, is_declare, private_name } => {
+            if legacy_decorators {
+                !private_name
+            } else {
+                !is_abstract && !is_declare
+            }
+        }
+        ParsedDecoratorTarget::Method { has_body, private_name } => has_body && !(legacy_decorators && private_name),
+        ParsedDecoratorTarget::Parameter => legacy_decorators,
     }
 }
 

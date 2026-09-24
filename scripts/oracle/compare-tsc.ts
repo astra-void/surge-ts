@@ -1064,6 +1064,7 @@ export const fixturePresets: Record<string, string> = {
   'tsc-binder-declarations': path.join(workspaceRoot, 'tests/compat-projects/tsc-binder-declarations/tsconfig.json'),
   'error-call-operands-checked': path.join(workspaceRoot, 'tests/compat-projects/error-call-operands-checked/tsconfig.json'),
   'tsc-regular-expressions': path.join(workspaceRoot, 'tests/compat-projects/tsc-regular-expressions/tsconfig.json'),
+  'decorator-expressions-checked': path.join(workspaceRoot, 'tests/compat-projects/decorator-expressions-checked/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
