@@ -829,6 +829,11 @@ pub(crate) fn lib_builtin_member_type(
     name: &str,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    if let Type::Reference(reference) = receiver
+        && reference.id.as_ref() == "\u{0}ArrayIterator"
+    {
+        return lib_array_iterator(reference.arguments.first()?, ctx)?.get_property_access_type(name);
+    }
     let (interface_name, element) = match receiver {
         Type::Array(element) => ("Array", Some(element.as_ref().clone())),
         Type::Tuple(elements) => ("Array", Some(surge_ts_types::union_type(elements.clone()))),
@@ -877,6 +882,37 @@ pub(crate) fn lib_builtin_member_type(
     } else {
         ty
     })
+}
+
+/// The lib's `ArrayIterator<T>`, which `Array.prototype.values()` and its
+/// kin return: surge's own stand-in models only `next()`, while the lib's
+/// inherits every `IteratorObject` member the configured lib declares
+/// (`map`, `filter`, `toArray`, …). `None` when the lib declares none.
+fn lib_array_iterator(yields: &Type, ctx: &mut CheckerContext) -> Option<Type> {
+    if !matches!(
+        ctx.lookup_type_declaration("ArrayIterator"),
+        Some(crate::symbols::TypeDeclarationInfo::Interface(_))
+    ) {
+        return None;
+    }
+    const SLOT: &str = "\u{0}yields";
+    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    substitution.insert(SLOT.to_string(), yields.clone());
+    let named = |name: &str, type_arguments| {
+        surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            name: name.to_string(),
+            span: None,
+            type_arguments,
+        }))
+    };
+    let reported = ctx.diagnostics().len();
+    let iterator = crate::infer::map_parsed_type_with_substitution(
+        named("ArrayIterator", vec![named(SLOT, Vec::new())]),
+        ctx,
+        &substitution,
+    );
+    ctx.truncate_diagnostics(reported);
+    (!iterator.is_unknown()).then_some(iterator)
 }
 
 fn no_lib_array_member(object_type: &Type, ctx: &CheckerContext) -> bool {
