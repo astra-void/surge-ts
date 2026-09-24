@@ -366,6 +366,11 @@ pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
 
 fn merge_intersection_member_types(members: Vec<Type>) -> Type {
     let (members, unwrapped_open) = flatten_deferred_intersections(members);
+    // tsc's `getIntersectionType` (checker.go:26443): an `any` operand is the
+    // whole intersection, and the error type outranks a written `any`.
+    if members.iter().any(|ty| matches!(ty, Type::ErrorType)) {
+        return Type::ErrorType;
+    }
     if members.iter().any(|ty| matches!(ty, Type::Any)) {
         return Type::Any;
     }

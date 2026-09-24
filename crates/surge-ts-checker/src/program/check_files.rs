@@ -16,7 +16,7 @@ use super::{
     FileCheckResult, ParsedProgramFile, ProgramCheckSharedState, census_check_milestone,
     check_program_file_statements, clone_type_declaration_table,
     collect_function_signatures_from_statements, count_local_type_declarations_in_statements,
-    drop_suppressed_diagnostics, emit_unsupported_declaration_diagnostics,
+    apply_comment_directives, emit_unsupported_declaration_diagnostics,
     extend_diagnostics_dedup, module_scope_declared_names, unused_locals,
 };
 use crate::context::{CheckerContext, CompatibilityStats, FileKind};
@@ -828,20 +828,176 @@ pub(crate) fn emit_grammar_diagnostics(
     ctx: &mut CheckerContext,
 ) {
     for finding in findings {
+        let diagnostic = grammar_finding_diagnostic(finding, ctx);
+        if matches!(
+            finding.kind,
+            surge_ts_syntax::ParsedGrammarDiagnosticKind::NamedSignatureParameterWithoutType
+                | surge_ts_syntax::ParsedGrammarDiagnosticKind::ComputedTypeMemberName
+        ) {
+            ctx.deferred_grammar_findings.push(finding.clone());
+            continue;
+        }
         let answered: &'static [u32] = match finding.kind {
             surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2842) => &[7031],
-            surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2372 | 2373)
-            | surge_ts_syntax::ParsedGrammarDiagnosticKind::LaterParameterReference => &[2304, 2552],
+            surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2372 | 2373) => &[2304, 2552],
+            // The name resolves to the constructor's local in the emitted
+            // code, so tsc reports nothing about what it names in the source.
+            surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2301) if diagnostic.is_some() => {
+                &[2304, 2552, 2663]
+            }
             _ => &[],
         };
         if !answered.is_empty() {
             ctx.grammar_answered_spans
                 .push((crate::context::convert_span(finding.span), answered));
         }
-        if let Some(diagnostic) = grammar_finding_diagnostic(finding, ctx) {
+        if let Some(diagnostic) = diagnostic {
             ctx.push(diagnostic);
         }
     }
+}
+
+/// The grammar findings whose answer needs the file's type declarations, which
+/// `emit_grammar_diagnostics` runs before. tsc's `reportImplicitAny` for a
+/// call signature, method signature or function type parameter: a bare name
+/// that is a type keyword or names a type in scope is TS7051 with the
+/// suggested `argN: Name`; otherwise the parameter is the implicit `any` it
+/// reads as (TS7006, or TS7019 for a rest parameter).
+pub(crate) fn emit_deferred_grammar_diagnostics(ctx: &mut CheckerContext) {
+    let findings = std::mem::take(&mut ctx.deferred_grammar_findings);
+    for finding in findings {
+        if finding.kind == surge_ts_syntax::ParsedGrammarDiagnosticKind::ComputedTypeMemberName {
+            if let Some(diagnostic) = computed_type_member_name_diagnostic(&finding, ctx) {
+                ctx.push(diagnostic.with_span(crate::context::convert_span(finding.span)));
+            }
+            continue;
+        }
+        if !ctx.options.no_implicit_any {
+            continue;
+        }
+        let Some([name, suggested_name, suffix]) = finding
+            .name
+            .as_deref()
+            .map(|payload| payload.split('\0').collect::<Vec<_>>())
+            .and_then(|parts| <[&str; 3]>::try_from(parts).ok())
+        else {
+            continue;
+        };
+        let file_name = ctx.file_name.clone();
+        let diagnostic =
+            if is_type_keyword_name(name) || ctx.lookup_type_declaration(name).is_some() {
+                Diagnostic::ts7051(suggested_name, format!("{name}{suffix}"), file_name)
+            } else if suffix.is_empty() {
+                Diagnostic::ts7006(name, file_name)
+            } else {
+                Diagnostic::ts7019(name, file_name)
+            };
+        ctx.push(diagnostic.with_span(crate::context::convert_span(finding.span)));
+    }
+}
+
+/// tsc's `checkAndReportErrorForUsingTypeAsValue` for a computed member name
+/// that resolves only as a type: TS2693, or TS2690 (`K in Keys`) when
+/// `maybeMappedType` holds — the member is a type literal's only property and
+/// the type is a union of string- and number-like types. `None` wherever surge
+/// cannot tell what the name's declared type is.
+fn computed_type_member_name_diagnostic(
+    finding: &surge_ts_syntax::ParsedGrammarDiagnostic,
+    ctx: &CheckerContext,
+) -> Option<Diagnostic> {
+    let (name, mapped) = finding.name.as_deref()?.split_once('\0')?;
+    if ctx.symbols.get_handle(name).is_some()
+        || ctx.ambient_global_symbols.get_handle(name).is_some()
+        || ctx.namespace_meaning(name).is_some()
+        || crate::checks::expr::is_es2015_or_later_constructor_name(name)
+    {
+        return None;
+    }
+    if crate::checks::expr::is_primitive_type_name(name) {
+        return Some(Diagnostic::ts2693(name, ctx.file_name.clone()));
+    }
+    let is_literal_union = match ctx.lookup_type_declaration(name)? {
+        crate::symbols::TypeDeclarationInfo::Interface(info) => {
+            if info.is_class_instance {
+                return None;
+            }
+            false
+        }
+        crate::symbols::TypeDeclarationInfo::Alias(info) => {
+            if info.enum_name.is_some() || !info.body.type_parameters.is_empty() {
+                return None;
+            }
+            declared_literal_union(&info.body.ty)?
+        }
+    };
+    let file_name = ctx.file_name.clone();
+    Some(if mapped == "1" && is_literal_union {
+        Diagnostic::ts2690(name, if name == "K" { "P" } else { "K" }, file_name)
+    } else {
+        Diagnostic::ts2693(name, file_name)
+    })
+}
+
+/// Whether an alias written as `body` declares a union every member of which
+/// is string- or number-like. `None` for a body whose declared type needs
+/// resolving, or a union tsc would reduce.
+fn declared_literal_union(body: &surge_ts_syntax::ParsedType) -> Option<bool> {
+    use surge_ts_syntax::ParsedType as P;
+    let is_settled = |ty: &P| {
+        matches!(
+            ty,
+            P::String
+                | P::Number
+                | P::Boolean
+                | P::BigInt
+                | P::Symbol
+                | P::StringLiteral(_)
+                | P::NumberLiteral(_)
+                | P::BooleanLiteral(_)
+                | P::Object(_)
+                | P::Function(_)
+                | P::Array(_)
+                | P::Tuple(_)
+        )
+    };
+    let P::Union(members) = body else {
+        return is_settled(body).then_some(false);
+    };
+    if !members.iter().all(is_settled) {
+        return None;
+    }
+    let has = |pred: fn(&P) -> bool| members.iter().any(pred);
+    let reduces = (has(|ty| matches!(ty, P::String)) && has(|ty| matches!(ty, P::StringLiteral(_))))
+        || (has(|ty| matches!(ty, P::Number)) && has(|ty| matches!(ty, P::NumberLiteral(_))))
+        || members
+            .iter()
+            .enumerate()
+            .any(|(index, ty)| members[..index].contains(ty));
+    if reduces {
+        return None;
+    }
+    Some(members.iter().all(|ty| {
+        matches!(ty, P::String | P::Number | P::StringLiteral(_) | P::NumberLiteral(_))
+    }))
+}
+
+/// tsc's `isTypeNodeKind` over the keyword an identifier's text scans as.
+fn is_type_keyword_name(name: &str) -> bool {
+    matches!(
+        name,
+        "any"
+            | "unknown"
+            | "number"
+            | "bigint"
+            | "object"
+            | "boolean"
+            | "string"
+            | "symbol"
+            | "void"
+            | "undefined"
+            | "never"
+            | "intrinsic"
+    )
 }
 
 /// The parse failures oxc classified that the grammar pass does not already
@@ -875,8 +1031,61 @@ pub(crate) fn unclaimed_parser_errors<'a>(
         })
         .map(|finding| finding.span)
         .collect();
+    // tsc's parser reports `super<T>` as TS2754 and still builds the
+    // expression with its type arguments, so a `.member` after it is not the
+    // instantiation-expression access oxc reports as TS1477.
+    let super_type_arguments: Vec<usize> = findings
+        .iter()
+        .filter(|finding| matches!(finding.kind, surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(2754)))
+        .map(|finding| finding.span.start)
+        .collect();
+    // tsc names the misplaced modifier's own error (TS1242 `abstract`,
+    // TS1275 `accessor`, TS1433 on a `this` parameter) where oxc reports the
+    // generic TS1090, and TS18041 for a `return` in a static block where oxc
+    // reports TS1108.
+    let spans_of = |codes: &[u32]| -> Vec<surge_ts_syntax::TextSpan> {
+        findings
+            .iter()
+            .filter(|finding| {
+                matches!(finding.kind, surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(code) if codes.contains(&code))
+            })
+            .map(|finding| finding.span)
+            .collect()
+    };
+    let parameter_modifiers = spans_of(&[1242, 1275, 1433]);
+    let static_block_returns = spans_of(&[18041]);
+    let overlaps = |spans: &[surge_ts_syntax::TextSpan], span: surge_ts_syntax::TextSpan| {
+        spans.iter().any(|finding| {
+            (finding.start <= span.start && span.start < finding.end.max(finding.start + 1))
+                || (span.start <= finding.start && finding.start < span.end.max(span.start + 1))
+        })
+    };
     errors.iter().filter(move |error| {
         if error.code.is_some_and(|code| claimed.contains(&code)) {
+            return false;
+        }
+        if error.code == Some(1477)
+            && error.span.is_some_and(|span| super_type_arguments.contains(&span.start))
+        {
+            return false;
+        }
+        if let Some(span) = error.span {
+            if error.code == Some(1090) && overlaps(&parameter_modifiers, span) {
+                return false;
+            }
+            if error.code == Some(1108) && overlaps(&static_block_returns, span) {
+                return false;
+            }
+        }
+        // oxc rejects any parameter-property modifier outside a constructor
+        // as TS1090; tsc's modifier grammar rejects only `static`, `export`,
+        // `declare` and `async` on a parameter and reports a misplaced
+        // parameter property as TS2369 instead.
+        if error.code == Some(1090)
+            && error.span_text.as_deref().is_some_and(|modifier| {
+                matches!(modifier, "public" | "private" | "protected" | "readonly" | "override")
+            })
+        {
             return false;
         }
         !(error.code == Some(1030)
@@ -901,6 +1110,24 @@ fn export_assignment_targets_esm(ctx: &CheckerContext) -> bool {
     module.is_ecmascript() && !lower.ends_with(".cts") && !lower.ends_with(".cjs")
 }
 
+/// tsc's `GetEmitModuleFormatOfFile` answering CommonJS: `module: commonjs`,
+/// a node module kind for a file whose implied format is not ESM, or a
+/// `.cts`/`.cjs` file under any other kind. A package.json `"type"` is only
+/// read under node resolution, where `esm_module_files` records it.
+fn file_emits_commonjs(ctx: &CheckerContext) -> bool {
+    let module = ctx.options.module_emit;
+    if module.is_node() {
+        return !ctx.options.esm_module_files.contains(ctx.file_name.as_str());
+    }
+    let lower = ctx.file_name.to_ascii_lowercase();
+    if lower.ends_with(".mts") || lower.ends_with(".mjs") {
+        return false;
+    }
+    module == crate::ModuleEmitKind::CommonJS
+        || lower.ends_with(".cts")
+        || lower.ends_with(".cjs")
+}
+
 fn grammar_finding_diagnostic(
     finding: &surge_ts_syntax::ParsedGrammarDiagnostic,
     ctx: &CheckerContext,
@@ -908,11 +1135,45 @@ fn grammar_finding_diagnostic(
     use surge_ts_syntax::ParsedGrammarDiagnosticKind as Kind;
 
     let diagnostic = match finding.kind {
-        Kind::LaterParameterReference => return None,
-        Kind::Ts(2683) if !ctx.options.no_implicit_this => return None,
+        Kind::Ts(2683 | 7041) if !ctx.options.no_implicit_this => return None,
+        Kind::Ts(7028) if ctx.options.allow_unused_labels != Some(false) => return None,
+        Kind::Ts(7032) => {
+            let payload = finding.name.as_deref()?;
+            let (name, private) = match payload.split_once('\0') {
+                Some((name, _)) => (name, true),
+                None => (payload, false),
+            };
+            if !ctx.options.no_implicit_any || (private && super::file_classify::is_declaration_file_name(&ctx.file_name)) {
+                return None;
+            }
+            Diagnostic::ts7032(name, ctx.file_name.clone())
+        }
+        // Answered by `emit_deferred_grammar_diagnostics`, once the file's type
+        // declarations are in place.
+        Kind::NamedSignatureParameterWithoutType | Kind::ComputedTypeMemberName => return None,
         Kind::Ts(1202) if !ctx.options.module_emit.is_ecmascript() => return None,
         Kind::Ts(1203) if !export_assignment_targets_esm(ctx) => return None,
         Kind::Ts(2699) if ctx.options.use_define_for_class_fields => return None,
+        Kind::Ts(2301 | 2376 | 2401) if ctx.options.emit_standard_class_fields() => return None,
+        // `errorSkippedOnNoEmit`: the CommonJS wrapper's names only collide
+        // when the file is emitted.
+        Kind::Ts(2441 | 1216) if ctx.options.no_emit || !file_emits_commonjs(ctx) => return None,
+        Kind::Ts(2818) if ctx.options.no_emit || ctx.options.target_es2022 => return None,
+        // `import string = N.T` is reported only when the target has a type
+        // meaning; the finding carries the entity name to resolve.
+        Kind::Ts(2438) => {
+            let (name, entity) = finding.name.as_deref()?.split_once('\0')?;
+            let entity: String = entity.chars().filter(|c| !c.is_whitespace()).collect();
+            ctx.lookup_type_declaration(&entity)?;
+            Diagnostic::ts2438(name, ctx.file_name.clone())
+        }
+        Kind::Ts(2725) if !file_emits_commonjs(ctx) => return None,
+        Kind::Ts(2725) => {
+            Diagnostic::ts2725(ctx.options.module_emit.option_name(), ctx.file_name.clone())
+        }
+        // tsc reports unreachable code as an error only under an explicit
+        // `allowUnreachableCode: false`; unset makes it a suggestion.
+        Kind::Ts(7027) if !ctx.options.report_unreachable_code => return None,
         Kind::TsUnderStrictNullChecks(_) if !ctx.options.strict_null_checks => return None,
         Kind::Ts(number) | Kind::TsUnderStrictNullChecks(number) => {
             let args: Vec<surge_ts_diagnostics::DiagnosticArg> = finding
@@ -1003,9 +1264,6 @@ fn grammar_finding_diagnostic(
         Kind::ObjectLiteralPropertyAndAccessor => Diagnostic::ts1119(ctx.file_name.clone()),
         Kind::AbstractMethodOutsideAbstractClass => Diagnostic::ts1244(ctx.file_name.clone()),
         Kind::AbstractPropertyOutsideAbstractClass => Diagnostic::ts1253(ctx.file_name.clone()),
-        Kind::ParameterPropertyOutsideImplementation => {
-            Diagnostic::ts2369(ctx.file_name.clone())
-        }
         Kind::ParameterInitializerOutsideImplementation => {
             Diagnostic::ts2371(ctx.file_name.clone())
         }
@@ -1071,6 +1329,7 @@ pub(super) fn check_program_file(
     }
 
     if parsed_file.file_kind.is_declaration() {
+        emit_grammar_diagnostics(&parsed_file.grammar_diagnostics, ctx);
         emit_unsupported_declaration_diagnostics(&parsed_file.statements, ctx);
         let diagnostics = std::mem::take(&mut ctx.diagnostics);
         let stats = std::mem::take(&mut ctx.stats);
@@ -1084,6 +1343,8 @@ pub(super) fn check_program_file(
     emit_grammar_diagnostics(&parsed_file.grammar_diagnostics, ctx);
     ctx.parenthesized_expressions = parsed_file.parenthesized_expressions.clone();
     ctx.let_assignments = parsed_file.let_assignments.clone();
+    ctx.jsx_factory_uses = parsed_file.jsx_factory_uses.clone();
+    crate::checks::jsx::check_jsx_runtime_import(ctx);
 
     if parsed_file.is_module {
         let Some(module_analysis) = shared_state.module_analyses[file_index].as_ref() else {
@@ -1115,10 +1376,23 @@ pub(super) fn check_program_file(
         // read-only lookup backdrop for the file check; holding them as a
         // `parent` fallback keeps the per-file working set O(imports + locals)
         // where a clone-then-insert deep-copied every global per file.
-        let globals_parent = Arc::new(
+        let ambient_globals = Arc::new(
             ctx.ambient_global_symbols
                 .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
         );
+        // The scripts' globals sit behind the module's own scope, which is a
+        // declaration space of its own: a module-level `let` never redeclares a
+        // script's.
+        let globals_parent = match shared_state.module_script_globals.as_ref() {
+            Some(script_globals) => Arc::new(crate::symbols::SymbolTable::declaration_scope(
+                Arc::new(
+                    script_globals
+                        .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext)
+                        .with_parent_fallback(ambient_globals),
+                ),
+            )),
+            None => ambient_globals,
+        };
         let mut merged_symbols =
             crate::symbols::SymbolTable::file_check_root(globals_parent.clone());
         if let Some(imported_bindings) = imported_bindings {
@@ -1157,6 +1431,12 @@ pub(super) fn check_program_file(
                 .into_iter()
                 .filter(|name| !module_declared.contains(name)),
         );
+        ctx.set_file_type_only_alias_names(
+            imported_bindings
+                .into_iter()
+                .flat_map(|bindings| bindings.type_only_aliases.iter().cloned())
+                .filter(|(name, _)| !module_declared.contains(name.as_ref())),
+        );
         ctx.set_file_import_names(
             crate::program::ambient::import_bound_names(&parsed_file.statements)
                 .into_iter()
@@ -1188,6 +1468,13 @@ pub(super) fn check_program_file(
             parsed_file.is_module,
             ctx,
         );
+        // The collection backs its table with the lib's globals alone; the
+        // function bodies that fall back to it read the scripts' globals too.
+        let validation_symbols = if shared_state.module_script_globals.is_some() {
+            validation_symbols.with_parent_fallback(globals_parent.clone())
+        } else {
+            validation_symbols
+        };
         let saved_symbols = std::mem::replace(&mut ctx.symbols, validation_symbols);
 
         let validation_start = Instant::now();
@@ -1268,9 +1555,12 @@ pub(super) fn check_program_file(
         ctx.module_value_fallback = None;
 
         if ctx.options.no_unused_locals && ctx.current_file_kind == FileKind::RootSource {
+            let jsx_reads =
+                unused_locals::jsx_factory_reads(&parsed_file.jsx_factory_uses, &ctx.options);
             unused_locals::emit_unused_module_bindings(
                 &parsed_file.statements,
                 &parsed_file.module_reads,
+                &jsx_reads,
                 ctx,
             );
         }
@@ -1379,8 +1669,14 @@ pub(super) fn check_program_file(
         });
     }
 
+    emit_deferred_grammar_diagnostics(ctx);
     let mut diagnostics = std::mem::take(&mut ctx.diagnostics);
-    drop_suppressed_diagnostics(&mut diagnostics, &parsed_file.suppressed_ranges);
+    apply_comment_directives(
+        &mut diagnostics,
+        &parsed_file.comment_directives,
+        !parsed_file.parser_errors.is_empty(),
+        &parsed_file.file_name,
+    );
     let stats = std::mem::take(&mut ctx.stats);
 
     FileCheckResult {

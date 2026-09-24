@@ -30,6 +30,9 @@ pub(crate) fn infer_index_access(
             span: *object_span,
         };
     };
+    if indexes_const_enum_object(object_name, index, &symbol.ty, ctx) {
+        return InferredExpression::Known(Type::ErrorType);
+    }
 
     if let ParsedExpression::NumberLiteral(index_value) = index
         && let Type::OpenTuple(tuple) = symbol.ty.peeled()
@@ -244,11 +247,41 @@ pub(crate) fn infer_tuple_index_access(
     InferredExpression::Unknown
 }
 
+/// tsc's `checkElementAccessExpression`: a const enum object indexed by
+/// anything but a string literal is TS2476 (a grammar diagnostic) and the
+/// access is the error type, so the object's reverse mapping never answers it.
+pub(crate) fn indexes_const_enum_object(
+    object_name: &str,
+    index: &ParsedExpression,
+    object_type: &Type,
+    ctx: &CheckerContext,
+) -> bool {
+    let string_literal_like = match index {
+        ParsedExpression::StringLiteral(_) => true,
+        ParsedExpression::TemplateLiteral { expressions, .. } => expressions.is_empty(),
+        _ => false,
+    };
+    if string_literal_like {
+        return false;
+    }
+    let Some(crate::symbols::TypeDeclarationInfo::Alias(alias)) =
+        ctx.lookup_type_declaration(object_name)
+    else {
+        return false;
+    };
+    // A value of the same name that is not the enum's object shadows it.
+    alias.enum_is_const
+        && alias.enum_name.as_deref() == Some(object_name)
+        && matches!(object_type, Type::Object(object)
+            if object.alias_name.as_deref().and_then(|name| name.strip_prefix("typeof "))
+                == Some(object_name))
+}
+
 /// `E.A` read off an enum's object is the enum member type `E.A`, not the
 /// bare value it holds, so it keeps the enum's nominal identity: `F.X` is not
 /// an `E` even when both are `0`. Only a member whose `E.A` alias resolves to
 /// an enum reference is answered here; anything else falls back to the object.
-fn enum_member_value_type(
+pub(crate) fn enum_member_value_type(
     object: &ParsedExpression,
     property_name: &str,
     symbols: &SymbolTable,
@@ -804,6 +837,13 @@ pub(crate) fn lib_builtin_member_type(
         Type::Boolean | Type::BooleanLiteral(_) => ("Boolean", None),
         Type::BigInt => ("BigInt", None),
         Type::Function(_) => ("Function", None),
+        // tsc's `getPropertyOfType`: an object type with call or construct
+        // signatures reads the members it lacks from the global `Function`.
+        _ if matches!(receiver.peeled(), Type::Object(object)
+            if object.call_signature().is_some() || object.construct_signature().is_some()) =>
+        {
+            ("Function", None)
+        }
         _ => return None,
     };
     let (member_type, optional, scope) = match ctx.lookup_type_declaration(interface_name)? {

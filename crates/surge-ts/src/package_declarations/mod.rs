@@ -14,7 +14,13 @@ use crate::package_resolution::{
 use crate::specifier::{is_external_specifier, is_relative_specifier};
 
 mod helpers;
+mod mode;
 use helpers::*;
+pub(crate) use mode::ImportUsage;
+use mode::{
+    ResolutionMode, default_resolution_mode, resolves_with_import_condition,
+    usage_resolution_mode,
+};
 
 pub struct PackageDeclarationRequest {
     pub specifier: String,
@@ -24,6 +30,20 @@ pub struct PackageDeclarationRequest {
     pub importer_file: PathBuf,
     /// `#alias` specifier resolved through the importer's own `imports` field.
     pub is_imports: bool,
+    pub usage: ImportUsage,
+    /// The usage's resolution mode as `GetConditions` reads it: `import`
+    /// when set, `require` otherwise.
+    pub import_condition: bool,
+}
+
+/// One loader resolution of a bare or `#imports` specifier.
+pub(crate) struct PackageResolution {
+    pub importer: String,
+    pub specifier: String,
+    /// Empty when nothing resolved, so the importer never borrows another
+    /// importer's answer for the same specifier.
+    pub resolved_file: String,
+    pub usage: ImportUsage,
 }
 
 #[derive(Debug, Default)]
@@ -48,7 +68,7 @@ struct PackageEntrypointCacheKey {
     package_name: String,
     subpath: Option<String>,
     is_imports: bool,
-    importer_is_esm: bool,
+    import_condition: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -88,15 +108,14 @@ fn parse_package_specifier(specifier: &str) -> Option<(String, Option<String>)> 
     }
 }
 
-/// Package-declaration resolutions in BFS resolution order:
-/// `(canonical importer file, specifier, canonical resolved file)`.
+/// Package-declaration resolutions in BFS resolution order.
 ///
 /// The same bare specifier may resolve differently from different importers
-/// (nested `node_modules`, `#imports` scopes, self-name imports), so results
-/// are keyed by importer rather than flattened to `specifier → file`. The
-/// ordered `Vec` keeps the project-wide first-resolution fallback map
-/// deterministic when the caller merges.
-pub(crate) type PackageResolutions = Vec<(String, String, String)>;
+/// (nested `node_modules`, `#imports` scopes, self-name imports, resolution
+/// modes), so results are keyed by importer rather than flattened to
+/// `specifier → file`. The ordered `Vec` keeps the project-wide
+/// first-resolution fallback map deterministic when the caller merges.
+pub(crate) type PackageResolutions = Vec<PackageResolution>;
 
 #[allow(dead_code)]
 pub fn resolve_package_declaration_entrypoints(
@@ -105,7 +124,7 @@ pub fn resolve_package_declaration_entrypoints(
     root_dir: &Path,
 ) -> PackageResolutions {
     let mut cache = PackageDeclarationResolverCache::default();
-    let mut scanner = crate::specifier_scan::ModuleSpecifierScanner::new();
+    let mut scanner = crate::specifier_scan::ModuleSpecifierScanner::new(Default::default());
     resolve_package_declaration_entrypoints_with_cache(
         inputs,
         sources,
@@ -126,12 +145,12 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
 ) -> PackageResolutions {
     let mut packages_to_resolve: VecDeque<PackageDeclarationRequest> = VecDeque::new();
     let mut resolutions: PackageResolutions = Vec::new();
-    let mut resolved_packages: HashSet<(String, String)> = HashSet::new();
+    let mut resolved_packages: HashSet<(String, String, ImportUsage)> = HashSet::new();
     let mut known_file_names: HashSet<String> = inputs
         .iter()
         .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
         .collect();
-    let mut queued_specifiers: HashSet<(String, String)> = HashSet::new();
+    let mut queued_specifiers: HashSet<(String, String, ImportUsage)> = HashSet::new();
 
     scanner.prefetch(sources, cache.scanned_sources);
     for index in cache.scanned_sources..sources.len() {
@@ -140,43 +159,52 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
             (file_path.clone(), file_name.clone(), source_text.clone())
         };
         let importer_dir = file_path.parent().unwrap_or(root_dir).to_path_buf();
-        let specifiers = scanner.specifiers(index, &file_name, &source_text);
+        let usages = scanner.usages(index, &file_name, &source_text);
         extract_packages_from_source(
-            &specifiers,
+            &usages,
             &file_path.to_string_lossy(),
             &importer_dir,
             opts,
+            cache,
             &mut packages_to_resolve,
             &mut queued_specifiers,
         );
     }
 
-    // The queue is finite: every (importer file, specifier) pair is enqueued at
-    // most once, and newly loaded files enqueue only their own pairs.
+    // The queue is finite: every (importer file, specifier, usage) triple is
+    // enqueued at most once, and newly loaded files enqueue only their own.
     while let Some(req) = packages_to_resolve.pop_front() {
         let importer_key = canonicalize_if_exists_string(&req.importer_file);
-        if resolved_packages.contains(&(importer_key.clone(), req.specifier.clone())) {
+        let resolved_key = (importer_key.clone(), req.specifier.clone(), req.usage);
+        if resolved_packages.contains(&resolved_key) {
             continue;
         }
 
-        let importer_is_esm = importer_is_esm(&req.importer_file, opts, cache);
         let cache_key = PackageEntrypointCacheKey {
             importer_dir: canonicalize_if_exists_string(&req.importer_dir),
             package_name: req.package_name.clone(),
             subpath: req.subpath.clone(),
             is_imports: req.is_imports,
-            importer_is_esm,
+            import_condition: req.import_condition,
         };
 
         let resolution = if let Some(cached) = cache.entrypoint_cache.get(&cache_key) {
             cached.clone()
         } else {
-            let resolved = resolve_package_entrypoint(&req, opts, importer_is_esm, cache, root_dir);
+            let resolved =
+                resolve_package_entrypoint(&req, opts, req.import_condition, cache, root_dir);
             cache.entrypoint_cache.insert(cache_key, resolved.clone());
             resolved
         };
 
         let Some(resolution) = resolution else {
+            resolved_packages.insert(resolved_key);
+            resolutions.push(PackageResolution {
+                importer: importer_key,
+                specifier: req.specifier.clone(),
+                resolved_file: String::new(),
+                usage: req.usage,
+            });
             continue;
         };
 
@@ -187,12 +215,13 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
                 };
 
                 let normalized_file_name = canonicalize_if_exists_string(&path);
-                resolved_packages.insert((importer_key.clone(), req.specifier.clone()));
-                resolutions.push((
-                    importer_key.clone(),
-                    req.specifier.clone(),
-                    normalized_file_name.clone(),
-                ));
+                resolved_packages.insert(resolved_key);
+                resolutions.push(PackageResolution {
+                    importer: importer_key.clone(),
+                    specifier: req.specifier.clone(),
+                    resolved_file: normalized_file_name.clone(),
+                    usage: req.usage,
+                });
 
                 if !known_file_names.contains(&normalized_file_name) {
                     let read_start = std::time::Instant::now();
@@ -216,14 +245,14 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
                     ));
 
                     let new_index = sources.len() - 1;
-                    let specifiers =
-                        scanner.specifiers(new_index, &normalized_file_name, &source_text);
+                    let usages = scanner.usages(new_index, &normalized_file_name, &source_text);
                     let new_importer_dir = path.parent().unwrap_or(root_dir).to_path_buf();
                     extract_packages_from_source(
-                        &specifiers,
+                        &usages,
                         &normalized_file_name,
                         &new_importer_dir,
                         opts,
+                        cache,
                         &mut packages_to_resolve,
                         &mut queued_specifiers,
                     );
@@ -232,8 +261,31 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
             PackageEntrypointKind::RuntimeOnly => {
                 if let Ok(path) = resolution.path.canonicalize() {
                     let file_name = canonicalize_if_exists_string(&path);
-                    resolved_packages.insert((importer_key.clone(), req.specifier.clone()));
-                    resolutions.push((importer_key, req.specifier.clone(), file_name));
+                    let is_json = file_name.to_ascii_lowercase().ends_with(".json");
+                    resolved_packages.insert(resolved_key);
+                    resolutions.push(PackageResolution {
+                        importer: importer_key,
+                        specifier: req.specifier.clone(),
+                        resolved_file: if !is_json || opts.resolve_json_module {
+                            file_name.clone()
+                        } else {
+                            String::new()
+                        },
+                        usage: req.usage,
+                    });
+                    // A `.json` module joins the program like the relative
+                    // ones the import graph loads.
+                    if is_json
+                        && opts.resolve_json_module
+                        && known_file_names.insert(file_name.clone())
+                        && let Ok(source_text) = std::fs::read_to_string(&path)
+                    {
+                        inputs.push(SourceFileInput {
+                            file_name: file_name.clone(),
+                            source_text: source_text.clone(),
+                        });
+                        sources.push((path, file_name, source_text));
+                    }
                 }
             }
         }
@@ -245,6 +297,132 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
     cache.scanned_sources = sources.len();
 
     resolutions
+}
+
+fn cached_package_entrypoint(
+    req: &PackageDeclarationRequest,
+    opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
+    root_dir: &Path,
+) -> Option<PackageEntrypointResolution> {
+    let cache_key = PackageEntrypointCacheKey {
+        importer_dir: canonicalize_if_exists_string(&req.importer_dir),
+        package_name: req.package_name.clone(),
+        subpath: req.subpath.clone(),
+        is_imports: req.is_imports,
+        import_condition: req.import_condition,
+    };
+    if let Some(cached) = cache.entrypoint_cache.get(&cache_key) {
+        return cached.clone();
+    }
+    let resolved = resolve_package_entrypoint(req, opts, req.import_condition, cache, root_dir);
+    cache.entrypoint_cache.insert(cache_key, resolved.clone());
+    resolved
+}
+
+/// Resolves each source module file's bare `declare module "m"` augmentation
+/// names the way an import of `m` from that file resolves, without loading
+/// anything: tsc resolves augmentation names alongside imports but adds only
+/// the imports' targets to the program, so an augmentation whose target
+/// nothing imports is TS2664.
+pub(crate) fn resolve_module_augmentation_specifiers(
+    sources: &[(PathBuf, String, String)],
+    root_dir: &Path,
+    opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
+    scanner: &crate::specifier_scan::ModuleSpecifierScanner,
+) -> PackageResolutions {
+    let mut requests: VecDeque<PackageDeclarationRequest> = VecDeque::new();
+    let mut queued_specifiers: HashSet<(String, String, ImportUsage)> = HashSet::new();
+    for (index, specifiers) in scanner.augmentation_specifiers() {
+        let Some((file_path, file_name, _)) = sources.get(index) else {
+            continue;
+        };
+        if is_declaration_file_path_str(file_name) {
+            continue;
+        }
+        let importer_dir = file_path.parent().unwrap_or(root_dir).to_path_buf();
+        let usages: Vec<crate::specifier_scan::ModuleUsage> = specifiers
+            .iter()
+            .map(|specifier| crate::specifier_scan::ModuleUsage {
+                specifier: specifier.clone(),
+                import_equals: false,
+                resolution_mode: None,
+            })
+            .collect();
+        extract_packages_from_source(
+            &usages,
+            &file_path.to_string_lossy(),
+            &importer_dir,
+            opts,
+            cache,
+            &mut requests,
+            &mut queued_specifiers,
+        );
+    }
+
+    let mut resolutions: PackageResolutions = Vec::new();
+    for req in requests {
+        let Some(resolution) = cached_package_entrypoint(&req, opts, cache, root_dir) else {
+            continue;
+        };
+        let Ok(path) = resolution.path.canonicalize() else {
+            continue;
+        };
+        resolutions.push(PackageResolution {
+            importer: canonicalize_if_exists_string(&req.importer_file),
+            specifier: req.specifier,
+            resolved_file: canonicalize_if_exists_string(&path),
+            usage: req.usage,
+        });
+    }
+    resolutions
+}
+
+/// tsc's `pathForLibFile` under `libReplacement`: `lib.dom.iterable.d.ts` is
+/// whatever `@typescript/lib-dom/iterable` resolves to from the config
+/// directory in CommonJS mode (`getLibraryNameFromLibFileName`,
+/// `resolveLibrary`), and stays the bundled lib when nothing does.
+pub(crate) fn resolve_lib_replacement(
+    normalized_name: &str,
+    config_dir: &Path,
+    opts: &ResolverOptions,
+    cache: &mut PackageDeclarationResolverCache,
+) -> Option<PathBuf> {
+    let library_name = lib_replacement_library_name(normalized_name);
+    let (package_name, subpath) = parse_package_specifier(&library_name)?;
+    let import_condition = resolves_with_import_condition(ResolutionMode::CommonJs, opts);
+    let req = PackageDeclarationRequest {
+        specifier: library_name,
+        package_name,
+        subpath,
+        importer_dir: config_dir.to_path_buf(),
+        importer_file: config_dir
+            .join(format!("__lib_node_modules_lookup_lib.{normalized_name}.d.ts__.ts")),
+        is_imports: false,
+        usage: ImportUsage::Declaration,
+        import_condition,
+    };
+    let resolution = resolve_package_entrypoint(&req, opts, import_condition, cache, config_dir)?;
+    (resolution.kind == PackageEntrypointKind::Declaration)
+        .then(|| resolution.path.canonicalize().unwrap_or(resolution.path))
+}
+
+/// The package a lib's replacement comes from: `@typescript/lib-dom` for
+/// `dom.iterable`.
+pub(crate) fn lib_replacement_package_name(normalized_name: &str) -> Option<String> {
+    parse_package_specifier(&lib_replacement_library_name(normalized_name))
+        .map(|(package_name, _)| package_name)
+}
+
+fn lib_replacement_library_name(normalized_name: &str) -> String {
+    let mut components = normalized_name.split('.');
+    let mut library_name = format!("@typescript/lib-{}", components.next().unwrap_or_default());
+    for (index, component) in components.enumerate() {
+        library_name.push(if index == 0 { '/' } else { '-' });
+        library_name.push_str(component);
+    }
+    library_name
 }
 
 /// Outcome of resolving the project's configured type packages.
@@ -330,9 +508,18 @@ pub(crate) fn resolve_type_packages(
         .map(|input| canonicalize_if_exists_string(Path::new(&input.file_name)))
         .collect();
 
+    // tsc resolves `types` entries with no resolution mode.
+    let import_condition = resolves_with_import_condition(ResolutionMode::None, opts);
     for (name, explicit) in directives {
         let resolved = resolve_type_directive_in_roots(&name, &roots, cache).or_else(|| {
-            resolve_type_directive_in_node_modules(&name, root_dir, root_dir, opts, cache)
+            resolve_type_directive_in_node_modules(
+                &name,
+                root_dir,
+                root_dir,
+                import_condition,
+                opts,
+                cache,
+            )
         });
         match resolved {
             Some(path) => {
@@ -378,9 +565,10 @@ pub(crate) struct ReferenceTypeDirectiveResolver {
     roots: Vec<PathBuf>,
     root_dir: PathBuf,
     scanned_files: HashSet<String>,
-    // The secondary `node_modules` lookup walks up from the referencing file, so
-    // the same directive name can resolve differently per directory.
-    resolution_cache: HashMap<(PathBuf, String), Option<PathBuf>>,
+    // The secondary `node_modules` lookup walks up from the referencing file
+    // in the directive's mode, so the same directive name can resolve
+    // differently per directory and per mode.
+    resolution_cache: HashMap<(PathBuf, String, bool), Option<PathBuf>>,
     effective_type_names: Vec<String>,
     seen_effective: HashSet<String>,
     missing: Vec<MissingReferenceTypeDirective>,
@@ -486,7 +674,14 @@ impl ReferenceTypeDirectiveResolver {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| self.root_dir.clone());
-        let cache_key = (lookup_dir.clone(), name.clone());
+        // tsc's `getModeForTypeReferenceDirectiveInFile`.
+        let mode = match directive.resolution_mode {
+            Some(surge_ts_syntax::ResolutionModeOverride::Import) => ResolutionMode::Esm,
+            Some(surge_ts_syntax::ResolutionModeOverride::Require) => ResolutionMode::CommonJs,
+            None => default_resolution_mode(Path::new(file_name), opts, cache),
+        };
+        let import_condition = resolves_with_import_condition(mode, opts);
+        let cache_key = (lookup_dir.clone(), name.clone(), import_condition);
         let resolved = match self.resolution_cache.get(&cache_key) {
             Some(cached) => cached.clone(),
             None => {
@@ -498,6 +693,7 @@ impl ReferenceTypeDirectiveResolver {
                             &name,
                             &lookup_dir,
                             &self.root_dir,
+                            import_condition,
                             opts,
                             cache,
                         )

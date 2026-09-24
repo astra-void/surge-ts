@@ -35,29 +35,51 @@ fn quoted_module_specifier(module_specifier: &str) -> String {
 /// Diagnostic for an unresolved module specifier, mirroring tsc: a Node
 /// built-in name gets the install-@types/node hint via
 /// `cannot_resolve_module_name_error_for_specific_module`; anything else falls
-/// back to the generic TS2307. Side-effect imports never reach here — they use
-/// TS2882.
+/// back to the generic TS2307.
 fn unresolved_module_diagnostic(ctx: &CheckerContext, module_specifier: &str) -> Diagnostic {
+    unresolved_module_diagnostic_in_mode(ctx, module_specifier, None)
+}
+
+/// [`unresolved_module_diagnostic`] for a usage whose resolution mode can
+/// differ from its file's: tsc keys the extension hint on the usage's mode.
+fn unresolved_module_diagnostic_in_mode(
+    ctx: &CheckerContext,
+    module_specifier: &str,
+    resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
+) -> Diagnostic {
+    unresolved_module_resolution_diagnostic(ctx, module_specifier, resolution_mode)
+        .or_else(|| cannot_resolve_module_name_error_for_specific_module(ctx, module_specifier))
+        .unwrap_or_else(|| Diagnostic::ts2307(module_specifier, ctx.file_name.clone()))
+}
+
+/// What tsc's `resolveExternalModule` reports for an unresolved module ahead
+/// of the not-found message its caller chose (TS2307, the Node built-in hint,
+/// or a side-effect import's TS2882).
+fn unresolved_module_resolution_diagnostic(
+    ctx: &CheckerContext,
+    module_specifier: &str,
+    resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
+) -> Option<Diagnostic> {
     // A `.json` specifier under `resolveJsonModule: false` is not a missing
     // module — it is a module the option refuses to resolve, and tsc says so
     // with its own code and hint.
     if !ctx.options.resolve_json_module && surge_ts_syntax::is_json_file_name(module_specifier) {
-        return Diagnostic::ts2732(module_specifier, ctx.file_name.clone());
+        return Some(Diagnostic::ts2732(module_specifier, ctx.file_name.clone()));
     }
 
     if is_relative_specifier(module_specifier)
-        && is_unresolvable_extensionless_esm_import(&ctx.file_name, module_specifier)
+        && relative_resolution_is_esm(&ctx.file_name, resolution_mode)
+        && is_extensionless_relative_specifier(module_specifier)
     {
-        return match suggested_import_extension(ctx, module_specifier) {
+        return Some(match suggested_import_extension(ctx, module_specifier) {
             Some(extension) => {
                 Diagnostic::ts2835(&format!("{module_specifier}{extension}"), ctx.file_name.clone())
             }
             None => Diagnostic::ts2834(ctx.file_name.clone()),
-        };
+        });
     }
 
-    cannot_resolve_module_name_error_for_specific_module(ctx, module_specifier)
-        .unwrap_or_else(|| Diagnostic::ts2307(module_specifier, ctx.file_name.clone()))
+    None
 }
 
 /// tsc's `getSuggestedImportExtension`: the output extension of the file the
@@ -85,51 +107,59 @@ fn suggested_import_extension(ctx: &CheckerContext, module_specifier: &str) -> O
     .map(|(_, output)| output)
 }
 
-/// A relative specifier that names an *existing* JavaScript file with no
-/// adjacent declaration file is resolved by tsc — it is just untyped, which is
-/// TS7016 under `noImplicitAny` and silent otherwise. Reporting TS2307 there
-/// says the module is missing, which it is not. Only explicit `.js`/`.mjs`/
-/// `.cjs`/`.jsx` specifiers are recognized; extensionless resolution stays with
-/// the module loader.
-fn untyped_javascript_module_path(ctx: &CheckerContext, module_specifier: &str) -> Option<String> {
-    if !module_specifier.starts_with('.') {
+/// The JavaScript file tsc resolves `module_specifier` to when no TypeScript
+/// or declaration file answers it; the loader records where the resolver's
+/// JavaScript fallback lands, for packages and relative paths alike.
+fn javascript_module_resolution(
+    ctx: &CheckerContext,
+    module_specifier: &str,
+    resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
+) -> Option<String> {
+    if is_relative_specifier(module_specifier)
+        && relative_resolution_is_esm(&ctx.file_name, resolution_mode)
+        && is_extensionless_relative_specifier(module_specifier)
+    {
         return None;
     }
-    let extension = Path::new(module_specifier).extension()?.to_str()?;
-    if !matches!(extension, "js" | "mjs" | "cjs" | "jsx") {
-        return None;
-    }
-    let resolved = Path::new(ctx.file_name.as_str())
-        .parent()?
-        .join(module_specifier);
-    let resolved = canonicalize_if_exists_string(&resolved);
-    if !Path::new(&resolved).is_file() {
-        return None;
-    }
-    let declaration = Path::new(&resolved).with_extension(match extension {
-        "mjs" => "d.mts",
-        "cjs" => "d.cts",
-        _ => "d.ts",
-    });
-    if declaration.is_file() {
-        return None;
-    }
-    Some(resolved)
+    let resolved = ctx
+        .options
+        .resolved_module_for(&ctx.file_name, module_specifier)?;
+    let lower = resolved.to_ascii_lowercase();
+    [".js", ".jsx", ".mjs", ".cjs"]
+        .into_iter()
+        .any(|extension| lower.ends_with(extension))
+        .then(|| resolved.clone())
 }
 
-/// Pushes the right diagnostic for a specifier the module loader did not
-/// resolve: TS7016 (or silence) for an existing untyped JavaScript file, and the
-/// caller's unresolved-module diagnostic otherwise.
+/// tsc's `resolveExternalModule` for a module that resolves to a JavaScript
+/// file outside the program. The module exists, so it is never TS2307:
+/// `GetResolutionDiagnostic` rejects a `.jsx` file while `jsx` is unset
+/// (TS6142), and otherwise the module is untyped — TS7016 under
+/// `noImplicitAny`, nothing without it. Under `allowJs`, tsc makes a
+/// JavaScript file outside `node_modules` a program file, so its import
+/// reports nothing either.
 fn push_untyped_javascript_module_diagnostic(
     ctx: &mut CheckerContext,
     module_specifier: &str,
+    resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
     span: Option<TextSpan>,
 ) -> bool {
-    let Some(resolved) = untyped_javascript_module_path(ctx, module_specifier) else {
+    let Some(resolved) = javascript_module_resolution(ctx, module_specifier, resolution_mode)
+    else {
         return false;
     };
-    if ctx.options.no_implicit_any {
-        let mut diagnostic = Diagnostic::ts7016(module_specifier, &resolved, ctx.file_name.clone());
+    let is_program_file_in_tsc = ctx.options.allow_js
+        && !resolved.contains("/node_modules/")
+        && !resolved.contains("\\node_modules\\");
+    let diagnostic = if resolved.to_ascii_lowercase().ends_with(".jsx") && !ctx.options.jsx_configured
+    {
+        Some(Diagnostic::ts6142(module_specifier, &resolved, ctx.file_name.clone()))
+    } else if ctx.options.no_implicit_any && !is_program_file_in_tsc {
+        Some(Diagnostic::ts7016(module_specifier, &resolved, ctx.file_name.clone()))
+    } else {
+        None
+    };
+    if let Some(mut diagnostic) = diagnostic {
         if let Some(span) = span {
             diagnostic = diagnostic.with_span(convert_span(span));
         }
@@ -143,7 +173,8 @@ pub(crate) fn emit_unresolved_export_module_diagnostic(
     module_specifier: &str,
     module_specifier_span: Option<TextSpan>,
 ) {
-    if push_untyped_javascript_module_diagnostic(ctx, module_specifier, module_specifier_span) {
+    if push_untyped_javascript_module_diagnostic(ctx, module_specifier, None, module_specifier_span)
+    {
         return;
     }
     let mut diagnostic = unresolved_module_diagnostic(ctx, module_specifier);
@@ -159,10 +190,12 @@ pub(crate) fn emit_unresolved_module_diagnostic(
     ctx: &mut CheckerContext,
     import: &ParsedImportDeclaration,
 ) {
+    let resolution_mode = import_resolution_mode(import);
     if !matches!(import.kind, ParsedImportKind::SideEffect)
         && push_untyped_javascript_module_diagnostic(
             ctx,
             &import.module_specifier,
+            resolution_mode,
             import.module_specifier_span.or(import.span),
         )
     {
@@ -170,9 +203,12 @@ pub(crate) fn emit_unresolved_module_diagnostic(
     }
     let mut diagnostic = match &import.kind {
         ParsedImportKind::SideEffect => {
-            Diagnostic::ts2882(&import.module_specifier, ctx.file_name.clone())
+            unresolved_module_resolution_diagnostic(ctx, &import.module_specifier, resolution_mode)
+                .unwrap_or_else(|| {
+                    Diagnostic::ts2882(&import.module_specifier, ctx.file_name.clone())
+                })
         }
-        _ => unresolved_module_diagnostic(ctx, &import.module_specifier),
+        _ => unresolved_module_diagnostic_in_mode(ctx, &import.module_specifier, resolution_mode),
     };
 
     if let Some(span) = import.module_specifier_span.or(import.span) {
@@ -582,12 +618,32 @@ pub(crate) fn allows_synthetic_default_import(
     false
 }
 
+/// Whether `export { name }` would resolve `name` in the global scope, or name
+/// a primitive type.
+pub(crate) fn is_global_scope_name(ctx: &CheckerContext, name: &str) -> bool {
+    matches!(
+        name,
+        "any" | "string" | "number" | "boolean" | "never" | "unknown" | "undefined" | "globalThis"
+    ) || ctx.ambient_global_symbols.get(name).is_some()
+        || ctx.ambient_global_type_declarations.get(name).is_some()
+        || ctx.namespace_registry.is_global(name)
+}
+
+/// tsc's `checkExportSpecifier` on `export { x }` with no module specifier:
+/// a name that resolves to a global-scope declaration (a lib or script
+/// global, `undefined`, `globalThis`) is TS2661, as is a primitive type name
+/// (`checkAndReportErrorForExportingPrimitiveType`); otherwise the name is
+/// simply not found.
 pub(crate) fn push_unresolved_export_diagnostic(
     ctx: &mut CheckerContext,
     local_name: &str,
     name_span: Option<TextSpan>,
 ) {
-    let mut diagnostic = Diagnostic::ts2304(local_name, ctx.file_name.clone());
+    let mut diagnostic = if is_global_scope_name(ctx, local_name) {
+        Diagnostic::ts2661(local_name, ctx.file_name.clone())
+    } else {
+        Diagnostic::ts2304(local_name, ctx.file_name.clone())
+    };
 
     if let Some(span) = name_span {
         diagnostic = diagnostic.with_span(convert_span(span));

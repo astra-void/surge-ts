@@ -35,6 +35,8 @@ npm-debug.log*
 # them), so re-include them — including dist/ dirs inside — but keep OS cruft out.
 !tests/compat-projects/**/node_modules/
 !tests/compat-projects/**/node_modules/**
+# Untyped-module fixtures import hand-written JavaScript beside their sources.
+!tests/compat-projects/untyped-javascript-module-*/**/*.js
 tests/compat-projects/**/.DS_Store
 .serena/
 

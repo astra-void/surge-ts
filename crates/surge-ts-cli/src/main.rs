@@ -500,6 +500,8 @@ fn run_single_file_mode(
             no_implicit_this: no_implicit_any,
             module_emit: surge_ts_checker::ModuleEmitKind::ES2022,
             use_define_for_class_fields: true,
+            target_es2022: true,
+            no_emit: false,
             node_module_resolution: false,
             esm_module_files: Default::default(),
             strict_null_checks: true,
@@ -516,6 +518,8 @@ fn run_single_file_mode(
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,
+            report_unreachable_code: false,
+            allow_unused_labels: None,
             no_lib,
             skip_lib_check: false,
             stub_external_modules,
@@ -524,8 +528,12 @@ fn run_single_file_mode(
             types: Vec::new(),
             jsx_automatic_runtime: false,
             jsx_classic_react: false,
+            jsx_emit_none: false,
             allow_umd_global_access: false,
             resolve_json_module: true,
+            allow_js: false,
+            jsx_configured: false,
+            jsx_factory_names: Default::default(),
             diagnostic_profile,
         })
         .check_source(&source_text, &file_name);
@@ -694,7 +702,7 @@ fn run_project_mode(
     if loaded.files.is_empty() {
         // A removed option is a config error in its own right; tsc reports it
         // even when the project resolves to no files.
-        let mut diagnostics = removed_option_diagnostics(loaded);
+        let mut diagnostics = surge_ts::removed_option_diagnostics(loaded);
         diagnostics.push(project_has_no_source_files_diagnostic(loaded));
         let stats = surge_ts_checker::CompatibilityStats::default();
         let exit_code = render_project_mode_output(
@@ -755,15 +763,9 @@ fn run_project_mode(
         merge_project_timings(&mut timings, &result.timings);
     }
 
-    // tsc reports removed compiler options against the config file itself, so
-    // they lead the run's diagnostics rather than joining a source file's.
-    let mut diagnostics = removed_option_diagnostics(loaded);
-    let config_only_diagnostics = diagnostics.len();
-    diagnostics.extend(result.diagnostics.iter().cloned());
-
     let exit_code = render_project_mode_output(
         loaded,
-        &diagnostics,
+        &result.diagnostics,
         &result.sources,
         &result.stats,
         show_spans,
@@ -781,7 +783,7 @@ fn run_project_mode(
     if let Err(error) = run_report::emit_run_reports(
         &report_request,
         &result.sources,
-        result.diagnostics.len() + config_only_diagnostics,
+        result.diagnostics.len(),
         jobs,
         &timings,
     ) {
@@ -1302,27 +1304,6 @@ fn config_backed_sources(
     extended.push((loaded.config_path.clone(), file_name, source_text));
     extended.extend(sources.iter().cloned());
     Some(extended)
-}
-
-/// `TS5102`/`TS5108` for every compiler option TypeScript 7 removed, spanned
-/// inside the config file the way tsc spans them (the value node for the
-/// `name=value` form, the key node otherwise).
-fn removed_option_diagnostics(loaded: &surge_ts_config::LoadedTsConfig) -> Vec<Diagnostic> {
-    let file_name = loaded.config_path.display().to_string();
-    loaded
-        .removed_options
-        .iter()
-        .map(|option| {
-            let diagnostic = match &option.value {
-                Some(value) => Diagnostic::ts5108(&option.name, value, file_name.clone()),
-                None => Diagnostic::ts5102(&option.name, file_name.clone()),
-            };
-            diagnostic.with_span(surge_ts_diagnostics::TextSpan {
-                start: option.start,
-                end: option.end,
-            })
-        })
-        .collect()
 }
 
 fn project_has_no_source_files_diagnostic(loaded: &surge_ts_config::LoadedTsConfig) -> Diagnostic {

@@ -7,6 +7,7 @@ use surge_ts_syntax::ParsedExpression;
 
 mod arrayness;
 mod discriminant;
+mod equality;
 mod instanceof;
 mod literal_equality;
 mod nullish;
@@ -16,6 +17,7 @@ mod typeof_guard;
 
 pub(super) use arrayness::*;
 pub(super) use discriminant::*;
+pub(super) use equality::*;
 pub(super) use instanceof::*;
 pub(super) use literal_equality::*;
 pub(crate) use nullish::*;

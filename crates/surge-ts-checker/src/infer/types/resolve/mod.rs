@@ -315,6 +315,20 @@ pub(crate) fn resolve_parsed_type(
                     ctx,
                 );
             }
+            // The name resolver refuses a property's read of a constructor
+            // local before looking any further out (TS2844 in a type position).
+            if let Some(span) = type_of.name_span
+                && let Some(property) =
+                    crate::program::property_with_invalid_initializer(&type_of.name, span, ctx)
+            {
+                let diagnostic =
+                    property.invalid_reference_diagnostic(&type_of.name, span, ctx.file_name.clone());
+                ctx.push_utility_diagnostic_once(diagnostic.with_span(convert_span(span)));
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: true,
+                };
+            }
             // A type query reads the value, so a UMD-global name reports here the
             // same way it would in an expression.
             let umd_global = crate::checks::emit_umd_global_reference_diagnostic(
@@ -458,8 +472,11 @@ pub(crate) fn resolve_parsed_type(
                         had_error: true,
                     };
                 }
-                let mut diagnostic =
-                    crate::checks::expr::unresolved_type_query_diagnostic(&type_of.name, ctx);
+                let mut diagnostic = crate::checks::expr::unresolved_type_query_diagnostic(
+                    &type_of.name,
+                    type_of.name_span,
+                    ctx,
+                );
                 if let Some(span) = type_of.name_span {
                     diagnostic = diagnostic.with_span(convert_span(span));
                 }

@@ -40,7 +40,8 @@ fn check_single_source(
     options: crate::context::CheckerOptions,
 ) -> Vec<Diagnostic> {
     let parsed = parse_source(source_text, file_name);
-    let suppressed_ranges = parsed.suppressed_ranges.clone();
+    let comment_directives = parsed.comment_directives.clone();
+    let has_parse_errors = !parsed.parser_errors.is_empty();
     let file_name = parsed.file_name;
     let mut file_kinds = surge_ts_types::fx::FxHashMap::default();
     file_kinds.insert(file_name.clone(), classify_file_kind(&file_name));
@@ -74,10 +75,21 @@ fn check_single_source(
     crate::program::emit_grammar_diagnostics(&parsed.grammar_diagnostics, &mut ctx);
     ctx.parenthesized_expressions = parsed.parenthesized_expressions.into();
     ctx.let_assignments = parsed.let_assignments.into();
+    ctx.jsx_factory_uses = parsed.jsx_factory_uses.clone();
+    if !classify_file_kind(&file_name).is_declaration() {
+        let properties =
+            crate::program::file_constructor_local_properties(&parsed.statements, &ctx.options);
+        if !properties.is_empty() {
+            let mut by_file = surge_ts_types::fx::FxHashMap::default();
+            by_file.insert(std::sync::Arc::from(file_name.as_str()), properties);
+            ctx.constructor_local_properties = std::sync::Arc::new(by_file);
+        }
+    }
 
     ctx.merge_script_interfaces_with_globals = !parsed.is_module;
     collect_type_declarations(&parsed.statements, &mut ctx);
     ctx.merge_script_interfaces_with_globals = false;
+    crate::program::emit_deferred_grammar_diagnostics(&mut ctx);
     collect_global_augmentations_from_statements(&parsed.statements, &mut ctx);
     // Ambient value lowering (`declare var Document: {…}`) already resolved some
     // of these names against the lib-only declarations. The file's own
@@ -127,9 +139,14 @@ fn check_single_source(
     ctx.module_value_fallback = None;
 
     let mut diagnostics = ctx.finish();
-    // Program mode drops these in `check_files`; the single-file driver has no
-    // such stage, so an `@ts-expect-error` suppressed nothing here.
-    crate::program::drop_suppressed_diagnostics(&mut diagnostics, &suppressed_ranges);
+    // Program mode applies these in `check_files`; the single-file driver has
+    // no such stage.
+    crate::program::apply_comment_directives(
+        &mut diagnostics,
+        &comment_directives,
+        has_parse_errors,
+        &file_name,
+    );
     diagnostics
 }
 
@@ -206,11 +223,12 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
                 file_kind: FileKind::GeneratedDeclaration,
                 module_reads: parsed.module_reads,
                 definite_writes: parsed.definite_writes,
-                suppressed_ranges: parsed.suppressed_ranges,
+                comment_directives: parsed.comment_directives,
                 grammar_diagnostics: Vec::new(),
                 parenthesized_expressions: Default::default(),
                 let_assignments: Default::default(),
                 json_module_type: None,
+                jsx_factory_uses: parsed.jsx_factory_uses,
             }
         })
         .collect();
@@ -246,6 +264,7 @@ pub(crate) fn collect_global_augmentations(
                 block_tables.push(collect_global_augmentation_block_types(
                     block_statements,
                     enclosing_statements,
+                    &parsed_file.statements,
                     ctx,
                 ));
             },
@@ -265,8 +284,8 @@ pub(crate) fn lower_global_augmentation_values_from_statements(
     statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
 ) {
-    for_each_global_augmentation_block(statements, ctx, |block_statements, _enclosing, ctx| {
-        lower_global_augmentation_values(block_statements, ctx)
+    for_each_global_augmentation_block(statements, ctx, |block_statements, enclosing, ctx| {
+        lower_global_augmentation_values(block_statements, enclosing.unwrap_or(statements), ctx)
     });
 }
 
@@ -284,6 +303,7 @@ pub(crate) fn collect_global_augmentations_from_statements(
             block_tables.push(collect_global_augmentation_block_types(
                 block_statements,
                 enclosing_statements,
+                statements,
                 ctx,
             ));
         },
@@ -292,8 +312,8 @@ pub(crate) fn collect_global_augmentations_from_statements(
         std::sync::Arc::make_mut(&mut ctx.ambient_global_type_declarations),
         &block_tables,
     );
-    for_each_global_augmentation_block(statements, ctx, |block_statements, _enclosing, ctx| {
-        lower_global_augmentation_values(block_statements, ctx)
+    for_each_global_augmentation_block(statements, ctx, |block_statements, enclosing, ctx| {
+        lower_global_augmentation_values(block_statements, enclosing.unwrap_or(statements), ctx)
     });
 }
 
@@ -351,10 +371,12 @@ fn for_each_global_augmentation_block(
 /// Collect one `declare global` block's type declarations into a fresh table, so
 /// the result can later be merged into the ambient table by sharing payload
 /// handles. The caller merges every block's table together in one pass
-/// (see [`collect_global_augmentations`]).
+/// (see [`collect_global_augmentations`]). `file_statements` are those of the
+/// file the block is written in.
 fn collect_global_augmentation_block_types(
     block_statements: &[ParsedStatement],
     enclosing_statements: Option<&[ParsedStatement]>,
+    file_statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
 ) -> crate::symbols::TypeDeclarationTable {
     let saved_type_declarations = std::mem::replace(
@@ -387,11 +409,109 @@ fn collect_global_augmentation_block_types(
             );
         }
     }
+    publish_global_augmentation_alias_types(
+        block_statements,
+        enclosing_statements.unwrap_or(file_statements),
+        &mut block_table,
+        ctx,
+    );
 
     ctx.type_declarations = saved_type_declarations;
     ctx.type_declaration_scope = saved_type_declaration_scope;
 
     block_table
+}
+
+/// `export import X = N.M` in a `declare global` block merges `X` into the
+/// globals as an alias, and an alias carries every meaning of its entity: the
+/// entity's type and its namespace members are global types under `X`, as its
+/// value is a global value ([`lower_global_augmentation_values`]). The entity
+/// resolves from the block outwards the way the value does: the block, then
+/// the file or ambient module it is written in, then the globals.
+fn publish_global_augmentation_alias_types(
+    block_statements: &[ParsedStatement],
+    enclosing_statements: &[ParsedStatement],
+    block_table: &mut crate::symbols::TypeDeclarationTable,
+    ctx: &mut CheckerContext,
+) {
+    use crate::symbols::{TypeDeclarationScope, TypeDeclarationTable};
+
+    let aliases: Vec<(&str, &str)> = block_statements
+        .iter()
+        .filter_map(|statement| match crate::modules::peel_exported_statement(statement) {
+            ParsedStatement::ImportDeclaration(import) => match &import.kind {
+                surge_ts_syntax::ParsedImportKind::EntityAlias {
+                    local_name, target, ..
+                } => Some((local_name.as_str(), target.as_str())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    if aliases.is_empty() {
+        return;
+    }
+    let names_entity = |table: &TypeDeclarationTable, target: &str| {
+        let prefix = format!("{target}.");
+        table.get(target).is_some()
+            || table.iter().any(|(key, _)| key.starts_with(prefix.as_str()))
+    };
+    let mut enclosing: Option<(Arc<TypeDeclarationTable>, Arc<TypeDeclarationScope>)> = None;
+    for (local, target) in aliases {
+        let entries = if names_entity(block_table, target) {
+            entity_alias_type_entries(block_table, target, local, None)
+        } else {
+            let (enclosing_table, enclosing_scope) = enclosing.get_or_insert_with(|| {
+                let saved = std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+                let diagnostics_before = ctx.diagnostics().len();
+                collect_type_declarations(enclosing_statements, ctx);
+                ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+                let table = Arc::new(std::mem::replace(&mut ctx.type_declarations, saved));
+                let scope = Arc::new(TypeDeclarationScope::new(vec![table.clone()]));
+                (table, scope)
+            });
+            if names_entity(enclosing_table, target) {
+                entity_alias_type_entries(enclosing_table, target, local, Some(&*enclosing_scope))
+            } else {
+                entity_alias_type_entries(&ctx.ambient_global_type_declarations, target, local, None)
+            }
+        };
+        for (name, declaration) in entries {
+            let _ = block_table.insert(name, declaration);
+        }
+    }
+}
+
+/// The type declarations the entity path `target` names in `source`, keyed
+/// under the alias `local`: the entity itself and its qualified members.
+fn entity_alias_type_entries(
+    source: &crate::symbols::TypeDeclarationTable,
+    target: &str,
+    local: &str,
+    scope: Option<&Arc<crate::symbols::TypeDeclarationScope>>,
+) -> Vec<(String, TypeDeclarationInfo)> {
+    let mut entries = Vec::new();
+    if let Some(declaration) = source.get(target) {
+        let declaration =
+            crate::modules::exports::attach_type_resolution_scope_if_missing(declaration.clone(), scope);
+        entries.push((
+            local.to_string(),
+            crate::modules::exports::rename_type_declaration(declaration, local.to_string()),
+        ));
+    }
+    let prefix = format!("{target}.");
+    for (key, declaration) in source.iter() {
+        if let Some(member) = key.strip_prefix(prefix.as_str()) {
+            entries.push((
+                format!("{local}.{member}"),
+                crate::modules::exports::attach_type_resolution_scope_if_missing(
+                    declaration.clone(),
+                    scope,
+                ),
+            ));
+        }
+    }
+    entries
 }
 
 /// A global function re-declared by another declaration file is an *overload*
@@ -416,8 +536,11 @@ pub(crate) fn merged_global_function_type(
     }
 }
 
+/// `enclosing_statements` are the declarations of the file, or of the ambient
+/// module, the block is written in.
 fn lower_global_augmentation_values(
     block_statements: &[ParsedStatement],
+    enclosing_statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
 ) {
     // Value types resolve against the caller's current type environment (during
@@ -555,7 +678,88 @@ fn lower_global_augmentation_values(
         }
     }
 
+    // A class in the block is a global value as well as a global type, the
+    // way a script's `declare class` is.
+    for stmt in block_statements {
+        if let ParsedStatement::ClassDeclaration(class) =
+            crate::modules::peel_exported_statement(stmt)
+            && ctx.ambient_global_symbols.get(&class.name).is_none()
+        {
+            crate::program::record_augmentation_value_insertion();
+            let symbol = crate::program::build_class_value_symbol(class, ctx);
+            ctx.ambient_global_symbols.insert(class.name.clone(), symbol);
+        }
+    }
+
+    for stmt in block_statements {
+        if let ParsedStatement::ImportDeclaration(import) =
+            crate::modules::peel_exported_statement(stmt)
+            && let surge_ts_syntax::ParsedImportKind::EntityAlias {
+                local_name, target, ..
+            } = &import.kind
+            && ctx.ambient_global_symbols.get(local_name).is_none()
+            && let Some(ty) =
+                global_augmentation_alias_value(target, block_statements, enclosing_statements, ctx)
+        {
+            crate::program::record_augmentation_value_insertion();
+            ctx.ambient_global_symbols.insert(
+                local_name.clone(),
+                crate::symbols::SymbolInfo {
+                    ty,
+                    kind: crate::symbols::SymbolKind::Const,
+                    function_signature: None,
+                },
+            );
+        }
+    }
+
     ctx.symbols = saved_symbols;
+}
+
+/// The value an `import X = N.M` in a `declare global` block aliases. The
+/// entity's root resolves the way tsc's `resolveEntityName` climbs from the
+/// block: its own namespaces, then those of the file or ambient module it is
+/// written in, then the globals.
+fn global_augmentation_alias_value(
+    target: &str,
+    block_statements: &[ParsedStatement],
+    enclosing_statements: &[ParsedStatement],
+    ctx: &mut CheckerContext,
+) -> Option<surge_ts_types::Type> {
+    let mut segments = target.split('.');
+    let root = segments.next()?;
+    let mut ty = match namespace_value_named(block_statements, root, ctx) {
+        Some(ty) => ty,
+        None => match namespace_value_named(enclosing_statements, root, ctx) {
+            Some(ty) => ty,
+            None => ctx.ambient_global_symbols.get(root)?.ty.clone(),
+        },
+    };
+    for member in segments {
+        let surge_ts_types::Type::Object(object) = ty.peeled() else {
+            return None;
+        };
+        ty = object.properties.get(member)?.ty.clone();
+    }
+    Some(ty)
+}
+
+fn namespace_value_named(
+    statements: &[ParsedStatement],
+    name: &str,
+    ctx: &mut CheckerContext,
+) -> Option<surge_ts_types::Type> {
+    let namespace = statements.iter().find_map(|statement| {
+        match crate::modules::peel_exported_statement(statement) {
+            ParsedStatement::NamespaceDeclaration(namespace)
+                if namespace.name == name && crate::program::is_instantiated_namespace(namespace) =>
+            {
+                Some(namespace)
+            }
+            _ => None,
+        }
+    })?;
+    Some(crate::modules::namespace_value_object_type_resolved(namespace, ctx))
 }
 
 pub(crate) fn sync_global_this_symbol(ctx: &mut CheckerContext) {
@@ -904,21 +1108,23 @@ pub(crate) fn with_namespace_reexports(
 /// Registers a namespace's interfaces and type aliases under qualified names
 /// (`JSX.IntrinsicElements`, `JSX.Element`, ...) so the JSX checker can resolve
 /// them. Members are not leaked into the unqualified scope. Nested namespaces are
-/// flattened by their already-dotted names. Duplicate members are first-wins
-/// (declaration merging), so no TS2300 is emitted here.
+/// flattened by their already-dotted names.
 fn collect_namespace_type_declarations(
     namespace: &ParsedNamespaceDeclaration,
     ctx: &mut CheckerContext,
 ) {
-    collect_namespace_type_declarations_prefixed(namespace, &namespace.name, ctx);
+    let ambient =
+        namespace.is_declare || crate::modules::is_declaration_file_name(&ctx.file_name);
+    let exports_table: Arc<str> = Arc::from(namespace.name.as_str());
+    collect_namespace_type_declarations_prefixed(
+        namespace,
+        &namespace.name,
+        &exports_table,
+        ambient,
+        ctx,
+    );
 }
 
-/// `prefix` is the fully-qualified dotted path to `namespace` (`React`, then
-/// `React.JSX`, …). Each member is registered under the full path so a qualified
-/// consumer reference like `React.JSX.IntrinsicElements` resolves; a nested member
-/// is ALSO registered under the bare immediate-namespace key (`JSX.IntrinsicElements`)
-/// so the JSX checker's literal lookup and the unqualified sibling references inside
-/// the library's own bodies keep resolving. First-wins (declaration merging).
 /// Default-on (opt-out `SURGE_NS_IFACE_MERGE=0`): fold a namespace's re-opened
 /// interfaces into one declaration. Correct and worth **32 fewer false
 /// positives on tRPC** (no new ones) — typescript.d.ts splits `Node`, `Type`,
@@ -940,122 +1146,126 @@ fn namespace_interface_merge_enabled() -> bool {
         .get_or_init(|| std::env::var_os("SURGE_NS_IFACE_MERGE").is_none_or(|value| value != "0"))
 }
 
-/// Merges from the parsed blocks in one shot rather than folding into the table
-/// incrementally: the table is rebuilt for every consuming module, and folding an
-/// already-merged result into itself re-appends its whole method set each pass
-/// (measured as a further 4x on top of the cost above).
-fn register_merged_namespace_interfaces(
-    namespace: &ParsedNamespaceDeclaration,
-    prefix: &str,
-    bare_prefix: &str,
+/// tsc's `hasExportDeclarations`: an `export { … }`, `export * from …` or
+/// export assignment among a block's statements.
+fn has_export_declarations(statements: &[ParsedStatement]) -> bool {
+    statements.iter().any(|statement| {
+        let ParsedStatement::ExportDeclaration(export) = statement else {
+            return false;
+        };
+        !matches!(
+            export.as_ref(),
+            ParsedExportDeclaration::Statement { .. }
+                | ParsedExportDeclaration::NamespaceExport { .. }
+                | ParsedExportDeclaration::Unsupported { .. }
+                | ParsedExportDeclaration::Default {
+                    declaration: ParsedDefaultExportDeclaration::Function(_)
+                        | ParsedDefaultExportDeclaration::Class(_),
+                    ..
+                }
+        )
+    })
+}
+
+/// Declares an interface or class instance side of a namespace in `table`
+/// (see [`InterfaceInfo::namespace_member_table`]): it merges into a
+/// declaration of the same table, and is first-wins against anything else.
+/// Re-collecting the same fragments leaves the entry as it is.
+fn register_namespace_member_interface(
+    key: String,
+    mut info: InterfaceInfo,
+    table: &Arc<str>,
     ctx: &mut CheckerContext,
 ) {
-    enum NamespaceTypeFragment<'a> {
-        Interface(&'a surge_ts_syntax::ParsedInterfaceDeclaration),
-        Class(&'a surge_ts_syntax::ParsedClassDeclaration),
-    }
-    let mut blocks: std::collections::HashMap<&str, Vec<NamespaceTypeFragment<'_>>> =
-        std::collections::HashMap::new();
-    let mut order: Vec<&str> = Vec::new();
-    for statement in &namespace.statements {
-        let inner = match statement {
-            ParsedStatement::ExportDeclaration(export) => {
-                if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
-                    declaration.as_ref()
-                } else {
-                    statement
-                }
+    let merged = match ctx.type_declarations.get(&key) {
+        None => None,
+        Some(TypeDeclarationInfo::Interface(existing))
+            if namespace_interface_merge_enabled()
+                && existing.namespace_member_table.as_deref() == Some(table.as_ref()) =>
+        {
+            if info
+                .body
+                .declaration_fragments
+                .iter()
+                .all(|fragment| existing.body.declaration_fragments.contains(fragment))
+            {
+                return;
             }
-            other => other,
-        };
-        // A class and a same-named interface declaration-merge just as two
-        // interfaces do (`class Duplex …` + `interface Duplex extends
-        // Readable, Writable {}` in @types/node's stream namespace is how
-        // `destroy` reaches Duplex). Collect both fragment kinds.
-        let (name, fragment) = match inner {
-            ParsedStatement::InterfaceDeclaration(interface) => (
-                interface.name.as_str(),
-                NamespaceTypeFragment::Interface(interface),
-            ),
-            ParsedStatement::ClassDeclaration(class) => {
-                (class.name.as_str(), NamespaceTypeFragment::Class(class))
-            }
-            _ => continue,
-        };
-        let entry = blocks.entry(name).or_default();
-        if entry.is_empty() {
-            order.push(name);
+            let mut merged = crate::symbols::merge_interface_infos(existing, &info);
+            merged.namespace_member_table = Some(table.clone());
+            Some(merged)
         }
-        entry.push(fragment);
-    }
-
-    for name in order {
-        let fragments = &blocks[name];
-        if fragments.len() < 2 {
-            continue;
-        }
-        let file_name = ctx.file_name_arc();
-        let build = |key: &str, fragment: &NamespaceTypeFragment<'_>| match fragment {
-            NamespaceTypeFragment::Interface(interface) => InterfaceInfo::new(
-                key.to_string(),
-                file_name.clone(),
-                interface.name_span,
-                interface.type_parameters.clone(),
-                interface.extends.clone(),
-                interface.members.clone(),
-                interface.string_index_type.clone(),
-                interface.number_index_type.clone(),
-                interface.call_signature.clone(),
-                interface.call_signature_overloads.clone(),
-                interface.construct_signatures.clone(),
-                None,
-            ),
-            NamespaceTypeFragment::Class(class) => {
-                let mut info =
-                    crate::program::class_instance_interface_info(class, file_name.clone());
-                info.name = key.into();
-                info
-            }
-        };
-        let mut keys = vec![format!("{prefix}.{name}")];
-        if prefix != bare_prefix {
-            keys.push(format!("{bare_prefix}.{name}"));
-        }
-        for key in keys {
-            let mut merged = build(&key, &fragments[0]);
-            for fragment in &fragments[1..] {
-                merged = crate::symbols::merge_interface_infos(&merged, &build(&key, fragment));
-            }
-            ctx.type_declarations
-                .upsert(key, TypeDeclarationInfo::Interface(merged));
+        Some(_) => return,
+    };
+    match merged {
+        Some(merged) => ctx
+            .type_declarations
+            .upsert(key, TypeDeclarationInfo::Interface(merged)),
+        None => {
+            info.namespace_member_table = Some(table.clone());
+            let _ = ctx
+                .type_declarations
+                .insert(key, TypeDeclarationInfo::Interface(info));
         }
     }
 }
 
+/// `prefix` is the fully-qualified dotted path to `namespace` (`React`, then
+/// `React.JSX`, …). Each member is registered under the full path so a qualified
+/// consumer reference like `React.JSX.IntrinsicElements` resolves; a nested member
+/// is ALSO registered under the bare immediate-namespace key (`JSX.IntrinsicElements`)
+/// so the JSX checker's literal lookup and the unqualified sibling references inside
+/// the library's own bodies keep resolving.
+///
+/// `exports_table` identifies the namespace's export table, which all of its
+/// blocks share (tsc merges every block into one symbol). A member goes there
+/// when it is exported — written `export`, or any member of an ambient block
+/// with no export declarations (tsc's `setExportContextFlag`) — and otherwise
+/// into the locals of its own block, so re-opened interfaces merge across the
+/// blocks of a namespace only when they are exported.
 fn collect_namespace_type_declarations_prefixed(
     namespace: &ParsedNamespaceDeclaration,
     prefix: &str,
+    exports_table: &Arc<str>,
+    ambient: bool,
     ctx: &mut CheckerContext,
 ) {
     let bare_prefix = namespace.name.as_str();
-    if namespace_interface_merge_enabled() {
-        register_merged_namespace_interfaces(namespace, prefix, bare_prefix, ctx);
-    }
+    let export_context = ambient && !has_export_declarations(&namespace.statements);
+    let locals_table: Arc<str> = Arc::from(format!(
+        "{}#{}",
+        ctx.file_name,
+        namespace
+            .span
+            .or(namespace.name_span)
+            .map_or(0, |span| span.start)
+    ));
+    let member_keys = |name: &str| {
+        let mut keys = vec![format!("{prefix}.{name}")];
+        if prefix != bare_prefix {
+            keys.push(format!("{bare_prefix}.{name}"));
+        }
+        keys
+    };
     for statement in &namespace.statements {
-        let inner = match statement {
-            ParsedStatement::ExportDeclaration(export) => {
-                if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
-                    declaration.as_ref()
-                } else {
-                    statement
+        let (exported, inner) = match statement {
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => {
+                    (true, declaration.as_ref())
                 }
-            }
-            other => other,
+                _ => (false, statement),
+            },
+            other => (false, other),
+        };
+        let table = if exported || export_context {
+            exports_table
+        } else {
+            &locals_table
         };
 
         match inner {
             ParsedStatement::InterfaceDeclaration(interface) => {
-                let mut register = |key: String| {
+                for key in member_keys(&interface.name) {
                     let info = InterfaceInfo::new(
                         key.clone(),
                         ctx.file_name_arc(),
@@ -1070,17 +1280,11 @@ fn collect_namespace_type_declarations_prefixed(
                         interface.construct_signatures.clone(),
                         None,
                     );
-                    let _ = ctx
-                        .type_declarations
-                        .insert(key, TypeDeclarationInfo::Interface(info));
-                };
-                register(format!("{}.{}", prefix, interface.name));
-                if prefix != bare_prefix {
-                    register(format!("{}.{}", bare_prefix, interface.name));
+                    register_namespace_member_interface(key, info, table, ctx);
                 }
             }
             ParsedStatement::TypeAliasDeclaration(alias) => {
-                let mut register = |key: String| {
+                for key in member_keys(&alias.name) {
                     let info = TypeAliasInfo::new(
                         key.clone(),
                         ctx.file_name_arc(),
@@ -1089,22 +1293,25 @@ fn collect_namespace_type_declarations_prefixed(
                         alias.ty.clone(),
                         None,
                     )
-                    .with_enum_name(alias.enum_name.as_deref(), alias.enum_exported);
+                    .with_enum_name(
+                        alias.enum_name.as_deref(),
+                        alias.enum_exported,
+                        alias.enum_is_const,
+                    );
                     let _ = ctx
                         .type_declarations
                         .insert(key, TypeDeclarationInfo::Alias(info));
-                };
-                register(format!("{}.{}", prefix, alias.name));
-                if prefix != bare_prefix {
-                    register(format!("{}.{}", bare_prefix, alias.name));
                 }
             }
             // A class inside a namespace contributes an instance type under the
             // qualified key just as an interface does; without this a
             // `namespace NS { class C {} }` member is reachable as a value but
-            // never as a type.
+            // never as a type. A class and a same-named interface merge just as
+            // two interfaces do (`class Duplex …` + `interface Duplex extends
+            // Readable, Writable {}` in @types/node's stream namespace is how
+            // `destroy` reaches Duplex).
             ParsedStatement::ClassDeclaration(class) => {
-                let mut register = |key: String| {
+                for key in member_keys(&class.name) {
                     let mut info =
                         crate::program::class_instance_interface_info(class, ctx.file_name_arc());
                     // Qualified name with NO declared_name, mirroring the
@@ -1117,18 +1324,26 @@ fn collect_namespace_type_declarations_prefixed(
                     // bare copy captures the qualified name as declared_name on
                     // rename, exactly as it does for interfaces.
                     info.name = key.as_str().into();
-                    let _ = ctx
-                        .type_declarations
-                        .insert(key, TypeDeclarationInfo::Interface(info));
-                };
-                register(format!("{}.{}", prefix, class.name));
-                if prefix != bare_prefix {
-                    register(format!("{}.{}", bare_prefix, class.name));
+                    register_namespace_member_interface(key, info, table, ctx);
                 }
             }
             ParsedStatement::NamespaceDeclaration(inner_namespace) => {
-                let inner_prefix = format!("{}.{}", prefix, inner_namespace.name);
-                collect_namespace_type_declarations_prefixed(inner_namespace, &inner_prefix, ctx);
+                let member = inner_namespace.member_name();
+                let inner_prefix = format!("{prefix}.{member}");
+                // `namespace A.B {}` exports `B` from `A` without `export`.
+                let dotted = inner_namespace
+                    .name
+                    .strip_prefix(namespace.name.as_str())
+                    .is_some_and(|rest| rest.starts_with('.'));
+                let enclosing_table = if dotted { exports_table } else { table };
+                let inner_exports: Arc<str> = Arc::from(format!("{enclosing_table}.{member}"));
+                collect_namespace_type_declarations_prefixed(
+                    inner_namespace,
+                    &inner_prefix,
+                    &inner_exports,
+                    ambient || inner_namespace.is_declare,
+                    ctx,
+                );
             }
             _ => {}
         }
@@ -1491,7 +1706,7 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
     }
 }
 
-fn is_runtime_js_only_module(module_specifier: &str, ctx: &CheckerContext) -> bool {
+pub(crate) fn is_runtime_js_only_module(module_specifier: &str, ctx: &CheckerContext) -> bool {
     let Some(resolved_path) = ctx
         .options
         .resolved_module_for(&ctx.file_name, module_specifier)
@@ -1575,7 +1790,11 @@ pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
         alias.ty.clone(),
         None,
     )
-    .with_enum_name(alias.enum_name.as_deref(), alias.enum_exported);
+    .with_enum_name(
+        alias.enum_name.as_deref(),
+        alias.enum_exported,
+        alias.enum_is_const,
+    );
 
     let previous = ctx
         .type_declarations

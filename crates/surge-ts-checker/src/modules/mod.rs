@@ -25,6 +25,30 @@ pub(crate) use imports::*;
 pub(crate) use node_builtins::*;
 pub(crate) use resolution::*;
 
+/// tsc's `InternalSymbolNameExportEquals`. An `export =` module's type table
+/// keys the assigned entity's type meaning under this name and each of its
+/// namespace members under `export=.<member>`, which is what an
+/// `import x = require(...)` binds. No written name can reach these keys.
+pub(crate) const EXPORT_ASSIGNMENT_NAME: &str = "export=";
+
+/// Whether `key` is one of the [`EXPORT_ASSIGNMENT_NAME`] keys, which belong to
+/// the module that declares them: `export *` and namespace re-exports do not
+/// carry a module's `export =`.
+pub(crate) fn is_export_assignment_key(key: &str) -> bool {
+    key.strip_prefix(EXPORT_ASSIGNMENT_NAME)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+}
+
+/// The kind of type-only declaration an alias chain passes through (tsc's
+/// `typeOnlyDeclaration`), which picks the diagnostic for a use of its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TypeOnlyAliasKind {
+    /// `import type` — TS1361.
+    Import,
+    /// `export type { … }` or `export type *` — TS1362.
+    Export,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ModuleResolution {
     pub(crate) resolved_file_index: usize,
@@ -42,9 +66,22 @@ pub(crate) struct ModuleExportTable {
     /// `default_symbol` so plain ESM default imports do not resolve through it
     /// (no synthetic default / `esModuleInterop`).
     pub(crate) export_assignment_symbol: Option<Arc<SymbolInfo>>,
+    /// Whether the module writes `export =`, whether or not surge resolved its
+    /// entity: `import x = require()` of it binds that entity, never the
+    /// module namespace.
+    pub(crate) writes_export_assignment: bool,
     pub(crate) namespace_export_object_type: Option<Type>,
     pub(crate) has_unresolved_star_export: bool,
     pub(crate) has_incomplete_declaration_surface: bool,
+    /// A shorthand ambient module (`declare module "x";`) as its first
+    /// declaration made it: every binding imported from it is the module
+    /// itself (tsc's `isShorthandAmbientModuleSymbol`).
+    pub(crate) shorthand: bool,
+    /// Exports whose alias chain passes through a type-only declaration. Their
+    /// values stay in `symbols` — tsc's alias still resolves to them, so a use
+    /// of one is reported rather than unresolved — but the module namespace
+    /// object leaves them out.
+    pub(crate) type_only_exports: Arc<surge_ts_types::fx::FxHashMap<Arc<str>, TypeOnlyAliasKind>>,
 }
 
 impl Clone for ModuleExportTable {
@@ -62,9 +99,12 @@ impl Clone for ModuleExportTable {
             symbols: self.symbols.clone(),
             default_symbol: self.default_symbol.clone(),
             export_assignment_symbol: self.export_assignment_symbol.clone(),
+            writes_export_assignment: self.writes_export_assignment,
             namespace_export_object_type: self.namespace_export_object_type.clone(),
             has_unresolved_star_export: self.has_unresolved_star_export,
             has_incomplete_declaration_surface: self.has_incomplete_declaration_surface,
+            shorthand: self.shorthand,
+            type_only_exports: self.type_only_exports.clone(),
         }
     }
 }
@@ -72,6 +112,14 @@ impl Clone for ModuleExportTable {
 impl ModuleExportTable {
     pub(crate) fn clone_with_reason(&self, reason: TypeCopyReason) -> Self {
         with_type_copy_reason(reason, || self.clone())
+    }
+
+    /// Records that `name`'s alias chain passes through a type-only
+    /// declaration; the nearest one to the export decides the kind.
+    pub(crate) fn mark_type_only_export(&mut self, name: &str, kind: TypeOnlyAliasKind) {
+        Arc::make_mut(&mut self.type_only_exports)
+            .entry(Arc::from(name))
+            .or_insert(kind);
     }
 
     pub(crate) fn get_shared_value(&self, name: &str) -> Option<Arc<SymbolInfo>> {
@@ -103,6 +151,9 @@ pub(crate) struct ModuleImportBindings {
     /// `type_declarations`) keeps `import * as` of a large barrel O(1) per importer
     /// instead of O(exports).
     pub(crate) namespace_alias_layers: Vec<Arc<TypeDeclarationTable>>,
+    /// Local names whose import reaches a type-only export (`export type`
+    /// upstream of a plain `import { A }`), with that declaration's kind.
+    pub(crate) type_only_aliases: Vec<(Arc<str>, TypeOnlyAliasKind)>,
 }
 
 impl ModuleImportBindings {
@@ -150,11 +201,12 @@ mod tests {
                     file_kind: FileKind::RootSource,
                     module_reads: parsed.module_reads,
                 definite_writes: parsed.definite_writes,
-                    suppressed_ranges: parsed.suppressed_ranges,
+                    comment_directives: parsed.comment_directives,
                     grammar_diagnostics: parsed.grammar_diagnostics,
                     parenthesized_expressions: parsed.parenthesized_expressions.into(),
                     let_assignments: parsed.let_assignments.into(),
                     json_module_type: parsed.json_module_type,
+                    jsx_factory_uses: parsed.jsx_factory_uses,
                 }
             })
             .collect()

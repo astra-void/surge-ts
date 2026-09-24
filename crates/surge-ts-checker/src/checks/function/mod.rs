@@ -564,7 +564,7 @@ fn body_check_context(ctx: &CheckerContext) -> CheckerContext {
     shadow.module_augmentations = ctx.module_augmentations.clone();
     shadow.module_file_index_by_identity = ctx.module_file_index_by_identity.clone();
     shadow.module_value_fallback = ctx.module_value_fallback.clone();
-    shadow.jsx_intrinsic_elements_declarer = ctx.jsx_intrinsic_elements_declarer.clone();
+    shadow.jsx_namespace_modules = ctx.jsx_namespace_modules.clone();
     shadow.namespace_registry = ctx.namespace_registry.clone();
     shadow.block_scoped_globals = ctx.block_scoped_globals.clone();
     shadow.umd_global_names = ctx.umd_global_names.clone();
@@ -933,7 +933,11 @@ pub(crate) fn collect_function_declaration_signature(
     ctx: &mut CheckerContext,
     allow_lazy_dependency_signature: bool,
 ) -> FunctionType {
+    // The signature resolves against `symbols`; whatever table the context
+    // held goes back afterwards, or every declaration collected after this one
+    // would resolve names against an empty table.
     let temp_symbols = std::mem::take(symbols);
+    let outer_symbols = std::mem::take(&mut ctx.symbols);
     ctx.set_symbols(temp_symbols);
 
     // Establish the function's own type-parameter scope (with constraints) while
@@ -1017,16 +1021,14 @@ pub(crate) fn collect_function_declaration_signature(
     };
 
     *symbols = std::mem::take(&mut ctx.symbols);
+    ctx.set_symbols(outer_symbols);
 
+    let signature_info =
+        function_declaration_signature_info(function, &function_type, symbols, ctx);
     let duplicate = register_function_signature(
         function.name.clone(),
         with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || function_type.clone()),
-        Some(function_declaration_signature_info(
-            function,
-            &function_type,
-            symbols,
-            &ctx.file_name,
-        )),
+        Some(signature_info),
         symbols,
         false,
         function.has_body,
@@ -1453,6 +1455,79 @@ fn without_undefined(ty: Type) -> Type {
     }
 }
 
+/// tsc's `getNarrowedTypeOfSymbol`: the parameters of a callback whose
+/// contextual signature is a lone rest parameter of a union of tuples depend on
+/// each other the way the names of one destructuring do — `kind === 'A'` picks
+/// the `payload` of the tuples it leaves — unless one of them is written.
+fn record_dependent_parameters(
+    parameters: &[surge_ts_syntax::ParsedFunctionParameter],
+    expected_type: &FunctionType,
+    body: &surge_ts_syntax::ParsedArrowFunctionBody,
+    arrow_span: Option<surge_ts_syntax::TextSpan>,
+    scopes: &mut ScopeStack,
+) {
+    let (Some(span), [rest]) = (arrow_span, expected_type.parameters()) else {
+        return;
+    };
+    if parameters.len() < 2 || !expected_type.is_variadic() {
+        return;
+    }
+    let rest = rest.peeled();
+    let Type::Union(union) = &rest else {
+        return;
+    };
+    if !union
+        .types()
+        .iter()
+        .all(|member| matches!(member.peeled(), Type::Tuple(_) | Type::OpenTuple(_)))
+    {
+        return;
+    }
+    let assigned = match body {
+        surge_ts_syntax::ParsedArrowFunctionBody::Block(statements) => {
+            deep_assigned_names(&[statements.as_slice()])
+        }
+        surge_ts_syntax::ParsedArrowFunctionBody::Expression(expression) => {
+            crate::flow::expression_assignments(expression)
+                .into_iter()
+                .filter_map(|(assignment, _)| match assignment {
+                    surge_ts_syntax::ParsedExpression::Assignment { target_name, .. } => {
+                        Some(target_name.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+    };
+    let names: Vec<&str> = parameters
+        .iter()
+        .filter_map(|parameter| match &parameter.binding_name {
+            surge_ts_syntax::ParsedBindingName::Identifier { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    if names.iter().any(|name| assigned.iter().any(|assigned| assigned == name)) {
+        return;
+    }
+    let source: std::sync::Arc<str> = format!("\0rest@{}", span.start).into();
+    for (index, parameter) in parameters.iter().enumerate() {
+        if let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } = &parameter.binding_name
+            && parameter.declared_type.is_none()
+            && parameter.initializer.is_none()
+            && !parameter.rest
+        {
+            scopes.record_tuple_destructure(
+                name,
+                Some(crate::symbols::TupleDestructureBinding {
+                    source: source.clone(),
+                    key: crate::symbols::DestructureKey::Index(index),
+                    source_type: Some(rest.clone()),
+                }),
+            );
+        }
+    }
+}
+
 fn contextual_parameter_types(expected_type: &FunctionType, parameter_count: usize) -> Vec<Type> {
     // tsc's `getTypeOfParameter`: an optional parameter of the contextual
     // signature is `T | undefined`, and that is the type an unannotated
@@ -1499,6 +1574,37 @@ fn contextual_parameter_types(expected_type: &FunctionType, parameter_count: usi
     let mut expanded = leading.to_vec();
     match rest {
         Type::Tuple(elements) => expanded.extend(elements.iter().cloned()),
+        // tsc's `tryGetTypeAtPosition`: a rest parameter that is not itself a
+        // tuple is indexed at each position, which distributes over a union of
+        // tuples (`(...args: ['A', number] | ['B', string])` gives `'A' | 'B'`
+        // then `number | string`); a fixed tuple too short for the position
+        // reads `undefined`.
+        Type::Union(union) if union.types().iter().all(|member| {
+            matches!(member.peeled(), Type::Tuple(_) | Type::OpenTuple(_))
+        }) =>
+        {
+            for position in 0..parameter_count.saturating_sub(leading.len()) {
+                let elements = union
+                    .types()
+                    .iter()
+                    .map(|member| match member.peeled() {
+                        Type::Tuple(elements) => {
+                            elements.get(position).cloned().unwrap_or(Type::Undefined)
+                        }
+                        Type::OpenTuple(open) => match open.leading.get(position) {
+                            Some(element) => element.clone(),
+                            None => {
+                                let mut tail = vec![open.rest.as_ref().clone()];
+                                tail.extend(open.trailing.iter().cloned());
+                                surge_ts_types::union_type(tail)
+                            }
+                        },
+                        _ => unreachable!("every member is a tuple"),
+                    })
+                    .collect();
+                expanded.push(surge_ts_types::union_type(elements));
+            }
+        }
         // The resolver already unwraps an array rest annotation to its element
         // type, but a signature mapped from source keeps the array; accept both.
         other => {
@@ -1697,6 +1803,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
     let ParsedArrowFunction {
         is_generator,
         this_binding,
+        name,
         type_parameters,
         parameters,
         return_type,
@@ -1721,15 +1828,47 @@ pub(crate) fn check_arrow_function_expression_anchored(
         surge_ts_syntax::ParsedThisBinding::ImplicitAny => ctx.this_is_implicitly_any = true,
     }
 
-    let expanded_contextual_parameter_types = expected_type
+    let mut expanded_contextual_parameter_types = expected_type
         .map(|expected_type| contextual_parameter_types(expected_type, parameters.len()));
+    // tsc's `getContextuallyTypedParameterType`: a rest parameter takes the
+    // rest of the contextual signature (`getRestTypeAtPosition`), which is the
+    // empty tuple when nothing is left — still a contextual type, so the
+    // parameter is no implicit `any[]`.
+    if let (Some(expected_type), Some(types)) =
+        (expected_type, expanded_contextual_parameter_types.as_mut())
+        && let Some(last) = parameters.len().checked_sub(1)
+        && parameters[last].rest
+        && parameters[last].declared_type.is_none()
+        && types.len() == last
+        && let Some(rest) = contextual_rest_parameter_type(expected_type, last)
+    {
+        types.push(rest);
+    }
     let contextual_parameter_types = expanded_contextual_parameter_types.as_deref();
     let result = with_type_parameter_scope(&type_parameters, ctx, |ctx| {
         // Resolve the arrow's annotations against the value symbols visible at
         // the arrow site, mirroring `check_variable_declaration_against_symbols`:
         // `(x: typeof localConst) => …` must see the enclosing function body's
         // locals, which live in the scope stack and never reach `ctx.symbols`.
-        let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+        // A named `function` expression's own name is in scope there too (tsc
+        // resolves it at the expression, past its parameters); its signature is
+        // what is being resolved, so the name stands at the sentinel meanwhile.
+        let signature_symbols = match &name {
+            Some(name) => {
+                let mut scope = SymbolTable::with_parent(std::sync::Arc::new(symbols.clone()));
+                let _ = scope.insert(
+                    name.as_str(),
+                    crate::symbols::SymbolInfo {
+                        ty: Type::Unknown,
+                        kind: crate::symbols::SymbolKind::Function,
+                        function_signature: None,
+                    },
+                );
+                scope
+            }
+            None => symbols.clone(),
+        };
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, signature_symbols);
         let function_type = map_function_signature(
             &parameters,
             return_type.as_ref(),
@@ -1800,6 +1939,24 @@ pub(crate) fn check_arrow_function_expression_anchored(
         let mut scopes =
             ScopeStack::from_root(symbols.clone_with_reason(TypeCopyReason::FunctionBodySetup));
         scopes.mark_function_boundary();
+        if let Some(name) = &name {
+            scopes.insert_current(
+                name.as_str(),
+                crate::symbols::SymbolInfo {
+                    ty: Type::Function(
+                        alloc_function_type(
+                            parameter_types.clone(),
+                            return_type.clone(),
+                            function_type.is_variadic(),
+                            function_type.required_parameter_count(),
+                        )
+                        .with_parameter_names(signature::written_binding_names(&parameters)),
+                    ),
+                    kind: crate::symbols::SymbolKind::Function,
+                    function_signature: None,
+                },
+            );
+        }
         scopes.push_function_scope();
         if !matches!(this_binding, surge_ts_syntax::ParsedThisBinding::Inherited) {
             bind_arguments_object(&mut scopes, ctx);
@@ -1834,6 +1991,9 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 .as_ref()
                 .unwrap_or_else(|| parameter_types.get(index).unwrap_or(&Type::Any));
             insert_parameter_bindings(parameter, parameter_type, &mut scopes);
+        }
+        if let Some(expected_type) = expected_type {
+            record_dependent_parameters(&parameters, expected_type, &body, arrow_span, &mut scopes);
         }
         crate::checks::function::with_type_parameter_scope(&type_parameters, ctx, |ctx| {
             for (index, parameter) in parameters.iter().enumerate() {

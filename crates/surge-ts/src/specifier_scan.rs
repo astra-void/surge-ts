@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use surge_ts_syntax::{ParsedExportDeclaration, ParsedSource, ParsedStatement, ParserWorker};
+use surge_ts_syntax::{
+    JsxRuntimeOptions, ParsedExportDeclaration, ParsedImportKind, ParsedResolutionModeAttribute,
+    ParsedSource, ParsedStatement, ParserWorker, ResolutionModeOverride,
+};
 
 /// One scanned source: the specifiers both fixpoint scanners ask for, and the
 /// parse they came from. The parse is kept because the checker would otherwise
@@ -8,7 +11,35 @@ use surge_ts_syntax::{ParsedExportDeclaration, ParsedSource, ParsedStatement, Pa
 /// [`ModuleSpecifierScanner::take_parsed_sources`] hands it over instead.
 struct ScannedSource {
     specifiers: Arc<[String]>,
+    augmentation_specifiers: Box<[String]>,
+    usages: Arc<[ModuleUsage]>,
     parsed: Option<ParsedSource>,
+}
+
+impl ScannedSource {
+    fn new(parsed: ParsedSource, retain_parse: bool, jsx_runtime: &JsxRuntimeOptions) -> ScannedSource {
+        // tsc's file loader resolves the automatic JSX runtime a file imports
+        // implicitly before the imports it writes.
+        let runtime_import =
+            surge_ts_syntax::jsx_runtime_import(&parsed.file_name, &parsed.jsx_factory_uses, jsx_runtime);
+        ScannedSource {
+            specifiers: source_specifiers(&parsed, runtime_import.as_deref()),
+            usages: source_usages(&parsed, runtime_import.as_deref()),
+            augmentation_specifiers: module_augmentation_specifiers(&parsed),
+            parsed: retain_parse.then_some(parsed),
+        }
+    }
+}
+
+/// One written module specifier and the syntax it is written in, which
+/// decides the mode tsc resolves it in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModuleUsage {
+    pub specifier: String,
+    /// `import x = require("...")`.
+    pub import_equals: bool,
+    /// A `resolution-mode` attribute that decides the mode.
+    pub resolution_mode: Option<ResolutionModeOverride>,
 }
 
 /// Shared module-specifier extraction for the loader's fixpoint scanners.
@@ -22,6 +53,7 @@ pub(crate) struct ModuleSpecifierScanner {
     parser: ParserWorker,
     scanned: Vec<Option<ScannedSource>>,
     retain_parses: bool,
+    jsx_runtime: JsxRuntimeOptions,
 }
 
 /// `SURGE_PRESCANNED_PARSE_REUSE=0` drops each parse as soon as its specifiers
@@ -33,11 +65,12 @@ fn parse_reuse_enabled() -> bool {
 }
 
 impl ModuleSpecifierScanner {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(jsx_runtime: JsxRuntimeOptions) -> Self {
         Self {
             parser: ParserWorker::new(),
             scanned: Vec::new(),
             retain_parses: parse_reuse_enabled(),
+            jsx_runtime,
         }
     }
 
@@ -69,6 +102,7 @@ impl ModuleSpecifierScanner {
         }
         let next = std::sync::atomic::AtomicUsize::new(0);
         let retain_parses = self.retain_parses;
+        let jsx_runtime = &self.jsx_runtime;
         let results: Vec<(usize, ScannedSource)> = std::thread::scope(|scope| {
             let pending = &pending;
             let next = &next;
@@ -85,13 +119,7 @@ impl ModuleSpecifierScanner {
                         let index = pending[slot];
                         let (_, file_name, source_text) = &sources[index];
                         let parsed = parser.parse(source_text, file_name);
-                        out.push((
-                            index,
-                            ScannedSource {
-                                specifiers: source_specifiers(&parsed),
-                                parsed: retain_parses.then_some(parsed),
-                            },
-                        ));
+                        out.push((index, ScannedSource::new(parsed, retain_parses, jsx_runtime)));
                     }
                     out
                 }));
@@ -115,19 +143,43 @@ impl ModuleSpecifierScanner {
         file_name: &str,
         source_text: &str,
     ) -> Arc<[String]> {
+        self.scanned_source(index, file_name, source_text)
+            .specifiers
+            .clone()
+    }
+
+    /// Like [`Self::specifiers`], with the syntax each specifier is written in.
+    pub(crate) fn usages(
+        &mut self,
+        index: usize,
+        file_name: &str,
+        source_text: &str,
+    ) -> Arc<[ModuleUsage]> {
+        self.scanned_source(index, file_name, source_text)
+            .usages
+            .clone()
+    }
+
+    fn scanned_source(&mut self, index: usize, file_name: &str, source_text: &str) -> &ScannedSource {
         if self.scanned.len() <= index {
             self.scanned.resize_with(index + 1, || None);
         }
-        if let Some(cached) = &self.scanned[index] {
-            return cached.specifiers.clone();
+        if self.scanned[index].is_none() {
+            let parsed = self.parser.parse(source_text, file_name);
+            self.scanned[index] = Some(ScannedSource::new(parsed, self.retain_parses, &self.jsx_runtime));
         }
-        let parsed = self.parser.parse(source_text, file_name);
-        let specifiers = source_specifiers(&parsed);
-        self.scanned[index] = Some(ScannedSource {
-            specifiers: specifiers.clone(),
-            parsed: self.retain_parses.then_some(parsed),
-        });
-        specifiers
+        self.scanned[index]
+            .as_ref()
+            .expect("scanned source was just filled")
+    }
+
+    /// `(sources index, names)` of every scanned module file's top-level
+    /// `declare module "name"` augmentations.
+    pub(crate) fn augmentation_specifiers(&self) -> impl Iterator<Item = (usize, &[String])> {
+        self.scanned.iter().enumerate().filter_map(|(index, slot)| {
+            let names = &slot.as_ref()?.augmentation_specifiers;
+            (!names.is_empty()).then_some((index, &names[..]))
+        })
     }
 
     /// Hand the scanned parses to the checker, which would otherwise parse the
@@ -146,13 +198,75 @@ impl ModuleSpecifierScanner {
 /// `Parsed*` tree cannot carry. Both belong to the module graph: a package
 /// reached only through an import type still supplies its
 /// `/// <reference types>` directives and ambient `declare module` blocks.
-fn source_specifiers(parsed: &ParsedSource) -> Arc<[String]> {
+fn source_specifiers(parsed: &ParsedSource, runtime_import: Option<&str>) -> Arc<[String]> {
+    runtime_import
+        .into_iter()
+        .chain(parsed.statements.iter().filter_map(statement_module_specifier))
+        .chain(parsed.import_call_specifiers.iter().map(String::as_str))
+        .map(str::to_owned)
+        .collect::<Vec<_>>()
+        .into()
+}
+
+/// Kept apart from [`source_specifiers`]: tsc resolves an augmentation's name
+/// but never loads a file for it, so these must not grow the program.
+fn module_augmentation_specifiers(parsed: &ParsedSource) -> Box<[String]> {
+    if !parsed.is_module {
+        return Box::default();
+    }
     parsed
         .statements
         .iter()
-        .filter_map(statement_module_specifier)
-        .chain(parsed.import_call_specifiers.iter().map(String::as_str))
-        .map(str::to_owned)
+        .filter_map(|statement| match statement {
+            ParsedStatement::DeclareModuleDeclaration(module)
+                if module.module_specifier != "global" =>
+            {
+                Some(module.module_specifier.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The usages behind [`source_specifiers`], in the same order.
+fn source_usages(parsed: &ParsedSource, runtime_import: Option<&str>) -> Arc<[ModuleUsage]> {
+    let runtime_usage = runtime_import.map(|specifier| ModuleUsage {
+        specifier: specifier.to_owned(),
+        import_equals: false,
+        resolution_mode: None,
+    });
+    runtime_usage
+        .into_iter()
+        .chain(parsed.statements.iter().filter_map(|statement| {
+            let specifier = statement_module_specifier(statement)?;
+            let (import_equals, attribute) = match statement {
+                ParsedStatement::ImportDeclaration(import) => (
+                    matches!(import.kind, ParsedImportKind::Equals { .. }),
+                    import.resolution_mode,
+                ),
+                ParsedStatement::ExportDeclaration(export) => match &**export {
+                    ParsedExportDeclaration::Named {
+                        resolution_mode, ..
+                    }
+                    | ParsedExportDeclaration::All {
+                        resolution_mode, ..
+                    } => (false, *resolution_mode),
+                    _ => (false, None),
+                },
+                _ => (false, None),
+            };
+            Some(ModuleUsage {
+                specifier: specifier.to_owned(),
+                import_equals,
+                resolution_mode: ParsedResolutionModeAttribute::resolution_override(attribute),
+            })
+        }))
+        .chain(parsed.import_call_specifiers.iter().map(|specifier| ModuleUsage {
+            specifier: specifier.clone(),
+            import_equals: false,
+            resolution_mode: None,
+        }))
+        .filter(|usage| !usage.specifier.is_empty())
         .collect::<Vec<_>>()
         .into()
 }

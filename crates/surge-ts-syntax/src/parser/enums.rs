@@ -123,6 +123,7 @@ fn lower_enum_declaration(
         member_types.push(member_type);
     }
 
+    let number_index_type = reverse_mapping_index_type(&properties);
     let enum_type = match member_types.len() {
         0 => ParsedType::Never,
         1 => member_types.pop().expect("one member type"),
@@ -155,7 +156,7 @@ fn lower_enum_declaration(
             declared_type: Some(ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
                 properties,
                 string_index_type: None,
-                number_index_type: None,
+                number_index_type,
                 call_signature: None,
             call_signature_overloads: Vec::new(),
                 construct_signature: None,
@@ -164,12 +165,27 @@ fn lower_enum_declaration(
             }))),
             initializer: None,
             initializer_span: None,
+            declaration_list: None,
         },
     )
 }
 
+/// tsc's `enumNumberIndexInfo` (`resolveAnonymousTypeMembers`): the object of
+/// an enum with no members, or with any numeric member, carries the reverse
+/// mapping `readonly [n: number]: string`. A string-only enum has none, so
+/// `S[0]` stays an implicit `any`.
+fn reverse_mapping_index_type(properties: &[ParsedObjectTypeProperty]) -> Option<Box<ParsedType>> {
+    let numeric = properties.is_empty()
+        || properties
+            .iter()
+            .any(|property| matches!(property.ty, ParsedType::NumberLiteral(_) | ParsedType::Number));
+    numeric.then(|| Box::new(ParsedType::String))
+}
+
 fn enum_member_name(name: &TSEnumMemberName<'_>) -> Option<String> {
     match name {
+        // The parser's nameless placeholder for a computed name (TS1164).
+        TSEnumMemberName::Identifier(identifier) if identifier.name.is_empty() => None,
         TSEnumMemberName::Identifier(identifier) => Some(identifier.name.to_string()),
         TSEnumMemberName::String(literal) | TSEnumMemberName::ComputedString(literal) => {
             Some(literal.value.to_string())
@@ -201,11 +217,7 @@ fn constant_member_type(initializer: &Expression<'_>) -> Option<ParsedType> {
 }
 
 fn format_auto_value(value: f64) -> String {
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        format!("{}", value as i64)
-    } else {
-        format!("{value}")
-    }
+    super::number_text::js_number_to_string(value)
 }
 
 /// An `enum` declared more than once in one scope is one enum: tsc merges the
@@ -244,12 +256,14 @@ pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStateme
     for indices in duplicated {
         let (first, rest) = indices.split_first().expect("non-empty group");
         let mut properties: Vec<ParsedObjectTypeProperty> = Vec::new();
+        let mut reverse_mapping = None;
         let mut member_types: Vec<ParsedType> = Vec::new();
         for index in rest {
             match peel_exported(&statements[*index]) {
                 ParsedStatement::VariableDeclaration(variable) => {
                     if let Some(ParsedType::Object(object)) = variable.declared_type.as_ref() {
                         properties.extend(object.properties.iter().cloned());
+                        reverse_mapping = reverse_mapping.or_else(|| object.number_index_type.clone());
                     }
                 }
                 ParsedStatement::TypeAliasDeclaration(alias) => {
@@ -267,11 +281,15 @@ pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStateme
             ParsedStatement::VariableDeclaration(variable) => {
                 if let Some(ParsedType::Object(object)) = variable.declared_type.as_mut() {
                     let object = std::sync::Arc::make_mut(object);
+                    if object.number_index_type.is_none() {
+                        object.number_index_type = reverse_mapping;
+                    }
                     for property in properties {
                         if !object.properties.iter().any(|kept| kept.name == property.name) {
                             object.properties.push(property);
                         }
                     }
+                    object.number_index_type = reverse_mapping_index_type(&object.properties);
                 }
             }
             ParsedStatement::TypeAliasDeclaration(alias) => {

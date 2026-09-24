@@ -334,7 +334,11 @@ pub(crate) fn summarize_function_body_flow(
     let mut summary = ReturnFlowSummary::default();
     for statement in body {
         let statement_summary = summarize_function_statement_flow(statement);
-        summary.contains_value_return |= statement_summary.contains_value_return;
+        // tsc's binder binds a statement no flow reaches without running
+        // `bindReturnStatement`, so a `return` there is not an explicit one.
+        if !summary.guarantees_exit {
+            summary.contains_return |= statement_summary.contains_return;
+        }
         summary.contains_return_with_value |= statement_summary.contains_return_with_value;
         summary.contains_throw |= statement_summary.contains_throw;
         summary.guarantees_value_return |= statement_summary.guarantees_value_return;
@@ -353,14 +357,14 @@ pub(crate) fn summarize_function_statement_flow(
         | ParsedFunctionBodyStatement::Interface(_)
         | ParsedFunctionBodyStatement::Class(_) => ReturnFlowSummary::default(),
         ParsedFunctionBodyStatement::Return(return_statement) => ReturnFlowSummary {
-            contains_value_return: return_statement.expression.is_some(),
+            contains_return: true,
             contains_return_with_value: return_statement.expression.is_some(),
             contains_throw: false,
             guarantees_value_return: return_statement.expression.is_some(),
             guarantees_exit: true,
         },
         ParsedFunctionBodyStatement::Throw(_) => ReturnFlowSummary {
-            contains_value_return: true,
+            contains_return: false,
             contains_return_with_value: false,
             contains_throw: true,
             guarantees_value_return: true,
@@ -368,7 +372,7 @@ pub(crate) fn summarize_function_statement_flow(
         },
         ParsedFunctionBodyStatement::Continue | ParsedFunctionBodyStatement::Break => {
             ReturnFlowSummary {
-                contains_value_return: false,
+                contains_return: false,
                 contains_return_with_value: false,
                 contains_throw: false,
                 guarantees_value_return: false,
@@ -393,8 +397,7 @@ pub(crate) fn summarize_function_statement_flow(
             }
 
             ReturnFlowSummary {
-                contains_value_return: then_summary.contains_value_return
-                    || else_summary.contains_value_return,
+                contains_return: then_summary.contains_return || else_summary.contains_return,
                 contains_return_with_value: then_summary.contains_return_with_value
                     || else_summary.contains_return_with_value,
                 contains_throw: then_summary.contains_throw || else_summary.contains_throw,
@@ -416,7 +419,7 @@ pub(crate) fn summarize_function_statement_flow(
             let never_falls_through = is_always_truthy_condition(&while_statement.condition)
                 && !body_breaks_enclosing_loop(&while_statement.body);
             ReturnFlowSummary {
-                contains_value_return: body_summary.contains_value_return,
+                contains_return: body_summary.contains_return,
                 contains_return_with_value: body_summary.contains_return_with_value,
                 contains_throw: body_summary.contains_throw,
                 guarantees_value_return: never_falls_through,
@@ -426,7 +429,7 @@ pub(crate) fn summarize_function_statement_flow(
         ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
             let body_summary = summarize_function_body_flow(&for_of_statement.body);
             ReturnFlowSummary {
-                contains_value_return: body_summary.contains_value_return,
+                contains_return: body_summary.contains_return,
                 contains_return_with_value: body_summary.contains_return_with_value,
                 contains_throw: body_summary.contains_throw,
                 guarantees_value_return: false,
@@ -434,7 +437,7 @@ pub(crate) fn summarize_function_statement_flow(
             }
         }
         ParsedFunctionBodyStatement::Switch(switch_statement) => {
-            let mut contains_value_return = false;
+            let mut contains_return = false;
             let mut contains_return_with_value = false;
             let mut contains_throw = false;
             // An empty clause falls through to the next one, so only the
@@ -446,7 +449,7 @@ pub(crate) fn summarize_function_statement_flow(
 
             for case in &switch_statement.cases {
                 let case_summary = summarize_function_body_flow(&case.consequent);
-                contains_value_return |= case_summary.contains_value_return;
+                contains_return |= case_summary.contains_return;
                 contains_return_with_value |= case_summary.contains_return_with_value;
                 contains_throw |= case_summary.contains_throw;
                 if !case.consequent.is_empty() {
@@ -490,7 +493,7 @@ pub(crate) fn summarize_function_statement_flow(
                 && (has_default || !is_known_non_exhaustive(switch_statement.span));
 
             ReturnFlowSummary {
-                contains_value_return,
+                contains_return,
                 contains_return_with_value,
                 contains_throw,
                 guarantees_value_return,
@@ -520,11 +523,11 @@ pub(crate) fn summarize_function_statement_flow(
                     .is_none_or(|summary| summary.guarantees_exit);
 
             ReturnFlowSummary {
-                contains_value_return: block_summary.contains_value_return
+                contains_return: block_summary.contains_return
                     || handler_summary
                         .as_ref()
-                        .is_some_and(|summary| summary.contains_value_return)
-                    || finalizer_summary.contains_value_return,
+                        .is_some_and(|summary| summary.contains_return)
+                    || finalizer_summary.contains_return,
                 contains_return_with_value: block_summary.contains_return_with_value
                     || handler_summary
                         .as_ref()
@@ -610,6 +613,11 @@ pub(crate) fn report_read_flow_positioned(
         {
             FlowCheck::Clear
         }
+        FlowReadOutcome::Declared(AssignmentState::DeclaredUnassigned)
+            if flow_state.reads_as_defined(name) =>
+        {
+            FlowCheck::Clear
+        }
         FlowReadOutcome::Declared(AssignmentState::DeclaredUnassigned) => {
             let mut diagnostic = Diagnostic::ts2454(name, ctx.file_name.clone());
             if let Some(span) = span {
@@ -617,24 +625,39 @@ pub(crate) fn report_read_flow_positioned(
             }
 
             ctx.push(diagnostic);
+            record_unassigned_read(span);
             FlowCheck::Blocked
         }
-        FlowReadOutcome::UseBeforeDeclaration => {
+        FlowReadOutcome::UseBeforeDeclaration {
+            unassigned,
+            circular_at,
+        } => {
             // A block-scoped (`let`/`const`) variable read before its declaration
             // is necessarily in its temporal dead zone, so it is also definitely
-            // unassigned. tsc reports both TS2448 and TS2454 at every such read.
+            // unassigned: tsc reports TS2454 beside TS2448 unless the binding's
+            // type assumes it initialized.
             let mut diagnostic = Diagnostic::ts2448(name, ctx.file_name.clone());
             if let Some(span) = span {
                 diagnostic = diagnostic.with_span(convert_span(span));
             }
             ctx.push(diagnostic);
 
-            if surge_ts_types::strict_null_checks() {
+            if unassigned && surge_ts_types::strict_null_checks() {
                 let mut diagnostic = Diagnostic::ts2454(name, ctx.file_name.clone());
                 if let Some(span) = span {
                     diagnostic = diagnostic.with_span(convert_span(span));
                 }
                 ctx.push(diagnostic);
+                record_unassigned_read(span);
+            }
+
+            if let Some(declaration_span) = circular_at
+                && ctx.options.no_implicit_any
+            {
+                ctx.push(
+                    Diagnostic::ts7022(name, ctx.file_name.clone())
+                        .with_span(convert_span(declaration_span)),
+                );
             }
 
             FlowCheck::Blocked

@@ -33,7 +33,10 @@ mod speculative;
 mod symbols;
 
 pub use api::{CheckResult, Checker};
-pub use context::{CheckerOptions, CompatibilityStats, DiagnosticProfile, FileKind, ModuleEmitKind};
+pub use context::{
+    CheckerOptions, CompatibilityStats, DiagnosticProfile, FileKind, JsxFactoryNames,
+    ModuleEmitKind,
+};
 pub use program::set_fast_process_exit;
 pub use program::{ProgramCheckResult, SourceFileInput};
 
@@ -58,7 +61,7 @@ pub mod lowlevel {
         DefaultLibIoStats, DefaultLibLoad, DefaultLibRequest, DirectoryLibSource, EMBEDDED_LIB_DIR,
         EmbeddedLib, EmbeddedLibSource, LibSource, LibSourceChoice, PhysicalLibResolution,
         bundled_typescript_version, default_full_lib_seed_for_target, find_typescript_lib_dir,
-        load_default_lib_inputs, load_generated_default_lib_inputs,
+        load_default_lib_inputs, load_generated_default_lib_inputs, reference_lib_directives,
     };
     pub use crate::metrics::{last_rss_stage_label, record_loader_rss_stage};
     pub use crate::program::check_program_with_prescanned_sources;
@@ -70,7 +73,7 @@ pub mod lowlevel {
         pub use crate::modules::candidates::{
             RelativeSpecifierShape, classify_relative_specifier, directory_index_candidates,
             extensionless_candidates, mapped_target_candidates, relative_import_candidates,
-            strip_extension,
+            relative_specifier_names_directory, resolution_mode_override_key, strip_extension,
         };
     }
 }

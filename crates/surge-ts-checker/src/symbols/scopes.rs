@@ -362,8 +362,11 @@ impl ScopeStack {
         for (name, previous_symbol) in frame.visible_shadows {
             // `var` is function-scoped: a block that declared one leaves it
             // visible after the block, and the shadow it displaced moves up so
-            // the enclosing frame restores it instead.
+            // the enclosing frame restores it instead. A block that only
+            // narrowed an enclosing `var` (a `case` clause of `switch (v)`)
+            // restores it like any other binding.
             if !frame.is_function_scope
+                && frame.declared_here.contains(&name)
                 && self
                     .visible_symbols
                     .get(&name)

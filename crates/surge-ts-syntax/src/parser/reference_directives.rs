@@ -1,4 +1,4 @@
-use crate::{ReferenceTypeDirective, TextSpan};
+use crate::{ReferenceTypeDirective, ResolutionModeOverride, TextSpan};
 
 /// Collect leading `/// <reference types="..." />` directives from a source file
 /// without a full parse. Mirroring tsc, only comments in the leading trivia of
@@ -97,12 +97,19 @@ fn parse_reference_directive(
     }
 
     let (value, value_start, value_end) = extract_named_attribute(comment_text, attribute)?;
+    // tsc's `parseResolutionMode`: any other value is an error and no override.
+    let resolution_mode = match extract_named_attribute(comment_text, "resolution-mode") {
+        Some((mode, _, _)) if mode == "import" => Some(ResolutionModeOverride::Import),
+        Some((mode, _, _)) if mode == "require" => Some(ResolutionModeOverride::Require),
+        _ => None,
+    };
     Some(ReferenceTypeDirective {
         value,
         value_span: TextSpan {
             start: base + value_start,
             end: base + value_end,
         },
+        resolution_mode,
     })
 }
 

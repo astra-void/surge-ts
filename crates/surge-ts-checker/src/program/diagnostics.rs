@@ -9,6 +9,72 @@ use surge_ts_diagnostics::Diagnostic;
 use crate::context::CheckerContext;
 use super::ParsedProgramFile;
 
+/// oxc's own wording for the token-level failures tsc's parser reports too.
+/// oxc also rejects syntax tsc parses and then reports from its checker (a
+/// `const` without an initializer, modifiers out of order); those carry other
+/// messages, or codes outside tsc's parser set.
+const GENERIC_SYNTAX_ERROR_PREFIXES: &[&str] = &[
+    "Unexpected token",
+    "Unexpected end of file",
+    "Unexpected exponentiation expression",
+    "Unexpected private identifier",
+    "Expected `",
+    "Expected a semicolon or an implicit semicolon after a statement",
+    "Expected corresponding JSX closing tag",
+    "Expected corresponding closing tag for JSX fragment",
+    "Expected function name",
+    "Expected function body",
+    "Expected switch clause",
+    "Invalid Unicode escape sequence",
+    "Invalid Character",
+    "Invalid characters after number",
+    "Invalid escape sequence",
+    "Bad escape sequence in untagged template literal",
+    "Keywords cannot contain escape characters",
+    "Unterminated string",
+    "Unterminated template",
+    "Unterminated regular expression",
+    "Unterminated multiline comment",
+    "Empty parenthesized expression",
+    "Parenthesized expressions may not have a trailing comma",
+    "Encountered diff marker",
+    "File appears to be binary",
+];
+
+/// Whether tsc's parser reports this failure as well, which makes tsc report
+/// the program's syntactic diagnostics alone.
+pub(super) fn is_syntactic_parser_error(error: &surge_ts_syntax::ParserError) -> bool {
+    match error.code {
+        Some(code) => surge_ts_diagnostics::is_tsc_parser_code(code),
+        None => {
+            error.message == "Identifier expected."
+                || GENERIC_SYNTAX_ERROR_PREFIXES
+                    .iter()
+                    .any(|prefix| error.message.starts_with(prefix))
+        }
+    }
+}
+
+/// tsc's `GetDiagnosticsOfAnyProgram`: a program with a syntax error anywhere
+/// reports its syntactic diagnostics and nothing else.
+pub(super) fn program_has_syntax_errors(parsed_files: &[ParsedProgramFile]) -> bool {
+    parsed_files.iter().any(|file| {
+        !matches!(
+            file.file_kind,
+            crate::FileKind::GeneratedDeclaration | crate::FileKind::PhysicalDefaultLib
+        ) && file.parser_errors.iter().any(is_syntactic_parser_error)
+    })
+}
+
+pub(super) fn is_syntactic_diagnostic(diagnostic: &Diagnostic) -> bool {
+    match diagnostic.code {
+        surge_ts_diagnostics::DiagnosticCode::TypeScript(code) => {
+            surge_ts_diagnostics::is_tsc_parser_code(code)
+        }
+        surge_ts_diagnostics::DiagnosticCode::Custom(_) => false,
+    }
+}
+
 /// A parse failure reported the way tsc reports it when oxc classified the
 /// failure: the catalogued message for its code, anchored at oxc's own span.
 /// oxc's rendering is used only for a failure it left unnumbered, and for a
@@ -28,10 +94,11 @@ pub(crate) fn parser_error_diagnostic(
     )
 }
 
-/// Codes whose one argument is the modifier oxc's label covers. oxc words
-/// some of them differently from tsc (TS1031 on a constructor, TS1273), so
-/// the argument cannot always be read back out of its message.
-const MODIFIER_LABEL_CODES: &[u32] = &[1030, 1031, 1070, 1071, 1090, 1273];
+/// Codes whose one argument is the text oxc's label covers: the modifier, or
+/// the `this` of a misplaced `this` parameter (TS2680). oxc words some of them
+/// differently from tsc (TS1031 on a constructor, TS1273), so the argument
+/// cannot always be read back out of its message.
+const MODIFIER_LABEL_CODES: &[u32] = &[1030, 1031, 1070, 1071, 1090, 1273, 2680];
 
 fn parser_error_descriptor(
     code: u32,
@@ -153,20 +220,116 @@ pub(super) fn extend_diagnostics_dedup(
     DiagnosticDeduper::with_existing(diagnostics).extend(diagnostics, new_diagnostics);
 }
 
-/// Drops the diagnostics an `@ts-expect-error`/`@ts-ignore` directive suppresses:
-/// every one whose span starts on the directive's following line. A diagnostic
-/// with no span cannot be attributed to a line and is kept.
-pub(crate) fn drop_suppressed_diagnostics(
+/// `SURGE_REPORT_UNUSED_EXPECT_ERROR=1` turns on TS2578. The check matches
+/// tsc, but every real error surge misses under an `@ts-expect-error` becomes
+/// a TS2578 false positive, which on the real-project corpora outnumbered the
+/// directives surge does satisfy. Off until surge's recall catches up.
+fn report_unused_expect_error() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("SURGE_REPORT_UNUSED_EXPECT_ERROR").as_deref() == Ok("1")
+    })
+}
+
+/// tsc's `getDiagnosticsWithPrecedingDirectives` plus the unused-directive
+/// report that follows it: a diagnostic starting on a directive's suppressed
+/// line is dropped and marks the nearest directive above it used; with the
+/// gate on, every `@ts-expect-error` left unused is TS2578 at the directive.
+/// An `@ts-ignore` never reports. Runs only for files surge checks in full: a
+/// declaration file returns before it, since its statements are never checked
+/// and every directive there would read as unused. A file with parse errors
+/// reports no unused directive either: tsc skips semantic diagnostics once any
+/// syntax error exists, and surge's checker may not have seen the file's
+/// statements.
+pub(crate) fn apply_comment_directives(
     diagnostics: &mut Vec<surge_ts_diagnostics::Diagnostic>,
-    suppressed_ranges: &[surge_ts_syntax::TextSpan],
+    directives: &[surge_ts_syntax::CommentDirective],
+    has_parse_errors: bool,
+    file_name: &str,
 ) {
-    if suppressed_ranges.is_empty() || diagnostics.is_empty() {
+    if directives.is_empty() {
         return;
     }
+    let mut used = vec![false; directives.len()];
     diagnostics.retain(|diagnostic| {
         let Some(span) = diagnostic.span.as_ref() else {
             return true;
         };
+        let nearest = directives
+            .iter()
+            .enumerate()
+            .filter(|(_, directive)| {
+                directive
+                    .suppressed_line
+                    .is_some_and(|line| span.start >= line.start && span.start <= line.end)
+            })
+            .max_by_key(|(_, directive)| directive.span.start);
+        match nearest {
+            Some((index, _)) => {
+                used[index] = true;
+                false
+            }
+            None => true,
+        }
+    });
+    if !report_unused_expect_error() {
+        return;
+    }
+    for (directive, used) in directives.iter().zip(used) {
+        if used
+            || has_parse_errors
+            || directive.kind != surge_ts_syntax::CommentDirectiveKind::ExpectError
+        {
+            continue;
+        }
+        let diagnostic = Diagnostic::ts2578(file_name.to_string())
+            .with_span(crate::context::convert_span(directive.span));
+        let position = diagnostics
+            .iter()
+            .position(|existing| {
+                existing
+                    .span
+                    .as_ref()
+                    .is_some_and(|span| span.start > directive.span.start)
+            })
+            .unwrap_or(diagnostics.len());
+        diagnostics.insert(position, diagnostic);
+    }
+}
+
+/// [`drop_suppressed_diagnostics`] for the semantic diagnostics reported
+/// against a file outside its own check — import binding runs first — which
+/// tsc's directive filter covers all the same. Syntax errors are never
+/// suppressed.
+pub(crate) fn drop_suppressed_program_diagnostics(
+    diagnostics: &mut Vec<surge_ts_diagnostics::Diagnostic>,
+    parsed_files: &[ParsedProgramFile],
+) {
+    let suppressed_ranges_by_file: std::collections::HashMap<&str, Vec<surge_ts_syntax::TextSpan>> =
+        parsed_files
+            .iter()
+            .filter_map(|file| {
+                let ranges: Vec<_> = file
+                    .comment_directives
+                    .iter()
+                    .filter_map(|directive| directive.suppressed_line)
+                    .collect();
+                (!ranges.is_empty()).then(|| (file.file_name.as_str(), ranges))
+            })
+            .collect();
+    if suppressed_ranges_by_file.is_empty() {
+        return;
+    }
+    diagnostics.retain(|diagnostic| {
+        let (Some(span), Some(suppressed_ranges)) = (
+            diagnostic.span.as_ref(),
+            suppressed_ranges_by_file.get(diagnostic.file_name.as_str()),
+        ) else {
+            return true;
+        };
+        if is_syntactic_diagnostic(diagnostic) {
+            return true;
+        }
         !suppressed_ranges
             .iter()
             .any(|range| span.start >= range.start && span.start <= range.end)

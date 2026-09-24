@@ -114,6 +114,18 @@ impl LazyInstantiation {
             && reference.id.starts_with(self.decl_key.file_name.as_ref())
             && reference.id.ends_with(self.decl_key.name.as_ref())
     }
+
+    /// Whether the expansion is independent of the site that wrote the
+    /// reference: a library declaration's body resolves in its own lexical
+    /// scope, where the referencing site's type parameters are not visible, and
+    /// arguments that name none of them carry nothing of that site either.
+    fn resolves_outside_creating_scopes(&self, ctx: &CheckerContext) -> bool {
+        let mut budget = 96usize;
+        crate::infer::types::declaration_file_is_library_scoped(self.decl.get(), ctx)
+            && self.resolved_arguments.iter().all(|argument| {
+                crate::infer::types::signature_cache_safe_argument(argument, 0, &mut budget)
+            })
+    }
 }
 
 impl ResolveReference for LazyInstantiation {
@@ -253,6 +265,17 @@ impl ResolveReference for LazyInstantiation {
         if self.creation_scope.is_some() {
             ctx.type_declaration_scope = self.creation_scope.clone();
         }
+        // The environment keeps the type parameter scopes open where the
+        // reference was written. Peeling a library declaration under a generic
+        // signature's scopes made every instantiation inside it non-concrete:
+        // nested references expanded eagerly and cut their own cycles to
+        // `unknown`, and the expansion was interned for every other consumer of
+        // the same (declaration, arguments), which a concrete site expands
+        // lazily and whole.
+        if self.resolves_outside_creating_scopes(&ctx) {
+            ctx.type_parameter_scopes.clear();
+            ctx.type_parameter_constraint_scopes.clear();
+        }
         let in_flight_before = in_flight_degraded_read_epoch();
         let mut resolving = Vec::new();
         let resolved = match self.decl.get() {
@@ -270,6 +293,7 @@ impl ResolveReference for LazyInstantiation {
                 interface,
                 self.decl.clone(),
                 self.type_arguments.clone(),
+                None,
                 &mut ctx,
                 &mut resolving,
                 &self.substitution,

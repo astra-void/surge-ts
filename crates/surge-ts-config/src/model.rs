@@ -49,6 +49,11 @@ pub struct NormalizedCompilerOptions {
     pub no_unused_parameters: bool,
     /// `compilerOptions.allowUnreachableCode`, set only when written `true`.
     pub allow_unreachable_code: bool,
+    /// `compilerOptions.allowUnreachableCode` written `false`, which is the
+    /// only setting under which tsc reports unreachable code as an error.
+    pub report_unreachable_code: bool,
+    /// `compilerOptions.allowUnusedLabels` as written; `None` when unset.
+    pub allow_unused_labels: Option<bool>,
     pub target: ScriptTarget,
     pub module: ModuleKind,
     /// tsgo's `GetEmitModuleKind`: the written `module`, or the kind its
@@ -60,6 +65,12 @@ pub struct NormalizedCompilerOptions {
     pub use_define_for_class_fields: bool,
     pub module_resolution: ModuleResolutionKind,
     pub jsx: Option<JsxMode>,
+    /// `jsxFactory`, `jsxFragmentFactory`, `reactNamespace` and
+    /// `jsxImportSource`: the names a JSX tag refers to implicitly.
+    pub jsx_factory: Option<String>,
+    pub jsx_fragment_factory: Option<String>,
+    pub react_namespace: Option<String>,
+    pub jsx_import_source: Option<String>,
     pub allow_js: bool,
     pub check_js: bool,
     pub no_emit: bool,
@@ -97,6 +108,9 @@ pub struct NormalizedCompilerOptions {
     /// `TS2732`. Defaults on for every resolver except `node16`, which is what
     /// tsc 7.0.2 does.
     pub resolve_json_module: bool,
+    /// `compilerOptions.libReplacement`: a default lib an installed
+    /// `@typescript/lib-*` package provides is read from that package.
+    pub lib_replacement: bool,
 }
 
 impl Default for NormalizedCompilerOptions {
@@ -117,12 +131,18 @@ impl Default for NormalizedCompilerOptions {
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,
+            report_unreachable_code: false,
+            allow_unused_labels: None,
             target: ScriptTarget::ES2024,
             module: ModuleKind::Preserve,
             emit_module: ModuleKind::ES2022,
             use_define_for_class_fields: true,
             module_resolution: ModuleResolutionKind::Bundler,
             jsx: None,
+            jsx_factory: None,
+            jsx_fragment_factory: None,
+            react_namespace: None,
+            jsx_import_source: None,
             allow_js: false,
             check_js: false,
             no_emit: false,
@@ -137,6 +157,7 @@ impl Default for NormalizedCompilerOptions {
             type_roots: Vec::new(),
             types: None,
             resolve_json_module: true,
+            lib_replacement: false,
             resolve_package_json_exports: true,
             resolve_package_json_imports: true,
             custom_conditions: Vec::new(),

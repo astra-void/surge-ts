@@ -9,11 +9,15 @@ mod evaluate;
 mod guarded_unknown;
 mod index_access;
 mod inferred;
+mod lib_features;
 mod operand_types;
 mod operand_writes;
 mod unresolved;
 
-pub(crate) use accessibility::{ClassIdentity, check_member_accessibility, enclosing_class_lineage};
+pub(crate) use accessibility::{
+    ClassIdentity, base_interface, check_member_accessibility, constructor_accessibility_error,
+    enclosing_class_lineage, restricted_member_owner,
+};
 pub(crate) use diagnostics::*;
 pub(crate) use evaluate::*;
 pub(crate) use guarded_unknown::downgrade_guarded_genuine_unknown;
@@ -21,6 +25,7 @@ use guarded_unknown::downgrade_predicate_guarded_genuine_unknown;
 use index_access::*;
 pub(crate) use index_access::object_element_read;
 pub(crate) use inferred::*;
+pub(crate) use lib_features::{lib_feature_of_missing_member, suggested_lib_for_nonexistent_name};
 pub(crate) use operand_types::{
     check_instanceof_left_operand, check_instanceof_right_operand, check_iterable_operand,
     check_object_spread_type,
@@ -29,8 +34,8 @@ pub(crate) use operand_types::{
 pub(crate) use operand_writes::{check_delete_operand, check_update_operand, update_result_type};
 pub(crate) use unresolved::{
     EnclosingClassMembers, UnresolvedNameSite, cannot_find_name_message,
-    export_assignment_target_is_exempt, report_unresolved_value_name,
-    suggested_lib_for_nonexistent_name, unresolved_type_query_diagnostic,
+    export_assignment_target_is_exempt, is_es2015_or_later_constructor_name, is_primitive_type_name,
+    report_unresolved_value_name, unresolved_type_query_diagnostic,
 };
 
 use std::time::Instant;
@@ -62,23 +67,37 @@ pub(crate) fn check_expression_statement(expression: ParsedExpression, ctx: &mut
     });
 }
 
-/// tsc reports a `readonly` array or tuple written to a mutable one with its
-/// own code (`The_type_0_is_readonly_and_cannot_be_assigned_to_the_mutable_type_1`,
-/// relater.go), not the generic assignability error.
+/// tsc's `tryElaborateArrayLikeErrors`, which `reportErrorResults` runs on
+/// every failed relation before the head is reported: a `readonly` array or
+/// tuple source against a mutable array or tuple target is TS4104
+/// (`The_type_0_is_readonly_and_cannot_be_assigned_to_the_mutable_type_1`), and
+/// `reportRelationError` then drops its own head — TS2322 or TS2345 alike —
+/// because that chain message names the same pair.
 pub(crate) fn readonly_to_mutable_mismatch(source: &Type, target: &Type) -> bool {
-    let Type::Reference(reference) = source else {
-        return false;
-    };
-    reference.is_readonly_array()
-        && matches!(
-            target,
-            Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)
-        )
+    array_like_mutability(source, 0) == Some(false) && array_like_mutability(target, 0) == Some(true)
 }
 
-/// The diagnostic an assignability failure reports: TS4104 when a readonly
-/// array or tuple is written to a mutable one, and otherwise the position's
-/// ordinary code — TS2345 for an argument, TS2322 everywhere else.
+/// Whether `ty` is a mutable (`Some(true)`) or `readonly` (`Some(false)`)
+/// array or tuple type, looking through the aliases that name one; `None` for
+/// anything else. The lib's `Array<T>` and `ReadonlyArray<T>` written by name
+/// are the same types tsc's `isArrayType` and `isReadonlyArrayType` test for.
+fn array_like_mutability(ty: &Type, depth: usize) -> Option<bool> {
+    let Type::Reference(reference) = ty else {
+        return matches!(ty, Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)).then_some(true);
+    };
+    if reference.is_readonly_array() {
+        return Some(false);
+    }
+    match reference.id.split('\u{0}').next_back() {
+        Some("Array") if reference.arguments.len() == 1 => Some(true),
+        Some("ReadonlyArray") if reference.arguments.len() == 1 => Some(false),
+        _ if depth < 8 => array_like_mutability(&reference.resolve_arc(), depth + 1),
+        _ => None,
+    }
+}
+
+/// The diagnostic an assignability failure reports: TS2345 for an argument,
+/// TS2322 everywhere else.
 pub(crate) fn assignability_mismatch_diagnostic(
     source: &Type,
     target: &Type,
@@ -87,10 +106,6 @@ pub(crate) fn assignability_mismatch_diagnostic(
     argument_position: bool,
     file_name: impl Into<String>,
 ) -> surge_ts_diagnostics::Diagnostic {
-    let file_name = file_name.into();
-    if readonly_to_mutable_mismatch(source, target) {
-        return surge_ts_diagnostics::Diagnostic::ts4104(source_name, target_name, file_name);
-    }
     if argument_position {
         argument_not_assignable_diagnostic(source, target, source_name, target_name, file_name)
     } else {
@@ -98,7 +113,8 @@ pub(crate) fn assignability_mismatch_diagnostic(
     }
 }
 
-/// TS2345, or the missing-property report that replaces it (see
+/// TS2345, or the report that replaces its head: TS4104 (see
+/// [`readonly_to_mutable_mismatch`]) or a missing-property report (see
 /// [`missing_properties_report`]).
 pub(crate) fn argument_not_assignable_diagnostic(
     source: &Type,
@@ -108,6 +124,9 @@ pub(crate) fn argument_not_assignable_diagnostic(
     file_name: impl Into<String>,
 ) -> surge_ts_diagnostics::Diagnostic {
     let file_name = file_name.into();
+    if readonly_to_mutable_mismatch(source, target) {
+        return surge_ts_diagnostics::Diagnostic::ts4104(source_name, target_name, file_name);
+    }
     missing_properties_report(source, target, source_name, target_name, &file_name)
         .unwrap_or_else(|| {
             surge_ts_diagnostics::Diagnostic::ts2345(source_name, target_name, file_name)
@@ -188,6 +207,7 @@ fn missing_required_properties(source: &Type, target: &Type) -> Option<Vec<Strin
     if let Type::Array(_) = &target {
         return missing_array_members(&source);
     }
+    if let Type::Tuple(elements) = &target { return surge_ts_types::tuple_target_missing_property(&source, elements).map(|name| vec![name]); }
     let Type::Object(target_object) = &target else {
         return None;
     };
@@ -272,7 +292,8 @@ pub(crate) fn missing_properties_diagnostic(
 
 /// tsc's plain assignability message (`reportRelationError` with no head
 /// message): TS2322, or TS2820 when a string literal missed a union by a typo
-/// of one of its string-literal members.
+/// of one of its string-literal members, unless TS4104 replaces it (see
+/// [`readonly_to_mutable_mismatch`]).
 pub(crate) fn type_not_assignable_diagnostic(
     source: &Type,
     target: &Type,
@@ -281,6 +302,9 @@ pub(crate) fn type_not_assignable_diagnostic(
     file_name: impl Into<String>,
 ) -> surge_ts_diagnostics::Diagnostic {
     let file_name = file_name.into();
+    if readonly_to_mutable_mismatch(source, target) {
+        return surge_ts_diagnostics::Diagnostic::ts4104(source_name, target_name, file_name);
+    }
     if let Some(diagnostic) =
         missing_properties_report(source, target, source_name, target_name, &file_name)
     {

@@ -3,9 +3,139 @@ use super::*;
 use std::collections::HashMap;
 
 use surge_ts_diagnostics::Diagnostic;
-use surge_ts_syntax::{ParsedExportSpecifier, ParsedVariableKind};
+use surge_ts_syntax::{ParsedExportSpecifier, ParsedResolutionModeAttribute, ParsedVariableKind};
 
 use crate::context::convert_span;
+
+/// A `var` nested in a module-level block, loop or `try` belongs to the module
+/// scope, so an export clause may name it (`export { hoisted }`).
+fn with_exported_nested_vars(
+    mut values: SymbolTable,
+    parsed_file: &ParsedProgramFile,
+    local_type_declarations: &TypeDeclarationTable,
+    local_symbols: &SymbolTable,
+    imported_symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> SymbolTable {
+    let mut named: Vec<&str> = Vec::new();
+    for statement in &parsed_file.statements {
+        if let ParsedStatement::ExportDeclaration(export) = statement
+            && let ParsedExportDeclaration::Named {
+                specifiers,
+                module_specifier: None,
+                ..
+            } = export.as_ref()
+        {
+            named.extend(
+                specifiers
+                    .iter()
+                    .map(|specifier| specifier.local_name.as_str())
+                    .filter(|name| values.get_own_shared(name).is_none()),
+            );
+        }
+    }
+    if named.is_empty() {
+        return values;
+    }
+    let mut nested = Vec::new();
+    for statement in &parsed_file.statements {
+        match statement {
+            ParsedStatement::Block(body) => nested_vars(body, &named, &mut nested),
+            ParsedStatement::If(if_statement) => {
+                nested_vars(&if_statement.then_body, &named, &mut nested);
+                nested_vars(&if_statement.else_body, &named, &mut nested);
+            }
+            _ => {}
+        }
+    }
+    if nested.is_empty() {
+        return values;
+    }
+    let typed = collect_exportable_value_symbols(
+        &nested,
+        local_type_declarations,
+        local_symbols,
+        Some(imported_symbols),
+        parsed_file.is_module,
+        ctx,
+    );
+    for name in named {
+        if values.get_own_shared(name).is_none()
+            && let Some(symbol) = typed.get_own_shared(name)
+        {
+            let _ = values.insert_shared(Arc::from(name), symbol);
+        }
+    }
+    values
+}
+
+fn nested_vars(
+    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+    named: &[&str],
+    out: &mut Vec<ParsedStatement>,
+) {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+    for statement in body {
+        match statement {
+            Statement::VariableDeclaration(variable)
+                if variable.kind == surge_ts_syntax::ParsedVariableKind::Var
+                    && named.contains(&variable.name.as_str()) =>
+            {
+                out.push(ParsedStatement::VariableDeclaration(variable.clone()));
+            }
+            Statement::Block(block) => nested_vars(block, named, out),
+            Statement::If(if_statement) => {
+                nested_vars(&if_statement.then_body, named, out);
+                nested_vars(&if_statement.else_body, named, out);
+            }
+            Statement::While(while_statement) => nested_vars(&while_statement.body, named, out),
+            Statement::ForOf(for_of_statement) => {
+                // A `for (var k in o)` / `for (var v of xs)` head is a hoisted
+                // `var` too: a key is a `string`, an element is left unmodelled.
+                if for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::Var
+                    && let surge_ts_syntax::ParsedBindingName::Identifier { name, span } =
+                        &for_of_statement.binding_name
+                    && named.contains(&name.as_str())
+                {
+                    out.push(ParsedStatement::VariableDeclaration(Box::new(
+                        surge_ts_syntax::ParsedVariableDeclaration {
+                            is_declare: false,
+                            kind: surge_ts_syntax::ParsedVariableKind::Var,
+                            from_binding_pattern: false,
+                            has_definite_assertion: false,
+                            array_pattern_span: None,
+                            is_enum_object: false,
+                            name: name.clone(),
+                            name_span: *span,
+                            declared_type: Some(if for_of_statement.keys_only {
+                                surge_ts_syntax::ParsedType::String
+                            } else {
+                                surge_ts_syntax::ParsedType::Unknown
+                            }),
+                            initializer: None,
+                            initializer_span: None,
+                            declaration_list: None,
+                        },
+                    )));
+                }
+                nested_vars(&for_of_statement.body, named, out)
+            }
+            Statement::Switch(switch_statement) => {
+                for case in &switch_statement.cases {
+                    nested_vars(&case.consequent, named, out);
+                }
+            }
+            Statement::Try(try_statement) => {
+                nested_vars(&try_statement.block, named, out);
+                if let Some(handler) = &try_statement.handler {
+                    nested_vars(&handler.body, named, out);
+                }
+                nested_vars(&try_statement.finalizer, named, out);
+            }
+            _ => {}
+        }
+    }
+}
 
 pub(crate) fn build_module_export_table(
     parsed_file: &ParsedProgramFile,
@@ -29,6 +159,14 @@ pub(crate) fn build_module_export_table(
         parsed_file.is_module,
         ctx,
     );
+    let exportable_values = with_exported_nested_vars(
+        exportable_values,
+        parsed_file,
+        local_type_declarations,
+        local_symbols,
+        imported_symbols,
+        ctx,
+    );
     crate::program::binding::analyze_split_record(3, split_start);
     let split_start = crate::program::binding::analyze_split_enabled()
         .then(std::time::Instant::now);
@@ -37,11 +175,16 @@ pub(crate) fn build_module_export_table(
     let mut symbols = SymbolTable::new();
     let mut default_symbol = None;
     let mut export_assignment_symbol = None;
+    let mut type_only_exports = surge_ts_types::fx::FxHashMap::default();
+    let imported_names = crate::program::import_bound_names(&parsed_file.statements);
     for statement in &parsed_file.statements {
         collect_exports_from_statement(
             statement,
             &exportable_values,
             imported_symbols,
+            &imported_names,
+            &parsed_file.statements,
+            &parsed_file.parenthesized_expressions,
             local_type_declarations,
             local_symbols,
             resolution_scope.as_ref(),
@@ -49,6 +192,7 @@ pub(crate) fn build_module_export_table(
             &mut symbols,
             &mut default_symbol,
             &mut export_assignment_symbol,
+            &mut type_only_exports,
             ctx,
         );
     }
@@ -59,10 +203,24 @@ pub(crate) fn build_module_export_table(
         symbols,
         default_symbol,
         export_assignment_symbol,
+        writes_export_assignment: parsed_file.statements.iter().any(is_export_assignment),
         namespace_export_object_type: None,
         has_unresolved_star_export: false,
         has_incomplete_declaration_surface: module_has_incomplete_declaration_surface(parsed_file),
+        shorthand: false,
+        type_only_exports: Arc::new(type_only_exports),
     }
+}
+
+fn is_export_assignment(statement: &ParsedStatement) -> bool {
+    matches!(
+        statement,
+        ParsedStatement::ExportDeclaration(export)
+            if matches!(
+                export.as_ref(),
+                ParsedExportDeclaration::Equals { .. } | ParsedExportDeclaration::EqualsExpression { .. }
+            )
+    )
 }
 
 /// The export surface of a `.json` module: the value itself as the default
@@ -96,9 +254,12 @@ fn build_json_module_export_table(
         symbols,
         default_symbol: Some(Arc::new(value_symbol(value_type.clone()))),
         export_assignment_symbol: Some(Arc::new(value_symbol(value_type.clone()))),
+        writes_export_assignment: true,
         has_unresolved_star_export: false,
         namespace_export_object_type: Some(value_type),
         has_incomplete_declaration_surface: false,
+        shorthand: false,
+        type_only_exports: Default::default(),
     }
 }
 
@@ -345,6 +506,7 @@ fn report_duplicate_export_declarations(
         let ParsedExportDeclaration::Named {
             specifiers,
             module_specifier,
+            resolution_mode,
             ..
         } = export.as_ref()
         else {
@@ -359,8 +521,9 @@ fn report_duplicate_export_declarations(
 
         let target_export_table = match module_specifier {
             Some(module_specifier) => {
-                let resolved = try_resolve_module_export_table(
+                let resolved = try_resolve_module_export_table_in_mode(
                     module_specifier,
+                    ParsedResolutionModeAttribute::resolution_override(*resolution_mode),
                     ctx,
                     parsed_files,
                     local_module_export_tables,
@@ -472,8 +635,34 @@ pub(crate) fn try_resolve_module_export_table(
     resolving: &mut [bool],
     file_name: &str,
 ) -> Option<(ModuleExportTable, Option<usize>)> {
+    try_resolve_module_export_table_in_mode(
+        module_specifier,
+        None,
+        ctx,
+        parsed_files,
+        local_module_export_tables,
+        resolved_module_export_tables,
+        resolving,
+        file_name,
+    )
+}
+
+/// [`try_resolve_module_export_table`] for a re-export whose
+/// `resolution-mode` attribute picks the mode its specifier resolves in.
+pub(crate) fn try_resolve_module_export_table_in_mode(
+    module_specifier: &str,
+    resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
+    ctx: &mut CheckerContext,
+    parsed_files: &[ParsedProgramFile],
+    local_module_export_tables: &[Option<ModuleExportTable>],
+    resolved_module_export_tables: &mut [Option<ModuleExportTable>],
+    resolving: &mut [bool],
+    file_name: &str,
+) -> Option<(ModuleExportTable, Option<usize>)> {
     let resolution_start = Instant::now();
-    if let Some(resolved_file_name) = ctx.options.resolved_module_for(file_name, module_specifier) {
+    if let Some(resolved_file_name) =
+        resolved_module_in_mode(ctx, file_name, module_specifier, resolution_mode)
+    {
         let resolved_file_name = canonical_file_identity(resolved_file_name);
         if let Some(resolved_index) = ctx
             .module_file_index_by_identity
@@ -602,17 +791,21 @@ pub(crate) fn resolve_module_export_table(
                 specifiers,
                 module_specifier: Some(module_specifier),
                 module_specifier_span,
+                resolution_mode,
                 ..
             } => {
-                let Some((target_export_table, resolved_index)) = try_resolve_module_export_table(
-                    module_specifier,
-                    ctx,
-                    parsed_files,
-                    local_module_export_tables,
-                    resolved_module_export_tables,
-                    resolving,
-                    &parsed_file.file_name,
-                ) else {
+                let Some((target_export_table, resolved_index)) =
+                    try_resolve_module_export_table_in_mode(
+                        module_specifier,
+                        ParsedResolutionModeAttribute::resolution_override(*resolution_mode),
+                        ctx,
+                        parsed_files,
+                        local_module_export_tables,
+                        resolved_module_export_tables,
+                        resolving,
+                        &parsed_file.file_name,
+                    )
+                else {
                     if resolve_relative_module(
                         &parsed_file.file_name,
                         module_specifier,
@@ -655,14 +848,72 @@ pub(crate) fn resolve_module_export_table(
 
                 ctx.set_file_name(parsed_file.file_name.clone());
 
+                // A shorthand ambient module's every member is the module
+                // itself: `any`, with no type of its own.
+                if target_export_table.shorthand {
+                    for specifier in specifiers {
+                        insert_error_type_import(
+                            Arc::make_mut(&mut resolved_export_table.type_declarations),
+                            &specifier.exported_name,
+                            ctx.file_name_arc(),
+                            specifier.name_span,
+                        );
+                        if !(*is_type_only || specifier.is_type_only) {
+                            insert_value_import(
+                                &specifier.exported_name,
+                                Type::Any,
+                                &mut resolved_export_table.symbols,
+                            );
+                        }
+                    }
+                    continue;
+                }
+
+                // The names the target publishes qualified `NS.Member` keys
+                // under: a namespace, which the alias re-exports beside any
+                // type or value of the same name.
+                let mut namespace_heads: Option<surge_ts_types::fx::FxHashSet<Arc<str>>> = None;
+                let mut is_namespace = |name: &str| {
+                    namespace_heads
+                        .get_or_insert_with(|| {
+                            target_export_table
+                                .type_declarations
+                                .iter()
+                                .filter_map(|(key, _)| {
+                                    key.split_once('.').map(|(head, _)| head.into())
+                                })
+                                .collect()
+                        })
+                        .contains(name)
+                };
                 for specifier in specifiers {
                     let specifier_is_type_only = *is_type_only || specifier.is_type_only;
                     let type_export =
                         lookup_type_export(&target_export_table, &specifier.local_name);
                     let value_export =
                         lookup_value_export(&target_export_table, &specifier.local_name);
+                    let target_type_only_kind = target_export_table
+                        .type_only_exports
+                        .get(specifier.local_name.as_str())
+                        .copied();
 
                     if specifier_is_type_only {
+                        // `export type` re-exports every meaning of the name
+                        // (tsc's alias resolves them all); it only keeps an
+                        // importer from using the value.
+                        let republishes_value = value_export.is_some();
+                        if let Some(value_export) = value_export {
+                            republish_value_export(
+                                &mut resolved_export_table,
+                                &specifier.exported_name,
+                                value_export,
+                            );
+                            resolved_export_table.mark_type_only_export(
+                                &specifier.exported_name,
+                                TypeOnlyAliasKind::Export,
+                            );
+                        }
+
                         if let Some(type_export) = type_export {
                             export_local_type_declaration(
                                 type_export,
@@ -670,6 +921,14 @@ pub(crate) fn resolve_module_export_table(
                                 None,
                                 Arc::make_mut(&mut resolved_export_table.type_declarations),
                             );
+                            if is_namespace(&specifier.local_name) {
+                                copy_qualified_type_exports(
+                                    &target_export_table,
+                                    &specifier.local_name,
+                                    &specifier.exported_name,
+                                    Arc::make_mut(&mut resolved_export_table.type_declarations),
+                                );
+                            }
                             continue;
                         }
 
@@ -687,14 +946,9 @@ pub(crate) fn resolve_module_export_table(
                         }
 
                         // `export type { f } from './m'` over a value-only
-                        // export republishes the symbol: the name is legal in
-                        // type position through `typeof f`.
-                        if let Some(value_export) = value_export {
-                            republish_value_export(
-                                &mut resolved_export_table,
-                                &specifier.exported_name,
-                                value_export,
-                            );
+                        // export: the name is legal in type position through
+                        // `typeof f`.
+                        if republishes_value {
                             continue;
                         }
 
@@ -731,10 +985,14 @@ pub(crate) fn resolve_module_export_table(
                             &specifier.exported_name,
                             value_export,
                         );
+                        if let Some(kind) = target_type_only_kind {
+                            resolved_export_table
+                                .mark_type_only_export(&specifier.exported_name, kind);
+                        }
                         found = true;
                     }
 
-                    if !found
+                    if (!found || is_namespace(&specifier.local_name))
                         && copy_qualified_type_exports(
                             &target_export_table,
                             &specifier.local_name,
@@ -932,6 +1190,10 @@ pub(crate) fn resolve_module_export_table(
     }
 
     let re_export_start = Instant::now();
+    // `getExportsOfModuleWorker`: a name some `export *` reaches without a
+    // type-only star is not made type-only by another star, so the values an
+    // `export type *` carries are taken after every other star's.
+    let mut type_only_star_targets = Vec::new();
     for statement in &parsed_file.statements {
         let ParsedStatement::ExportDeclaration(export) = statement else {
             continue;
@@ -940,14 +1202,16 @@ pub(crate) fn resolve_module_export_table(
             module_specifier,
             module_specifier_span,
             is_type_only,
+            resolution_mode,
             ..
         } = export.as_ref()
         else {
             continue;
         };
 
-        let Some((target_export_table, _resolved_index)) = try_resolve_module_export_table(
+        let Some((target_export_table, _resolved_index)) = try_resolve_module_export_table_in_mode(
             module_specifier,
+            ParsedResolutionModeAttribute::resolution_override(*resolution_mode),
             ctx,
             parsed_files,
             local_module_export_tables,
@@ -976,19 +1240,37 @@ pub(crate) fn resolve_module_export_table(
         // which first-wins expansion later consumers observe (zod message
         // drift). Re-export entries keep their per-table copies.
         for (name, declaration) in target_export_table.type_declarations.iter() {
-            if resolved_type_declarations.get(name.as_ref()).is_none() {
+            if !is_export_assignment_key(name)
+                && resolved_type_declarations.get(name.as_ref()).is_none()
+            {
                 let _ = resolved_type_declarations.insert(name.clone(), declaration.clone());
             }
         }
 
-        if !*is_type_only {
-            for (name, symbol) in target_export_table.symbols.iter_shared() {
-                if resolved_export_table.symbols.get(name).is_none() {
-                    crate::program::record_module_export_symbol_handle_copy_count(1);
-                    resolved_export_table
-                        .symbols
-                        .insert_shared(name.clone(), symbol.clone());
+        if *is_type_only {
+            type_only_star_targets.push(target_export_table);
+            continue;
+        }
+        for (name, symbol) in target_export_table.symbols.iter_shared() {
+            if resolved_export_table.symbols.get(name).is_none() {
+                crate::program::record_module_export_symbol_handle_copy_count(1);
+                resolved_export_table
+                    .symbols
+                    .insert_shared(name.clone(), symbol.clone());
+                if let Some(kind) = target_export_table.type_only_exports.get(name.as_ref()) {
+                    resolved_export_table.mark_type_only_export(name, *kind);
                 }
+            }
+        }
+    }
+    for target_export_table in type_only_star_targets {
+        for (name, symbol) in target_export_table.symbols.iter_shared() {
+            if resolved_export_table.symbols.get(name).is_none() {
+                crate::program::record_module_export_symbol_handle_copy_count(1);
+                resolved_export_table
+                    .symbols
+                    .insert_shared(name.clone(), symbol.clone());
+                resolved_export_table.mark_type_only_export(name, TypeOnlyAliasKind::Export);
             }
         }
     }

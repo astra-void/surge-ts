@@ -139,6 +139,13 @@ pub(super) fn evaluate_index_access(
         super::report_unknown_operand(&object, choose_span(object_span, fallback_span), ctx);
         return InferredExpression::Unknown;
     }
+    // tsc's `checkElementAccessExpression`: a const enum object indexed by
+    // anything but a string literal is TS2476 (a grammar diagnostic) and the
+    // access is the error type, so its reverse mapping never answers it.
+    if crate::infer::expression::indexes_const_enum_object(object_name, index, &symbol.ty, ctx) {
+        let _ = evaluate_expression(index, index_span.or(fallback_span), symbols, ctx);
+        return InferredExpression::Known(Type::ErrorType);
+    }
     if let Some(narrowed) = crate::infer::narrowed_element_read_named(object_name, index, symbols)
     {
         return InferredExpression::Known(narrowed);

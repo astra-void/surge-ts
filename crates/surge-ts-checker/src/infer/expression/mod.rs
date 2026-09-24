@@ -185,8 +185,14 @@ fn infer_expression_unsettled(
             };
             resolved
                 .map(|symbol| {
+                    // tsc types a read it reports as used before being assigned
+                    // as the declared type, not what a guard narrowed it to.
+                    let ty = crate::flow::is_unassigned_read(*span, &ctx.file_name)
+                        .then(|| symbols.declared_type(name))
+                        .flatten()
+                        .unwrap_or(&symbol.ty);
                     InferredExpression::Known(with_generic_declaration(
-                        clone_type_with_metrics(&symbol.ty, CopySource::Identifier),
+                        clone_type_with_metrics(ty, CopySource::Identifier),
                         &symbol,
                     ))
                 })
@@ -231,16 +237,27 @@ fn infer_expression_unsettled(
         ParsedExpression::ObjectLiteral { properties, .. } => {
             InferredExpression::Known(infer_object_literal(properties, symbols, ctx))
         }
-        ParsedExpression::ArrayLiteral { elements, .. } => {
-            infer_array_literal(elements, symbols, ctx)
-        }
+        ParsedExpression::ArrayLiteral {
+            elements,
+            tuple_context,
+            ..
+        } => infer_array_literal(elements, *tuple_context, symbols, ctx),
         ParsedExpression::Unary {
             operator, operand, ..
         } => infer_unary_expression(*operator, operand, symbols, ctx),
         ParsedExpression::Update { operand, .. } => {
             crate::checks::expr::update_result_type(&infer_expression(operand, symbols, ctx))
         }
-        ParsedExpression::ObjectRest { source, omitted } => match infer_expression(source, symbols, ctx) {
+        ParsedExpression::ObjectRest {
+            source, omitted, ..
+        } => match infer_expression(source, symbols, ctx) {
+            // A source that is not an object type is TS2700 where it is
+            // checked; the binding reads as the error type.
+            InferredExpression::Known(ty)
+                if crate::checks::function::rest_source_validity(&ty) == Some(false) =>
+            {
+                InferredExpression::Known(Type::ErrorType)
+            }
             InferredExpression::Known(ty) => InferredExpression::Known(
                 crate::checks::function::object_rest_type(&ty, omitted),
             ),
@@ -551,7 +568,11 @@ fn infer_expression_unsettled(
             index_span,
         } => infer_optional_index_access(object, object_span, index, index_span, symbols, ctx),
         ParsedExpression::JsxElement { .. } | ParsedExpression::JsxFragment { .. } => {
-            InferredExpression::Known(jsx_element_type())
+            let fragment = matches!(parsed_expression, ParsedExpression::JsxFragment { .. });
+            InferredExpression::Known(
+                crate::checks::jsx::jsx_expression_type(fragment, ctx)
+                    .unwrap_or_else(jsx_element_type),
+            )
         }
         ParsedExpression::TemplateLiteral {
             expressions,
@@ -563,7 +584,7 @@ fn infer_expression_unsettled(
             for expression in expressions {
                 let _ = infer_expression(expression, symbols, ctx);
             }
-            InferredExpression::Known(template_literal_type(expressions, quasis))
+            InferredExpression::Known(template_literal_type(expressions, quasis, symbols, ctx))
         }
         ParsedExpression::TemplateStringsArray { .. } => {
             match ctx.lookup_type_declaration("TemplateStringsArray") {
@@ -623,10 +644,26 @@ fn is_known_non_unknown(result: &InferredExpression) -> bool {
 /// tsc's `checkTemplateExpression`: a template whose interpolations all
 /// evaluate to constants is the fresh string literal of its text; any other is
 /// `string` (a template-literal *type* needs a contextual type surge does not
-/// model separately from `string`). Only string and integer literals are
-/// evaluated here — the forms whose JavaScript string conversion is certain.
-fn template_literal_type(expressions: &[ParsedExpression], quasis: &[Option<String>]) -> Type {
-    fn constant_text(expression: &ParsedExpression) -> Option<String> {
+/// model separately from `string`). Of the numbers only integer literals are
+/// evaluated — the ones whose JavaScript string conversion is certain.
+pub(crate) fn template_literal_type(
+    expressions: &[ParsedExpression],
+    quasis: &[Option<String>],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Type {
+    // tsc's constant evaluator (`evaluateTemplateExpression`, `evaluateEntity`):
+    // a literal, a `const` holding one, an enum member, or a template of those.
+    fn constant_text(
+        expression: &ParsedExpression,
+        symbols: &SymbolTable,
+        ctx: &mut CheckerContext,
+    ) -> Option<String> {
+        let literal_text = |ty: &Type| match ty.peeled() {
+            Type::StringLiteral(value) => Some(value),
+            Type::NumberLiteral(number) => Some(number.value),
+            _ => None,
+        };
         match expression {
             ParsedExpression::StringLiteral(value) => Some(value.clone()),
             ParsedExpression::NumberLiteral(value)
@@ -636,6 +673,30 @@ fn template_literal_type(expressions: &[ParsedExpression], quasis: &[Option<Stri
             {
                 Some(value.clone())
             }
+            ParsedExpression::Identifier { name, .. } => {
+                let symbol = symbols.get(name)?;
+                matches!(symbol.kind, crate::symbols::SymbolKind::Const)
+                    .then(|| literal_text(&symbol.ty))
+                    .flatten()
+            }
+            ParsedExpression::PropertyAccess {
+                object,
+                property_name,
+                ..
+            } => literal_text(&access::enum_member_value_type(
+                object,
+                property_name,
+                symbols,
+                ctx,
+            )?),
+            ParsedExpression::TemplateLiteral {
+                expressions,
+                quasis,
+                ..
+            } => match template_literal_type(expressions, quasis, symbols, ctx) {
+                Type::StringLiteral(value) => Some(value),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -649,7 +710,7 @@ fn template_literal_type(expressions: &[ParsedExpression], quasis: &[Option<Stri
         };
         text.push_str(quasi);
         if let Some(expression) = expressions.get(index) {
-            match constant_text(expression) {
+            match constant_text(expression, symbols, ctx) {
                 Some(value) => text.push_str(&value),
                 None => return Type::String,
             }
@@ -659,11 +720,11 @@ fn template_literal_type(expressions: &[ParsedExpression], quasis: &[Option<Stri
 }
 
 fn callable_return_without_inference(callee_type: &Type) -> Option<Type> {
-    let peeled = callee_type.peeled();
-    let Type::Object(object) = &peeled else {
-        return None;
+    let signature = match callee_type.peeled() {
+        Type::Object(object) => object.call_signature()?.clone(),
+        Type::Union(union) => crate::checks::call::union_call_signature(&union)?,
+        _ => return None,
     };
-    let signature = object.call_signature()?;
     (signature.overloads().is_none() && signature.type_parameter_names().is_empty())
         .then(|| signature.return_type().clone())
 }

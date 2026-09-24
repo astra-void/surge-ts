@@ -99,11 +99,16 @@ pub fn find_typescript_lib_dir(root_dir: &Path) -> Option<PathBuf> {
 /// * `lib_entries` mirrors `compilerOptions.lib`. When empty, `default_seed`
 ///   (typically the target's `.full` aggregate, e.g. `"es2024.full"`) is used,
 ///   matching how `tsc` derives the default lib from `target`.
+/// * `referenced_libs` are the `/// <reference lib>` names of the program's
+///   own files. tsc's file loader adds each one to the program on top of the
+///   configured set; a name with no lib file is the directive's own error,
+///   not the loader's, so it is skipped here.
 pub(crate) fn resolve_default_libs_from_source(
     source: &dyn LibSource,
     no_lib: bool,
     lib_entries: &[String],
     default_seed: &str,
+    referenced_libs: &[String],
     io_stats: DefaultLibIoStats,
 ) -> PhysicalLibResolution {
     if no_lib {
@@ -129,6 +134,9 @@ pub(crate) fn resolve_default_libs_from_source(
         if !loader.enqueue_lib_name(seed) {
             unknown_libs.push(seed.clone());
         }
+    }
+    for referenced in referenced_libs {
+        loader.enqueue_lib_name(referenced);
     }
     let (inputs, loaded_files, io_stats) = loader.run();
 
@@ -404,6 +412,11 @@ fn normalize_lib_name(name: &str) -> String {
         .strip_suffix(".d.ts")
         .unwrap_or_else(|| trimmed.strip_prefix("lib.").unwrap_or(&trimmed));
     trimmed.to_string()
+}
+
+/// The `/// <reference lib="..." />` names a source file declares.
+pub fn reference_lib_directives(source_text: &str) -> Vec<String> {
+    scan_reference_libs(source_text)
 }
 
 /// Narrow scanner for `/// <reference lib="..." />` directives.

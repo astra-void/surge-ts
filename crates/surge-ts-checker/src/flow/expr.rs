@@ -31,14 +31,31 @@ pub(crate) fn check_expression_flow_impl(
     let mut blocked = false;
     let result = match expression {
         // The target is written, not read; the statement marks it assigned
-        // once the expression has run.
-        ParsedExpression::Assignment { value, value_span, .. } => check_expression_flow_impl(
+        // once the expression has run. The write is still positional, so one in
+        // the binding's temporal dead zone is TS2448, which blocks nothing:
+        // tsc goes on to check the write itself (`const c = (c = 1)` is TS2588
+        // too).
+        ParsedExpression::Assignment {
+            target_name,
+            target_span,
             value,
-            value_span.or(fallback_span),
-            flow_state,
-            statement_index,
-            ctx,
-        ),
+            value_span,
+        } => {
+            let _ = check_assignment_target_flow(
+                target_name,
+                flow_state,
+                statement_index,
+                ctx,
+                target_span.or(fallback_span),
+            );
+            check_expression_flow_impl(
+                value,
+                value_span.or(fallback_span),
+                flow_state,
+                statement_index,
+                ctx,
+            )
+        }
         ParsedExpression::Identifier { name, span } => report_read_flow(
             name,
             span.or(fallback_span),
@@ -153,6 +170,8 @@ pub(crate) fn check_expression_flow_impl(
             check_expression_flow_impl(source, fallback_span, flow_state, statement_index, ctx)
         }
         ParsedExpression::Sequence { expressions } => {
+            // Operands run in order: each sees what the earlier ones assigned.
+            let mark = flow_state.push_guarded_defined(&[]);
             for (expression, span) in expressions {
                 blocked |= check_expression_flow_impl(
                     expression,
@@ -162,7 +181,9 @@ pub(crate) fn check_expression_flow_impl(
                     ctx,
                 )
                 .is_blocked();
+                flow_state.push_guarded_defined(&certainly_assigned_names(expression));
             }
+            flow_state.restore_guarded_defined(mark);
             FlowCheck::Clear
         }
         ParsedExpression::Binary {
@@ -180,17 +201,21 @@ pub(crate) fn check_expression_flow_impl(
                 ctx,
             ).is_blocked();
 
-            check_expression_flow_impl(
+            let mark = flow_state.push_guarded_defined(&certainly_assigned_names(left));
+            let result = check_expression_flow_impl(
                 right,
                 right_span.or(fallback_span),
                 flow_state,
                 statement_index,
                 ctx,
-            )
+            );
+            flow_state.restore_guarded_defined(mark);
+            result
         }
         ParsedExpression::Logical {
             left,
             left_span,
+            operator,
             right,
             right_span,
             ..
@@ -203,13 +228,13 @@ pub(crate) fn check_expression_flow_impl(
                 ctx,
             ).is_blocked();
 
-            check_expression_flow_impl(
-                right,
-                right_span.or(fallback_span),
-                flow_state,
-                statement_index,
-                ctx,
-            )
+            // The right operand runs on the left's true edge for `&&`, its
+            // false edge for `||`, after the left's assignments.
+            let edge = matches!(operator, surge_ts_syntax::ParsedLogicalOperator::And);
+            let mark = flow_state.push_guarded_defined(&certainly_assigned_names(left));
+            let result = check_on_edge(left, edge, right, right_span.or(fallback_span), flow_state, statement_index, ctx);
+            flow_state.restore_guarded_defined(mark);
+            result
         }
         ParsedExpression::Conditional {
             condition,
@@ -228,21 +253,29 @@ pub(crate) fn check_expression_flow_impl(
                 ctx,
             ).is_blocked();
 
-            blocked |= check_expression_flow_impl(
+            let mark = flow_state.push_guarded_defined(&certainly_assigned_names(condition));
+            blocked |= check_on_edge(
+                condition,
+                true,
                 when_true,
                 when_true_span.or(fallback_span),
                 flow_state,
                 statement_index,
                 ctx,
-            ).is_blocked();
+            )
+            .is_blocked();
 
-            check_expression_flow_impl(
+            let result = check_on_edge(
+                condition,
+                false,
                 when_false,
                 when_false_span.or(fallback_span),
                 flow_state,
                 statement_index,
                 ctx,
-            )
+            );
+            flow_state.restore_guarded_defined(mark);
+            result
         }
         ParsedExpression::ObjectLiteral { properties, .. } => {
             for property in properties {
@@ -451,6 +484,30 @@ pub(crate) fn check_expression_flow_impl(
     if blocked { FlowCheck::Blocked } else { result }
 }
 
+/// Walks `expression`, which runs on `condition`'s `when` edge: what the edge
+/// proves defined holds there, and nothing is unassigned on an edge a literal
+/// condition never takes.
+fn check_on_edge(
+    condition: &ParsedExpression,
+    when: bool,
+    expression: &ParsedExpression,
+    fallback_span: Option<SyntaxTextSpan>,
+    flow_state: &FunctionFlowState,
+    statement_index: usize,
+    ctx: &mut CheckerContext,
+) -> FlowCheck {
+    let unreachable = super::condition_never_takes(condition, when);
+    let defined =
+        super::condition_defined_names(condition, when, &|callee| super::predicate_parameter(callee, ctx));
+    let mark = flow_state.push_guarded_defined(&defined);
+    flow_state.enter_unreachable(unreachable);
+    let result =
+        check_expression_flow_impl(expression, fallback_span, flow_state, statement_index, ctx);
+    flow_state.exit_unreachable(unreachable);
+    flow_state.restore_guarded_defined(mark);
+    result
+}
+
 fn check_jsx_child_flow(
     child: &ParsedJsxChild,
     fallback_span: Option<SyntaxTextSpan>,
@@ -488,7 +545,7 @@ pub(crate) fn check_assignment_target_flow(
         return FlowCheck::Clear;
     }
 
-    let FlowReadOutcome::UseBeforeDeclaration =
+    let FlowReadOutcome::UseBeforeDeclaration { circular_at, .. } =
         flow_state.read_identifier(target_name, statement_index)
     else {
         return FlowCheck::Clear;
@@ -500,6 +557,16 @@ pub(crate) fn check_assignment_target_flow(
     }
 
     ctx.push(diagnostic);
+    // Checking the write needs the target's type, which is what is being
+    // resolved.
+    if let Some(declaration_span) = circular_at
+        && ctx.options.no_implicit_any
+    {
+        ctx.push(
+            Diagnostic::ts7022(target_name, ctx.file_name.clone())
+                .with_span(convert_span(declaration_span)),
+        );
+    }
     FlowCheck::Blocked
 }
 

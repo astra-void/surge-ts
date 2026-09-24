@@ -14,6 +14,8 @@
 use serde_json::Value;
 use surge_ts_config::ModuleResolutionKind;
 
+use crate::semver::{Version, VersionRange};
+
 /// Inputs that steer condition selection, derived from `compilerOptions`.
 #[derive(Debug, Clone)]
 pub struct ResolverOptions {
@@ -32,6 +34,11 @@ pub struct ResolverOptions {
     /// Base directory `paths` targets resolve against: `baseUrl` when set,
     /// else the config directory.
     pub path_mapping_base: Option<std::path::PathBuf>,
+    /// tsgo's `GetEmitModuleKind`, which decides a file's resolution mode.
+    pub emit_module: surge_ts_config::ModuleKind,
+    /// `resolveJsonModule`: a package entry naming a `.json` file resolves to
+    /// it.
+    pub resolve_json_module: bool,
 }
 
 impl Default for ResolverOptions {
@@ -43,6 +50,8 @@ impl Default for ResolverOptions {
             custom_conditions: Vec::new(),
             path_mappings: Vec::new(),
             path_mapping_base: None,
+            emit_module: surge_ts_config::ModuleKind::ES2022,
+            resolve_json_module: true,
         }
     }
 }
@@ -51,20 +60,19 @@ impl ResolverOptions {
     /// The condition names that are "on" for declaration resolution, besides the
     /// always-matching `default`. Mirrors TypeScript's `getConditions`:
     ///
-    /// * the mode condition (`import` for ESM contexts / bundler, `require` for
-    ///   CJS contexts under node16/nodenext),
+    /// * the mode condition (`import` for an ESM-mode resolution, `require`
+    ///   otherwise; bundler reads an unset mode as ESM before this point),
     /// * `types` (declaration resolution always opts in),
     /// * `node` for node16/nodenext (never under bundler),
     /// * then `customConditions` in configured order.
     ///
     /// Priority between branches of a conditional object is decided by the
     /// *package author's key order* (Node semantics), not by this list — this is
-    /// only the membership set. `importer_is_esm` reflects the importing file's
-    /// module format; bundler ignores it and always behaves as ESM.
+    /// only the membership set.
     pub fn active_conditions(&self, importer_is_esm: bool) -> Vec<String> {
         let mut conditions = Vec::new();
         let is_bundler = self.module_resolution == ModuleResolutionKind::Bundler;
-        if is_bundler || importer_is_esm {
+        if importer_is_esm {
             conditions.push("import".to_string());
         } else {
             conditions.push("require".to_string());
@@ -221,7 +229,7 @@ fn collect_targets_into(value: &Value, conditions: &[String], targets: &mut Vec<
         }
         Value::Object(map) => {
             for (condition, target) in map {
-                if condition == "default" || conditions.iter().any(|c| c == condition) {
+                if condition_matches(condition, conditions) {
                     if !collect_targets_into(target, conditions, targets) {
                         return false;
                     }
@@ -232,6 +240,34 @@ fn collect_targets_into(value: &Value, conditions: &[String], targets: &mut Vec<
         Value::Null => false,
         _ => true,
     }
+}
+
+/// tsgo's `conditionMatches`: `default` and the active conditions, plus a
+/// `types@<range>` key the TypeScript version satisfies once `types` is active.
+fn condition_matches(condition: &str, conditions: &[String]) -> bool {
+    if condition == "default" || conditions.iter().any(|active| active == condition) {
+        return true;
+    }
+    conditions.iter().any(|active| active == "types")
+        && is_applicable_versioned_types_key(condition)
+}
+
+/// tsgo's `IsApplicableVersionedTypesKey`.
+fn is_applicable_versioned_types_key(key: &str) -> bool {
+    key.strip_prefix("types@")
+        .and_then(VersionRange::parse)
+        .is_some_and(|range| range.test(typescript_version()))
+}
+
+/// The version `typesVersions` and `types@` ranges are tested against: the
+/// TypeScript release the bundled libs come from, as tsc tests its own.
+fn typescript_version() -> &'static Version {
+    static VERSION: std::sync::OnceLock<Version> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        let bundled = surge_ts_checker::lowlevel::bundled_typescript_version();
+        Version::parse(bundled)
+            .unwrap_or_else(|| panic!("bundled TypeScript version `{bundled}` is not semver"))
+    })
 }
 
 /// Split a key with exactly one `*` into `(prefix, suffix)`. Returns `None` for
@@ -264,22 +300,25 @@ fn substitute_star(template: &str, captured: &str) -> String {
 /// `"index.d.ts"` for the root, or `"server"` / `"features/auth"` for a subpath)
 /// to its ordered list of candidate target templates (with `*` substituted).
 ///
-/// Version selection is deliberately narrow: the pinned TypeScript is 6.0.3, so
-/// `"*"` always matches and simple comparator ranges (`>=5.0`, `<6.0`, `6.0`)
-/// are evaluated against it. The first matching version key wins.
+/// tsgo's `GetVersionPaths`: the first key whose npm range the TypeScript
+/// version satisfies wins, an unparsable key is skipped, and a matching key
+/// whose value is not an object leaves the package with no version paths.
 pub fn types_versions_candidates(types_versions: &Value, subpath: &str) -> Vec<String> {
     let Value::Object(version_map) = types_versions else {
         return Vec::new();
     };
 
     for (version_range, mapping) in version_map {
-        if !version_range_matches(version_range) {
-            continue;
-        }
-        let Value::Object(paths) = mapping else {
+        let Some(range) = VersionRange::parse(version_range) else {
             continue;
         };
-        return match_types_versions_paths(paths, subpath);
+        if !range.test(typescript_version()) {
+            continue;
+        }
+        return match mapping {
+            Value::Object(paths) => match_types_versions_paths(paths, subpath),
+            _ => Vec::new(),
+        };
     }
 
     Vec::new()
@@ -332,57 +371,6 @@ fn string_list(value: &Value) -> Vec<String> {
     }
 }
 
-/// The pinned TypeScript version this checker targets.
-const PINNED_TS_VERSION: (u32, u32) = (6, 0);
-
-/// Whether a `typesVersions` version-range key is satisfied by the pinned
-/// TypeScript version. `"*"` always matches; otherwise a small set of comparator
-/// forms is supported.
-fn version_range_matches(range: &str) -> bool {
-    let range = range.trim();
-    if range == "*" || range.is_empty() {
-        return true;
-    }
-
-    let (op, rest) = if let Some(rest) = range.strip_prefix(">=") {
-        (">=", rest)
-    } else if let Some(rest) = range.strip_prefix("<=") {
-        ("<=", rest)
-    } else if let Some(rest) = range.strip_prefix('>') {
-        (">", rest)
-    } else if let Some(rest) = range.strip_prefix('<') {
-        ("<", rest)
-    } else {
-        ("=", range)
-    };
-
-    let Some(bound) = parse_major_minor(rest) else {
-        // Unrecognized range form: match permissively so a real package's types
-        // are not silently dropped.
-        return true;
-    };
-
-    let pinned = PINNED_TS_VERSION;
-    match op {
-        ">=" => pinned >= bound,
-        "<=" => pinned <= bound,
-        ">" => pinned > bound,
-        "<" => pinned < bound,
-        _ => pinned == bound,
-    }
-}
-
-fn parse_major_minor(text: &str) -> Option<(u32, u32)> {
-    let text = text.trim().trim_start_matches('v');
-    let mut parts = text.split('.');
-    let major = parts.next()?.parse::<u32>().ok()?;
-    let minor = match parts.next() {
-        Some(minor) => minor.trim_end_matches('x').parse::<u32>().unwrap_or(0),
-        None => 0,
-    };
-    Some((major, minor))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,11 +391,10 @@ mod tests {
     }
 
     #[test]
-    fn active_conditions_bundler_prefers_import_no_node() {
+    fn active_conditions_bundler_follows_the_mode_without_node() {
         let opts = ResolverOptions::default();
         assert_eq!(opts.active_conditions(true), vec!["import", "types"]);
-        // bundler ignores importer module format.
-        assert_eq!(opts.active_conditions(false), vec!["import", "types"]);
+        assert_eq!(opts.active_conditions(false), vec!["require", "types"]);
     }
 
     #[test]
@@ -608,26 +595,44 @@ mod tests {
     }
 
     #[test]
-    fn types_versions_version_range_matching() {
-        assert!(version_range_matches("*"));
-        assert!(version_range_matches(">=5.0"));
-        assert!(version_range_matches(">=6.0"));
-        assert!(version_range_matches("<7.0"));
-        assert!(version_range_matches("6.0"));
-        assert!(!version_range_matches("<6.0"));
-        assert!(!version_range_matches(">=7.0"));
-        assert!(!version_range_matches("5.0"));
-    }
-
-    #[test]
     fn types_versions_picks_first_matching_version() {
         let tv = json!({
-            ">=7.0": { "*": ["future/*"] },
-            ">=5.0": { "*": ["dist/*"] }
+            "<7.0": { "*": ["legacy/*"] },
+            ">=7.0": { "*": ["dist/*"] }
         });
         assert_eq!(
             types_versions_candidates(&tv, "index.d.ts"),
             vec!["dist/index.d.ts".to_string()]
+        );
+    }
+
+    #[test]
+    fn types_versions_skips_an_unparsable_range() {
+        let tv = json!({
+            "latest": { "*": ["wrong/*"] },
+            "*": { "*": ["dist/*"] }
+        });
+        assert_eq!(
+            types_versions_candidates(&tv, "index.d.ts"),
+            vec!["dist/index.d.ts".to_string()]
+        );
+    }
+
+    #[test]
+    fn versioned_types_conditions_apply_with_types_active() {
+        let exports = json!({
+            "./yep": { "types@>=4": "./types/foo.d.ts" },
+            "./nah": { "types@<4": "./types/foo.d.ts" }
+        });
+        let conditions = bundler_conditions();
+        assert_eq!(
+            select_export_target(&exports, "./yep", &conditions),
+            Some("./types/foo.d.ts".to_string())
+        );
+        assert_eq!(select_export_target(&exports, "./nah", &conditions), None);
+        assert_eq!(
+            select_export_target(&exports, "./yep", &["import".to_string()]),
+            None
         );
     }
 }

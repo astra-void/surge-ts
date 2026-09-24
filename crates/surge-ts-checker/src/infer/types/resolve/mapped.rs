@@ -118,7 +118,22 @@ pub(crate) fn resolve_mapped_type(
             };
         }
     }
-    let resolved_constraint = resolve_parsed_type(*mapped.constraint, ctx, resolving, substitution);
+    // tsc's binder declares the key in the mapped type's own scope, so a
+    // constraint naming it reads the key itself, not an outer type of that
+    // name: a circular constraint (TS2313, reported on the syntax) or a generic
+    // one, neither of which surge enumerates.
+    let mut names_own_key = false;
+    mapped.constraint.for_each_named_type(&mut |named| {
+        names_own_key |= named.name == mapped.key_name && named.type_arguments.is_empty();
+    });
+    let resolved_constraint = if names_own_key {
+        let mut constraint_substitution =
+            substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+        constraint_substitution.insert(mapped.key_name.clone(), Type::Unknown);
+        resolve_parsed_type(*mapped.constraint, ctx, resolving, &constraint_substitution)
+    } else {
+        resolve_parsed_type(*mapped.constraint, ctx, resolving, substitution)
+    };
 
     if resolved_constraint.had_error {
         return ResolvedType {

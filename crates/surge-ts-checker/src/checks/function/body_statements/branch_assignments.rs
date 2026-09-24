@@ -184,7 +184,7 @@ pub(super) fn widen_loop_assigned_bindings(
 }
 
 /// Every plain binding any of `bodies` assigns, at any depth.
-pub(super) fn deep_assigned_names(bodies: &[&[ParsedFunctionBodyStatement]]) -> Vec<String> {
+pub(crate) fn deep_assigned_names(bodies: &[&[ParsedFunctionBodyStatement]]) -> Vec<String> {
     let mut names = Vec::new();
     for body in bodies {
         loop_assigned_names(body, &mut names);

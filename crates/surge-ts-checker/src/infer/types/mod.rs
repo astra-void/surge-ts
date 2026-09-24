@@ -41,6 +41,37 @@ pub(crate) struct TypeParameterSubstitution {
     /// per-binding tuple does not grow and the common (nothing degraded) case
     /// costs one `None`.
     degraded: Option<Arc<Vec<Arc<str>>>>,
+    /// Every candidate a call's inference recorded per type parameter, in
+    /// arrival order; the binding is computed from the whole list, as tsc's
+    /// `getInferredType` does. Scratch state of one inference, cleared when it
+    /// ends so no reference that captures the binding keeps the list alive.
+    inference_candidates: Option<Arc<Vec<InferenceRecord>>>,
+}
+
+#[derive(Debug, Clone)]
+struct InferenceRecord {
+    name: Arc<str>,
+    candidates: Vec<InferenceCandidate>,
+    /// tsc's `InferenceInfo.isFixed`: the binding was read to type a callback's
+    /// parameter, and no later candidate changes it.
+    fixed: bool,
+}
+
+/// A type recorded for a type parameter while a call's arguments are inferred
+/// from (tsc's `InferenceInfo.candidates`, or `contraCandidates`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct InferenceCandidate {
+    pub(crate) ty: Type,
+    /// The type of an object or array literal (`isObjectOrArrayLiteralType`).
+    pub(crate) literal: bool,
+    /// Inferred from a contravariant position: a callback's parameter.
+    pub(crate) contravariant: bool,
+    /// The parameter the argument was inferred against names the type
+    /// parameter at its top level (`InferenceInfo.topLevel`).
+    pub(crate) top_level: bool,
+    /// Taken from a fresh literal, whose literal types a fixed inference
+    /// widens (`getWidenedLiteralType` leaves a regular literal alone).
+    pub(crate) fresh: bool,
 }
 
 impl TypeParameterSubstitution {
@@ -177,12 +208,60 @@ impl TypeParameterSubstitution {
             .flat_map(|values| values.iter().map(|(name, ty)| (name, ty)))
     }
 
+    fn inference_record(&self, name: &str) -> Option<&InferenceRecord> {
+        self.inference_candidates
+            .as_deref()
+            .and_then(|records| records.iter().find(|record| record.name.as_ref() == name))
+    }
+
+    fn inference_record_mut(&mut self, name: &str) -> &mut InferenceRecord {
+        let records = Arc::make_mut(
+            self.inference_candidates
+                .get_or_insert_with(|| Arc::new(Vec::new())),
+        );
+        let index = match records.iter().position(|record| record.name.as_ref() == name) {
+            Some(index) => index,
+            None => {
+                records.push(InferenceRecord {
+                    name: Arc::from(name),
+                    candidates: Vec::new(),
+                    fixed: false,
+                });
+                records.len() - 1
+            }
+        };
+        &mut records[index]
+    }
+
+    /// The candidates recorded for `name` so far, in arrival order.
+    pub(crate) fn inference_candidates(&self, name: &str) -> &[InferenceCandidate] {
+        self.inference_record(name)
+            .map_or(&[], |record| record.candidates.as_slice())
+    }
+
+    pub(crate) fn push_inference_candidate(&mut self, name: &str, candidate: InferenceCandidate) {
+        self.inference_record_mut(name).candidates.push(candidate);
+    }
+
+    pub(crate) fn is_inference_fixed(&self, name: &str) -> bool {
+        self.inference_record(name).is_some_and(|record| record.fixed)
+    }
+
+    pub(crate) fn fix_inference(&mut self, name: &str) {
+        self.inference_record_mut(name).fixed = true;
+    }
+
+    pub(crate) fn clear_inference_candidates(&mut self) {
+        self.inference_candidates = None;
+    }
+
     pub(crate) fn extend(&mut self, other: Self) {
         let Self {
             values,
             placeholders,
             literal_keeping,
             degraded,
+            inference_candidates: _,
         } = other;
         if let Some(keeping) = literal_keeping {
             for name in keeping.iter() {

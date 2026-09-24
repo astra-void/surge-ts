@@ -19,12 +19,20 @@ mod function_types;
 mod functions;
 mod grammar;
 mod grammar_context;
+mod grammar_modifiers;
+mod grammar_merges;
+mod grammar_recovered;
+mod import_aliases;
 mod import_calls;
 mod imports;
 mod interfaces;
 mod json;
+mod reachability;
 mod reads;
+mod jsx_uses;
+mod number_text;
 mod reference_directives;
+mod scanner_checks;
 mod spans;
 mod suppressions;
 mod types;
@@ -50,6 +58,8 @@ use self::spans::text_span_from_oxc_span;
 use self::types::{parse_type_alias_declaration, parse_type_annotation};
 pub use entry::{ParserWorker, parse_source};
 pub use json::{is_json_file_name, parse_json_module_type};
+pub use jsx_uses::{JsxRuntimeOptions, entity_root as jsx_entity_root, jsx_runtime_import};
+pub use number_text::js_number_to_string;
 
 fn parse_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {
     if let Some(module_declaration) = statement.as_module_declaration() {
@@ -153,6 +163,7 @@ fn parse_declaration(declaration: &Declaration<'_>) -> Option<Vec<ParsedStatemen
 }
 
 fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<ParsedStatement> {
+    let list = std::sync::Arc::new(declaration_list_shape(declaration));
     let kind = match declaration.kind {
         VariableDeclarationKind::Var => ParsedVariableKind::Var,
         VariableDeclarationKind::Let => ParsedVariableKind::Let,
@@ -194,6 +205,13 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
 
             let (initializer, initializer_span) = parse_expression(init);
             let initializer_span = Some(text_span_from_oxc_span(initializer_span));
+            // An annotation is the initializer's contextual type; otherwise the
+            // pattern is.
+            let initializer = if declarator.type_annotation.is_none() {
+                with_pattern_context(&declarator.id, initializer)
+            } else {
+                initializer
+            };
 
             parse_binding_pattern_declarations(
                 &declarator.id,
@@ -204,7 +222,87 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                 declared_type,
             )
         })
+        .map(|statement| match statement {
+            ParsedStatement::VariableDeclaration(mut variable) => {
+                variable.declaration_list = Some(list.clone());
+                ParsedStatement::VariableDeclaration(variable)
+            }
+            other => other,
+        })
         .collect()
+}
+
+fn declaration_list_shape(declaration: &VariableDeclaration<'_>) -> crate::ParsedDeclarationList {
+    use crate::ParsedDeclarationShape;
+    let using = matches!(
+        declaration.kind,
+        VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing
+    );
+    fn name(identifier: &oxc_ast::ast::BindingIdentifier<'_>, always_used: bool) -> ParsedDeclarationShape {
+        ParsedDeclarationShape::Name {
+            name: identifier.name.to_string(),
+            span: Some(text_span_from_oxc_span(identifier.span)),
+            always_used,
+        }
+    }
+    // An element of a pattern: `underscore_exempts` when an `_`-prefixed name
+    // counts as used there, `rest_sibling` when the pattern's rest needs it.
+    fn element(pattern: &BindingPattern<'_>, underscore_exempts: bool, rest_sibling: bool) -> ParsedDeclarationShape {
+        match pattern {
+            BindingPattern::BindingIdentifier(identifier) => name(
+                identifier,
+                rest_sibling || (underscore_exempts && identifier.name.starts_with('_')),
+            ),
+            BindingPattern::AssignmentPattern(assignment) => {
+                element(&assignment.left, underscore_exempts, rest_sibling)
+            }
+            BindingPattern::ObjectPattern(object) => {
+                let has_rest = object.rest.is_some();
+                let mut elements: Vec<_> = object
+                    .properties
+                    .iter()
+                    .map(|property| element(&property.value, !property.shorthand, has_rest))
+                    .collect();
+                if let Some(rest) = &object.rest {
+                    elements.push(element(&rest.argument, false, false));
+                }
+                ParsedDeclarationShape::Pattern {
+                    span: Some(text_span_from_oxc_span(object.span)),
+                    elements,
+                }
+            }
+            BindingPattern::ArrayPattern(array) => {
+                let mut elements: Vec<_> = array
+                    .elements
+                    .iter()
+                    .map(|element_pattern| match element_pattern {
+                        Some(element_pattern) => element(element_pattern, true, false),
+                        None => ParsedDeclarationShape::Omitted,
+                    })
+                    .collect();
+                if let Some(rest) = &array.rest {
+                    elements.push(element(&rest.argument, true, false));
+                }
+                ParsedDeclarationShape::Pattern {
+                    span: Some(text_span_from_oxc_span(array.span)),
+                    elements,
+                }
+            }
+        }
+    }
+    crate::ParsedDeclarationList {
+        span: Some(text_span_from_oxc_span(declaration.span)),
+        declarations: declaration
+            .declarations
+            .iter()
+            .map(|declarator| match &declarator.id {
+                BindingPattern::BindingIdentifier(identifier) => {
+                    name(identifier, using && identifier.name.starts_with('_'))
+                }
+                pattern => element(pattern, false, false),
+            })
+            .collect(),
+    }
 }
 
 fn parse_expression_statement(
@@ -350,14 +448,15 @@ fn parse_assignment_expression(
     })
 }
 
-/// `[a, b] = source` / `({ a, b: c } = source)`: each identifier target is an
-/// ordinary assignment of the element or property it reads (with its default
+/// `[a, b] = source` / `({ a, b: { c } } = source)`: each identifier target is
+/// an ordinary assignment of the element or property it reads (with its default
 /// applied as `??`, as a binding pattern does), so the checker reports each write
-/// on its target the way tsc's `checkDestructuringAssignment` does. Nested
-/// patterns and member targets are not lowered.
+/// on its target the way tsc's `checkDestructuringAssignment` does. A nested
+/// pattern reads its elements or properties from its own read, and a rest target
+/// is assigned a value the lowering does not type (tsc's
+/// `bindDestructuringTargetFlow` assigns every target either way). Member
+/// targets are not lowered.
 pub(crate) fn parse_destructuring_assignment(expression: &Expression<'_>) -> Vec<ParsedAssignment> {
-    use oxc_ast::ast::{AssignmentTargetMaybeDefault, AssignmentTargetProperty};
-
     let Expression::AssignmentExpression(assignment) = expression.without_parentheses() else {
         return Vec::new();
     };
@@ -366,29 +465,19 @@ pub(crate) fn parse_destructuring_assignment(expression: &Expression<'_>) -> Vec
     }
     let (source, source_span) = parse_expression(&assignment.right);
     let source_span = Some(text_span_from_oxc_span(source_span));
+    let mut assignments = Vec::new();
+    lower_assignment_pattern(&assignment.left, &source, source_span, &mut assignments);
+    assignments
+}
 
-    let element_read = |index: usize, target_span: Option<crate::TextSpan>| match &source {
-        // An array literal source is contextually a tuple: each target takes
-        // its own element, not the union of all of them.
-        ParsedExpression::ArrayLiteral { elements, .. }
-            if elements.iter().take(index + 1).all(|element| !element.spread)
-                && index < elements.len() =>
-        {
-            elements[index].expression.clone()
-        }
-        ParsedExpression::Identifier { name, .. } => ParsedExpression::IndexAccess {
-            object_name: name.clone(),
-            object_span: source_span,
-            index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
-            index_span: target_span,
-        },
-        _ => ParsedExpression::ElementAccess {
-            object: Box::new(source.clone()),
-            object_span: source_span,
-            index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
-            index_span: target_span,
-        },
-    };
+fn lower_assignment_pattern(
+    pattern: &AssignmentTarget<'_>,
+    source: &ParsedExpression,
+    source_span: Option<crate::TextSpan>,
+    assignments: &mut Vec<ParsedAssignment>,
+) {
+    use oxc_ast::ast::{AssignmentTargetMaybeDefault, AssignmentTargetProperty, IdentifierReference};
+
     let with_default = |read: ParsedExpression, default: Option<&Expression<'_>>| match default {
         Some(default) => {
             let (default_value, default_span) = parse_expression(default);
@@ -401,78 +490,132 @@ pub(crate) fn parse_destructuring_assignment(expression: &Expression<'_>) -> Vec
         }
         None => read,
     };
-    let lowered = |identifier: &oxc_ast::ast::IdentifierReference<'_>, value: ParsedExpression| {
-        ParsedAssignment {
-            target_name: identifier.name.to_string(),
-            target_span: Some(text_span_from_oxc_span(identifier.span)),
-            written_target_span: Some(text_span_from_oxc_span(identifier.span)),
-            value,
-            value_span: source_span,
+    let assign_identifier =
+        |identifier: &IdentifierReference<'_>, value, assignments: &mut Vec<ParsedAssignment>| {
+            assignments.push(ParsedAssignment {
+                target_name: identifier.name.to_string(),
+                target_span: Some(text_span_from_oxc_span(identifier.span)),
+                written_target_span: Some(text_span_from_oxc_span(identifier.span)),
+                value,
+                value_span: source_span,
+            });
+        };
+    let assign = |target: &AssignmentTarget<'_>, value, assignments: &mut Vec<ParsedAssignment>| {
+        match target {
+            AssignmentTarget::AssignmentTargetIdentifier(identifier) => {
+                assign_identifier(identifier, value, assignments);
+            }
+            AssignmentTarget::ArrayAssignmentTarget(_)
+            | AssignmentTarget::ObjectAssignmentTarget(_) => {
+                lower_assignment_pattern(target, &value, source_span, assignments);
+            }
+            _ => {}
         }
     };
+    fn split_default<'t, 'a>(
+        target: &'t AssignmentTargetMaybeDefault<'a>,
+    ) -> Option<(&'t AssignmentTarget<'a>, Option<&'t Expression<'a>>)> {
+        match target {
+            AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(with_default) => {
+                Some((&with_default.binding, Some(&with_default.init)))
+            }
+            other => other.as_assignment_target().map(|target| (target, None)),
+        }
+    }
 
-    let mut assignments = Vec::new();
-    match &assignment.left {
+    match pattern {
         AssignmentTarget::ArrayAssignmentTarget(pattern) => {
             for (index, element) in pattern.elements.iter().enumerate() {
-                let (target, default) = match element {
-                    Some(AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(with_default)) => {
-                        (&with_default.binding, Some(&with_default.init))
-                    }
-                    Some(other) => match other.as_assignment_target() {
-                        Some(target) => (target, None),
-                        None => continue,
-                    },
-                    None => continue,
-                };
-                let AssignmentTarget::AssignmentTargetIdentifier(identifier) = target else {
+                let Some((target, default)) = element.as_ref().and_then(split_default) else {
                     continue;
                 };
-                let span = Some(text_span_from_oxc_span(identifier.span));
-                assignments.push(lowered(identifier, with_default(element_read(index, span), default)));
+                let span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(target)));
+                let read = match source {
+                    // An array literal source is contextually a tuple: each
+                    // target takes its own element, not the union of all of them.
+                    ParsedExpression::ArrayLiteral { elements, .. }
+                        if elements.iter().take(index + 1).all(|element| !element.spread)
+                            && index < elements.len() =>
+                    {
+                        elements[index].expression.clone()
+                    }
+                    ParsedExpression::Identifier { name, .. } => ParsedExpression::IndexAccess {
+                        object_name: name.clone(),
+                        object_span: source_span,
+                        index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
+                        index_span: span,
+                    },
+                    _ => ParsedExpression::ElementAccess {
+                        object: Box::new(source.clone()),
+                        object_span: source_span,
+                        index: Box::new(ParsedExpression::NumberLiteral(index.to_string())),
+                        index_span: span,
+                    },
+                };
+                assign(target, with_default(read, default), assignments);
+            }
+            if let Some(rest) = &pattern.rest {
+                assign(&rest.target, ParsedExpression::Unknown, assignments);
             }
         }
         AssignmentTarget::ObjectAssignmentTarget(pattern) => {
+            let property_read = |name: &str, span| ParsedExpression::PropertyAccess {
+                object: Box::new(source.clone()),
+                object_span: source_span,
+                property_name: name.to_string(),
+                property_span: span,
+                is_bracketed: false,
+            };
             for property in &pattern.properties {
-                let (identifier, name, default) = match property {
-                    AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(shorthand) => (
-                        &shorthand.binding,
-                        shorthand.binding.name.to_string(),
-                        shorthand.init.as_ref(),
-                    ),
+                match property {
+                    AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(shorthand) => {
+                        let identifier = &shorthand.binding;
+                        let span = Some(text_span_from_oxc_span(identifier.span));
+                        let read = property_read(&identifier.name, span);
+                        let value = with_default(read, shorthand.init.as_ref());
+                        assign_identifier(identifier, value, assignments);
+                    }
                     AssignmentTargetProperty::AssignmentTargetPropertyProperty(property) => {
                         let Some(name) = property.name.static_name() else {
                             continue;
                         };
-                        let (target, default) = match &property.binding {
-                            AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(with_default) => {
-                                (&with_default.binding, Some(&with_default.init))
-                            }
-                            other => match other.as_assignment_target() {
-                                Some(target) => (target, None),
-                                None => continue,
-                            },
-                        };
-                        let AssignmentTarget::AssignmentTargetIdentifier(identifier) = target else {
+                        let Some((target, default)) = split_default(&property.binding) else {
                             continue;
                         };
-                        (identifier.as_ref(), name.to_string(), default)
+                        let span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(target)));
+                        let value = with_default(property_read(&name, span), default);
+                        assign(target, value, assignments);
                     }
+                }
+            }
+            if let Some(rest) = &pattern.rest {
+                // tsc's `getRestType`: the source without the properties the
+                // pattern names — known only when every key is static.
+                let omitted: Option<Vec<String>> = pattern
+                    .properties
+                    .iter()
+                    .map(|property| match property {
+                        AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(shorthand) => {
+                            Some(shorthand.binding.name.to_string())
+                        }
+                        AssignmentTargetProperty::AssignmentTargetPropertyProperty(property) => {
+                            property.name.static_name().map(|name| name.to_string())
+                        }
+                    })
+                    .collect();
+                let value = match omitted {
+                    Some(omitted) => ParsedExpression::ObjectRest {
+                        source: Box::new(source.clone()),
+                        omitted,
+                        name_span: Some(text_span_from_oxc_span(oxc_span::GetSpan::span(&rest.target))),
+                    },
+                    None => ParsedExpression::Unknown,
                 };
-                let span = Some(text_span_from_oxc_span(identifier.span));
-                let read = ParsedExpression::PropertyAccess {
-                    object: Box::new(source.clone()),
-                    object_span: source_span,
-                    property_name: name,
-                    property_span: span,
-                    is_bracketed: false,
-                };
-                assignments.push(lowered(identifier, with_default(read, default)));
+                assign(&rest.target, value, assignments);
             }
         }
         _ => {}
     }
-    assignments
 }
 
 fn parse_binding_pattern_declarations(
@@ -519,6 +662,7 @@ fn parse_binding_pattern_declarations_with_definite(
                     declared_type,
                     initializer,
                     initializer_span,
+                    declaration_list: None,
                 },
             ))]
         }
@@ -528,6 +672,7 @@ fn parse_binding_pattern_declarations_with_definite(
             let initializer = match initializer {
                 Some(initializer) => {
                     let (default_value, default_span) = parse_expression(&assignment_pattern.right);
+                    let default_value = with_pattern_context(&assignment_pattern.left, default_value);
                     Some(ParsedExpression::NullishCoalescing {
                         left: Box::new(initializer),
                         left_span: initializer_span,
@@ -626,16 +771,18 @@ fn parse_object_pattern_declarations(
         let omitted: Option<Vec<String>> = object_pattern
             .properties
             .iter()
-            .map(|property| match &property.key {
-                PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
-                PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
-                _ => None,
-            })
+            .map(|property| binding_property_key(&property.key).map(|(name, _)| name))
             .collect();
         let initializer = match omitted {
             Some(omitted) => ParsedExpression::ObjectRest {
                 source: Box::new(initializer),
                 omitted,
+                name_span: match &rest.argument {
+                    BindingPattern::BindingIdentifier(identifier) => {
+                        Some(text_span_from_oxc_span(identifier.span))
+                    }
+                    _ => None,
+                },
             },
             None => initializer,
         };
@@ -659,7 +806,7 @@ fn parse_object_binding_property_declarations(
     is_declare: bool,
     kind: ParsedVariableKind,
 ) -> Vec<ParsedStatement> {
-    let PropertyKey::StaticIdentifier(identifier) = &property.key else {
+    let Some((property_name, key_span)) = binding_property_key(&property.key) else {
         return Vec::new();
     };
 
@@ -669,38 +816,78 @@ fn parse_object_binding_property_declarations(
     // than a missing property.
     if matches!(property.value, BindingPattern::AssignmentPattern(_))
         && static_object_literal(&source_initializer).is_some_and(|properties| {
-            literal_lacks_property(properties, identifier.name.as_str())
+            literal_lacks_property(properties, &property_name)
         })
     {
         return parse_binding_pattern_declarations(
             &property.value,
             Some(ParsedExpression::UndefinedLiteral),
-            Some(text_span_from_oxc_span(identifier.span)),
+            Some(text_span_from_oxc_span(key_span)),
             is_declare,
             kind,
             None,
         );
     }
 
-    // Marked bracketed: this access is synthesized from a binding pattern, and
-    // tsc does not apply `noPropertyAccessFromIndexSignature` (TS4111) to
-    // destructuring — only to written dotted accesses.
-    let property_initializer = ParsedExpression::PropertyAccess {
-        object: Box::new(source_initializer),
-        object_span: source_initializer_span,
-        property_name: identifier.name.to_string(),
-        property_span: Some(text_span_from_oxc_span(identifier.span)),
-        is_bracketed: true,
+    // tsc indexes the source by the key's literal type
+    // (`getLiteralTypeFromPropertyName`); a numeric name stays an element access,
+    // as `obj["0"]` does, so a tuple or array source answers it.
+    let is_numeric_index = !property_name.is_empty() && property_name.bytes().all(|byte| byte.is_ascii_digit());
+    let property_initializer = if is_numeric_index {
+        let index = Box::new(match &property.key {
+            PropertyKey::NumericLiteral(_) => ParsedExpression::NumberLiteral(property_name),
+            _ => ParsedExpression::StringLiteral(property_name),
+        });
+        let index_span = Some(text_span_from_oxc_span(key_span));
+        match source_initializer {
+            ParsedExpression::Identifier { name, .. } => ParsedExpression::IndexAccess {
+                object_name: name,
+                object_span: source_initializer_span,
+                index,
+                index_span,
+            },
+            source => ParsedExpression::ElementAccess {
+                object: Box::new(source),
+                object_span: source_initializer_span,
+                index,
+                index_span,
+            },
+        }
+    } else {
+        // Marked bracketed: this access is synthesized from a binding pattern,
+        // and tsc does not apply `noPropertyAccessFromIndexSignature` (TS4111)
+        // to destructuring — only to written dotted accesses.
+        ParsedExpression::PropertyAccess {
+            object: Box::new(source_initializer),
+            object_span: source_initializer_span,
+            property_name,
+            property_span: Some(text_span_from_oxc_span(key_span)),
+            is_bracketed: true,
+        }
     };
 
     parse_binding_pattern_declarations(
         &property.value,
         Some(property_initializer),
-        Some(text_span_from_oxc_span(identifier.span)),
+        Some(text_span_from_oxc_span(key_span)),
         is_declare,
         kind,
         None,
     )
+}
+
+/// The property a non-computed binding property reads. A quoted or numeric key
+/// names the property its value spells, as it does in an object literal
+/// (`{ 0: first }` reads `"0"`).
+pub(crate) fn binding_property_key(key: &PropertyKey<'_>) -> Option<(String, oxc_span::Span)> {
+    match key {
+        PropertyKey::StaticIdentifier(identifier) => Some((identifier.name.to_string(), identifier.span)),
+        PropertyKey::StringLiteral(literal) => Some((literal.value.to_string(), literal.span)),
+        PropertyKey::NumericLiteral(literal) => {
+            Some((number_text::js_number_to_string(literal.value), literal.span))
+        }
+        _ => None,
+    }
 }
 
 /// The properties of the object literal `expression` statically evaluates to:
@@ -789,11 +976,25 @@ fn parse_array_pattern_declarations(
     // the whole initializer, the same shape the object-pattern sibling uses: for
     // an array source that is already the right element type. A tuple source is
     // over-wide here (tsc slices), which is still far better than leaving the
-    // name unbound and reporting it as missing everywhere it is used.
+    // name unbound and reporting it as missing everywhere it is used. A literal
+    // typed as a tuple is sliced as tsc slices a tuple source
+    // (`sliceTupleType`).
     if let Some(rest) = array_pattern.rest.as_deref() {
+        let rest_initializer = match &initializer {
+            ParsedExpression::ArrayLiteral {
+                elements,
+                span,
+                tuple_context: true,
+            } if elements.iter().all(|element| !element.spread) => ParsedExpression::ArrayLiteral {
+                elements: elements.iter().skip(array_pattern.elements.len()).cloned().collect(),
+                span: *span,
+                tuple_context: true,
+            },
+            _ => initializer.clone(),
+        };
         declarations.extend(parse_binding_pattern_declarations(
             &rest.argument,
-            Some(initializer.clone()),
+            Some(rest_initializer),
             initializer_span,
             is_declare,
             kind,
@@ -802,6 +1003,108 @@ fn parse_array_pattern_declarations(
     }
 
     declarations
+}
+
+/// tsc's `getContextualTypeForInitializerExpression`: an unannotated
+/// declaration's initializer is contextually typed by the type its binding
+/// pattern implies (`getTypeFromBindingPattern`) — a tuple for an array
+/// pattern, an object with the pattern's keys for an object pattern — and an
+/// array literal whose contextual type is tuple-like (a tuple, or a type with a
+/// `"0"` property: `isTupleLikeType`) is a tuple (`checkArrayLiteral`). The
+/// context reaches a nested literal through the element or property a nested
+/// pattern destructures.
+fn with_pattern_context(pattern: &BindingPattern<'_>, initializer: ParsedExpression) -> ParsedExpression {
+    let take = |expression: &mut ParsedExpression| std::mem::replace(expression, ParsedExpression::Unknown);
+    match (pattern, initializer) {
+        (
+            BindingPattern::ArrayPattern(array),
+            ParsedExpression::ArrayLiteral { mut elements, span, .. },
+        ) if !array.elements.is_empty() || array.rest.is_some() => {
+            for (element, nested) in elements.iter_mut().zip(&array.elements) {
+                if element.spread {
+                    break;
+                }
+                if let Some(nested) = nested {
+                    element.expression = with_element_context(nested, take(&mut element.expression));
+                }
+            }
+            ParsedExpression::ArrayLiteral {
+                elements,
+                span,
+                tuple_context: true,
+            }
+        }
+        (
+            BindingPattern::ObjectPattern(object),
+            ParsedExpression::ArrayLiteral {
+                mut elements,
+                span,
+                tuple_context,
+            },
+        ) => {
+            let property_at = |index: usize| {
+                let key = index.to_string();
+                object
+                    .properties
+                    .iter()
+                    .find(|property| binding_property_key(&property.key).is_some_and(|(name, _)| name == key))
+            };
+            if property_at(0).is_none() {
+                return ParsedExpression::ArrayLiteral {
+                    elements,
+                    span,
+                    tuple_context,
+                };
+            }
+            for (index, element) in elements.iter_mut().enumerate() {
+                if element.spread {
+                    break;
+                }
+                if let Some(property) = property_at(index) {
+                    element.expression = with_element_context(&property.value, take(&mut element.expression));
+                }
+            }
+            ParsedExpression::ArrayLiteral {
+                elements,
+                span,
+                tuple_context: true,
+            }
+        }
+        (BindingPattern::ObjectPattern(object), ParsedExpression::ObjectLiteral { mut properties, span }) => {
+            for property in &mut properties {
+                if property.is_spread || property.computed_key.is_some() {
+                    continue;
+                }
+                if let Some(pattern_property) = object.properties.iter().find(|pattern_property| {
+                    binding_property_key(&pattern_property.key).is_some_and(|(name, _)| name == property.name)
+                }) {
+                    property.value = with_element_context(&pattern_property.value, take(&mut property.value));
+                }
+            }
+            ParsedExpression::ObjectLiteral { properties, span }
+        }
+        (_, initializer) => initializer,
+    }
+}
+
+/// The context a pattern element gives the value it destructures
+/// (`getTypeFromBindingElement`): a nested pattern's own, or with a default, the
+/// default's type — which mirrors the nested pattern only when the default is
+/// itself a literal.
+fn with_element_context(element: &BindingPattern<'_>, value: ParsedExpression) -> ParsedExpression {
+    match element {
+        BindingPattern::AssignmentPattern(assignment) => {
+            if matches!(
+                &assignment.right,
+                Expression::ArrayExpression(_) | Expression::ObjectExpression(_)
+            ) {
+                with_pattern_context(&assignment.left, value)
+            } else {
+                value
+            }
+        }
+        pattern => with_pattern_context(pattern, value),
+    }
 }
 
 pub(crate) fn parse_ts_module_declaration(
@@ -833,6 +1136,7 @@ pub(crate) fn parse_ts_module_declaration(
             enums::merge_lowered_enum_declarations(&mut statements);
             statements
         }
+        None => Vec::new(),
         _ => {
             return vec![ParsedStatement::UnsupportedDeclaration {
                 span: Some(text_span_from_oxc_span(module.span)),
@@ -846,6 +1150,7 @@ pub(crate) fn parse_ts_module_declaration(
             module_specifier_span: Some(text_span_from_oxc_span(module.id.span())),
             statements,
             span: Some(text_span_from_oxc_span(module.span)),
+            is_shorthand: module.body.is_none(),
         },
     ))]
 }
@@ -914,6 +1219,7 @@ fn parse_ts_global_declaration(global: &TSGlobalDeclaration<'_>) -> Vec<ParsedSt
             module_specifier_span: Some(text_span_from_oxc_span(global.global_span)),
             statements,
             span: Some(text_span_from_oxc_span(global.span)),
+            is_shorthand: false,
         },
     ))]
 }

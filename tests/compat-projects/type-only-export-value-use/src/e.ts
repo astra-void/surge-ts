@@ -1,0 +1,10 @@
+import { Local, Plain } from './local';
+new Local();
+new Plain();
+import { A, B, C, I } from './star';
+new A();
+B;
+new C();
+let i: I = { i: 1 };
+import { C as C2 } from './star2';
+new C2();

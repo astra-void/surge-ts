@@ -358,7 +358,19 @@ fn declare_variable(
     ctx: &mut CheckerContext,
 ) {
     if let Some(initializer) = &variable.initializer {
+        let initializing = (variable.kind != ParsedVariableKind::Var).then(|| {
+            let annotation_excludes_undefined = variable.declared_type.as_ref().map(|annotation| {
+                !declared_type_admits_undefined(&variable.name, Some(annotation), types, ctx)
+            });
+            flow.begin_initializer([super::InitializingBinding::declaration(
+                variable,
+                annotation_excludes_undefined,
+            )])
+        });
         let _ = check_expression_flow_marking(initializer, variable.initializer_span, flow, index, ctx);
+        if let Some(mark) = initializing {
+            flow.end_initializer(mark);
+        }
     }
     let assigned = variable.initializer.is_some()
         || variable.is_declare
@@ -413,8 +425,20 @@ fn walk_statement(
     match statement {
         ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
             if let Some(initializer) = &variable.initializer {
+                let initializing = (variable.kind != ParsedVariableKind::Var).then(|| {
+                    let annotation_excludes_undefined = variable.declared_type.as_ref().map(|annotation| {
+                        super::never_initialized::excludes_undefined(annotation, ctx, &[])
+                    });
+                    flow.begin_initializer([super::InitializingBinding::declaration(
+                        variable,
+                        annotation_excludes_undefined,
+                    )])
+                });
                 let _ =
                     check_expression_flow_marking(initializer, variable.initializer_span, flow, index, ctx);
+                if let Some(mark) = initializing {
+                    flow.end_initializer(mark);
+                }
             }
             if variable.kind == ParsedVariableKind::Var {
                 if variable.initializer.is_some() {
@@ -480,10 +504,11 @@ fn walk_statement(
                 index,
                 ctx,
             );
+            let condition = &if_statement.condition;
             let mut then_flow = flow.clone();
-            let then_continues = in_block(&if_statement.then_body, index, &mut then_flow, ctx);
+            let then_continues = in_edge_block(condition, true, &if_statement.then_body, index, &mut then_flow, ctx);
             let mut else_flow = flow.clone();
-            let else_continues = in_block(&if_statement.else_body, index, &mut else_flow, ctx);
+            let else_continues = in_edge_block(condition, false, &if_statement.else_body, index, &mut else_flow, ctx);
             join(
                 flow,
                 [
@@ -501,7 +526,8 @@ fn walk_statement(
                 ctx,
             );
             let mut body_flow = flow.clone();
-            let body_continues = in_block(&while_statement.body, index, &mut body_flow, ctx);
+            let body_continues =
+                in_edge_block(&while_statement.condition, true, &while_statement.body, index, &mut body_flow, ctx);
             // Only a body that must run adds its assignments to the code after
             // the loop; otherwise the loop may be skipped outright.
             if while_statement.runs_at_least_once
@@ -513,6 +539,7 @@ fn walk_statement(
             true
         }
         ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
+            let head = flow.begin_initializer(super::for_head_initializing(for_of_statement));
             let _ = check_expression_flow_marking(
                 &for_of_statement.iterable,
                 for_of_statement.iterable_span,
@@ -520,6 +547,7 @@ fn walk_statement(
                 index,
                 ctx,
             );
+            flow.end_initializer(head);
             let mut body_flow = flow.clone();
             if for_of_statement.binding_kind != surge_ts_syntax::ParsedForBindingKind::BlockScoped
                 && let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } =
@@ -703,6 +731,25 @@ fn in_block(
     let continues = walk_body(body, index, flow, ctx);
     flow.pop_scope();
     continues
+}
+
+/// A block entered on `condition`'s `when` edge, which carries what the edge
+/// proves defined; one a literal condition never enters is unreachable, so it
+/// reports nothing and reaches no join.
+fn in_edge_block(
+    condition: &ParsedExpression,
+    when: bool,
+    body: &[ParsedFunctionBodyStatement],
+    index: usize,
+    flow: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let unreachable = super::condition_never_takes(condition, when);
+    super::mark_condition_defined(condition, when, flow, ctx);
+    flow.enter_unreachable(unreachable);
+    let continues = in_block(body, index, flow, ctx);
+    flow.exit_unreachable(unreachable);
+    continues && !unreachable
 }
 
 /// The container's bindings after edges meet: assigned only where every edge

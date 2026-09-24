@@ -331,7 +331,8 @@ fn collect_exportable_value_symbols_thin(
                     )
                 }
                 ParsedStatement::NamespaceDeclaration(inner_namespace) => {
-                    let inner_prefix = format!("{prefix}.{}", inner_namespace.name);
+                    let inner_prefix =
+                        format!("{prefix}.{}", inner_namespace.member_name());
                     thin_namespace_member_names(
                         inner_namespace,
                         &inner_prefix,
@@ -841,11 +842,104 @@ pub(crate) fn collect_exportable_value_symbols(
             lazy_origin,
         );
     }
+    for hoisted in hoisted_nested_vars(statements) {
+        if let ParsedStatement::VariableDeclaration(variable) = &hoisted
+            && exportable_values.get_own_shared(&variable.name).is_none()
+        {
+            collect_exportable_value_symbols_from_statement(
+                &hoisted,
+                &mut exportable_values,
+                &mut shadow_ctx,
+                !library_file,
+                module_file,
+                lazy_origin,
+            );
+        }
+    }
     apply_merging_namespace_value_members(&merging_namespaces, &mut exportable_values);
     apply_expando_members(statements, &mut exportable_values, &mut shadow_ctx);
     inherit_base_statics(statements, &mut exportable_values, imported_symbols);
 
     exportable_values
+}
+
+/// The `var`s nested in the top-level blocks, loops, `if`s, `switch`es and
+/// `try`s of `statements`. tsc's binder declares a `var` in its function-like
+/// container — the file or the namespace here — so it is in scope throughout
+/// it, in a function declared ahead of it too. A `for…in` key is a `string`; a
+/// `for…of` element is left unmodelled.
+fn hoisted_nested_vars(statements: &[ParsedStatement]) -> Vec<ParsedStatement> {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+    fn walk(body: &[Statement], out: &mut Vec<ParsedStatement>) {
+        for statement in body {
+            match statement {
+                Statement::VariableDeclaration(variable)
+                    if variable.kind == surge_ts_syntax::ParsedVariableKind::Var =>
+                {
+                    out.push(ParsedStatement::VariableDeclaration(variable.clone()));
+                }
+                Statement::Block(block) => walk(block, out),
+                Statement::If(if_statement) => {
+                    walk(&if_statement.then_body, out);
+                    walk(&if_statement.else_body, out);
+                }
+                Statement::While(while_statement) => walk(&while_statement.body, out),
+                Statement::ForOf(for_of_statement) => {
+                    if for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::Var
+                        && let surge_ts_syntax::ParsedBindingName::Identifier { name, span } =
+                            &for_of_statement.binding_name
+                    {
+                        out.push(ParsedStatement::VariableDeclaration(Box::new(
+                            surge_ts_syntax::ParsedVariableDeclaration {
+                                is_declare: false,
+                                kind: surge_ts_syntax::ParsedVariableKind::Var,
+                                from_binding_pattern: false,
+                                has_definite_assertion: false,
+                                array_pattern_span: None,
+                                is_enum_object: false,
+                                name: name.clone(),
+                                name_span: *span,
+                                declared_type: Some(if for_of_statement.keys_only {
+                                    surge_ts_syntax::ParsedType::String
+                                } else {
+                                    surge_ts_syntax::ParsedType::Unknown
+                                }),
+                                initializer: None,
+                                initializer_span: None,
+                                declaration_list: None,
+                            },
+                        )));
+                    }
+                    walk(&for_of_statement.body, out)
+                }
+                Statement::Switch(switch_statement) => {
+                    for case in &switch_statement.cases {
+                        walk(&case.consequent, out);
+                    }
+                }
+                Statement::Try(try_statement) => {
+                    walk(&try_statement.block, out);
+                    if let Some(handler) = &try_statement.handler {
+                        walk(&handler.body, out);
+                    }
+                    walk(&try_statement.finalizer, out);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut hoisted = Vec::new();
+    for statement in statements {
+        match statement {
+            ParsedStatement::Block(body) => walk(body, &mut hoisted),
+            ParsedStatement::If(if_statement) => {
+                walk(&if_statement.then_body, &mut hoisted);
+                walk(&if_statement.else_body, &mut hoisted);
+            }
+            _ => {}
+        }
+    }
+    hoisted
 }
 
 /// A derived class's static side starts from its base's, which the binding
@@ -1582,7 +1676,8 @@ pub(crate) fn collect_namespace_member_value_symbols(
                 );
             }
             ParsedStatement::NamespaceDeclaration(inner_namespace) => {
-                let inner_prefix = format!("{prefix}.{}", inner_namespace.name);
+                let inner_prefix =
+                    format!("{prefix}.{}", inner_namespace.member_name());
                 collect_namespace_member_value_symbols(
                     inner_namespace,
                     &inner_prefix,
@@ -1603,10 +1698,20 @@ pub(crate) fn collect_namespace_member_value_symbols(
 /// `export = <namespace>` value so `import * as Ns` exposes `Ns.member`.
 /// Merges a later block of a namespace into the value object an earlier block
 /// produced. Nested namespaces merge member by member at every depth, so
-/// `namespace M { namespace N { … } }` written twice keeps both `N` bodies.
+/// `namespace M { namespace N { … } }` written twice keeps both `N` bodies. A
+/// namespace following the class or function it merges with adds its members
+/// to that value (tsc's declaration merging keeps the constructor and call
+/// signatures): a permissive class is `any`, which already has every member.
 fn merge_namespace_value_objects(previous: &Type, current: &Type) -> Type {
     let (Type::Object(previous), Type::Object(current)) = (previous, current) else {
-        return current.clone();
+        return match (previous, current) {
+            (Type::Any, _) => Type::Any,
+            (Type::Function(function), Type::Object(current)) => Type::Object(
+                crate::metrics::alloc_object_type(current.properties.as_ref().clone(), None)
+                    .with_call_signature(function.clone()),
+            ),
+            _ => current.clone(),
+        };
     };
     let mut properties = previous.properties.as_ref().clone();
     for (name, property) in current.properties.iter() {
@@ -1698,16 +1803,23 @@ fn resolve_namespace_value_annotations(
                 );
             }
             ParsedStatement::NamespaceDeclaration(inner) => {
-                let inner_prefix = format!("{prefix}.{}", inner.name);
+                let member_name = inner.member_name();
+                let inner_prefix = format!("{prefix}.{member_name}");
                 // Seeded with whatever a sibling block of the same namespace
                 // already contributed, so the merge `fill_namespace_value_properties`
-                // performed is not thrown away when the annotations resolve.
-                let mut inner_properties = match properties
-                    .get(inner.name.as_str())
+                // performed is not thrown away when the annotations resolve —
+                // the call signature of a function it merged into included.
+                let (mut inner_properties, call_signature) = match properties
+                    .get(member_name)
                     .map(|property| &property.ty)
                 {
-                    Some(Type::Object(previous)) => previous.properties.as_ref().clone(),
-                    _ => surge_ts_types::PropertyMap::default(),
+                    // The class it merged into, whose `any` value stands.
+                    Some(Type::Any) => continue,
+                    Some(Type::Object(previous)) => (
+                        previous.properties.as_ref().clone(),
+                        previous.call_signature.clone(),
+                    ),
+                    _ => (surge_ts_types::PropertyMap::default(), None),
                 };
                 fill_namespace_value_properties(inner, &mut inner_properties);
                 resolve_namespace_value_annotations(
@@ -1716,11 +1828,11 @@ fn resolve_namespace_value_annotations(
                     &mut inner_properties,
                     ctx,
                 );
+                let mut object = crate::metrics::alloc_object_type(inner_properties, None);
+                object.call_signature = call_signature;
                 properties.insert(
-                    inner.name.as_str().into(),
-                    surge_ts_types::ObjectProperty::required(Type::Object(
-                        crate::metrics::alloc_object_type(inner_properties, None),
-                    )),
+                    member_name.into(),
+                    surge_ts_types::ObjectProperty::required(Type::Object(object)),
                 );
             }
             _ => {}
@@ -1776,6 +1888,16 @@ pub(crate) fn fill_namespace_value_properties(
         };
 
         match inner {
+            // `export import alias = N.M` makes the alias a member. Its entity's
+            // members are reached through the rewritten references, so the
+            // member itself stays permissive like the others here.
+            ParsedStatement::ImportDeclaration(import)
+                if !std::ptr::eq(inner, statement)
+                    && let surge_ts_syntax::ParsedImportKind::EntityAlias { local_name, .. } =
+                        &import.kind =>
+            {
+                properties.insert(local_name.as_str().into(), ObjectProperty::required(Type::Any));
+            }
             ParsedStatement::FunctionDeclaration(function) => {
                 // `(...args: any[]) => any`, spelled out rather than left as a
                 // zero-parameter variadic: an argument lines up with the rest
@@ -1805,7 +1927,7 @@ pub(crate) fn fill_namespace_value_properties(
                 );
             }
             ParsedStatement::NamespaceDeclaration(inner_namespace) => {
-                let name: std::sync::Arc<str> = inner_namespace.name.as_str().into();
+                let name: std::sync::Arc<str> = inner_namespace.member_name().into();
                 let inner = namespace_value_object_type(inner_namespace);
                 // A nested namespace written twice merges the same way a
                 // top-level one does; without this the second block replaces

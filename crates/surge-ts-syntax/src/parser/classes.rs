@@ -1,7 +1,8 @@
 use oxc_ast::ast::{
-    Class, ClassElement, MethodDefinitionKind, MethodDefinitionType,
+    Class, ClassElement, Expression, MethodDefinitionKind, MethodDefinitionType,
     PropertyDefinitionType, PropertyKey,
 };
+use oxc_syntax::operator::BinaryOperator;
 
 use oxc_span::GetSpan;
 
@@ -30,17 +31,17 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
             .collect(),
     );
 
-    // The last instance signature of each key kind wins, as for an interface.
+    // The last signature of each key kind and side wins, as for an interface.
     // A `symbol` or pattern key answers no named member (Prisma's client class
     // declares `[K: symbol]`), so only `string` and `number` keys are kept.
-    let index_signature_of = |numeric: bool| {
+    let index_signature_of = |numeric: bool, is_static: bool| {
         class
             .body
             .body
             .iter()
             .filter_map(|element| match element {
                 ClassElement::TSIndexSignature(index_signature)
-                    if !index_signature.r#static
+                    if index_signature.r#static == is_static
                         && index_signature.parameters.first().is_some_and(|parameter| {
                             matches!(
                                 parameter.type_annotation.type_annotation,
@@ -57,20 +58,29 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
             })
             .next_back()
     };
-    let (string_index_type, string_index_span) = index_signature_of(false).unzip();
-    let (number_index_type, number_index_span) = index_signature_of(true).unzip();
+    let (string_index_type, string_index_span) = index_signature_of(false, false).unzip();
+    let (number_index_type, number_index_span) = index_signature_of(true, false).unzip();
+    let static_string_index_type = index_signature_of(false, true).map(|(ty, _)| ty);
+    let static_number_index_type = index_signature_of(true, true).map(|(ty, _)| ty);
 
     Some(ParsedClassDeclaration {
         string_index_type,
         number_index_type,
         string_index_span,
         number_index_span,
+        static_string_index_type,
+        static_number_index_type,
         is_declare: class.declare,
         is_abstract: class.r#abstract,
         name: id.name.to_string(),
         name_span: Some(text_span_from_oxc_span(id.span)),
         type_parameters: parse_type_parameters(class.type_parameters.as_deref()),
         extends: parse_class_heritage(class),
+        heritage_expression: class
+            .super_class
+            .as_ref()
+            .filter(|super_class| super::types::flatten_heritage_expression(super_class).is_none())
+            .map(|super_class| Box::new(parse_expression(super_class).0)),
         implements: class
             .implements
             .iter()
@@ -95,13 +105,22 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
             .body
             .iter()
             .filter_map(|element| {
-                let (key, computed) = match element {
-                    ClassElement::MethodDefinition(member) => (&member.key, member.computed),
-                    ClassElement::PropertyDefinition(member) => (&member.key, member.computed),
-                    ClassElement::AccessorProperty(member) => (&member.key, member.computed),
+                let (key, computed, is_get_or_set) = match element {
+                    ClassElement::MethodDefinition(member) => (
+                        &member.key,
+                        member.computed,
+                        member.kind.is_accessor(),
+                    ),
+                    ClassElement::PropertyDefinition(member) => (&member.key, member.computed, false),
+                    ClassElement::AccessorProperty(member) => (&member.key, member.computed, false),
                     _ => return None,
                 };
                 let expression = key.as_expression().filter(|_| computed)?;
+                // tsc's `isInvalidComputedPropertyName`: a `[k in T]` name is a
+                // misplaced mapped type (TS7061) and its expression is never checked.
+                if !is_get_or_set && is_in_expression(expression) {
+                    return None;
+                }
                 let (parsed, _) = parse_expression(expression);
                 // The name's `[`, which the key's own span leaves out.
                 let span = key.span();
@@ -115,6 +134,14 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
             })
             .collect(),
     })
+}
+
+fn is_in_expression(expression: &Expression<'_>) -> bool {
+    match expression {
+        Expression::BinaryExpression(binary) => binary.operator == BinaryOperator::In,
+        Expression::PrivateInExpression(_) => true,
+        _ => false,
+    }
 }
 
 fn restricted_class_members(class: &Class<'_>) -> Vec<ParsedRestrictedMember> {
@@ -301,6 +328,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             match method.kind {
                 MethodDefinitionKind::Constructor => {
                     Some(ParsedClassMember::Constructor(ParsedClassConstructor {
+                        accessibility: restricted_accessibility(method.accessibility),
                         parameters,
                         body,
                         body_reads,
@@ -411,6 +439,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             }
         }
         ClassElement::PropertyDefinition(property) => {
+            let has_literal_name = !property.computed && is_literal_property_key(&property.key);
             let (name, name_span) = if property.computed {
                 (super::types::computed_key_name(&property.key)?, property.key.span())
             } else {
@@ -437,6 +466,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 span: Some(text_span_from_oxc_span(property.span)),
                 name,
                 name_span: Some(text_span_from_oxc_span(name_span)),
+                has_literal_name,
                 is_static: property.r#static,
                 is_override: property.r#override,
                 is_abstract: matches!(
@@ -463,6 +493,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
         // slot: for typing it is the property it looks like. Dropping it made
         // every use of the member a missing property.
         ClassElement::AccessorProperty(property) => {
+            let has_literal_name = !property.computed && is_literal_property_key(&property.key);
             let (name, name_span) = if property.computed {
                 (super::types::computed_key_name(&property.key)?, property.key.span())
             } else {
@@ -486,6 +517,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 span: Some(text_span_from_oxc_span(property.span)),
                 name,
                 name_span: Some(text_span_from_oxc_span(name_span)),
+                has_literal_name,
                 is_static: property.r#static,
                 is_override: property.r#override,
                 is_abstract: matches!(
@@ -504,4 +536,8 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
         // Index signatures are not part of this slice.
         ClassElement::TSIndexSignature(_) => None,
     }
+}
+
+fn is_literal_property_key(key: &PropertyKey<'_>) -> bool {
+    matches!(key, PropertyKey::StringLiteral(_) | PropertyKey::NumericLiteral(_))
 }
