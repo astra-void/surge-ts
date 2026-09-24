@@ -103,3 +103,47 @@ pub(crate) fn can_have_synthetic_default(
         _ => !has_syntactic_default(export_table) && !exports_es_module_marker(),
     }
 }
+
+/// tsc's `resolveESModuleSymbol` for `import * as ns`: the namespace object
+/// gains the synthetic default as a `default` member when the module is
+/// callable or constructable, already has a `default`, or is a CommonJS file
+/// an ESM file imports — and it can have a synthetic default at all.
+pub(crate) fn namespace_import_has_synthetic_default(
+    ctx: &CheckerContext,
+    target: Option<&ParsedProgramFile>,
+    export_table: &ModuleExportTable,
+) -> bool {
+    let assignment = export_table
+        .export_assignment_symbol
+        .as_ref()
+        .map(|symbol| symbol.ty.peeled());
+    let (has_signatures, has_default) = match &assignment {
+        Some(Type::Function(_)) => (true, false),
+        Some(Type::Object(object)) => (
+            object.call_signature.is_some() || object.construct_signature.is_some(),
+            object.properties.get("default").is_some(),
+        ),
+        Some(_) => (false, false),
+        None => (false, export_table.default_symbol.is_some()),
+    };
+    let esm_imports_commonjs = target.is_some_and(|file| {
+        declaration_emit_syntax(ctx) == Some(ModuleFormat::Esm)
+            && implied_format_for_emit(ctx, &file.file_name) == Some(ModuleFormat::CommonJs)
+    });
+    (has_signatures || has_default || esm_imports_commonjs)
+        && can_have_synthetic_default(ctx, target, export_table)
+}
+
+/// The namespace object with `default` set to the synthetic default, which
+/// overrides a `default` member of its own.
+pub(crate) fn with_synthetic_default_member(namespace_type: Type, default_type: Type) -> Type {
+    let Type::Object(object) = namespace_type else {
+        return namespace_type;
+    };
+    let mut properties = (*object.properties).clone();
+    properties.insert(
+        "default".into(),
+        surge_ts_types::ObjectProperty::required(default_type),
+    );
+    Type::Object(crate::metrics::alloc_object_type(properties, None))
+}

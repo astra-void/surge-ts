@@ -1774,6 +1774,22 @@ fn resolve_namespace_import(
             module_resolution_scopes,
         ) {
             let namespace_type = namespace_export_object_type(&export_table);
+            let namespace_type = if namespace_import_has_synthetic_default(
+                ctx,
+                resolved_index.and_then(|index| program_files.get(index)),
+                &export_table,
+            ) {
+                let default_value = external_module_value(
+                    &export_table,
+                    resolved_index,
+                    &import.module_specifier,
+                    program_files,
+                    ctx,
+                );
+                with_synthetic_default_member(namespace_type, default_value.ty.clone())
+            } else {
+                namespace_type
+            };
             // tsc displays a namespace import object as `typeof import("<path>")`
             // (absolute, without the source extension) rather than the structural
             // shape. Tag the object with that display form when we know the file.
