@@ -168,60 +168,25 @@ fn validate_code_policy(entry: &CatalogEntry) -> Result<()> {
     Ok(())
 }
 
-/// The number of `{N}` placeholders. A brace pair around a plain word is
-/// literal message text (TS1202's `import {a} from "mod"`); anything else
-/// that is not a digit placeholder is rejected as ambiguous.
+/// The number of `{N}` placeholders. Like tsc's `formatStringFromArgs`, only
+/// a brace pair around digits is a placeholder; any other brace is message
+/// text (TS1144's `'{' or ';' expected.`, TS1381's `` `{'}'}` ``).
 fn placeholder_arity(message: &str) -> Result<usize> {
-    let mut highest = None;
+    let mut highest: Option<usize> = None;
     let mut rest = message;
-    loop {
-        let open = rest.find('{');
-        let close = rest.find('}');
-        match (open, close) {
-            (None, None) => break,
-            (None, Some(_)) => {
-                return Err(validation_error(format!(
-                    "message contains unmatched closing brace: {}",
-                    message
-                )));
-            }
-            (Some(open), Some(close)) if close < open => {
-                return Err(validation_error(format!(
-                    "message contains unmatched closing brace: {}",
-                    message
-                )));
-            }
-            (Some(open), _) => {
-                let after = &rest[open + 1..];
-                let Some(end) = after.find('}') else {
-                    return Err(validation_error(format!(
-                        "message contains ambiguous brace sequence: {}",
-                        message
-                    )));
-                };
-                let content = &after[..end];
-                if content.is_empty() {
-                    return Err(validation_error(format!(
-                        "message contains empty placeholder braces: {}",
-                        message
-                    )));
-                }
-                if content.bytes().all(|byte| byte.is_ascii_digit()) {
-                    let index = content.parse::<usize>().map_err(|error| {
-                        validation_error(format!("failed to parse placeholder index: {error}"))
-                    })?;
-                    highest = Some(highest.map_or(index, |current: usize| current.max(index)));
-                } else if !content.bytes().all(|byte| byte.is_ascii_alphabetic()) {
-                    return Err(validation_error(format!(
-                        "message contains ambiguous brace sequence: {}",
-                        message
-                    )));
-                }
-                rest = &after[end + 1..];
-            }
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 && after.as_bytes().get(digits) == Some(&b'}') {
+            let index = after[..digits].parse::<usize>().map_err(|error| {
+                validation_error(format!("failed to parse placeholder index: {error}"))
+            })?;
+            highest = Some(highest.map_or(index, |current| current.max(index)));
+            rest = &after[digits + 1..];
+        } else {
+            rest = after;
         }
     }
-
     Ok(highest.map_or(0, |value| value + 1))
 }
 
