@@ -6805,6 +6805,56 @@ pub const TS1241: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1200: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1200",
+    number: Some(1200),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Line terminator not permitted before arrow.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1294: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1294",
+    number: Some(1294),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This syntax is not allowed when 'erasableSyntaxOnly' is enabled.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS6807: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS6807",
+    number: Some(6807),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This operation can be simplified. This shift is identical to `{0} {1} {2}`.",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2823: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2823",
+    number: Some(2823),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Import attributes are only supported when the '--module' option is set to 'esnext', 'node18', 'node20', 'nodenext', or 'preserve'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1323: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1323",
+    number: Some(1323),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Dynamic imports are only supported when the '--module' flag is set to 'es2020', 'es2022', 'esnext', 'commonjs', 'amd', 'system', 'umd', 'node16', 'node18', 'node20', or 'nodenext'.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
     TS2411,
@@ -7486,6 +7536,11 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1239,
     TS1240,
     TS1241,
+    TS1200,
+    TS1294,
+    TS6807,
+    TS2823,
+    TS1323,
 ];
 
 impl Diagnostic {
@@ -12426,5 +12481,43 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts1241(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS1241, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1200(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1200, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1294(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1294, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts6807(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS6807,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2823(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2823, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1323(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1323, Vec::<DiagnosticArg>::new(), file_name)
     }
 }

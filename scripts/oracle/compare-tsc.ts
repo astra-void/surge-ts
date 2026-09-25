@@ -1071,6 +1071,11 @@ export const fixturePresets: Record<string, string> = {
   'element-reference-narrowing': path.join(workspaceRoot, 'tests/compat-projects/element-reference-narrowing/tsconfig.json'),
   'method-return-inferred': path.join(workspaceRoot, 'tests/compat-projects/method-return-inferred/tsconfig.json'),
   'enum-literal-widening': path.join(workspaceRoot, 'tests/compat-projects/enum-literal-widening/tsconfig.json'),
+  'checker-grammar-rejections': path.join(workspaceRoot, 'tests/compat-projects/checker-grammar-rejections/tsconfig.json'),
+  'erasable-syntax-only': path.join(workspaceRoot, 'tests/compat-projects/erasable-syntax-only/tsconfig.json'),
+  'module-es2015-import-forms': path.join(workspaceRoot, 'tests/compat-projects/module-es2015-import-forms/tsconfig.json'),
+  'class-member-duplicates': path.join(workspaceRoot, 'tests/compat-projects/class-member-duplicates/tsconfig.json'),
+  'signature-pattern-implicit-any': path.join(workspaceRoot, 'tests/compat-projects/signature-pattern-implicit-any/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

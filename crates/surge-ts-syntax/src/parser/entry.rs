@@ -56,6 +56,19 @@ const FOR_AWAIT_IN_MESSAGE: &str = "await can only be used in conjunction with `
 /// TS2364 for an assignment, TS2357 for `++`/`--`, TS2779/TS2777 when it is an
 /// optional chain — and a misplaced rest parameter (TS1014) or rest element
 /// (TS2462).
+/// The tsc code of a recovered parse error tsc reports from its checker
+/// instead (`checkGrammarModifiers`, `checkGrammarArrowFunction`,
+/// `checkGrammarIndexSignatureParameters`).
+fn checker_grammar_code(error: &crate::ParserError) -> Option<u32> {
+    match (error.code?, error.message.as_str()) {
+        (1206, "Decorators are not valid here.")
+        | (1275, "'accessor' modifier cannot be used here.")
+        | (1200, "Line terminator not permitted before arrow") => error.code,
+        (code @ (1021 | 1096), _) => Some(code),
+        _ => None,
+    }
+}
+
 fn classify_uncoded_parser_error(
     message: &str,
     span: crate::TextSpan,
@@ -65,6 +78,10 @@ fn classify_uncoded_parser_error(
     match message {
         // On the first token (`checkGrammarModifiers`).
         "Decorators are not valid here." => Some((1206, crate::TextSpan { start: span.start, end: span.start + 1 })),
+        // On the modifier (`checkGrammarModifiers`).
+        "'accessor' modifier cannot be used here." => Some((1275, span)),
+        // On the `=>` (`checkGrammarArrowFunction`).
+        "Line terminator not permitted before arrow" => Some((1200, span)),
         "Cannot assign to this expression" => {
             if let Some(stop) = update_target_stop(text, span, source_text) {
                 return Some(stop);
@@ -495,23 +512,24 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         (Vec::new(), Vec::new())
     };
     let mut grammar_diagnostics = grammar_diagnostics;
-    // Decorators before a declaration that cannot take them (`@dec var x`)
-    // are tsc's checker grammar error, not its parser's; the recovering parse
-    // drops them from the tree, so the grammar walk cannot see them.
+    // What the recovering parse rejects that tsc's parser accepts and its
+    // checker's grammar checks reject: reported whether or not tsc's parser
+    // finds the file clean. The parse drops some of it from the tree
+    // (decorators before a declaration that cannot take them), so the grammar
+    // walk cannot see it.
     let collects = collects_grammar_diagnostics(file_name);
     parser_errors.retain(|error| {
-        let dropped_decorators = error.code == Some(1206) && error.message == "Decorators are not valid here.";
-        if dropped_decorators
-            && collects
-            && let Some(span) = error.span
-        {
+        let Some(code) = checker_grammar_code(error) else {
+            return true;
+        };
+        if collects && let Some(span) = error.span {
             grammar_diagnostics.push(crate::ParsedGrammarDiagnostic {
-                kind: crate::ParsedGrammarDiagnosticKind::Ts(1206),
+                kind: crate::ParsedGrammarDiagnosticKind::Ts(code),
                 span,
                 name: None,
             });
         }
-        !dropped_decorators
+        false
     });
 
     let let_assignments =

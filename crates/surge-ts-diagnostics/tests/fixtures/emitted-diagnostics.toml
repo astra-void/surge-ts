@@ -4354,3 +4354,33 @@ status = "emitted"
 oracle = [
   "decorator-expressions-checked",
 ]
+
+[TS1200]
+status = "emitted"
+oracle = [
+  "checker-grammar-rejections",
+]
+
+[TS1294]
+status = "emitted"
+oracle = [
+  "erasable-syntax-only",
+]
+
+[TS6807]
+status = "emitted"
+oracle = [
+  "checker-grammar-rejections",
+]
+
+[TS2823]
+status = "emitted"
+oracle = [
+  "module-es2015-import-forms",
+]
+
+[TS1323]
+status = "emitted"
+oracle = [
+  "module-es2015-import-forms",
+]

@@ -1496,12 +1496,31 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             ));
         }
         self.expect(Kind::RBrack);
+        // surge: TS1096 — on the first parameter's name when there are several
+        // (`checkGrammarIndexSignatureParameters`), on the signature when none.
         if params.len() != 1 {
-            self.error(diagnostics::index_signature_one_parameter(self.end_span(span)));
+            let at = params.first().map_or(self.end_span(span), |parameter| {
+                Span::new(parameter.span.start, parameter.span.start + parameter.name.len() as u32)
+            });
+            self.error(diagnostics::index_signature_one_parameter(at));
         }
-        let Some(type_annotation) = self.parse_ts_type_annotation() else {
-            return self
-                .fatal_error(diagnostics::index_signature_type_annotation(self.end_span(span)));
+        // surge: TS1021 — tsc parses a missing annotation and reports it from its
+        // checker, after the parameter errors, so parsing goes on with `any`.
+        let type_annotation = match self.parse_ts_type_annotation() {
+            Some(type_annotation) => type_annotation,
+            None => {
+                // After the key checks: a key tsc rejects (TS1268, TS1337) is
+                // reported instead.
+                let key_is_valid = params.first().is_some_and(|parameter| {
+                    is_valid_index_key_type(&parameter.type_annotation.type_annotation)
+                });
+                if params.len() == 1 && key_is_valid {
+                    self.error(diagnostics::index_signature_type_annotation(self.end_span(span)));
+                }
+                let at = Span::empty(self.prev_token_end);
+                let any = self.ast.ts_type_any_keyword(at);
+                self.ast.alloc_ts_type_annotation(at, any)
+            }
         };
         self.parse_type_member_semicolon();
         self.ast.alloc_ts_index_signature(
@@ -1601,5 +1620,19 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
             _ => false,
         }
+    }
+}
+
+/// `isValidIndexKeyType` as far as the written key decides it; a named key
+/// cannot be judged here and counts as invalid.
+fn is_valid_index_key_type(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSStringKeyword(_)
+        | TSType::TSNumberKeyword(_)
+        | TSType::TSSymbolKeyword(_)
+        | TSType::TSTemplateLiteralType(_) => true,
+        TSType::TSUnionType(union) => union.types.iter().all(is_valid_index_key_type),
+        TSType::TSParenthesizedType(inner) => is_valid_index_key_type(&inner.type_annotation),
+        _ => false,
     }
 }

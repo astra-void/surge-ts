@@ -51,6 +51,11 @@ impl ModuleEmitKind {
     pub fn is_node(self) -> bool {
         matches!(self, Self::Node16 | Self::Node18 | Self::Node20 | Self::NodeNext)
     }
+
+    /// tsgo's `SupportsImportAttributes`.
+    pub fn supports_import_attributes(self) -> bool {
+        matches!(self, Self::Node18 | Self::Node20 | Self::NodeNext | Self::Preserve | Self::ESNext)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -198,6 +203,9 @@ pub struct CheckerOptions {
     /// `compilerOptions.checkJs`, unset when not written: a JavaScript file
     /// is "plain" JavaScript (`ast.IsPlainJSFile`) only when it is unset.
     pub check_js: Option<bool>,
+    /// `compilerOptions.erasableSyntaxOnly`: TypeScript-only syntax with a
+    /// run-time meaning is TS1294.
+    pub erasable_syntax_only: bool,
     /// What makes a file without an import or export a module to tsc.
     pub module_detection: ModuleDetection,
     /// `GetEmitScriptTarget`: the language version tsc checks against.
@@ -303,6 +311,7 @@ impl Default for CheckerOptions {
             resolve_json_module: true,
             allow_js: false,
             check_js: None,
+            erasable_syntax_only: false,
             module_detection: Default::default(),
             language_version: Default::default(),
             jsx_configured: false,

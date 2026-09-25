@@ -803,7 +803,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     /// Parse import statement or import expression.
-    fn parse_import_statement(&mut self) -> Statement<'a> {
+    pub(crate) fn parse_import_statement(&mut self) -> Statement<'a> {
         let checkpoint = self.checkpoint();
         let span = self.start_span();
         self.bump_any();

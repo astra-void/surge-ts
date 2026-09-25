@@ -85,6 +85,7 @@ pub struct NormalizedCompilerOptions {
     /// `compilerOptions.checkJs`; unset is not `false`: tsc reports a plain
     /// JavaScript file's binder and grammar errors only when it is unset.
     pub check_js: Option<bool>,
+    pub erasable_syntax_only: bool,
     pub module_detection: ModuleDetectionKind,
     pub no_emit: bool,
     /// `compilerOptions.noCheck`: no file is type-checked, so only syntactic
@@ -167,6 +168,7 @@ impl Default for NormalizedCompilerOptions {
             jsx_import_source: None,
             allow_js: false,
             check_js: None,
+            erasable_syntax_only: false,
             module_detection: ModuleDetectionKind::Auto,
             no_emit: false,
             no_check: false,

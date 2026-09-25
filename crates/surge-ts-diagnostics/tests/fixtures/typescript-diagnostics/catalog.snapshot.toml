@@ -5440,3 +5440,43 @@ support = "emitted"
 message = "Unable to resolve signature of method decorator when called as an expression."
 arity = 0
 
+[[diagnostic]]
+code = "TS1200"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Line terminator not permitted before arrow."
+arity = 0
+
+[[diagnostic]]
+code = "TS1294"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This syntax is not allowed when 'erasableSyntaxOnly' is enabled."
+arity = 0
+
+[[diagnostic]]
+code = "TS6807"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This operation can be simplified. This shift is identical to `{0} {1} {2}`."
+arity = 3
+
+[[diagnostic]]
+code = "TS2823"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Import attributes are only supported when the '--module' option is set to 'esnext', 'node18', 'node20', 'nodenext', or 'preserve'."
+arity = 0
+
+[[diagnostic]]
+code = "TS1323"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Dynamic imports are only supported when the '--module' flag is set to 'es2020', 'es2022', 'esnext', 'commonjs', 'amd', 'system', 'umd', 'node16', 'node18', 'node20', or 'nodenext'."
+arity = 0
+

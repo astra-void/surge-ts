@@ -149,6 +149,120 @@ fn is_ambient_marker(kind: &AstKind<'_>) -> bool {
     }
 }
 
+/// tsc's `ModuleInstanceState`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ModuleInstanceState {
+    NonInstantiated,
+    ConstEnumOnly,
+    Instantiated,
+}
+
+/// tsc's `getModuleInstanceState`: whether a namespace declares anything that
+/// exists at run time.
+fn module_instance_state(module: &oxc_ast::ast::TSModuleDeclaration<'_>) -> ModuleInstanceState {
+    match &module.body {
+        None => ModuleInstanceState::Instantiated,
+        Some(oxc_ast::ast::TSModuleDeclarationBody::TSModuleDeclaration(nested)) => module_instance_state(nested),
+        Some(oxc_ast::ast::TSModuleDeclarationBody::TSModuleBlock(block)) => {
+            let mut state = ModuleInstanceState::NonInstantiated;
+            for statement in &block.body {
+                match statement_instance_state(statement, &block.body) {
+                    ModuleInstanceState::Instantiated => return ModuleInstanceState::Instantiated,
+                    ModuleInstanceState::ConstEnumOnly => state = ModuleInstanceState::ConstEnumOnly,
+                    ModuleInstanceState::NonInstantiated => {}
+                }
+            }
+            state
+        }
+    }
+}
+
+fn statement_instance_state(statement: &Statement<'_>, siblings: &[Statement<'_>]) -> ModuleInstanceState {
+    match statement {
+        Statement::TSInterfaceDeclaration(_) | Statement::TSTypeAliasDeclaration(_) => {
+            ModuleInstanceState::NonInstantiated
+        }
+        Statement::TSEnumDeclaration(declaration) if declaration.r#const => ModuleInstanceState::ConstEnumOnly,
+        Statement::ImportDeclaration(_) | Statement::TSImportEqualsDeclaration(_) => {
+            ModuleInstanceState::NonInstantiated
+        }
+        Statement::TSModuleDeclaration(module) => module_instance_state(module),
+        Statement::ExportNamedDeclaration(export) => match &export.declaration {
+            Some(
+                oxc_ast::ast::Declaration::TSInterfaceDeclaration(_)
+                | oxc_ast::ast::Declaration::TSTypeAliasDeclaration(_),
+            ) => ModuleInstanceState::NonInstantiated,
+            Some(oxc_ast::ast::Declaration::TSEnumDeclaration(declaration)) if declaration.r#const => {
+                ModuleInstanceState::ConstEnumOnly
+            }
+            Some(oxc_ast::ast::Declaration::TSModuleDeclaration(module)) => module_instance_state(module),
+            Some(_) => ModuleInstanceState::Instantiated,
+            // `export { a, b }`: what the names declare
+            // (`getModuleInstanceStateForAliasTarget`).
+            None if export.source.is_none() => export
+                .specifiers
+                .iter()
+                .map(|specifier| match &specifier.local {
+                    ModuleExportName::IdentifierReference(name) => local_instance_state(&name.name, siblings),
+                    _ => ModuleInstanceState::Instantiated,
+                })
+                .max()
+                .unwrap_or(ModuleInstanceState::NonInstantiated),
+            None => ModuleInstanceState::Instantiated,
+        },
+        _ => ModuleInstanceState::Instantiated,
+    }
+}
+
+fn local_instance_state(name: &str, siblings: &[Statement<'_>]) -> ModuleInstanceState {
+    let mut found = false;
+    let mut state = ModuleInstanceState::NonInstantiated;
+    for statement in siblings {
+        let declaration_state = match statement {
+            Statement::TSInterfaceDeclaration(declaration) if declaration.id.name == name => {
+                Some(ModuleInstanceState::NonInstantiated)
+            }
+            Statement::TSTypeAliasDeclaration(declaration) if declaration.id.name == name => {
+                Some(ModuleInstanceState::NonInstantiated)
+            }
+            Statement::TSEnumDeclaration(declaration) if declaration.id.name == name => Some(if declaration.r#const {
+                ModuleInstanceState::ConstEnumOnly
+            } else {
+                ModuleInstanceState::Instantiated
+            }),
+            Statement::TSModuleDeclaration(module)
+                if matches!(&module.id, oxc_ast::ast::TSModuleDeclarationName::Identifier(id) if id.name == name) =>
+            {
+                Some(module_instance_state(module))
+            }
+            _ => None,
+        };
+        if let Some(declaration_state) = declaration_state {
+            found = true;
+            state = state.max(declaration_state);
+        }
+    }
+    if found { state } else { ModuleInstanceState::Instantiated }
+}
+
+/// The number a constant operand evaluates to, as `evaluate` gives it for a
+/// literal (possibly signed or parenthesized).
+fn constant_number(expression: &oxc_ast::ast::Expression<'_>) -> Option<f64> {
+    match expression {
+        oxc_ast::ast::Expression::NumericLiteral(literal) => Some(literal.value),
+        oxc_ast::ast::Expression::ParenthesizedExpression(inner) => constant_number(&inner.expression),
+        oxc_ast::ast::Expression::UnaryExpression(unary) => {
+            let operand = constant_number(&unary.argument)?;
+            match unary.operator {
+                oxc_syntax::operator::UnaryOperator::UnaryNegation => Some(-operand),
+                oxc_syntax::operator::UnaryOperator::UnaryPlus => Some(operand),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 fn is_function_like(kind: &AstKind<'_>) -> bool {
     matches!(kind, AstKind::Function(_) | AstKind::ArrowFunctionExpression(_))
 }
@@ -640,6 +754,8 @@ impl<'a> ContextCollector<'a, '_> {
                     | Statement::ThrowStatement(_)
                     | Statement::TryStatement(_)
                     | Statement::ExpressionStatement(_)
+                    | Statement::EmptyStatement(_)
+                    | Statement::DebuggerStatement(_)
             )
         });
         if let Some(statement) = first {
@@ -647,6 +763,134 @@ impl<'a> ContextCollector<'a, '_> {
             let end = first_token_end(self.source_text, start as usize) as u32;
             self.push(1036, Span::new(start, end), &[]);
         }
+    }
+
+    /// tsc's `checkGrammarStatementInAmbientContext` for a function's body
+    /// block (`checkBlock`): an implementation in an ambient context is TS1183
+    /// on its `{`, and the block's own statements report nothing more.
+    fn check_implementation_in_ambient_context(&mut self, body: &oxc_ast::ast::FunctionBody<'_>) {
+        if self.ambient_depth == 0 {
+            return;
+        }
+        if let Some(AstKind::ArrowFunctionExpression(arrow)) = self.stack.last()
+            && arrow.expression
+        {
+            return;
+        }
+        self.push(1183, Span::new(body.span.start, body.span.start + 1), &[]);
+    }
+
+    /// tsc's `checkGrammarAccessor`: a class accessor outside an ambient
+    /// context needs a body unless it is abstract — `'{' expected` on the
+    /// accessor's last character (its `;` when it has one).
+    fn check_accessor_body(&mut self, method: &oxc_ast::ast::MethodDefinition<'_>) {
+        if !matches!(method.kind, MethodDefinitionKind::Get | MethodDefinitionKind::Set)
+            || method.value.body.is_some()
+            || method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition
+            || self.ambient_depth > 0
+        {
+            return;
+        }
+        // tsc checks the accessor only once its modifiers pass
+        // (`checkGrammarFunctionLikeDeclaration` first), and these never do on
+        // an accessor.
+        let modifiers_start = method.decorators.last().map_or(method.span.start, |decorator| decorator.span.end);
+        let modifiers = &self.source_text[modifiers_start as usize..method.key.span().start as usize];
+        if modifiers
+            .split(|c: char| !c.is_ascii_alphabetic())
+            .any(|word| matches!(word, "declare" | "readonly" | "async" | "export" | "const" | "accessor"))
+        {
+            return;
+        }
+        let end = method.span.end as usize;
+        let text = self.source_text;
+        let at = if text.as_bytes().get(end.wrapping_sub(1)) == Some(&b';') {
+            end - 1
+        } else {
+            let rest = &text[end..];
+            let trimmed = rest.trim_start();
+            if trimmed.starts_with(';') { end + (rest.len() - trimmed.len()) } else { end.saturating_sub(1) }
+        } as u32;
+        self.push(1005, Span::new(at, at + 1), &["{"]);
+    }
+
+    /// tsc's shift check in `checkBinaryLikeExpression`, an error only where
+    /// the shift is an enum member's initializer: a constant shift of 32 or
+    /// more is the shift by its remainder (TS6807).
+    fn check_enum_member_overshift(&mut self, member: &oxc_ast::ast::TSEnumMember<'_>) {
+        let Some(mut expression) = member.initializer.as_ref() else {
+            return;
+        };
+        while let oxc_ast::ast::Expression::ParenthesizedExpression(inner) = expression {
+            expression = &inner.expression;
+        }
+        let oxc_ast::ast::Expression::BinaryExpression(binary) = expression else {
+            return;
+        };
+        let operator = match binary.operator {
+            oxc_syntax::operator::BinaryOperator::ShiftLeft => "<<",
+            oxc_syntax::operator::BinaryOperator::ShiftRight => ">>",
+            oxc_syntax::operator::BinaryOperator::ShiftRightZeroFill => ">>>",
+            _ => return,
+        };
+        let Some(amount) = constant_number(&binary.right) else {
+            return;
+        };
+        if amount.abs() < 32.0 {
+            return;
+        }
+        let left_span = binary.left.span();
+        let left = self.source_text[left_span.start as usize..left_span.end as usize].to_string();
+        let remainder = amount % 32.0;
+        let remainder = super::number_text::js_number_to_string(if remainder == 0.0 { 0.0 } else { remainder });
+        self.push(6807, binary.span, &[&left, operator, &remainder]);
+    }
+
+    /// tsc's `checkQuestionTokenAgreementBetweenOverloads` for the method
+    /// signatures of an interface or type literal: overloads that are neither
+    /// all optional nor all required report TS2386 where they differ from the
+    /// first, which is canonical with no implementation to defer to.
+    fn check_signature_overload_optionality(&mut self, members: &[oxc_ast::ast::TSSignature<'_>]) {
+        let mut groups: Vec<(&str, Vec<(bool, Span)>)> = Vec::new();
+        for member in members {
+            let oxc_ast::ast::TSSignature::TSMethodSignature(method) = member else {
+                continue;
+            };
+            if method.kind != oxc_ast::ast::TSMethodSignatureKind::Method {
+                continue;
+            }
+            let name = match &method.key {
+                oxc_ast::ast::PropertyKey::StaticIdentifier(identifier) => identifier.name.as_str(),
+                oxc_ast::ast::PropertyKey::StringLiteral(literal) => literal.value.as_str(),
+                _ => continue,
+            };
+            let overload = (method.optional, method.key.span());
+            match groups.iter_mut().find(|(existing, _)| *existing == name) {
+                Some((_, overloads)) => overloads.push(overload),
+                None => groups.push((name, vec![overload])),
+            }
+        }
+        for (_, overloads) in groups {
+            let some_optional = overloads.iter().any(|(optional, _)| *optional);
+            let all_optional = overloads.iter().all(|(optional, _)| *optional);
+            if some_optional == all_optional {
+                continue;
+            }
+            let canonical = overloads[0].0;
+            for (optional, span) in overloads {
+                if optional != canonical {
+                    self.push(2386, span, &[]);
+                }
+            }
+        }
+    }
+
+    /// The constructs `erasableSyntaxOnly` forbids (TS1294), recorded always
+    /// and reported only under the option: a parameter property, a non-ambient
+    /// enum, an instantiated non-ambient namespace, a non-ambient `import =`
+    /// or `export =`, and a `<T>x` assertion.
+    fn push_erasable(&mut self, span: Span) {
+        self.push(1294, span, &[]);
     }
 
     /// A `declare` written on a declaration already inside an ambient
@@ -1768,6 +2012,27 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
+    /// tsc's `checkImportAttributes`: TS2823 on a `with { … }` clause, which
+    /// the checker keeps unless the `module` option supports attributes. A
+    /// type-only import or export whose one attribute is a valid
+    /// `resolution-mode` is exempt.
+    fn check_import_attributes_supported(&mut self, clause: &oxc_ast::ast::WithClause<'_>, type_only: bool) {
+        if clause.keyword != oxc_ast::ast::WithClauseKeyword::With {
+            return;
+        }
+        if type_only
+            && let [attribute] = clause.with_entries.as_slice()
+            && attribute.key.as_arena_str().as_str() == "resolution-mode"
+            && matches!(attribute.value.value.as_str(), "import" | "require")
+        {
+            return;
+        }
+        // The clause's span starts after its keyword.
+        if let Some(start) = self.source_text[..clause.span.start as usize].rfind("with") {
+            self.push(2823, Span::new(start as u32, clause.span.end), &[]);
+        }
+    }
+
     /// Whether the node being entered is a statement of a source file or a
     /// namespace body — where tsc's `checkGrammarModuleElementContext` allows
     /// `export` and `declare`. Anywhere else they are TS1184.
@@ -2488,7 +2753,15 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_jump(statement.span, statement.label.as_ref().map(|l| l.name.as_str()), true);
             }
             AstKind::LabeledStatement(statement) => self.check_labeled_statement(statement),
-            AstKind::FormalParameter(parameter) => self.check_parameter_property(parameter),
+            AstKind::FormalParameter(parameter) => {
+                self.check_parameter_property(parameter);
+                if parameter.accessibility.is_some() || parameter.readonly || parameter.r#override {
+                    self.push_erasable(parameter.span);
+                }
+            }
+            AstKind::TSTypeAssertion(assertion) => {
+                self.push_erasable(Span::new(assertion.span.start, assertion.expression.span().start));
+            }
             AstKind::WithStatement(statement) => {
                 self.check_with_statement(statement);
                 self.with_bodies.push(statement.body.span());
@@ -2540,7 +2813,11 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             }
             AstKind::TSEnumDeclaration(declaration) => {
                 self.check_reserved_type_name(2431, &declaration.id);
+                if self.ambient_depth == 0 && !declaration.declare {
+                    self.push_erasable(declaration.id.span);
+                }
             }
+            AstKind::TSEnumMember(member) => self.check_enum_member_overshift(member),
             AstKind::Class(class) => {
                 check_class_name(self, class);
                 self.check_object_class_name(class);
@@ -2551,7 +2828,16 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_definite_assertion(declarator);
                 self.check_var_declared_name_not_shadowed(declarator);
             }
-            AstKind::TSModuleDeclaration(module) => self.check_relative_ambient_module_name(module),
+            AstKind::TSModuleDeclaration(module) => {
+                self.check_relative_ambient_module_name(module);
+                if self.ambient_depth == 0
+                    && !module.declare
+                    && let oxc_ast::ast::TSModuleDeclarationName::Identifier(name) = &module.id
+                    && module_instance_state(module) == ModuleInstanceState::Instantiated
+                {
+                    self.push_erasable(name.span);
+                }
+            }
             AstKind::PropertyDefinition(property) => {
                 if property.definite && property.value.is_some() {
                     self.push_at_exclamation(1263, property.key.span());
@@ -2638,6 +2924,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 }
             }
             AstKind::MethodDefinition(method) => {
+                self.check_accessor_body(method);
                 if method.kind == MethodDefinitionKind::Constructor && method.value.r#async {
                     let from = method.span.start as usize;
                     if let Some(offset) = self.source_text[from..method.key.span().start as usize].find("async") {
@@ -2664,6 +2951,10 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     let span = self.first_token(self.statement_start(declaration.span.start));
                     self.push(1232, span, &[]);
                 } else {
+                    if self.ambient_depth == 0 {
+                        let start = self.statement_start(declaration.span.start);
+                        self.push_erasable(Span::new(start, declaration.span.end));
+                    }
                     let require_in_namespace = self.check_import_require_in_namespace(declaration);
                     self.check_import_alias_name(declaration);
                     // Gated on `module` by the checker: ES2015..ESNext cannot emit it.
@@ -2683,6 +2974,9 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 }
             }
             AstKind::TSExportAssignment(assignment) => {
+                if self.ambient_depth == 0 && self.at_module_element_level() {
+                    self.push_erasable(assignment.span);
+                }
                 if !self.at_module_element_level() {
                     self.push(1231, self.first_token(assignment.span.start), &[]);
                 } else if self.is_contained_by_namespace() {
@@ -2701,6 +2995,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     self.push(1232, self.first_token(declaration.span.start), &[]);
                 } else if let Some(clause) = &declaration.with_clause {
                     self.check_import_assertion(clause);
+                    self.check_import_attributes_supported(clause, declaration.import_kind.is_type());
                 }
             }
             AstKind::ExportNamedDeclaration(declaration) => {
@@ -2724,6 +3019,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     }
                 } else if let Some(clause) = &declaration.with_clause {
                     self.check_import_assertion(clause);
+                    self.check_import_attributes_supported(clause, declaration.export_kind.is_type());
                 }
             }
             AstKind::ExportAllDeclaration(declaration) => {
@@ -2732,6 +3028,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     self.push(1233, Span::new(start, start + 6), &[]);
                 } else if let Some(clause) = &declaration.with_clause {
                     self.check_import_assertion(clause);
+                    self.check_import_attributes_supported(clause, declaration.export_kind.is_type());
                 }
             }
             AstKind::ClassBody(body) => {
@@ -2744,8 +3041,14 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     }
                 }));
             }
-            AstKind::TSInterfaceBody(body) => self.check_duplicate_index_signatures(signature_index_signatures(&body.body)),
-            AstKind::TSTypeLiteral(literal) => self.check_duplicate_index_signatures(signature_index_signatures(&literal.members)),
+            AstKind::TSInterfaceBody(body) => {
+                self.check_duplicate_index_signatures(signature_index_signatures(&body.body));
+                self.check_signature_overload_optionality(&body.body);
+            }
+            AstKind::TSTypeLiteral(literal) => {
+                self.check_duplicate_index_signatures(signature_index_signatures(&literal.members));
+                self.check_signature_overload_optionality(&literal.members);
+            }
             AstKind::TSModuleBlock(block) => {
                 self.check_statements_in_ambient_context(&block.body);
                 self.check_redundant_declare(&block.body);
@@ -2774,6 +3077,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_merged_declarations(&program.body);
             }
             AstKind::FunctionBody(body) => {
+                self.check_implementation_in_ambient_context(body);
                 self.check_enum_merges(&body.statements);
                 self.check_self_referencing_annotations(&body.statements);
                 self.check_merged_declarations(&body.statements);
@@ -2907,6 +3211,9 @@ impl<'a> ContextCollector<'a, '_> {
                     self.push(2754, type_arguments.span, &[]);
                 }
             }
+            // `checkGrammarImportCallExpression` rejects a dynamic import
+            // under `module: es2015`; the checker gates it on the option.
+            AstKind::ImportExpression(import) if import.phase.is_none() => self.push(1323, import.span, &[]),
             AstKind::BinaryExpression(binary) => self.check_instanceof_instantiation(binary),
             _ => {}
         }

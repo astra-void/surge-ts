@@ -1355,6 +1355,21 @@ impl GrammarCollector {
                             method.value.body.is_some(),
                             is_abstract,
                         ));
+                        // A parameter property is an instance property
+                        // declared where the constructor stands.
+                        for parameter in &method.value.params.items {
+                            if (parameter.accessibility.is_some() || parameter.readonly || parameter.r#override)
+                                && let oxc_ast::ast::BindingPattern::BindingIdentifier(identifier) = &parameter.pattern
+                            {
+                                add_group_member(
+                                    &mut groups,
+                                    &mut group_slots,
+                                    identifier.name.to_string(),
+                                    false,
+                                    (identifier.span, MemberKind::Property),
+                                );
+                            }
+                        }
                         continue;
                     }
                     let member = match method.kind {
@@ -1398,22 +1413,14 @@ impl GrammarCollector {
                     }
                     (&property.key, property.r#static, MemberKind::Property)
                 }
+                ClassElement::AccessorProperty(property) => (&property.key, property.r#static, MemberKind::Accessor),
                 _ => continue,
             };
 
             let Some(name) = property_key_name(key) else {
                 continue;
             };
-            match group_slots.get(&(name.clone(), is_static)) {
-                Some(&slot) => groups[slot].members.push((key.span(), member)),
-                None => {
-                    group_slots.insert((name.clone(), is_static), groups.len());
-                    groups.push(MemberGroup {
-                        name,
-                        members: vec![(key.span(), member)],
-                    });
-                }
-            }
+            add_group_member(&mut groups, &mut group_slots, name, is_static, (key.span(), member));
         }
 
         for group in &groups {
@@ -1545,6 +1552,33 @@ impl GrammarCollector {
             .members
             .iter()
             .any(|(_, member)| matches!(member, MemberKind::Accessor));
+        let has_method = group
+            .members
+            .iter()
+            .any(|(_, member)| matches!(member, MemberKind::Method { .. } | MemberKind::AbstractMethod));
+
+        // Properties and accessors merge into one symbol, so tsc's checker
+        // finds these (`checkObjectTypeForDuplicateDeclarations`): a second
+        // property, or a property with an accessor, is a duplicate at every
+        // member of the name; a get/set pair is not. A method among them is
+        // the binder's conflict instead.
+        if !has_method {
+            let mut first_kind: Option<MemberKind> = None;
+            for (_, member) in &group.members {
+                match first_kind {
+                    None => first_kind = Some(*member),
+                    Some(MemberKind::Accessor) if *member == MemberKind::Accessor => {}
+                    Some(_) => {
+                        let name = group.name.clone();
+                        for (span, _) in &group.members {
+                            self.push(Kind::DuplicateMember, *span, Some(&name));
+                        }
+                        return;
+                    }
+                }
+            }
+            return;
+        }
 
         if group.members.len() > 1 && has_property && !has_accessor {
             let name = group.name.clone();
@@ -1681,12 +1715,42 @@ impl GrammarCollector {
     /// A signature has no body to run a default in.
     fn check_signature_parameters(&mut self, parameters: &FormalParameters<'_>) {
         for parameter in &parameters.items {
+            self.check_signature_pattern_initializers(&parameter.pattern);
             if parameter.initializer.is_some() {
                 self.push(
                     Kind::ParameterInitializerOutsideImplementation,
                     parameter.span,
                     None,
                 );
+            }
+        }
+    }
+
+    /// The elements of a parameter's pattern are checked like the parameter
+    /// (`checkVariableLikeDeclaration`), so an initializer there is TS2371 too,
+    /// at the element's name — except on a renamed element (`{ key: local }`),
+    /// which that check leaves at once.
+    fn check_signature_pattern_initializers(&mut self, pattern: &oxc_ast::ast::BindingPattern<'_>) {
+        let elements: Vec<(&oxc_ast::ast::BindingPattern<'_>, bool)> = match pattern {
+            oxc_ast::ast::BindingPattern::ObjectPattern(object) => {
+                object.properties.iter().map(|property| (&property.value, !property.shorthand)).collect()
+            }
+            oxc_ast::ast::BindingPattern::ArrayPattern(array) => {
+                array.elements.iter().flatten().map(|element| (element, false)).collect()
+            }
+            _ => return,
+        };
+        for (element, renamed) in elements {
+            match element {
+                oxc_ast::ast::BindingPattern::AssignmentPattern(assignment) => {
+                    if renamed && matches!(assignment.left, oxc_ast::ast::BindingPattern::BindingIdentifier(_)) {
+                        continue;
+                    }
+                    self.check_signature_pattern_initializers(&assignment.left);
+                    self.push(Kind::ParameterInitializerOutsideImplementation, assignment.left.span(), None);
+                }
+                oxc_ast::ast::BindingPattern::BindingIdentifier(_) => {}
+                nested => self.check_signature_pattern_initializers(nested),
             }
         }
     }
@@ -1859,8 +1923,12 @@ impl GrammarCollector {
             if parameter.type_annotation.is_some() || parameter.initializer.is_some() {
                 continue;
             }
-            let oxc_ast::ast::BindingPattern::BindingIdentifier(binding) = &parameter.pattern else {
-                continue;
+            let binding = match &parameter.pattern {
+                oxc_ast::ast::BindingPattern::BindingIdentifier(binding) => binding,
+                pattern => {
+                    self.report_implicit_any_binding_elements(pattern);
+                    continue;
+                }
             };
             if may_name_type {
                 self.push(
@@ -1886,6 +1954,52 @@ impl GrammarCollector {
                 rest.span,
                 Some(&format!("{}\0arg{}\0[]", binding.name, parameters.items.len())),
             );
+        }
+    }
+
+    /// tsc's `getTypeFromBindingPattern` with errors reported: an element
+    /// with neither an initializer nor a pattern of its own is an implicit
+    /// `any` (TS7031, which the checker keeps under `noImplicitAny`). An
+    /// object rest, a computed name that is no literal, and an array pattern
+    /// with nothing but a rest imply nothing to report.
+    fn report_implicit_any_binding_elements(&mut self, pattern: &oxc_ast::ast::BindingPattern<'_>) {
+        match pattern {
+            oxc_ast::ast::BindingPattern::ObjectPattern(object) => {
+                for property in &object.properties {
+                    // A renamed element is left to the unused-renaming check.
+                    let renamed = !property.shorthand
+                        && matches!(property.value, oxc_ast::ast::BindingPattern::BindingIdentifier(_));
+                    if renamed
+                        || property.computed
+                            && !matches!(property.key, PropertyKey::StringLiteral(_) | PropertyKey::NumericLiteral(_))
+                    {
+                        continue;
+                    }
+                    self.report_implicit_any_binding_element(&property.value);
+                }
+            }
+            oxc_ast::ast::BindingPattern::ArrayPattern(array) => {
+                if array.elements.is_empty() {
+                    return;
+                }
+                for element in array.elements.iter().flatten() {
+                    self.report_implicit_any_binding_element(element);
+                }
+                if let Some(rest) = &array.rest {
+                    self.report_implicit_any_binding_element(&rest.argument);
+                }
+            }
+            oxc_ast::ast::BindingPattern::BindingIdentifier(_) | oxc_ast::ast::BindingPattern::AssignmentPattern(_) => {}
+        }
+    }
+
+    fn report_implicit_any_binding_element(&mut self, element: &oxc_ast::ast::BindingPattern<'_>) {
+        match element {
+            oxc_ast::ast::BindingPattern::BindingIdentifier(identifier) => {
+                self.push(Kind::Ts(7031), identifier.span, Some(&format!("{}\0any", identifier.name)));
+            }
+            oxc_ast::ast::BindingPattern::AssignmentPattern(_) => {}
+            nested => self.report_implicit_any_binding_elements(nested),
         }
     }
 
@@ -1947,6 +2061,25 @@ impl OverloadSibling {
 struct MemberGroup {
     name: String,
     members: Vec<(Span, MemberKind)>,
+}
+
+fn add_group_member(
+    groups: &mut Vec<MemberGroup>,
+    slots: &mut std::collections::HashMap<(String, bool), usize>,
+    name: String,
+    is_static: bool,
+    member: (Span, MemberKind),
+) {
+    match slots.get(&(name.clone(), is_static)) {
+        Some(&slot) => groups[slot].members.push(member),
+        None => {
+            slots.insert((name.clone(), is_static), groups.len());
+            groups.push(MemberGroup {
+                name,
+                members: vec![member],
+            });
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

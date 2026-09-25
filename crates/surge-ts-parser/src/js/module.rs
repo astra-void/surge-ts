@@ -1,6 +1,6 @@
 use oxc_allocator::{Box, Vec};
 use oxc_ast::{NONE, ast::*};
-use oxc_span::GetSpan;
+use oxc_span::{GetSpan, Span};
 use rustc_hash::FxHashMap;
 
 use super::FunctionKind;
@@ -35,9 +35,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         phase: Option<ImportPhase>,
     ) -> Expression<'a> {
         self.expect(Kind::LParen);
+        // surge: TS1323/TS1450 — tsc parses any argument list of `import(…)` and rejects its
+        // length from the checker; keep the file, with an empty-span placeholder specifier
+        // and the arguments past the second parsed and dropped.
         if self.eat(Kind::RParen) {
             let error = diagnostics::import_requires_a_specifier(self.end_span(span));
-            return self.fatal_error(error);
+            self.error(error);
+            let source = self.ast.expression_null_literal(Span::empty(self.prev_token_end));
+            let expr = self.ast.alloc_import_expression(self.end_span(span), source, None, phase);
+            return Expression::ImportExpression(expr);
         }
         let has_in = self.ctx.has_in();
         self.ctx = self.ctx.and_in(true);
@@ -49,6 +55,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         };
         // Allow trailing comma
         self.bump(Kind::Comma);
+        if arguments.is_some() && !self.at(Kind::RParen) && !self.at(Kind::Eof) {
+            self.error(diagnostics::import_arguments(self.end_span(span)));
+            loop {
+                self.parse_assignment_expression_or_higher();
+                if !self.eat(Kind::Comma) || self.at(Kind::RParen) {
+                    break;
+                }
+            }
+        }
         if !self.eat(Kind::RParen) {
             let error = diagnostics::import_arguments(self.end_span(span));
             return self.fatal_error(error);

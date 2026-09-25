@@ -414,6 +414,28 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /* ----------------------- declare --------------------- */
 
     pub(crate) fn parse_ts_declaration_statement(&mut self, start_span: u32) -> Statement<'a> {
+        // surge: TS1275 — tsc parses `accessor` before an import or export as
+        // a modifier and rejects it from its checker (`checkGrammarModifiers`);
+        // the statement stands.
+        if self.at(Kind::Accessor)
+            && self.lookahead(|parser| {
+                while parser.at(Kind::Accessor) {
+                    parser.bump_any();
+                }
+                matches!(parser.cur_kind(), Kind::Import | Kind::Export)
+            })
+        {
+            while self.at(Kind::Accessor) {
+                let span = self.cur_token().span();
+                self.bump_any();
+                self.error(diagnostics::accessor_modifier_cannot_be_used_here(span));
+            }
+            return if self.at(Kind::Import) {
+                self.parse_import_statement()
+            } else {
+                self.parse_export_declaration(self.start_span(), self.ast.vec())
+            };
+        }
         let reserved_ctx = self.ctx;
         let modifiers = self.eat_modifiers_before_declaration();
         self.ctx = self

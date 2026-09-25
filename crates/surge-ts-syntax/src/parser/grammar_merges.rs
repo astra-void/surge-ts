@@ -4,8 +4,9 @@
 //! here.
 
 use oxc_ast::ast::{
-    ClassElement, Declaration, ExportDefaultDeclarationKind, PropertyDefinitionType, PropertyKey,
-    Statement, TSAccessibility, TSModuleDeclarationName, TSSignature,
+    BindingPattern, ClassElement, Declaration, ExportDefaultDeclarationKind, MethodDefinitionKind,
+    PropertyDefinitionType, PropertyKey, Statement, TSAccessibility, TSModuleDeclarationName,
+    TSSignature,
 };
 use oxc_span::{GetSpan, Span};
 
@@ -31,6 +32,10 @@ pub(crate) fn check_merged_declarations(
             .collect();
         check_enum_first_member_initializers(&group, out);
         if group.len() < 2 {
+            // One class merges its properties with its parameter properties.
+            if matches!(declaration.kind, MergedKind::Class(_)) {
+                check_identical_property_modifiers(&group, source_text, out);
+            }
             continue;
         }
         check_namespace_placement(&group, out);
@@ -264,9 +269,10 @@ struct PropertyFlags {
 }
 
 /// tsc's `areDeclarationFlagsIdentical` over the property declarations that
-/// merge into one symbol: the instance properties of the classes and
-/// interfaces of one name. The first declaration is the symbol's value
-/// declaration; it and every declaration differing from it report TS2687.
+/// merge into one symbol: the instance properties, parameter properties
+/// included, of the classes and interfaces of one name. The first declaration
+/// is the symbol's value declaration; it and every declaration differing from
+/// it report TS2687.
 fn check_identical_property_modifiers(
     group: &[&Merged<'_>],
     source_text: &str,
@@ -277,6 +283,30 @@ fn check_identical_property_modifiers(
         match declaration.kind {
             MergedKind::Class(class) => {
                 for element in &class.body.body {
+                    if let ClassElement::MethodDefinition(method) = element
+                        && method.kind == MethodDefinitionKind::Constructor
+                    {
+                        for parameter in &method.value.params.items {
+                            if !(parameter.accessibility.is_some() || parameter.readonly || parameter.r#override) {
+                                continue;
+                            }
+                            let BindingPattern::BindingIdentifier(identifier) = &parameter.pattern else {
+                                continue;
+                            };
+                            properties.push((
+                                identifier.name.to_string(),
+                                identifier.span,
+                                PropertyFlags {
+                                    optional: parameter.optional,
+                                    readonly: parameter.readonly,
+                                    private: parameter.accessibility == Some(TSAccessibility::Private),
+                                    protected: parameter.accessibility == Some(TSAccessibility::Protected),
+                                    is_abstract: false,
+                                },
+                            ));
+                        }
+                        continue;
+                    }
                     let ClassElement::PropertyDefinition(property) = element else {
                         continue;
                     };

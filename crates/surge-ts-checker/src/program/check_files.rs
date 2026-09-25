@@ -875,6 +875,9 @@ pub(crate) fn emit_grammar_diagnostics(
     ctx: &mut CheckerContext,
 ) {
     for finding in findings {
+        if matches!(finding.kind, surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(1294)) && !ctx.options.erasable_syntax_only {
+            continue;
+        }
         let diagnostic = grammar_finding_diagnostic(finding, ctx);
         if matches!(
             finding.kind,
@@ -1235,6 +1238,9 @@ fn grammar_finding_diagnostic(
         // tsc reports unreachable code as an error only under an explicit
         // `allowUnreachableCode: false`; unset makes it a suggestion.
         Kind::Ts(7027) if !ctx.options.report_unreachable_code => return None,
+        Kind::Ts(2823) if ctx.options.module_emit.supports_import_attributes() => return None,
+        Kind::Ts(7031) if !ctx.options.no_implicit_any => return None,
+        Kind::Ts(1323) if ctx.options.module_emit != crate::ModuleEmitKind::ES2015 => return None,
         Kind::TsUnderStrictNullChecks(_) if !ctx.options.strict_null_checks => return None,
         Kind::TsUnderLegacyDecorators(_) if !ctx.options.experimental_decorators => return None,
         Kind::TsUnderEsDecorators(_) if ctx.options.experimental_decorators => return None,

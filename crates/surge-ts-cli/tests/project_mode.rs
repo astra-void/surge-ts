@@ -151,6 +151,7 @@ fn project_mode_maps_strict_to_no_implicit_any() {
             resolve_json_module: true,
             allow_js: false,
             check_js: None,
+            erasable_syntax_only: false,
             module_detection: Default::default(),
             language_version: Default::default(),
             jsx_configured: false,

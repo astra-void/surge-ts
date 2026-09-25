@@ -843,6 +843,12 @@ pub fn import_requires_a_specifier(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error("import() requires a specifier.").with_label(span)
 }
 
+/// surge: TS1275 — `accessor` before an import or export.
+#[cold]
+pub fn accessor_modifier_cannot_be_used_here(span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error("'accessor' modifier cannot be used here.").with_label(span)
+}
+
 #[cold]
 pub fn modifier_cannot_be_used_here(
     modifier: &Modifier,

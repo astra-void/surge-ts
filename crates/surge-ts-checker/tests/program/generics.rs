@@ -1059,6 +1059,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             resolve_json_module: true,
             allow_js: false,
             check_js: None,
+            erasable_syntax_only: false,
             module_detection: Default::default(),
             language_version: Default::default(),
             jsx_configured: false,

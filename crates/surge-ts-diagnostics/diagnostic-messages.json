@@ -5438,5 +5438,45 @@
     "source": "typescript",
     "arity": 0,
     "support": "emitted"
+  },
+  {
+    "code": "TS1200",
+    "category": "Error",
+    "message": "Line terminator not permitted before arrow.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1294",
+    "category": "Error",
+    "message": "This syntax is not allowed when 'erasableSyntaxOnly' is enabled.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6807",
+    "category": "Error",
+    "message": "This operation can be simplified. This shift is identical to `{0} {1} {2}`.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2823",
+    "category": "Error",
+    "message": "Import attributes are only supported when the '--module' option is set to 'esnext', 'node18', 'node20', 'nodenext', or 'preserve'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1323",
+    "category": "Error",
+    "message": "Dynamic imports are only supported when the '--module' flag is set to 'es2020', 'es2022', 'esnext', 'commonjs', 'amd', 'system', 'umd', 'node16', 'node18', 'node20', or 'nodenext'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
   }
 ]
