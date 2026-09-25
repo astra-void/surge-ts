@@ -19,6 +19,7 @@ pub(crate) use template::*;
 
 use super::*;
 
+pub(crate) use indexed_access::check_binding_pattern_reads;
 use indexed_access::resolve_indexed_access_type;
 
 use std::sync::Arc;

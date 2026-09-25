@@ -1087,6 +1087,7 @@ export const fixturePresets: Record<string, string> = {
   'unused-identifiers-by-symbol': path.join(workspaceRoot, 'tests/compat-projects/unused-identifiers-by-symbol/tsconfig.json'),
   'heritage-cycles-and-conflicts': path.join(workspaceRoot, 'tests/compat-projects/heritage-cycles-and-conflicts/tsconfig.json'),
   'variable-declaration-list-grammar': path.join(workspaceRoot, 'tests/compat-projects/variable-declaration-list-grammar/tsconfig.json'),
+  'binding-patterns-and-nested-classes': path.join(workspaceRoot, 'tests/compat-projects/binding-patterns-and-nested-classes/tsconfig.json'),
   'mapped-type-member-grammar': path.join(workspaceRoot, 'tests/compat-projects/mapped-type-member-grammar/tsconfig.json'),
 };
 

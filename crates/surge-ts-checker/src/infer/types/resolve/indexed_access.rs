@@ -875,6 +875,96 @@ fn apparent_display_name(apparent: &Type) -> String {
     }
 }
 
+/// tsc's `getBindingElementTypeFromParentType`, for what it reports: an object
+/// pattern's property the parent does not have (TS2339 at the property name),
+/// an array pattern over a type that is not iterable (TS2488 at the pattern),
+/// and an element past the end of a fixed tuple without a default (TS2493). A
+/// nested pattern reads its element's type.
+pub(crate) fn check_binding_pattern_reads(
+    binding: &surge_ts_syntax::ParsedBindingName,
+    parent: &Type,
+    ctx: &mut CheckerContext,
+) {
+    use surge_ts_syntax::ParsedBindingName;
+    let apparent = apparent_type(parent);
+    if [parent, &apparent]
+        .iter()
+        .any(|ty| matches!(ty, Type::Any | Type::Unknown | Type::ErrorType | Type::TypeParameter(_)))
+        || receiver_is_unenumerable(&apparent)
+    {
+        return;
+    }
+    // A nested pattern over a read that may be missing is reported by
+    // `check_binding_pattern_defaults`, which also skips what lies beneath.
+    let descend = |binding: &ParsedBindingName, read: Type, has_default: bool, ctx: &mut CheckerContext| {
+        let read = if has_default { surge_ts_types::remove_undefined(&read) } else { read };
+        if matches!(binding, ParsedBindingName::Identifier { .. }) {
+            return;
+        }
+        if !has_default
+            && (surge_ts_types::is_assignable_to(&Type::Undefined, &read)
+                || surge_ts_types::is_assignable_to(&Type::Null, &read))
+        {
+            return;
+        }
+        check_binding_pattern_reads(binding, &read, ctx);
+    };
+    match binding {
+        ParsedBindingName::ObjectPattern(pattern) => {
+            for element in &pattern.elements {
+                if matches!(element.binding_name, ParsedBindingName::Unsupported { .. }) {
+                    continue;
+                }
+                let site = AccessSite {
+                    span: element.span.map(|span| TextSpan {
+                        start: span.start,
+                        end: span.start + element.property_name.len(),
+                    }),
+                };
+                let key = Type::StringLiteral(element.property_name.clone());
+                let Some(read) = indexed_access_type_or_undefined(&apparent, &key, Some(site), ctx) else {
+                    continue;
+                };
+                descend(&element.binding_name, read, element.has_default, ctx);
+            }
+        }
+        ParsedBindingName::ArrayPattern(pattern) => {
+            if crate::checks::expr::is_definitely_not_iterable(&apparent, true) {
+                let diagnostic = Diagnostic::ts2488(parent.name(), ctx.file_name.clone());
+                ctx.push(match pattern.span {
+                    Some(span) => diagnostic.with_span(convert_span(span)),
+                    None => diagnostic,
+                });
+                return;
+            }
+            for (index, element) in pattern.elements.iter().enumerate() {
+                let Some(element) = element else { continue };
+                let has_default = pattern.defaults.get(index).copied().unwrap_or(false);
+                let read = match &apparent {
+                    Type::Tuple(elements) if index >= elements.len() => {
+                        if !has_default {
+                            let span = match element {
+                                ParsedBindingName::Identifier { span, .. }
+                                | ParsedBindingName::Unsupported { span } => *span,
+                                ParsedBindingName::ObjectPattern(pattern) => pattern.span,
+                                ParsedBindingName::ArrayPattern(pattern) => pattern.span,
+                            };
+                            let key = Type::NumberLiteral(NumberLiteralType { value: index.to_string() });
+                            let _ = indexed_access_type_or_undefined(&apparent, &key, Some(AccessSite { span }), ctx);
+                        }
+                        continue;
+                    }
+                    Type::Tuple(elements) => elements[index].clone(),
+                    Type::Array(element_type) => (**element_type).clone(),
+                    _ => continue,
+                };
+                descend(element, read, has_default, ctx);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// tsc's `getIndexedAccessTypeOrUndefined` for an access it does not defer.
 fn indexed_access_type_or_undefined(
     object: &Type,

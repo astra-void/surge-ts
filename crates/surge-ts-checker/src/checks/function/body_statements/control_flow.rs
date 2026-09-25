@@ -1553,6 +1553,7 @@ pub(crate) fn check_function_try_statement(
                     } else {
                         Type::Any
                     });
+                crate::infer::types::check_binding_pattern_reads(binding_name, &catch_type, ctx);
                 insert_binding_name(binding_name, catch_type, scopes);
             }
             flow_state.begin_branch_capture();
@@ -1651,6 +1652,7 @@ pub(crate) fn check_function_try_statement(
                     } else {
                         Type::Any
                     });
+                crate::infer::types::check_binding_pattern_reads(binding_name, &catch_type, ctx);
                 insert_binding_name(binding_name, catch_type, scopes);
             }
             check_function_body(

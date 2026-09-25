@@ -280,8 +280,20 @@ pub(crate) fn check_expression_flow_impl(
         }
         ParsedExpression::ObjectLiteral { properties, .. } => {
             for property in properties {
+                // A computed name is evaluated before its value.
+                if let Some(key) = property.computed_key.as_deref() {
+                    blocked |= check_expression_flow_impl(
+                        key,
+                        property.name_span.or(property.span).or(fallback_span),
+                        flow_state,
+                        statement_index,
+                        ctx,
+                    )
+                    .is_blocked();
+                }
+                let value = property.unnamed_key_value.as_deref().unwrap_or(&property.value);
                 blocked |= check_expression_flow_impl(
-                    &property.value,
+                    value,
                     property.value_span.or(property.span).or(fallback_span),
                     flow_state,
                     statement_index,
@@ -405,12 +417,31 @@ pub(crate) fn check_expression_flow_impl(
             }
             check_expression_flow_impl(index, fallback_span, flow_state, statement_index, ctx)
         }
-        ParsedExpression::OptionalPropertyCall { object, .. } => {
-            check_substituting_read_flow(object, fallback_span, flow_state, statement_index, ctx)
+        ParsedExpression::OptionalPropertyCall {
+            object: callee,
+            arguments,
+            ..
         }
-        ParsedExpression::OptionalCall { callee, .. }
-        | ParsedExpression::ExpressionCall { callee, .. } => {
-            check_substituting_read_flow(callee, fallback_span, flow_state, statement_index, ctx)
+        | ParsedExpression::OptionalCall {
+            callee, arguments, ..
+        }
+        | ParsedExpression::ExpressionCall {
+            callee, arguments, ..
+        } => {
+            blocked |= check_substituting_read_flow(callee, fallback_span, flow_state, statement_index, ctx)
+                .is_blocked();
+            for argument in arguments {
+                blocked |= check_substituting_read_flow(
+                    &argument.expression,
+                    argument.span.or(fallback_span),
+                    flow_state,
+                    statement_index,
+                    ctx,
+                )
+                .is_blocked();
+            }
+
+            FlowCheck::Clear
         }
         ParsedExpression::NullishCoalescing { left, right, .. } => {
             blocked |= check_expression_flow_impl(left, fallback_span, flow_state, statement_index, ctx).is_blocked();

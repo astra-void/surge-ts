@@ -2138,6 +2138,9 @@ pub(crate) fn check_arrow_function_expression_anchored(
         }
         crate::checks::function::with_type_parameter_scope(&type_parameters, ctx, |ctx| {
             for (index, parameter) in parameters.iter().enumerate() {
+                if let Some(parameter_type) = parameter_types.get(index) {
+                    check_annotated_binding_pattern_reads(parameter, parameter_type, ctx);
+                }
                 check_binding_pattern_defaults(
                     &parameter.binding_name,
                     parameter_types.get(index),

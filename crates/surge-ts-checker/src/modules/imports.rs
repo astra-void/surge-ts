@@ -1203,6 +1203,13 @@ fn resolve_default_and_named_import(
                     None,
                     type_declarations,
                 );
+                // `import type` binds the whole symbol: the value side of a
+                // class or enum is what `typeof C` reads in a type position.
+                if let Some(value_export) = value_export
+                    && symbols.get(&specifier.local_name).is_none()
+                {
+                    symbols.insert_shared(specifier.local_name.clone(), value_export);
+                }
                 continue;
             }
 
@@ -2190,6 +2197,11 @@ fn resolve_named_import(
                     Some(&scope),
                     type_export.clone(),
                 );
+                // `import type` binds the whole symbol: the value side of a
+                // class or enum is what `typeof C` reads in a type position.
+                if let Some(value_export) = value_export {
+                    symbols.insert_shared(specifier.local_name.clone(), value_export);
+                }
                 continue;
             }
 

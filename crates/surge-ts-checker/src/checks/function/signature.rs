@@ -364,6 +364,28 @@ pub(crate) fn bound_name_type(
     }
 }
 
+/// What reading an annotated destructured parameter's names off its type
+/// reports (see [`crate::infer::types::check_binding_pattern_reads`]). A
+/// contextually typed parameter is left alone.
+pub(crate) fn check_annotated_binding_pattern_reads(
+    parameter: &ParsedFunctionParameter,
+    parameter_type: &Type,
+    ctx: &mut CheckerContext,
+) {
+    if parameter.declared_type.is_none()
+        || parameter.rest
+        || (parameter.optional && parameter.initializer.is_none())
+    {
+        return;
+    }
+    let parent = if parameter.initializer.is_some() {
+        surge_ts_types::remove_undefined(parameter_type)
+    } else {
+        parameter_type.clone()
+    };
+    crate::infer::types::check_binding_pattern_reads(&parameter.binding_name, &parent, ctx);
+}
+
 /// Evaluates the defaults a destructuring pattern writes (`{ c = fallback }`)
 /// in the scope the pattern binds into, for their own diagnostics. Where the
 /// bound type is known this is tsc's `checkBindingElement`: the initializer of
@@ -2388,6 +2410,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
     with_type_parameter_scope(type_parameters, ctx, |ctx| {
         for (parameter, parameter_type) in parameters.iter().zip(function_type.parameters().iter())
         {
+            check_annotated_binding_pattern_reads(parameter, parameter_type, ctx);
             check_binding_pattern_defaults(
                 &parameter.binding_name,
                 Some(parameter_type),

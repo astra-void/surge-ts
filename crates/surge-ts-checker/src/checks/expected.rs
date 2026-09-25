@@ -170,6 +170,9 @@ fn expectation_is_error_type(expected_type: &Type) -> bool {
 fn expectation_is_degraded(expected_type: &Type) -> bool {
     match expected_type {
         Type::Unknown | Type::ErrorType | Type::TypeParameter(_) => true,
+        // A deferred reference whose expansion is the sentinel carries no more
+        // than the sentinel does.
+        Type::Reference(_) => matches!(expected_type.peeled(), Type::Unknown),
         Type::Union(union) => union.types().iter().any(|member| {
             matches!(
                 member,

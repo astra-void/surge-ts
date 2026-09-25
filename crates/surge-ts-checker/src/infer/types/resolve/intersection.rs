@@ -545,8 +545,15 @@ fn merge_intersection_member_types(members: Vec<Type>) -> Type {
         // The operands double as the reference arguments so nominal identity
         // (`same_reference`: id + arguments) distinguishes `A & Ref<X>` from
         // `A & Ref<Y>` — the operand ids alone erase the instantiation.
+        // An intersection that dropped an unmodelled operand is open, and must
+        // not share its identity with the closed one over the same operands.
+        let prefix = if dropped_unmodelled_operand {
+            OPEN_DEFERRED_INTERSECTION_ID_PREFIX
+        } else {
+            DEFERRED_INTERSECTION_ID_PREFIX
+        };
         return Type::Reference(surge_ts_types::TypeReference::new(
-            format!("{DEFERRED_INTERSECTION_ID_PREFIX}{id}"),
+            format!("{prefix}{id}"),
             display,
             members.clone(),
             deferred_merge(members, dropped_unmodelled_operand),
