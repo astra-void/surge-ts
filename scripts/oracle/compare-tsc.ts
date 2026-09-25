@@ -1073,6 +1073,7 @@ export const fixturePresets: Record<string, string> = {
   'enum-literal-widening': path.join(workspaceRoot, 'tests/compat-projects/enum-literal-widening/tsconfig.json'),
   'checker-grammar-rejections': path.join(workspaceRoot, 'tests/compat-projects/checker-grammar-rejections/tsconfig.json'),
   'erasable-syntax-only': path.join(workspaceRoot, 'tests/compat-projects/erasable-syntax-only/tsconfig.json'),
+  'unreachable-never-calls': path.join(workspaceRoot, 'tests/compat-projects/unreachable-never-calls/tsconfig.json'),
   'module-es2015-import-forms': path.join(workspaceRoot, 'tests/compat-projects/module-es2015-import-forms/tsconfig.json'),
   'class-member-duplicates': path.join(workspaceRoot, 'tests/compat-projects/class-member-duplicates/tsconfig.json'),
   'signature-pattern-implicit-any': path.join(workspaceRoot, 'tests/compat-projects/signature-pattern-implicit-any/tsconfig.json'),

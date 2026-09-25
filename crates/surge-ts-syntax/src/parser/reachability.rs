@@ -8,17 +8,22 @@
 //! is modelled: `return`/`throw`/`break`/`continue`, loops whose exit
 //! condition is the literal `true`, branches guarded by a literal `false`,
 //! `try`/`finally` completion, and a non-async, non-generator IIFE that never
-//! completes. What the checker adds on top — `never`-returning calls,
-//! exhaustive `switch` — is not.
+//! completes. Of what the checker adds on top, a `FlowCall` whose effects
+//! signature the file itself declares is modelled (see [`call_effects`]);
+//! calls that need types, and exhaustive `switch`, are not.
+
+mod call_effects;
 
 use oxc_ast::ast::{
-    Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit, FunctionBody,
-    LogicalOperator, ModuleExportName, Program, Statement, StaticBlock, TSModuleBlock,
+    AccessorProperty, ArrowFunctionExpression, Class, Declaration, ExportDefaultDeclarationKind,
+    Expression, ForStatementInit, Function, FunctionBody, LogicalOperator, MethodDefinition,
+    ModuleExportName, Program, PropertyDefinition, Statement, StaticBlock, TSModuleBlock,
     TSModuleDeclaration, TSModuleDeclarationBody, VariableDeclaration, VariableDeclarationKind,
 };
 use oxc_ast_visit::Visit;
 use oxc_span::{GetSpan, Span};
 use oxc_syntax::operator::UnaryOperator;
+use oxc_syntax::scope::ScopeFlags;
 
 use crate::{ParsedGrammarDiagnostic, ParsedGrammarDiagnosticKind as Kind, TextSpan};
 
@@ -26,6 +31,7 @@ pub(crate) fn collect_unreachable_code(program: &Program<'_>, out: &mut Vec<Pars
     let mut collector = UnreachableCollector {
         out,
         reported: Vec::new(),
+        calls: call_effects::CallEffects::new(program.source_text),
     };
     collector.visit_program(program);
 }
@@ -36,6 +42,7 @@ pub(crate) fn collect_unreachable_code(program: &Program<'_>, out: &mut Vec<Pars
 struct UnreachableCollector<'o> {
     out: &'o mut Vec<ParsedGrammarDiagnostic>,
     reported: Vec<Span>,
+    calls: call_effects::CallEffects,
 }
 
 impl UnreachableCollector<'_> {
@@ -44,6 +51,7 @@ impl UnreachableCollector<'_> {
             frames: Vec::new(),
             returned: false,
             reported: Vec::new(),
+            calls: Some(&self.calls),
         };
         flow.bind_statements(statements, true);
         for run in flow.reported {
@@ -62,8 +70,46 @@ impl UnreachableCollector<'_> {
 
 impl<'a> Visit<'a> for UnreachableCollector<'_> {
     fn visit_program(&mut self, program: &Program<'a>) {
+        self.calls.enter_statements(&program.body);
         self.analyze(&program.body);
         oxc_ast_visit::walk::walk_program(self, program);
+        self.calls.leave();
+    }
+
+    fn visit_function(&mut self, function: &Function<'a>, flags: ScopeFlags) {
+        self.calls.enter_function(function);
+        oxc_ast_visit::walk::walk_function(self, function, flags);
+        self.calls.leave();
+    }
+
+    fn visit_arrow_function_expression(&mut self, arrow: &ArrowFunctionExpression<'a>) {
+        self.calls.enter_arrow(arrow);
+        oxc_ast_visit::walk::walk_arrow_function_expression(self, arrow);
+        self.calls.leave_arrow();
+    }
+
+    fn visit_class(&mut self, class: &Class<'a>) {
+        self.calls.enter_class(class);
+        oxc_ast_visit::walk::walk_class(self, class);
+        self.calls.leave_class();
+    }
+
+    fn visit_method_definition(&mut self, method: &MethodDefinition<'a>) {
+        self.calls.enter_method(method);
+        oxc_ast_visit::walk::walk_method_definition(self, method);
+        self.calls.leave_method();
+    }
+
+    fn visit_property_definition(&mut self, property: &PropertyDefinition<'a>) {
+        self.calls.enter_property(property.r#static);
+        oxc_ast_visit::walk::walk_property_definition(self, property);
+        self.calls.leave_property();
+    }
+
+    fn visit_accessor_property(&mut self, property: &AccessorProperty<'a>) {
+        self.calls.enter_property(property.r#static);
+        oxc_ast_visit::walk::walk_accessor_property(self, property);
+        self.calls.leave_property();
     }
 
     fn visit_function_body(&mut self, body: &FunctionBody<'a>) {
@@ -72,13 +118,17 @@ impl<'a> Visit<'a> for UnreachableCollector<'_> {
     }
 
     fn visit_static_block(&mut self, block: &StaticBlock<'a>) {
+        self.calls.enter_static_block(block);
         self.analyze(&block.body);
         oxc_ast_visit::walk::walk_static_block(self, block);
+        self.calls.leave();
     }
 
     fn visit_ts_module_block(&mut self, block: &TSModuleBlock<'a>) {
+        self.calls.enter_statements(&block.body);
         self.analyze(&block.body);
         oxc_ast_visit::walk::walk_ts_module_block(self, block);
+        self.calls.leave();
     }
 
     fn visit_statement(&mut self, statement: &Statement<'a>) {
@@ -112,15 +162,17 @@ enum FrameKind {
     Label,
 }
 
-struct Flow {
+struct Flow<'c> {
     frames: Vec<Frame>,
     /// A `return` was bound on a reachable path of the current container;
     /// what makes an IIFE's call complete.
     returned: bool,
     reported: Vec<ReportedRun>,
+    /// `None` inside an IIFE body, whose calls are not resolved.
+    calls: Option<&'c call_effects::CallEffects>,
 }
 
-impl Flow {
+impl Flow<'_> {
     /// Binds a statement list starting with `reachable` flow; returns whether
     /// flow is reachable after the last statement. Once flow is unreachable
     /// it stays so for the rest of the list, and the consecutive potentially
@@ -170,11 +222,12 @@ impl Flow {
                 self.jump(statement.label.as_ref().map(|label| label.name.as_str()), false);
                 false
             }
-            Statement::ExpressionStatement(statement) => !diverges(&statement.expression),
-            Statement::VariableDeclaration(declaration) => !declaration
-                .declarations
-                .iter()
-                .any(|declarator| declarator.init.as_ref().is_some_and(diverges)),
+            Statement::ExpressionStatement(statement) => {
+                !diverges(&statement.expression) && !self.call_ends_flow(&statement.expression, true)
+            }
+            Statement::VariableDeclaration(declaration) => !declaration.declarations.iter().any(|declarator| {
+                declarator.init.as_ref().is_some_and(|init| diverges(init) || self.call_ends_flow(init, false))
+            }),
             Statement::IfStatement(statement) => {
                 let then_end =
                     self.bind_statement_from(&statement.consequent, !definitely_false(&statement.test));
@@ -200,11 +253,17 @@ impl Flow {
             }
             Statement::ForStatement(statement) => {
                 let init_diverges = match &statement.init {
-                    Some(ForStatementInit::VariableDeclaration(declaration)) => declaration
-                        .declarations
-                        .iter()
-                        .any(|declarator| declarator.init.as_ref().is_some_and(diverges)),
-                    Some(init) => init.as_expression().is_some_and(diverges),
+                    Some(ForStatementInit::VariableDeclaration(declaration)) => {
+                        declaration.declarations.iter().any(|declarator| {
+                            declarator
+                                .init
+                                .as_ref()
+                                .is_some_and(|init| diverges(init) || self.call_ends_flow(init, false))
+                        })
+                    }
+                    Some(init) => init
+                        .as_expression()
+                        .is_some_and(|init| diverges(init) || self.call_ends_flow(init, false)),
                     None => false,
                 };
                 if init_diverges {
@@ -249,6 +308,10 @@ impl Flow {
 
     fn bind_statement_from(&mut self, statement: &Statement<'_>, reachable: bool) -> bool {
         self.bind_statements(std::slice::from_ref(statement), reachable)
+    }
+
+    fn call_ends_flow(&self, expression: &Expression<'_>, whole_statement: bool) -> bool {
+        self.calls.is_some_and(|calls| calls.ends_flow(expression, whole_statement))
     }
 
     fn bind_switch(&mut self, statement: &oxc_ast::ast::SwitchStatement<'_>, labels: Vec<String>) -> bool {
@@ -617,6 +680,7 @@ fn function_body_completes(body: &FunctionBody<'_>) -> bool {
         frames: Vec::new(),
         returned: false,
         reported: Vec::new(),
+        calls: None,
     };
     let end_reachable = flow.bind_statements(&body.statements, true);
     end_reachable || flow.returned

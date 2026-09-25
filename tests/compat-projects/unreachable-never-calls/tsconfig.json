@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "esnext",
+    "lib": ["esnext"],
+    "allowUnreachableCode": false,
+    "noEmit": true
+  },
+  "include": ["src"]
+}
