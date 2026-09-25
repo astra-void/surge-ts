@@ -149,6 +149,10 @@ fn class_decorators(class: &Class<'_>) -> Vec<ParsedDecorator> {
                 expression: parse_expression(&decorator.expression).0,
                 span: Some(text_span_from_oxc_span(decorator.expression.span())),
                 target,
+                needs_parentheses: decorator_needs_parentheses(&decorator.expression),
+                decorator_span: Some(text_span_from_oxc_span(decorator.span)),
+                expression_text: super::spans::source_text_of(decorator.expression.span()),
+                is_parenthesized: matches!(decorator.expression, Expression::ParenthesizedExpression(_)),
             })
             .collect::<Vec<_>>()
     };
@@ -172,6 +176,7 @@ fn class_decorators(class: &Class<'_>) -> Vec<ParsedDecorator> {
                     is_abstract: property.r#type == PropertyDefinitionType::TSAbstractPropertyDefinition,
                     is_declare: property.declare,
                     private_name: matches!(property.key, PropertyKey::PrivateIdentifier(_)),
+                    is_auto_accessor: false,
                 };
                 out.extend(lower(&property.decorators, target));
             }
@@ -180,6 +185,7 @@ fn class_decorators(class: &Class<'_>) -> Vec<ParsedDecorator> {
                     is_abstract: accessor.r#type == oxc_ast::ast::AccessorPropertyType::TSAbstractAccessorProperty,
                     is_declare: false,
                     private_name: matches!(accessor.key, PropertyKey::PrivateIdentifier(_)),
+                    is_auto_accessor: true,
                 };
                 out.extend(lower(&accessor.decorators, target));
             }
@@ -187,6 +193,61 @@ fn class_decorators(class: &Class<'_>) -> Vec<ParsedDecorator> {
         }
     }
     out
+}
+
+/// tsc's `checkGrammarDecorator`: a decorator is `(expression)`, or a
+/// dotted name, each part a property access, with at most one call at the
+/// end, no optional chaining, and non-null assertions or type arguments
+/// anywhere.
+fn decorator_needs_parentheses(expression: &Expression<'_>) -> bool {
+    use oxc_ast::ast::ChainElement;
+    if matches!(expression, Expression::ParenthesizedExpression(_)) {
+        return false;
+    }
+    enum Part<'e, 'a> {
+        Expression(&'e Expression<'a>),
+        Chain(&'e ChainElement<'a>),
+    }
+    let mut node = Part::Expression(expression);
+    let mut can_have_call = true;
+    let mut invalid = false;
+    loop {
+        let (inner, optional, is_call): (Part<'_, '_>, bool, bool) = match node {
+            Part::Expression(Expression::TSNonNullExpression(e)) => (Part::Expression(&e.expression), false, false),
+            Part::Expression(Expression::TSInstantiationExpression(e)) => (Part::Expression(&e.expression), false, false),
+            Part::Expression(Expression::ChainExpression(chain)) => (Part::Chain(&chain.expression), false, false),
+            Part::Expression(Expression::CallExpression(call)) => (Part::Expression(&call.callee), call.optional, true),
+            Part::Chain(ChainElement::CallExpression(call)) => (Part::Expression(&call.callee), call.optional, true),
+            Part::Expression(Expression::StaticMemberExpression(member)) => {
+                (Part::Expression(&member.object), member.optional, false)
+            }
+            Part::Chain(ChainElement::StaticMemberExpression(member)) => {
+                (Part::Expression(&member.object), member.optional, false)
+            }
+            Part::Expression(Expression::PrivateFieldExpression(member)) => {
+                (Part::Expression(&member.object), member.optional, false)
+            }
+            Part::Chain(ChainElement::PrivateFieldExpression(member)) => {
+                (Part::Expression(&member.object), member.optional, false)
+            }
+            Part::Chain(ChainElement::TSNonNullExpression(e)) => (Part::Expression(&e.expression), false, false),
+            Part::Expression(Expression::Identifier(_)) => return invalid,
+            _ => return true,
+        };
+        if optional || is_call && !can_have_call {
+            invalid = true;
+        }
+        let is_member_or_call = is_call
+            || matches!(
+                node,
+                Part::Expression(Expression::StaticMemberExpression(_) | Expression::PrivateFieldExpression(_))
+                    | Part::Chain(ChainElement::StaticMemberExpression(_) | ChainElement::PrivateFieldExpression(_))
+            );
+        if is_member_or_call {
+            can_have_call = false;
+        }
+        node = inner;
+    }
 }
 
 fn is_in_expression(expression: &Expression<'_>) -> bool {

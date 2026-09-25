@@ -840,11 +840,18 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             // Export span.start starts after decorators.
             return self.parse_export_declaration(self.start_span(), decorators);
         }
+        let after_decorators = self.checkpoint();
         let modifiers = self.parse_modifiers(false, false);
         if self.at(Kind::Class) {
             // Class span.start starts before decorators.
             return self.parse_class_statement(span, stmt_ctx, &modifiers, decorators);
         }
-        self.unexpected()
+        // surge: TS1206 — tsc parses decorators before any declaration and rejects them from its
+        // checker (`checkGrammarModifiers`), on the first token; the statement stands.
+        self.rewind(after_decorators);
+        if let Some(first) = decorators.first() {
+            self.error(diagnostics::decorators_are_not_valid_here(Span::new(first.span.start, first.span.start + 1)));
+        }
+        self.parse_statement_list_item(stmt_ctx)
     }
 }

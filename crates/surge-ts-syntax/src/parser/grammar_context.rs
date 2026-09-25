@@ -2620,15 +2620,21 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             AstKind::TSTypeOperator(operator) => self.check_unique_symbol_position(operator),
             // oxc keeps a static block's span from its first modifier; any
             // text before `static` is one — TS1184 (oxc reports it too, and a
-            // grammar TS1184 elsewhere in the file claims oxc's copies).
+            // grammar TS1184 elsewhere in the file claims oxc's copies), or
+            // TS1206 when it is a decorator (`checkGrammarModifiers` meets it
+            // first).
             AstKind::StaticBlock(block) => {
                 let text = &self.source_text[block.span.start as usize..block.span.end as usize];
                 if let Some(keyword) = text.find("static")
                     && !text[..keyword].trim().is_empty()
                 {
                     let start = block.span.start;
-                    let end = first_token_end(self.source_text, start as usize) as u32;
-                    self.push(1184, Span::new(start, end), &[]);
+                    if text.starts_with('@') {
+                        self.push(1206, Span::new(start, start + 1), &[]);
+                    } else {
+                        let end = first_token_end(self.source_text, start as usize) as u32;
+                        self.push(1184, Span::new(start, end), &[]);
+                    }
                 }
             }
             AstKind::MethodDefinition(method) => {

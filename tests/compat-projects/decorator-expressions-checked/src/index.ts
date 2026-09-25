@@ -22,3 +22,16 @@ class SelfInMember {
 
 @decorate(LaterClass) class BeforeLater {}
 class LaterClass {}
+
+declare function takesNothing(): (target: unknown, context: unknown) => void;
+@takesNothing class CalledTooLate {}
+@takesNothing() class CalledFirst {}
+
+declare const factories: { make(): (target: unknown, context: unknown) => void };
+@factories.make().extra class NeedsParentheses {}
+@(factories.make()) class Parenthesized {}
+
+@decorate var notDecoratable = 1;
+
+@((first: unknown, second: unknown, third: unknown) => {}) class ExpectsTooMany {}
+@(() => {}) class ExpectsNone {}

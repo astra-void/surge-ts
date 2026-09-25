@@ -63,6 +63,8 @@ fn classify_uncoded_parser_error(
 ) -> Option<(u32, crate::TextSpan)> {
     let text = source_text.get(span.start..span.end)?;
     match message {
+        // On the first token (`checkGrammarModifiers`).
+        "Decorators are not valid here." => Some((1206, crate::TextSpan { start: span.start, end: span.start + 1 })),
         "Cannot assign to this expression" => {
             if let Some(stop) = update_target_stop(text, span, source_text) {
                 return Some(stop);
@@ -447,6 +449,11 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             if matches!(code, Some(2357 | 2777)) && message == "Cannot assign to this expression" {
                 return None;
             }
+            // tsc reports this (TS1497) only for a decorator its checker checks, which the
+            // lowering records (`ParsedDecorator::needs_parentheses`).
+            if message == "Expression must be enclosed in parentheses to be used as a decorator." {
+                return None;
+            }
             if message == FOR_AWAIT_IN_MESSAGE {
                 message = "'of' expected.".to_string();
             } else if code == Some(1005) && message == "Cannot assign to this expression" {
@@ -487,6 +494,25 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     } else {
         (Vec::new(), Vec::new())
     };
+    let mut grammar_diagnostics = grammar_diagnostics;
+    // Decorators before a declaration that cannot take them (`@dec var x`)
+    // are tsc's checker grammar error, not its parser's; the recovering parse
+    // drops them from the tree, so the grammar walk cannot see them.
+    let collects = collects_grammar_diagnostics(file_name);
+    parser_errors.retain(|error| {
+        let dropped_decorators = error.code == Some(1206) && error.message == "Decorators are not valid here.";
+        if dropped_decorators
+            && collects
+            && let Some(span) = error.span
+        {
+            grammar_diagnostics.push(crate::ParsedGrammarDiagnostic {
+                kind: crate::ParsedGrammarDiagnosticKind::Ts(1206),
+                span,
+                name: None,
+            });
+        }
+        !dropped_decorators
+    });
 
     let let_assignments =
         super::let_assignments::collect_let_assignments(&parsed.program, source_text);

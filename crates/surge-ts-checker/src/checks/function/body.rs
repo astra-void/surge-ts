@@ -924,6 +924,8 @@ fn check_function_body_statement_itself(
             if flow_state.tracked_local_count() > 0 {
                 crate::flow::walk_class(&class, statement_index, flow_state, ctx);
             }
+            let visible_symbols = visible_symbols(scopes);
+            crate::program::check_class_head_expressions(&class, &visible_symbols, ctx);
             // Member bodies of a body-local class are not otherwise checked.
             crate::flow::check_class_member_flow(&class, ctx);
             let symbol = crate::program::build_class_value_symbol(&class, ctx);

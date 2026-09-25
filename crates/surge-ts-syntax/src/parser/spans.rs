@@ -37,6 +37,18 @@ pub(crate) fn with_lowering_source<R>(
     f()
 }
 
+/// The source text `span` covers, empty outside [`with_lowering_source`].
+pub(crate) fn source_text_of(span: Span) -> String {
+    LOWERING_SOURCE.with(|source| {
+        source
+            .borrow()
+            .as_deref()
+            .and_then(|text| text.get(span.start as usize..span.end as usize))
+            .unwrap_or_default()
+            .to_string()
+    })
+}
+
 /// Whether the file being lowered is JavaScript.
 pub(crate) fn lowering_javascript() -> bool {
     LOWERING_JAVASCRIPT.with(std::cell::Cell::get)

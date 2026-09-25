@@ -5392,3 +5392,51 @@ support = "emitted"
 message = "Unicode escape sequences are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set."
 arity = 0
 
+[[diagnostic]]
+code = "TS1497"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expression must be enclosed in parentheses to be used as a decorator."
+arity = 0
+
+[[diagnostic]]
+code = "TS1329"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' accepts too few arguments to be used as a decorator here. Did you mean to call it first and write '@{0}()'?"
+arity = 1
+
+[[diagnostic]]
+code = "TS1238"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unable to resolve signature of class decorator when called as an expression."
+arity = 0
+
+[[diagnostic]]
+code = "TS1239"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unable to resolve signature of parameter decorator when called as an expression."
+arity = 0
+
+[[diagnostic]]
+code = "TS1240"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unable to resolve signature of property decorator when called as an expression."
+arity = 0
+
+[[diagnostic]]
+code = "TS1241"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unable to resolve signature of method decorator when called as an expression."
+arity = 0
+

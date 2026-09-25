@@ -1396,25 +1396,19 @@ fn declared_member_name(member: &ParsedClassMember) -> Option<String> {
     }
 }
 
-pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
-    crate::checks::function::check_type_parameter_declarations(&class.type_parameters, ctx);
-    crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
-        for member in &class.members {
-            if let ParsedClassMember::Method(method) = member {
-                crate::checks::function::check_type_parameter_declarations(
-                    &method.type_parameters,
-                    ctx,
-                );
-            }
-        }
-    });
-    let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+/// What a class declaration evaluates outside its body: its members'
+/// computed names and the decorators tsc checks.
+pub(crate) fn check_class_head_expressions(
+    class: &ParsedClassDeclaration,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
     // The class's own type parameters are found from a computed name (the
     // binder then rejects the reference as TS2467, which the grammar pass
     // reports), so they resolve here instead of reading as unknown names.
     crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
         for (key, span) in &class.computed_keys {
-            let key_type = crate::checks::expr::evaluate_expression(key, *span, &symbols, ctx);
+            let key_type = crate::checks::expr::evaluate_expression(key, *span, symbols, ctx);
             crate::checks::expr::report_invalid_computed_key(&key_type, *span, ctx);
         }
         // tsc's `checkDecorators`: the expression of every decorator on a
@@ -1428,16 +1422,109 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
             if !super::forward_references::decorator_is_checked(decorator.target, legacy_decorators) {
                 continue;
             }
+            if decorator.needs_parentheses {
+                ctx.push(crate::spans::diagnostic_with_syntax_span(
+                    Diagnostic::ts1497(ctx.file_name.clone()),
+                    decorator.span,
+                ));
+            }
             let contextually_typed = matches!(decorator.expression, surge_ts_syntax::ParsedExpression::ArrowFunction(_));
             if contextually_typed {
                 ctx.degraded_expected_type_depth += 1;
             }
-            let _ = crate::checks::expr::evaluate_expression(&decorator.expression, decorator.span, &symbols, ctx);
+            let decorator_type = crate::checks::expr::evaluate_expression(&decorator.expression, decorator.span, symbols, ctx);
             if contextually_typed {
                 ctx.degraded_expected_type_depth -= 1;
             }
+            if let crate::infer::InferredExpression::Known(decorator_type) = &decorator_type {
+                check_decorator_call(decorator_type, decorator, legacy_decorators, ctx);
+            }
         }
     });
+}
+
+/// tsc's `resolveDecorator`, for what surge models of a decorator call: one
+/// that takes too few parameters to be applied uncalled
+/// (`isPotentiallyUncalledDecorator`, TS1329), and one no signature of which
+/// accepts the arguments the runtime passes (`hasCorrectArity`; TS1238 for
+/// a class decorator, TS1239-TS1241 for a parameter, property or method). A
+/// signature that fits the count but not the types is not checked.
+fn check_decorator_call(
+    decorator_type: &Type,
+    decorator: &surge_ts_syntax::ParsedDecorator,
+    legacy_decorators: bool,
+    ctx: &mut CheckerContext,
+) {
+    use surge_ts_syntax::ParsedDecoratorTarget as Target;
+    let Type::Function(function) = decorator_type.peeled() else {
+        return;
+    };
+    let mut signatures = Vec::new();
+    function.push_overload_members(&mut signatures);
+    if signatures.is_empty() {
+        return;
+    }
+    // `getDecoratorArgumentCount`.
+    let argument_count = |signature: &surge_ts_types::FunctionType| {
+        let parameters = signature.parameters().len();
+        if !legacy_decorators {
+            return parameters.clamp(1, 2);
+        }
+        match decorator.target {
+            Target::Class => 1,
+            Target::Property { is_auto_accessor, .. } => if is_auto_accessor { 3 } else { 2 },
+            Target::Method { .. } => if parameters <= 2 { 2 } else { 3 },
+            Target::Parameter => 3,
+        }
+    };
+    let potentially_uncalled = signatures.iter().all(|signature| {
+        surge_ts_types::min_argument_count(signature) == 0
+            && !signature.is_variadic()
+            && signature.parameters().len() < argument_count(signature)
+    });
+    if potentially_uncalled && !decorator.is_parenthesized {
+        ctx.push(crate::spans::diagnostic_with_syntax_span(
+            Diagnostic::ts1329(&decorator.expression_text, ctx.file_name.clone()),
+            decorator.decorator_span,
+        ));
+        return;
+    }
+    let too_many = |signature: &surge_ts_types::FunctionType| {
+        !signature.is_variadic() && argument_count(signature) > signature.parameters().len()
+    };
+    let has_correct_arity = |signature: &surge_ts_types::FunctionType| {
+        !too_many(signature) && argument_count(signature) >= surge_ts_types::min_argument_count(signature)
+    };
+    if signatures.iter().any(has_correct_arity) {
+        return;
+    }
+    let file_name = ctx.file_name.clone();
+    let diagnostic = match decorator.target {
+        Target::Class => Diagnostic::ts1238(file_name),
+        Target::Parameter => Diagnostic::ts1239(file_name),
+        Target::Property { .. } => Diagnostic::ts1240(file_name),
+        Target::Method { .. } => Diagnostic::ts1241(file_name),
+    };
+    // `getArgumentArityError`: arguments beyond every signature are reported
+    // where they would be, the decorator's expression; too few, on the call.
+    let span = if signatures.iter().all(too_many) { decorator.span } else { decorator.decorator_span };
+    ctx.push(crate::spans::diagnostic_with_syntax_span(diagnostic, span));
+}
+
+pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    crate::checks::function::check_type_parameter_declarations(&class.type_parameters, ctx);
+    crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
+        for member in &class.members {
+            if let ParsedClassMember::Method(method) = member {
+                crate::checks::function::check_type_parameter_declarations(
+                    &method.type_parameters,
+                    ctx,
+                );
+            }
+        }
+    });
+    let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    check_class_head_expressions(class, &symbols, ctx);
     // Everything checked from here on is lexically inside the class, which is
     // what decides whether its `private`/`protected` members are reachable.
     let lineage = crate::checks::expr::enclosing_class_lineage(class, ctx);

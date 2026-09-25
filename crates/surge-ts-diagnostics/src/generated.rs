@@ -6745,6 +6745,66 @@ pub const TS1538: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1497: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1497",
+    number: Some(1497),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Expression must be enclosed in parentheses to be used as a decorator.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1329: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1329",
+    number: Some(1329),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' accepts too few arguments to be used as a decorator here. Did you mean to call it first and write '@{0}()'?",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1238: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1238",
+    number: Some(1238),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Unable to resolve signature of class decorator when called as an expression.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1239: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1239",
+    number: Some(1239),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Unable to resolve signature of parameter decorator when called as an expression.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1240: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1240",
+    number: Some(1240),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Unable to resolve signature of property decorator when called as an expression.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1241: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1241",
+    number: Some(1241),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Unable to resolve signature of method decorator when called as an expression.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
     TS2411,
@@ -7420,6 +7480,12 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1536,
     TS1537,
     TS1538,
+    TS1497,
+    TS1329,
+    TS1238,
+    TS1239,
+    TS1240,
+    TS1241,
 ];
 
 impl Diagnostic {
@@ -12326,5 +12392,39 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts1538(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS1538, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1497(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1497, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1329(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS1329,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1238(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1238, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1239(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1239, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1240(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1240, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1241(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1241, Vec::<DiagnosticArg>::new(), file_name)
     }
 }

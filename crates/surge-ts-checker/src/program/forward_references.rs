@@ -154,7 +154,7 @@ fn walk_self_reference(expression: &ParsedExpression, class_name: &str, reported
 pub(crate) fn decorator_is_checked(target: ParsedDecoratorTarget, legacy_decorators: bool) -> bool {
     match target {
         ParsedDecoratorTarget::Class => true,
-        ParsedDecoratorTarget::Property { is_abstract, is_declare, private_name } => {
+        ParsedDecoratorTarget::Property { is_abstract, is_declare, private_name, .. } => {
             if legacy_decorators {
                 !private_name
             } else {

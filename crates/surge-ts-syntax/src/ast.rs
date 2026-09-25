@@ -947,13 +947,20 @@ pub struct ParsedDecorator {
     pub expression: ParsedExpression,
     pub span: Option<TextSpan>,
     pub target: ParsedDecoratorTarget,
+    /// The expression is not one a decorator may be written as without
+    /// parentheses (tsc's `checkGrammarDecorator`, TS1497).
+    pub needs_parentheses: bool,
+    /// The whole decorator, `@` included, and the expression as written.
+    pub decorator_span: Option<TextSpan>,
+    pub expression_text: String,
+    pub is_parenthesized: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParsedDecoratorTarget {
     Class,
     /// A property, or an auto-accessor.
-    Property { is_abstract: bool, is_declare: bool, private_name: bool },
+    Property { is_abstract: bool, is_declare: bool, private_name: bool, is_auto_accessor: bool },
     /// A method or a `get`/`set` accessor.
     Method { has_body: bool, private_name: bool },
     /// A parameter of a constructor, method or `set` accessor that has a body.

@@ -4318,3 +4318,39 @@ status = "emitted"
 oracle = [
   "tsc-regular-expressions",
 ]
+
+[TS1497]
+status = "emitted"
+oracle = [
+  "decorator-expressions-checked",
+]
+
+[TS1329]
+status = "emitted"
+oracle = [
+  "decorator-expressions-checked",
+]
+
+[TS1238]
+status = "emitted"
+oracle = [
+  "decorator-expressions-checked",
+]
+
+[TS1239]
+status = "emitted"
+oracle = [
+  "decorator-expressions-checked",
+]
+
+[TS1240]
+status = "emitted"
+oracle = [
+  "decorator-expressions-checked",
+]
+
+[TS1241]
+status = "emitted"
+oracle = [
+  "decorator-expressions-checked",
+]

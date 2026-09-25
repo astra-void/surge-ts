@@ -5390,5 +5390,53 @@
     "source": "typescript",
     "arity": 0,
     "support": "emitted"
+  },
+  {
+    "code": "TS1497",
+    "category": "Error",
+    "message": "Expression must be enclosed in parentheses to be used as a decorator.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1329",
+    "category": "Error",
+    "message": "'{0}' accepts too few arguments to be used as a decorator here. Did you mean to call it first and write '@{0}()'?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1238",
+    "category": "Error",
+    "message": "Unable to resolve signature of class decorator when called as an expression.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1239",
+    "category": "Error",
+    "message": "Unable to resolve signature of parameter decorator when called as an expression.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1240",
+    "category": "Error",
+    "message": "Unable to resolve signature of property decorator when called as an expression.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1241",
+    "category": "Error",
+    "message": "Unable to resolve signature of method decorator when called as an expression.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
   }
 ]
