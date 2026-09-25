@@ -1838,6 +1838,10 @@ pub struct ParsedVariableDeclaration {
     /// is one enum, so these declarations merge their members instead of the
     /// later one replacing the earlier.
     pub is_enum_object: bool,
+    /// The rest element of an array pattern, bound to the whole source: a
+    /// tuple source is sliced from this index when it is checked
+    /// (`sliceTupleType`).
+    pub array_rest_start: Option<usize>,
     pub name: String,
     pub name_span: Option<TextSpan>,
     pub declared_type: Option<ParsedType>,

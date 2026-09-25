@@ -105,6 +105,7 @@ fn nested_vars(
                             has_definite_assertion: false,
                             array_pattern_span: None,
                             is_enum_object: false,
+                            array_rest_start: None,
                             name: name.clone(),
                             name_span: *span,
                             declared_type: Some(if for_of_statement.keys_only {

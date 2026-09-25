@@ -150,6 +150,7 @@ fn lower_enum_declaration(
             has_definite_assertion: false,
             array_pattern_span: None,
             is_enum_object: true,
+            array_rest_start: None,
             kind: ParsedVariableKind::Const,
             name: declaration.id.name.to_string(),
             name_span,

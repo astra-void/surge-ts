@@ -169,8 +169,10 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
     let kind = match declaration.kind {
         VariableDeclarationKind::Var => ParsedVariableKind::Var,
         VariableDeclarationKind::Let => ParsedVariableKind::Let,
-        VariableDeclarationKind::Const => ParsedVariableKind::Const,
-        _ => ParsedVariableKind::Var,
+        // `using` is block-scoped and const-like (`isVarConstLike`).
+        VariableDeclarationKind::Const | VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing => {
+            ParsedVariableKind::Const
+        }
     };
 
     declaration
@@ -288,6 +290,7 @@ fn annotated_pattern_declarations(
             declarations.push(ParsedStatement::VariableDeclaration(Box::new(
                 ParsedVariableDeclaration {
                     is_enum_object: false,
+                    array_rest_start: None,
                     is_declare,
                     kind,
                     from_binding_pattern: true,
@@ -788,6 +791,7 @@ fn parse_binding_pattern_declarations_with_definite(
             vec![ParsedStatement::VariableDeclaration(Box::new(
                 ParsedVariableDeclaration {
                     is_enum_object: false,
+                    array_rest_start: None,
                     is_declare,
                     kind,
                     from_binding_pattern: false,
@@ -1190,32 +1194,42 @@ fn parse_array_pattern_declarations(
 
     // `const [a, ...rest] = xs` binds `rest` to the remaining elements. Bound to
     // the whole initializer, the same shape the object-pattern sibling uses: for
-    // an array source that is already the right element type. A tuple source is
-    // over-wide here (tsc slices), which is still far better than leaving the
-    // name unbound and reporting it as missing everywhere it is used. A literal
-    // typed as a tuple is sliced as tsc slices a tuple source
+    // an array source that is already the right element type, and a tuple
+    // source is sliced when the binding is checked (`array_rest_start`). A
+    // literal typed as a tuple is sliced here, as tsc slices a tuple source
     // (`sliceTupleType`).
     if let Some(rest) = array_pattern.rest.as_deref() {
-        let rest_initializer = match &initializer {
+        let (rest_initializer, sliced) = match &initializer {
             ParsedExpression::ArrayLiteral {
                 elements,
                 span,
                 tuple_context: true,
-            } if elements.iter().all(|element| !element.spread) => ParsedExpression::ArrayLiteral {
-                elements: elements.iter().skip(array_pattern.elements.len()).cloned().collect(),
-                span: *span,
-                tuple_context: true,
-            },
-            _ => initializer.clone(),
+            } if elements.iter().all(|element| !element.spread) => (
+                ParsedExpression::ArrayLiteral {
+                    elements: elements.iter().skip(array_pattern.elements.len()).cloned().collect(),
+                    span: *span,
+                    tuple_context: true,
+                },
+                true,
+            ),
+            _ => (initializer.clone(), false),
         };
-        declarations.extend(parse_binding_pattern_declarations(
+        let mut rest_declarations = parse_binding_pattern_declarations(
             &rest.argument,
             Some(rest_initializer),
             initializer_span,
             is_declare,
             kind,
             None,
-        ));
+        );
+        if !sliced && matches!(rest.argument, BindingPattern::BindingIdentifier(_)) {
+            for statement in &mut rest_declarations {
+                if let ParsedStatement::VariableDeclaration(variable) = statement {
+                    variable.array_rest_start = Some(array_pattern.elements.len());
+                }
+            }
+        }
+        declarations.extend(rest_declarations);
     }
 
     declarations

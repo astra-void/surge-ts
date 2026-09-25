@@ -1066,6 +1066,7 @@ export const fixturePresets: Record<string, string> = {
   'tsc-regular-expressions': path.join(workspaceRoot, 'tests/compat-projects/tsc-regular-expressions/tsconfig.json'),
   'decorator-expressions-checked': path.join(workspaceRoot, 'tests/compat-projects/decorator-expressions-checked/tsconfig.json'),
   'write-targets-checked': path.join(workspaceRoot, 'tests/compat-projects/write-targets-checked/tsconfig.json'),
+  'var-redeclaration-types': path.join(workspaceRoot, 'tests/compat-projects/var-redeclaration-types/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

@@ -187,8 +187,13 @@ pub(crate) fn check_function_variable_declaration(
     // after the binding exists. It is seeded as the degradation sentinel so the
     // closure reference resolves without inventing a type; the real symbol
     // replaces it below. A *direct* self-read is still caught by the flow layer's
-    // temporal-dead-zone check, which runs above.
-    if has_initializer {
+    // temporal-dead-zone check, which runs above. A redeclared `var` is
+    // one symbol that already has its first declaration's type.
+    let redeclared_var = matches!(variable_kind, ParsedVariableKind::Var)
+        && visible_symbols(scopes)
+            .get_own(&local_name)
+            .is_some_and(|existing| matches!(existing.kind, SymbolKind::Var) && !existing.ty.is_unknown());
+    if has_initializer && !redeclared_var {
         scopes.insert_current(
             local_name.as_str(),
             SymbolInfo {

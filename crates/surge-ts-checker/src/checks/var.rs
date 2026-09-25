@@ -318,6 +318,11 @@ pub(crate) fn check_variable_declaration_against_symbols(
     if declared_type.is_none() && variable.initializer.is_none() {
         inferred_symbol_type = Some(Type::Any);
     }
+    if let Some(start) = variable.array_rest_start
+        && let Some(Type::Tuple(elements)) = inferred_symbol_type.as_ref().map(Type::peeled)
+    {
+        inferred_symbol_type = Some(Type::Tuple(elements.get(start..).unwrap_or_default().to_vec()));
+    }
 
     // A generic arrow assigned to a binding (`const arrayToEnum = <T, U>(…) => …`,
     // the shape every namespace-scoped helper takes) is still a generic call
@@ -441,7 +446,14 @@ pub(crate) fn check_variable_declaration_against_symbols(
                     matches!(existing.kind, SymbolKind::Var) && !existing.ty.is_unknown()
                 })
         {
-            return Some(first);
+            return Some(match symbols.declared_type(&variable_name) {
+                Some(declared) if *declared != first.ty => Arc::new(SymbolInfo {
+                    ty: declared.clone(),
+                    kind: first.kind,
+                    function_signature: first.function_signature.clone(),
+                }),
+                _ => first,
+            });
         }
     }
 
@@ -452,10 +464,12 @@ pub(crate) fn check_variable_declaration_against_symbols(
 /// same type. `get_own` keeps this to the declaring scope, so a module `var`
 /// that shadows a same-named ambient global is not a redeclaration.
 ///
-/// Both declarations must be annotated. tsc compares the *widened declaration*
-/// types, which for an unannotated `var` comes from its initializer; surge's
-/// inference is not faithful enough there to report on it, so an unannotated
-/// declaration on either side leaves the pair alone.
+/// tsc compares each later declaration's widened type
+/// (`getWidenedTypeForVariableLikeDeclaration`: its annotation, its widened
+/// initializer, or `any`) with the first's. Only an annotated later
+/// declaration is compared here: an unannotated one reads its initializer
+/// through inference that still answers `any` where tsc has a type (an
+/// unannotated method's return, a namespace's unannotated members).
 ///
 /// An ambient `declare var` is skipped for the reason the duplicate `let`/`const`
 /// check skips it: it is pre-registered before this runs, so its own
@@ -470,15 +484,21 @@ fn report_redeclared_var_type(
     if !matches!(symbol.kind, SymbolKind::Var) {
         return;
     }
+    // The binding may carry a flow-narrowed type; the symbol's own is the
+    // declared one recorded beside it.
     let Some(previous) = symbols
         .get_own(variable_name)
         .filter(|existing| matches!(existing.kind, SymbolKind::Var))
-        .map(|existing| existing.ty.clone())
+        .map(|existing| symbols.declared_type(variable_name).unwrap_or(&existing.ty).clone())
     else {
         return;
     };
+    // A type with one of surge's holes in it (the sentinel, an unsubstituted
+    // parameter) is not the type tsc compares.
     if previous.is_unknown()
         || symbol.ty.is_unknown()
+        || surge_ts_types::parameter_type_is_degraded(&previous)
+        || surge_ts_types::parameter_type_is_degraded(&symbol.ty)
         || surge_ts_types::is_type_identical_to(&previous, &symbol.ty)
     {
         return;
