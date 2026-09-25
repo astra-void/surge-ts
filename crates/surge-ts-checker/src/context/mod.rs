@@ -642,6 +642,11 @@ pub(crate) struct CheckerContext {
     /// import and every downstream call read as a chain surge merely failed to
     /// model. Per-file: cleared by `begin_file_check`.
     pub(crate) genuine_any_bindings: HashSet<String>,
+    /// `var`s whose first declaration is unannotated and inferred `any`, which
+    /// may be surge's inference failing rather than the source's type — a later
+    /// declaration is not compared with it (TS2403). Per-file: cleared by
+    /// `begin_file_check`.
+    pub(crate) inferred_any_vars: HashSet<String>,
     /// Nonzero while checking the value of a shorthand object-literal property
     /// (`{ value }`). An unresolved name there is TS18004 to tsc — the property
     /// has no initializer to fall back on — rather than a plain missing name.
@@ -940,6 +945,7 @@ impl CheckerContext {
             shorthand_property_depth: 0,
             degraded_expected_type_depth: 0,
             genuine_any_bindings: HashSet::default(),
+            inferred_any_vars: HashSet::default(),
             union_member_probe_depth: 0,
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
@@ -1130,6 +1136,7 @@ impl CheckerContext {
             shorthand_property_depth: 0,
             degraded_expected_type_depth: 0,
             genuine_any_bindings: HashSet::default(),
+            inferred_any_vars: HashSet::default(),
             union_member_probe_depth: 0,
             contextual_return_frames: Vec::new(),
             in_contextual_return_check: false,
@@ -1760,6 +1767,7 @@ impl CheckerContext {
         self.non_exhaustive_switches.clear();
         self.exhaustive_switches.clear();
         self.genuine_any_bindings.clear();
+        self.inferred_any_vars.clear();
         self.this_is_implicitly_any = false;
         self.javascript_expando_objects = Arc::default();
         self.constructor_writable_members = None;

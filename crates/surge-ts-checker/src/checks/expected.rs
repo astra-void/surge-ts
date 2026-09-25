@@ -2651,6 +2651,12 @@ fn evaluate_object_literal_with_expected_type(
         if property.is_shorthand {
             ctx.shorthand_property_depth += 1;
         }
+        // A member declared with method syntax relates its parameters
+        // bivariantly, which only this property check knows: the value is
+        // typed by it and related below.
+        let method_target = !property.is_accessor
+            && expected_property.is_method()
+            && matches!(expected_property.ty.peeled(), Type::Function(_));
         // A contextually-typed arrow whose returns do not fit is one
         // whole-signature mismatch anchored on the property name. A nested
         // literal that fails as a whole — a missing property, not one of its
@@ -2665,7 +2671,11 @@ fn evaluate_object_literal_with_expected_type(
                     .as_ref()
                     .unwrap_or(&contextual_property_type),
             ),
-            ExpectedTypeDiagnostic::TypeNotAssignable,
+            if method_target {
+                ExpectedTypeDiagnostic::ContextOnly
+            } else {
+                ExpectedTypeDiagnostic::TypeNotAssignable
+            },
             symbols,
             ctx,
         );
@@ -2699,9 +2709,12 @@ fn evaluate_object_literal_with_expected_type(
                     with_type_copy_reason(TypeCopyReason::ExpectedType, || actual_type.clone()),
                 );
                 record_assignability_check();
-                if expected_diagnostic != ExpectedTypeDiagnostic::ContextOnly
-                    && !is_assignable_to(&actual_type, &expected_property_type)
-                {
+                let assignable = if method_target && actual_type != Type::Undefined {
+                    surge_ts_types::is_member_assignable_to(&actual_type, &expected_property.ty, true)
+                } else {
+                    is_assignable_to(&actual_type, &expected_property_type)
+                };
+                if expected_diagnostic != ExpectedTypeDiagnostic::ContextOnly && !assignable {
                     // The comparison target carries the optionality-implied
                     // `undefined`, but tsc's elaboration names the property's
                     // written type — a value that is not `undefined` failed

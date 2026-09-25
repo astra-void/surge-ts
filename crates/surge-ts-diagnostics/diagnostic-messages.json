@@ -1040,6 +1040,78 @@
     "support": "emitted"
   },
   {
+    "code": "TS4115",
+    "category": "Error",
+    "message": "This parameter property must have an 'override' modifier because it overrides a member in base class '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS4116",
+    "category": "Error",
+    "message": "This member must have an 'override' modifier because it overrides an abstract method that is declared in the base class '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS4117",
+    "category": "Error",
+    "message": "This member cannot have an 'override' modifier because it is not declared in the base class '{0}'. Did you mean '{1}'?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS4119",
+    "category": "Error",
+    "message": "This member must have a JSDoc comment with an '@override' tag because it overrides a member in the base class '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS4121",
+    "category": "Error",
+    "message": "This member cannot have a JSDoc comment with an '@override' tag because its containing class '{0}' does not extend another class.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS4122",
+    "category": "Error",
+    "message": "This member cannot have a JSDoc comment with an '@override' tag because it is not declared in the base class '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS4123",
+    "category": "Error",
+    "message": "This member cannot have a JSDoc comment with an 'override' tag because it is not declared in the base class '{0}'. Did you mean '{1}'?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS4127",
+    "category": "Error",
+    "message": "This member cannot have an 'override' modifier because its name is dynamic.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS4128",
+    "category": "Error",
+    "message": "This member cannot have a JSDoc comment with an '@override' tag because its name is dynamic.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS7029",
     "category": "Error",
     "message": "Fallthrough case in switch.",

@@ -25,6 +25,7 @@ mod forward_references;
 mod heritage;
 mod index_constraints;
 mod namespaces;
+mod override_modifiers;
 mod property_initialization;
 pub(crate) mod diagnostics;
 mod file_classify;

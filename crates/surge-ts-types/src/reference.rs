@@ -138,6 +138,11 @@ impl TypeReference {
         self.id.starts_with(UNIQUE_SYMBOL_ID_PREFIX)
     }
 
+    /// The declaration name of a unique symbol (`s` in `const s = Symbol()`).
+    pub fn unique_symbol_name(&self) -> Option<&str> {
+        self.id.strip_prefix(UNIQUE_SYMBOL_ID_PREFIX)?.rsplit('\u{0}').next()
+    }
+
     pub fn new(
         id: impl Into<Arc<str>>,
         display: impl Into<Arc<str>>,

@@ -1305,6 +1305,96 @@ pub const TS4114: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS4115: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4115",
+    number: Some(4115),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This parameter property must have an 'override' modifier because it overrides a member in base class '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS4116: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4116",
+    number: Some(4116),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This member must have an 'override' modifier because it overrides an abstract method that is declared in the base class '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS4117: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4117",
+    number: Some(4117),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This member cannot have an 'override' modifier because it is not declared in the base class '{0}'. Did you mean '{1}'?",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS4119: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4119",
+    number: Some(4119),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This member must have a JSDoc comment with an '@override' tag because it overrides a member in the base class '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS4121: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4121",
+    number: Some(4121),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This member cannot have a JSDoc comment with an '@override' tag because its containing class '{0}' does not extend another class.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS4122: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4122",
+    number: Some(4122),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This member cannot have a JSDoc comment with an '@override' tag because it is not declared in the base class '{0}'.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS4123: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4123",
+    number: Some(4123),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This member cannot have a JSDoc comment with an 'override' tag because it is not declared in the base class '{0}'. Did you mean '{1}'?",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS4127: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4127",
+    number: Some(4127),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This member cannot have an 'override' modifier because its name is dynamic.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS4128: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS4128",
+    number: Some(4128),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "This member cannot have a JSDoc comment with an '@override' tag because its name is dynamic.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS7029: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS7029",
     number: Some(7029),
@@ -7066,6 +7156,15 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS4112,
     TS4113,
     TS4114,
+    TS4115,
+    TS4116,
+    TS4117,
+    TS4119,
+    TS4121,
+    TS4122,
+    TS4123,
+    TS4127,
+    TS4128,
     TS7029,
     TS7030,
     TS2534,
@@ -8886,6 +8985,85 @@ impl Diagnostic {
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4115(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS4115,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4116(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS4116,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4117(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS4117,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4119(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS4119,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4121(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS4121,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4122(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS4122,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4123(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS4123,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4127(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS4127, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts4128(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS4128, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

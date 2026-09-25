@@ -25,6 +25,18 @@ mod class_emit;
 mod members;
 mod reflect_collision;
 
+thread_local! {
+    static EXAMINED_MODIFIERS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Where every modifier the last walk judged starts. The walk is tsc's
+/// `checkGrammarModifiers` for those lists, so oxc's own verdict on them
+/// (which misses parameters and type parameters, and names the wrong rule
+/// for `abstract private`) is dropped.
+pub(crate) fn take_examined_modifier_starts() -> Vec<u32> {
+    EXAMINED_MODIFIERS.with(|examined| std::mem::take(&mut *examined.borrow_mut()))
+}
+
 pub(crate) fn collect_context_grammar_diagnostics(
     program: &Program<'_>,
     out: &mut Vec<ParsedGrammarDiagnostic>,
@@ -37,8 +49,11 @@ pub(crate) fn collect_context_grammar_diagnostics(
         ambient_depth: 0,
         with_bodies: Vec::new(),
         const_enum_names: unshadowed_const_enum_names(program),
+        examined_modifiers: Vec::new(),
     };
     collector.visit_program(program);
+    let examined = std::mem::take(&mut collector.examined_modifiers);
+    EXAMINED_MODIFIERS.with(|slot| *slot.borrow_mut() = examined);
     // tsc's `checkWithStatement` checks the object but never the body, so no
     // checker grammar error comes from inside one.
     let with_bodies = std::mem::take(&mut collector.with_bodies);
@@ -87,6 +102,8 @@ struct ContextCollector<'a, 'o> {
     /// an identifier reference to one is the const enum object and nothing
     /// else — what tsc's `isConstEnumObjectType` sees on the expression.
     const_enum_names: Vec<String>,
+    /// See [`take_examined_modifier_starts`].
+    examined_modifiers: Vec<u32>,
 }
 
 /// The top-level `const enum` names whose every binding in the file is such a
@@ -2937,16 +2954,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     }
                 }
             }
-            AstKind::MethodDefinition(method) => {
-                self.check_accessor_body(method);
-                if method.kind == MethodDefinitionKind::Constructor && method.value.r#async {
-                    let from = method.span.start as usize;
-                    if let Some(offset) = self.source_text[from..method.key.span().start as usize].find("async") {
-                        let start = (from + offset) as u32;
-                        self.push(1089, Span::new(start, start + 5), &["async"]);
-                    }
-                }
-            }
+            AstKind::MethodDefinition(method) => self.check_accessor_body(method),
             AstKind::TSTypeParameterDeclaration(declaration) => {
                 self.check_circular_constraints(declaration);
                 self.check_type_parameter_defaults(declaration);
@@ -3124,7 +3132,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
 
 /// The modifier codes this pass reports from tsc's `checkGrammarModifiers`
 /// port; the rest of its table is oxc's or another check's to report.
-const OWNED_MODIFIER_CODES: &[u32] = &[1040, 1042, 1044, 1243, 1277, 1319];
+const OWNED_MODIFIER_CODES: &[u32] = &[1029, 1040, 1042, 1044, 1089, 1243, 1277, 1319];
 
 /// Declaration-position and modifier grammar: tsc's
 /// `checkGrammarModuleElementContext`, `checkModuleDeclaration`,
@@ -3149,7 +3157,7 @@ impl<'a> ContextCollector<'a, '_> {
                 self.check_use_strict_parameters(&arrow.params, &arrow.body);
             }
             AstKind::Class(class) if class.r#type == oxc_ast::ast::ClassType::ClassDeclaration => {
-                self.check_statement_modifiers(NodeKind::ClassDeclaration, class.span);
+                self.check_statement_modifiers_after(NodeKind::ClassDeclaration, class.span, &class.decorators);
             }
             AstKind::VariableDeclaration(declaration) => {
                 let parent = self.stack.iter().rev().find(|kind| {
@@ -3195,8 +3203,18 @@ impl<'a> ContextCollector<'a, '_> {
                 );
             }
             AstKind::MethodDefinition(method) => {
+                // tsc parses any method named `constructor` as a constructor
+                // (`tryParseConstructorDeclaration`); oxc makes `static
+                // constructor()` a static method.
+                let named_constructor = !method.computed
+                    && match &method.key {
+                        oxc_ast::ast::PropertyKey::StaticIdentifier(key) => key.name == "constructor",
+                        oxc_ast::ast::PropertyKey::StringLiteral(key) => key.value == "constructor",
+                        _ => false,
+                    };
                 let node = match method.kind {
                     MethodDefinitionKind::Constructor => NodeKind::Constructor,
+                    MethodDefinitionKind::Method if named_constructor => NodeKind::Constructor,
                     MethodDefinitionKind::Method => NodeKind::MethodDeclaration,
                     MethodDefinitionKind::Get => NodeKind::GetAccessor,
                     MethodDefinitionKind::Set => NodeKind::SetAccessor,
@@ -3206,6 +3224,7 @@ impl<'a> ContextCollector<'a, '_> {
             }
             AstKind::ObjectProperty(property) => self.check_object_member_modifiers(property),
             AstKind::TSTypeParameter(parameter) => self.check_type_parameter_modifiers(parameter),
+            AstKind::FormalParameter(parameter) => self.check_parameter_modifiers(parameter),
             AstKind::TSInstantiationExpression(expression) => {
                 if matches!(expression.expression, oxc_ast::ast::Expression::Super(_)) {
                     self.push(2754, expression.type_arguments.span, &[]);
@@ -3259,6 +3278,17 @@ impl<'a> ContextCollector<'a, '_> {
     /// Modifiers on a statement-level declaration, read from the statement's
     /// start (an `export` wrapper's, when there is one) up to its keyword.
     fn check_statement_modifiers(&mut self, node: NodeKind, span: Span) {
+        self.check_statement_modifiers_after(node, span, &[]);
+    }
+
+    /// [`Self::check_statement_modifiers`] for a declaration whose leading
+    /// decorators come before its modifiers (`@d default class {}`).
+    fn check_statement_modifiers_after(
+        &mut self,
+        node: NodeKind,
+        span: Span,
+        decorators: &[oxc_ast::ast::Decorator<'_>],
+    ) {
         let mut ancestors = self.stack.iter().rev();
         let mut parent = ancestors.next();
         let mut start = span.start;
@@ -3286,7 +3316,7 @@ impl<'a> ContextCollector<'a, '_> {
         };
         let Some(modifiers) = modifiers::scan_modifiers(
             self.source_text,
-            start,
+            decorators_end(decorators, start),
             span.end,
             node != NodeKind::VariableStatement,
         ) else {
@@ -3299,7 +3329,34 @@ impl<'a> ContextCollector<'a, '_> {
             name_is_private: false,
             type_parameter_owner: TypeParameterOwner::Other,
         };
-        self.push_modifier_error(modifiers::first_modifier_error(&modifiers, &context));
+        self.examine_modifiers(&modifiers, &context);
+    }
+
+    fn examine_modifiers(&mut self, modifiers: &[modifiers::Modifier], context: &ModifierContext) {
+        self.examined_modifiers.extend(modifiers.iter().map(|modifier| modifier.span.start));
+        self.push_modifier_error(modifiers::first_modifier_error(modifiers, context));
+    }
+
+    /// A parameter property's modifiers (`checkParameter`); oxc keeps which
+    /// ones it has, not the order they were written in.
+    fn check_parameter_modifiers(&mut self, parameter: &oxc_ast::ast::FormalParameter<'_>) {
+        if parameter.accessibility.is_none() && !parameter.readonly && !parameter.r#override {
+            return;
+        }
+        let start = decorators_end(&parameter.decorators, parameter.span.start);
+        let Some(modifiers) =
+            modifiers::scan_modifiers(self.source_text, start, parameter.pattern.span().start, true)
+        else {
+            return;
+        };
+        let context = ModifierContext {
+            node: NodeKind::Parameter,
+            parent: Parent::Other,
+            parent_ambient: self.ambient_depth > 0,
+            name_is_private: false,
+            type_parameter_owner: TypeParameterOwner::Other,
+        };
+        self.examine_modifiers(&modifiers, &context);
     }
 
     fn check_class_member_modifiers(
@@ -3311,11 +3368,27 @@ impl<'a> ContextCollector<'a, '_> {
         let Some(AstKind::Class(class)) = self.stack.iter().rev().nth(1) else {
             return;
         };
-        let Some(modifiers) =
+        let Some(mut modifiers) =
             modifiers::scan_modifiers(self.source_text, start, key.span().start, true)
         else {
             return;
         };
+        // A JSDoc modifier follows the written ones (`reparseHosted`) and is
+        // exempt from their order. oxc never sees it, so an error on it is
+        // this walker's to report.
+        let jsdoc_modifiers = super::jsdoc::member_modifiers_at(start);
+        let jsdoc_starts: Vec<u32> = jsdoc_modifiers.iter().map(|(_, span)| span.start as u32).collect();
+        modifiers.extend(jsdoc_modifiers.into_iter().map(|(modifier, span)| modifiers::Modifier {
+            kind: match modifier {
+                super::jsdoc::JsDocModifier::Public => modifiers::ModifierKind::Public,
+                super::jsdoc::JsDocModifier::Private => modifiers::ModifierKind::Private,
+                super::jsdoc::JsDocModifier::Protected => modifiers::ModifierKind::Protected,
+                super::jsdoc::JsDocModifier::Readonly => modifiers::ModifierKind::Readonly,
+                super::jsdoc::JsDocModifier::Override => modifiers::ModifierKind::Override,
+            },
+            span: oxc_span::Span::new(span.start as u32, span.end as u32),
+            reparsed: true,
+        }));
         let context = ModifierContext {
             node,
             parent: Parent::Class {
@@ -3326,7 +3399,13 @@ impl<'a> ContextCollector<'a, '_> {
             name_is_private: matches!(key, oxc_ast::ast::PropertyKey::PrivateIdentifier(_)),
             type_parameter_owner: TypeParameterOwner::Other,
         };
-        self.push_modifier_error(modifiers::first_modifier_error(&modifiers, &context));
+        self.examined_modifiers.extend(modifiers.iter().map(|modifier| modifier.span.start));
+        match modifiers::first_modifier_error(&modifiers, &context) {
+            Some(error) if jsdoc_starts.contains(&error.span.start) => {
+                self.push(error.code, error.span, &error.args);
+            }
+            error => self.push_modifier_error(error),
+        }
     }
 
     fn check_type_parameter_modifiers(&mut self, parameter: &oxc_ast::ast::TSTypeParameter<'_>) {
@@ -3360,7 +3439,7 @@ impl<'a> ContextCollector<'a, '_> {
             name_is_private: false,
             type_parameter_owner: owner,
         };
-        self.push_modifier_error(modifiers::first_modifier_error(&modifiers, &context));
+        self.examine_modifiers(&modifiers, &context);
     }
 
     /// tsc's `checkGrammarObjectLiteralExpression`: no modifier belongs on an

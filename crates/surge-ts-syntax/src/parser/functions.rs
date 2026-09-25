@@ -1045,8 +1045,9 @@ pub(crate) fn parse_function_parameter(
             || untyped_javascript,
         untyped_javascript,
         rest: false,
-        is_parameter_property: parameter.accessibility.is_some() || parameter.readonly,
+        is_parameter_property: parameter.accessibility.is_some() || parameter.readonly || parameter.r#override,
         is_readonly_parameter_property: parameter.readonly,
+        is_override_parameter_property: parameter.r#override,
     })
 }
 
@@ -1071,6 +1072,7 @@ pub(crate) fn parse_rest_function_parameter(
         rest: true,
         is_parameter_property: false,
         is_readonly_parameter_property: false,
+        is_override_parameter_property: false,
     })
 }
 

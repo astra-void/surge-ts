@@ -578,7 +578,13 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     // (decorators before a declaration that cannot take them), so the grammar
     // walk cannot see it.
     let collects = collects_grammar_diagnostics(file_name) || javascript;
+    let examined_modifiers = super::grammar_context::take_examined_modifier_starts();
     parser_errors.retain(|error| {
+        if error.code == Some(1029)
+            && error.span.is_some_and(|span| examined_modifiers.contains(&(span.start as u32)))
+        {
+            return false;
+        }
         let Some(code) = checker_grammar_code(error) else {
             return true;
         };

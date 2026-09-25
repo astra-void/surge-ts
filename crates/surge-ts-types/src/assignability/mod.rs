@@ -1438,11 +1438,24 @@ pub fn parameter_type_is_degraded(ty: &Type) -> bool {
 }
 
 fn parameter_carries_degraded_unknown(ty: &Type, depth: usize) -> bool {
+    carries_degraded_unknown(ty, depth, true)
+}
+
+/// A signature's parameter compared with another's: a type variable of the
+/// body being checked is a real type there, not a hole.
+fn signature_parameter_carries_hole(ty: &Type) -> bool {
+    carries_degraded_unknown(ty, 0, false)
+}
+
+fn carries_degraded_unknown(ty: &Type, depth: usize, active_variables_are_holes: bool) -> bool {
     if depth > 3 {
         return false;
     }
+    let parameter_carries_degraded_unknown =
+        |ty: &Type, depth: usize| carries_degraded_unknown(ty, depth, active_variables_are_holes);
     match ty {
-        Type::Unknown | Type::ErrorType | Type::TypeParameter(_) => true,
+        Type::TypeParameter(parameter) => active_variables_are_holes || !parameter.is_active_variable(),
+        Type::Unknown | Type::ErrorType => true,
         Type::Reference(reference) => {
             reference
                 .arguments
@@ -1907,6 +1920,19 @@ fn substitute_type_parameters(
     }
 }
 
+/// A member value against the member it fills: one declared with method
+/// syntax compares its parameters bivariantly (`compareSignaturesRelated`
+/// for a method declaration), even under `strictFunctionTypes`.
+pub fn is_member_assignable_to(source: &Type, target: &Type, method: bool) -> bool {
+    if method
+        && let (Type::Function(source_signature), Type::Function(target_signature)) =
+            (source.peeled(), target.peeled())
+    {
+        return is_signature_assignable_to(&source_signature, &target_signature, true);
+    }
+    is_assignable_to(source, target)
+}
+
 /// `bivariant_parameters` relaxes the contravariant parameter test to accept
 /// either direction. tsc applies exactly that relaxation to members declared
 /// with method syntax (`m(x: T): U`), even under `strictFunctionTypes` — an
@@ -1962,11 +1988,10 @@ fn is_signature_assignable_to(
             // to the covariant direction rather than flagging a handler tsc
             // accepts.
             source_parameter == target_parameter
-                || source_parameter.is_unknown()
+                || source_parameter.is_unmodelled()
                 || matches!(source_parameter, Type::Any)
                 || is_assignable_to(target_parameter, source_parameter)
-                || ((bivariant_parameters
-                    || parameter_carries_degraded_unknown(target_parameter, 0))
+                || ((bivariant_parameters || signature_parameter_carries_hole(target_parameter))
                     && is_assignable_to(source_parameter, target_parameter))
         },
     );

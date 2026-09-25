@@ -570,6 +570,19 @@ fn check_statements_over_module_scope(
     ctx: &mut CheckerContext,
 ) -> Vec<Option<surge_ts_types::Type>> {
     let mut scopes = crate::symbols::ScopeStack::from_root(symbols);
+    let mut var_names = Vec::new();
+    crate::flow::collect_var_names(&statements, &mut var_names);
+    // A `var` the block redeclares is the module's own binding — one symbol,
+    // as tsc binds it — so the redeclaration is checked against it (TS2403).
+    for name in &var_names {
+        if let Some(existing) = ctx
+            .symbols
+            .get_own_handle(name)
+            .filter(|existing| matches!(existing.kind, crate::symbols::SymbolKind::Var))
+        {
+            let _ = scopes.insert_current_handle(name.as_str(), existing);
+        }
+    }
     // The block is a scope of its own: a `const name` in it shadows the module
     // binding or the global of that name instead of redeclaring it. The frame
     // stays pushed so `names` still read what the block narrowed them to.
@@ -578,8 +591,6 @@ fn check_statements_over_module_scope(
     let mut flow_state = crate::flow::FunctionFlowState::new(
         flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,
     );
-    let mut var_names = Vec::new();
-    crate::flow::collect_var_names(&statements, &mut var_names);
     crate::checks::function::check_function_body(
         statements,
         None,

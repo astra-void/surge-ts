@@ -80,6 +80,9 @@ impl ModifierKind {
 pub(super) struct Modifier {
     pub kind: ModifierKind,
     pub span: Span,
+    /// A JSDoc modifier tag (`NodeFlagsReparsed`): it has no written position,
+    /// so the "must precede" order rules skip it.
+    pub reparsed: bool,
 }
 
 /// The modifier keywords written from `start` on, in order, up to the first
@@ -128,7 +131,11 @@ pub(super) fn scan_modifiers(
             break;
         }
         let word_start = start + offset as u32;
-        modifiers.push(Modifier { kind, span: Span::new(word_start, word_start + word_len as u32) });
+        modifiers.push(Modifier {
+            kind,
+            span: Span::new(word_start, word_start + word_len as u32),
+            reparsed: false,
+        });
         offset += word_len;
     }
     Some(modifiers)
@@ -151,6 +158,7 @@ pub(super) enum NodeKind {
     SetAccessor,
     Constructor,
     TypeParameter,
+    Parameter,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -232,7 +240,10 @@ fn is_class_member(node: NodeKind) -> bool {
 /// of its own syntax.
 fn first_illegal_modifier(modifiers: &[Modifier], ctx: &ModifierContext) -> Option<Modifier> {
     if is_class_member(ctx.node)
-        || matches!(ctx.node, NodeKind::ModuleDeclaration | NodeKind::TypeParameter)
+        || matches!(
+            ctx.node,
+            NodeKind::ModuleDeclaration | NodeKind::TypeParameter | NodeKind::Parameter
+        )
     {
         return None;
     }
@@ -294,11 +305,11 @@ pub(super) fn first_modifier_error(
                     return error(1030, span, &["override"]);
                 } else if flags & FLAG_AMBIENT != 0 {
                     return error(1243, span, &["override", "declare"]);
-                } else if flags & FLAG_READONLY != 0 {
+                } else if flags & FLAG_READONLY != 0 && !modifier.reparsed {
                     return error(1029, span, &["override", "readonly"]);
-                } else if flags & FLAG_ACCESSOR != 0 {
+                } else if flags & FLAG_ACCESSOR != 0 && !modifier.reparsed {
                     return error(1029, span, &["override", "accessor"]);
-                } else if flags & FLAG_ASYNC != 0 {
+                } else if flags & FLAG_ASYNC != 0 && !modifier.reparsed {
                     return error(1029, span, &["override", "async"]);
                 }
                 flags |= FLAG_OVERRIDE;
@@ -307,23 +318,24 @@ pub(super) fn first_modifier_error(
             ModifierKind::Public | ModifierKind::Protected | ModifierKind::Private => {
                 if flags & FLAG_ACCESSIBILITY != 0 {
                     return error(1028, span, &[]);
-                } else if flags & FLAG_OVERRIDE != 0 {
+                } else if flags & FLAG_OVERRIDE != 0 && !modifier.reparsed {
                     return error(1029, span, &[text, "override"]);
-                } else if flags & FLAG_STATIC != 0 {
+                } else if flags & FLAG_STATIC != 0 && !modifier.reparsed {
                     return error(1029, span, &[text, "static"]);
-                } else if flags & FLAG_ACCESSOR != 0 {
+                } else if flags & FLAG_ACCESSOR != 0 && !modifier.reparsed {
                     return error(1029, span, &[text, "accessor"]);
-                } else if flags & FLAG_READONLY != 0 {
+                } else if flags & FLAG_READONLY != 0 && !modifier.reparsed {
                     return error(1029, span, &[text, "readonly"]);
-                } else if flags & FLAG_ASYNC != 0 {
+                } else if flags & FLAG_ASYNC != 0 && !modifier.reparsed {
                     return error(1029, span, &[text, "async"]);
                 } else if at_module_level {
                     return error(1044, span, &[text]);
                 } else if flags & FLAG_ABSTRACT != 0 {
                     if modifier.kind == ModifierKind::Private {
                         return error(1243, span, &[text, "abstract"]);
+                    } else if !modifier.reparsed {
+                        return error(1029, span, &[text, "abstract"]);
                     }
-                    return error(1029, span, &[text, "abstract"]);
                 } else if ctx.name_is_private && is_class_member(ctx.node) {
                     return error(18010, span, &[]);
                 }
@@ -332,17 +344,19 @@ pub(super) fn first_modifier_error(
             ModifierKind::Static => {
                 if flags & FLAG_STATIC != 0 {
                     return error(1030, span, &["static"]);
-                } else if flags & FLAG_READONLY != 0 {
+                } else if flags & FLAG_READONLY != 0 && !modifier.reparsed {
                     return error(1029, span, &["static", "readonly"]);
-                } else if flags & FLAG_ASYNC != 0 {
+                } else if flags & FLAG_ASYNC != 0 && !modifier.reparsed {
                     return error(1029, span, &["static", "async"]);
-                } else if flags & FLAG_ACCESSOR != 0 {
+                } else if flags & FLAG_ACCESSOR != 0 && !modifier.reparsed {
                     return error(1029, span, &["static", "accessor"]);
                 } else if at_module_level {
                     return error(1044, span, &["static"]);
+                } else if ctx.node == NodeKind::Parameter {
+                    return error(1090, span, &["static"]);
                 } else if flags & FLAG_ABSTRACT != 0 {
                     return error(1243, span, &["static", "abstract"]);
-                } else if flags & FLAG_OVERRIDE != 0 {
+                } else if flags & FLAG_OVERRIDE != 0 && !modifier.reparsed {
                     return error(1029, span, &["static", "override"]);
                 }
                 flags |= FLAG_STATIC;
@@ -363,7 +377,7 @@ pub(super) fn first_modifier_error(
             ModifierKind::Readonly => {
                 if flags & FLAG_READONLY != 0 {
                     return error(1030, span, &["readonly"]);
-                } else if ctx.node != NodeKind::PropertyDeclaration {
+                } else if !matches!(ctx.node, NodeKind::PropertyDeclaration | NodeKind::Parameter) {
                     return error(1024, span, &[]);
                 } else if flags & FLAG_ACCESSOR != 0 {
                     return error(1243, span, &["readonly", "accessor"]);
@@ -373,21 +387,23 @@ pub(super) fn first_modifier_error(
             ModifierKind::Export => {
                 if flags & FLAG_EXPORT != 0 {
                     return error(1030, span, &["export"]);
-                } else if flags & FLAG_AMBIENT != 0 {
+                } else if flags & FLAG_AMBIENT != 0 && !modifier.reparsed {
                     return error(1029, span, &["export", "declare"]);
-                } else if flags & FLAG_ABSTRACT != 0 {
+                } else if flags & FLAG_ABSTRACT != 0 && !modifier.reparsed {
                     return error(1029, span, &["export", "abstract"]);
-                } else if flags & FLAG_ASYNC != 0 {
+                } else if flags & FLAG_ASYNC != 0 && !modifier.reparsed {
                     return error(1029, span, &["export", "async"]);
                 } else if in_class {
                     return error(1031, span, &["export"]);
+                } else if ctx.node == NodeKind::Parameter {
+                    return error(1090, span, &["export"]);
                 }
                 flags |= FLAG_EXPORT;
             }
             ModifierKind::Default => {
                 if matches!(ctx.parent, Parent::ModuleBlock { namespace: true }) {
                     return error(1319, span, &[]);
-                } else if flags & FLAG_EXPORT == 0 {
+                } else if flags & FLAG_EXPORT == 0 && !modifier.reparsed {
                     return error(1029, span, &["export", "default"]);
                 }
                 flags |= FLAG_DEFAULT;
@@ -401,6 +417,8 @@ pub(super) fn first_modifier_error(
                     return error(1040, span, &["override"]);
                 } else if in_class && ctx.node != NodeKind::PropertyDeclaration {
                     return error(1031, span, &["declare"]);
+                } else if ctx.node == NodeKind::Parameter {
+                    return error(1090, span, &["declare"]);
                 } else if ctx.parent_ambient && matches!(ctx.parent, Parent::ModuleBlock { .. }) {
                     return error(1038, span, &[]);
                 } else if ctx.name_is_private && is_class_member(ctx.node) {
@@ -439,10 +457,10 @@ pub(super) fn first_modifier_error(
                     {
                         return error(1243, last_async.span, &["async", "abstract"]);
                     }
-                    if flags & FLAG_OVERRIDE != 0 {
+                    if flags & FLAG_OVERRIDE != 0 && !modifier.reparsed {
                         return error(1029, span, &["abstract", "override"]);
                     }
-                    if flags & FLAG_ACCESSOR != 0 {
+                    if flags & FLAG_ACCESSOR != 0 && !modifier.reparsed {
                         return error(1029, span, &["abstract", "accessor"]);
                     }
                 }
@@ -456,6 +474,8 @@ pub(super) fn first_modifier_error(
                     return error(1030, span, &["async"]);
                 } else if flags & FLAG_AMBIENT != 0 || ctx.parent_ambient {
                     return error(1040, span, &["async"]);
+                } else if ctx.node == NodeKind::Parameter {
+                    return error(1090, span, &["async"]);
                 }
                 if flags & FLAG_ABSTRACT != 0 {
                     return error(1243, span, &["async", "abstract"]);

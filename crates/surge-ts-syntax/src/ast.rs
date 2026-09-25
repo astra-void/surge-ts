@@ -215,10 +215,6 @@ pub enum ParsedGrammarDiagnosticKind {
     NeverNullishCoalesceOperand,
     /// A `??` left operand whose syntax is always nullish — TS2871.
     AlwaysNullishCoalesceOperand,
-    /// A class member modifier written after one it must precede — TS1029.
-    /// `name` holds the two modifiers, the one that must come first separated
-    /// from the other by a NUL.
-    ModifierMustPrecede,
     /// An `async` function whose written return type is not `Promise<T>` —
     /// TS1064. `name` holds the written type, which the message wraps.
     AsyncReturnTypeNotPromise,
@@ -2157,12 +2153,14 @@ pub struct ParsedFunctionParameter {
     /// accept any number of trailing arguments.
     pub rest: bool,
     /// Constructor parameter property: the parameter carries an accessibility
-    /// (`public`/`private`/`protected`) or `readonly` modifier, which declares a
-    /// class instance member of the same name and type.
+    /// (`public`/`private`/`protected`), `readonly` or `override` modifier,
+    /// which declares a class instance member of the same name and type.
     pub is_parameter_property: bool,
     /// The parameter property was declared `readonly`, so the member it
     /// declares rejects writes (tsc's `isReadonlySymbol`).
     pub is_readonly_parameter_property: bool,
+    /// The parameter property was declared `override`.
+    pub is_override_parameter_property: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

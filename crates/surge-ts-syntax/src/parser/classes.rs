@@ -30,8 +30,9 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
             .filter_map(parse_class_member)
             .collect(),
     );
+    let mut restricted_members = restricted_class_members(class);
     if super::spans::lowering_javascript() {
-        let assigned = javascript_this_members(class, &members);
+        let assigned = javascript_this_members(class, &members, &mut restricted_members);
         members.extend(assigned);
     }
 
@@ -105,7 +106,7 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
             })
             .collect(),
         members,
-        restricted_members: restricted_class_members(class),
+        restricted_members,
         span: Some(text_span_from_oxc_span(class.span)),
         computed_keys: class
             .body
@@ -310,7 +311,9 @@ fn restricted_class_members(class: &Class<'_>) -> Vec<ParsedRestrictedMember> {
             ),
             _ => continue,
         };
-        let Some(accessibility) = restricted_accessibility(accessibility) else {
+        let Some(accessibility) = restricted_accessibility(accessibility)
+            .or_else(|| super::jsdoc::member_accessibility_at(element.span().start))
+        else {
             continue;
         };
         let name = if computed {
@@ -446,7 +449,8 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             match method.kind {
                 MethodDefinitionKind::Constructor => {
                     Some(ParsedClassMember::Constructor(ParsedClassConstructor {
-                        accessibility: restricted_accessibility(method.accessibility),
+                        accessibility: restricted_accessibility(method.accessibility)
+                            .or_else(|| super::jsdoc::member_accessibility_at(method.span.start)),
                         parameters,
                         body,
                         body_reads,
@@ -474,7 +478,11 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                         name,
                         name_span: Some(text_span_from_oxc_span(name_span)),
                         is_static: method.r#static,
-                        is_override: method.r#override,
+                        is_override: method.r#override
+                            || super::jsdoc::member_has_modifier(
+                                method.span.start,
+                                super::jsdoc::JsDocModifier::Override,
+                            ),
                         is_abstract: matches!(
                             method.r#type,
                             MethodDefinitionType::TSAbstractMethodDefinition
@@ -603,7 +611,11 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 is_declare: property.declare,
                 has_definite_assertion: property.definite,
                 optional: property.optional,
-                readonly: property.readonly,
+                readonly: property.readonly
+                    || super::jsdoc::member_has_modifier(
+                        property.span.start,
+                        super::jsdoc::JsDocModifier::Readonly,
+                    ),
                 declared_type,
                 initializer,
                 initializer_span,
@@ -676,6 +688,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
 fn javascript_this_members(
     class: &Class<'_>,
     declared: &[ParsedClassMember],
+    restricted: &mut Vec<ParsedRestrictedMember>,
 ) -> Vec<ParsedClassMember> {
     use oxc_ast::ast::{AssignmentTarget, Expression};
     use oxc_ast_visit::{Visit, walk};
@@ -686,6 +699,8 @@ fn javascript_this_members(
         value: Option<crate::ParsedExpression>,
         is_static: bool,
         in_constructor: bool,
+        /// Where the assignment starts, which its JSDoc modifiers are keyed by.
+        start: u32,
     }
     struct Collector {
         found: Vec<Found>,
@@ -705,6 +720,7 @@ fn javascript_this_members(
                         .then(|| parse_expression(&assignment.right).0),
                     is_static: self.is_static,
                     in_constructor: self.in_constructor,
+                    start: assignment.span.start,
                 });
             }
             walk::walk_assignment_expression(self, assignment);
@@ -779,12 +795,24 @@ fn javascript_this_members(
             is_declare: false,
             has_definite_assertion: false,
             optional: false,
-            readonly: false,
+            readonly: assignments.iter().any(|assignment| {
+                super::jsdoc::member_has_modifier(assignment.start, super::jsdoc::JsDocModifier::Readonly)
+            }),
             declared_type: None,
             initializer: None,
             initializer_span: None,
             this_assignments: Some(crate::ParsedThisAssignments { values, in_constructor }),
         }));
+        if let Some(accessibility) =
+            assignments.iter().find_map(|assignment| super::jsdoc::member_accessibility_at(assignment.start))
+        {
+            restricted.push(ParsedRestrictedMember {
+                name: found.name.clone(),
+                is_static: found.is_static,
+                accessibility,
+                accessor_side: None,
+            });
+        }
     }
     members
 }

@@ -346,6 +346,30 @@ pub(super) fn evaluate_index_access(
                 || indexes_as_number(index, symbols);
             let Some(key) = literal_index_key(&index_type) else {
                 if let Type::Object(object_type) = receiver_type.peeled() {
+                    // A unique symbol names the member declared under it,
+                    // `[s]` (tsc's late-bound name). One written through another
+                    // path to the same symbol cannot be told apart here.
+                    if let Type::Reference(reference) = &index_type
+                        && let Some(name) = reference.unique_symbol_name()
+                    {
+                        let own = format!("[{name}]");
+                        let qualified = format!(".{name}]");
+                        if let Some(property) = object_type
+                            .properties
+                            .iter()
+                            .find(|(key, _)| key.as_ref() == own.as_str() || key.ends_with(&qualified))
+                            .map(|(_, property)| property)
+                        {
+                            return InferredExpression::Known(property.ty.clone());
+                        }
+                        if object_type
+                            .properties
+                            .keys()
+                            .any(|key| key.starts_with('[') && !key.starts_with("[Symbol."))
+                        {
+                            return InferredExpression::Unknown;
+                        }
+                    }
                     if let Some(index_value) = object_type.applicable_index_type(index_is_numeric) {
                         return InferredExpression::Known(crate::infer::unchecked_index_read(
                             index_value.clone(),
@@ -630,15 +654,11 @@ fn union_literal_index_read(
 /// expression, an unresolved reference, an uninstantiated type parameter)
 /// answers nothing about which member is read.
 fn index_key_is_concrete(index_type: &Type) -> bool {
-    !matches!(
-        index_type,
-        Type::Any
-            | Type::Unknown
-            | Type::GenuineUnknown
-            | Type::ErrorType
-            | Type::TypeParameter(_)
-            | Type::Reference(_)
-    )
+    match index_type {
+        Type::Reference(reference) => reference.is_unique_symbol(),
+        Type::Any | Type::Unknown | Type::GenuineUnknown | Type::ErrorType | Type::TypeParameter(_) => false,
+        _ => true,
+    }
 }
 
 fn literal_index_key(index_type: &Type) -> Option<String> {

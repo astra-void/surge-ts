@@ -1041,6 +1041,78 @@ message = "This member must have an 'override' modifier because it overrides a m
 arity = 1
 
 [[diagnostic]]
+code = "TS4115"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This parameter property must have an 'override' modifier because it overrides a member in base class '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS4116"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This member must have an 'override' modifier because it overrides an abstract method that is declared in the base class '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS4117"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This member cannot have an 'override' modifier because it is not declared in the base class '{0}'. Did you mean '{1}'?"
+arity = 2
+
+[[diagnostic]]
+code = "TS4119"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This member must have a JSDoc comment with an '@override' tag because it overrides a member in the base class '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS4121"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This member cannot have a JSDoc comment with an '@override' tag because its containing class '{0}' does not extend another class."
+arity = 1
+
+[[diagnostic]]
+code = "TS4122"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This member cannot have a JSDoc comment with an '@override' tag because it is not declared in the base class '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS4123"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This member cannot have a JSDoc comment with an 'override' tag because it is not declared in the base class '{0}'. Did you mean '{1}'?"
+arity = 2
+
+[[diagnostic]]
+code = "TS4127"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This member cannot have an 'override' modifier because its name is dynamic."
+arity = 0
+
+[[diagnostic]]
+code = "TS4128"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This member cannot have a JSDoc comment with an '@override' tag because its name is dynamic."
+arity = 0
+
+[[diagnostic]]
 code = "TS7029"
 category = "Error"
 source = "typescript"

@@ -17,7 +17,7 @@ use crate::program::{
     DtsExpansionReason, record_call_resolution, record_program_timing, with_dts_expansion_reason,
 };
 use crate::spans::diagnostic_with_syntax_span;
-use crate::symbols::SymbolTable;
+use crate::symbols::{FunctionSignatureInfo, SymbolTable};
 
 mod builtins;
 mod instantiate;
@@ -271,10 +271,25 @@ pub(crate) fn check_call_like_with_expected_type(
     // extends ResponseType = "json">(…): … }`) was resolved with its type
     // parameters at their defaults; the written signature is read back so the
     // call infers them from its arguments instead.
-    let generic_signature = symbol
-        .function_signature
-        .as_deref()
-        .filter(|signature| !signature.type_parameters.is_empty());
+    let kept_signature = symbol.function_signature.as_deref().map(|signature| {
+        let candidates = overloads_fitting_call(signature, &callee_ty, arguments.len(), type_arguments.len());
+        match (candidates.as_slice(), &callee_ty) {
+            ([], _) => signature,
+            ([only], _) => only,
+            (several, Type::Function(fold)) => first_accepting_overload(
+                several,
+                fold,
+                type_arguments,
+                callee_span,
+                arguments,
+                expected_return_type,
+                symbols,
+                ctx,
+            ),
+            ([first, ..], _) => first,
+        }
+    });
+    let generic_signature = kept_signature.filter(|signature| !signature.type_parameters.is_empty());
     let written_signature = generic_signature
         .is_none()
         .then(|| interface_call_signature_info(&symbol.ty, ctx))
@@ -292,7 +307,7 @@ pub(crate) fn check_call_like_with_expected_type(
                         .or(written_signature
                             .as_ref()
                             .map(|written| &*written.signature))
-                        .or(symbol.function_signature.as_deref()),
+                        .or(kept_signature),
                     outer_type_arguments,
                     type_arguments,
                     callee_span,
@@ -2392,6 +2407,84 @@ fn call_site_required_count(signature: &FunctionType) -> usize {
         required -= 1;
     }
     required
+}
+
+/// tsc's `chooseOverload` candidate filter (`hasCorrectArity`,
+/// `hasCorrectTypeArgumentArity`) over the signatures an overload group keeps:
+/// the first declaration's, then its later overloads in declaration order,
+/// which the folded callee lists in the same order. A group instantiates
+/// through one signature, so it must be one this call can bind at all. Empty
+/// when the kept signature fits (the group is instantiated through it, as
+/// before) or when none does.
+fn overloads_fitting_call<'a>(
+    kept: &'a FunctionSignatureInfo,
+    callee: &Type,
+    argument_count: usize,
+    type_argument_count: usize,
+) -> Vec<&'a FunctionSignatureInfo> {
+    let Type::Function(fold) = callee else {
+        return Vec::new();
+    };
+    let Some(members) = fold.overloads() else {
+        return Vec::new();
+    };
+    if !kept.overloaded || kept.overload_alternatives.is_empty() || members.len() != kept.overload_alternatives.len() + 1 {
+        return Vec::new();
+    }
+    let type_arity_fits = |info: &FunctionSignatureInfo| {
+        type_argument_count == 0
+            || (type_argument_count <= info.type_parameters.len()
+                && type_argument_count
+                    >= info.type_parameters.iter().filter(|parameter| parameter.default_type.is_none()).count())
+    };
+    let fits = |info: &FunctionSignatureInfo, member: &FunctionType| {
+        overload_arity_fits(member, argument_count) && type_arity_fits(info)
+    };
+    if fits(kept, &members[0]) {
+        return Vec::new();
+    }
+    kept.overload_alternatives
+        .iter()
+        .zip(members.iter().skip(1))
+        .filter(|(info, member)| fits(info, member))
+        .map(|(info, _)| &**info)
+        .collect()
+}
+
+/// The first of several candidates whose instantiation for this call accepts
+/// its arguments — `chooseOverload`'s walk — or the first when none does. The
+/// probes' diagnostics are discarded.
+#[allow(clippy::too_many_arguments)]
+fn first_accepting_overload<'a>(
+    candidates: &[&'a FunctionSignatureInfo],
+    fold: &FunctionType,
+    type_arguments: &[ParsedType],
+    callee_span: Option<SyntaxTextSpan>,
+    arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> &'a FunctionSignatureInfo {
+    let checkpoint = ctx.diagnostics().len();
+    let shapes = inferred_argument_shapes(fold, arguments, symbols, ctx);
+    let picked = shapes.and_then(|shapes| {
+        candidates.iter().copied().find(|candidate| {
+            let instantiated = instantiate_function_type(
+                fold,
+                Some(candidate),
+                &[],
+                type_arguments,
+                callee_span,
+                arguments,
+                expected_return_type,
+                symbols,
+                ctx,
+            );
+            signature_accepts_argument_types(&instantiated, &shapes, OverloadRelation::Assignable)
+        })
+    });
+    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    picked.unwrap_or(candidates[0])
 }
 
 fn overload_arity_fits(candidate: &FunctionType, argument_count: usize) -> bool {

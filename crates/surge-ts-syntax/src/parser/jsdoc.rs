@@ -305,7 +305,19 @@ pub(crate) enum JsDocTag {
     Augments(Option<JsDocType>),
     /// `@import`: a type-only import declaration.
     Import(crate::ParsedImportDeclaration),
+    /// `@public`, `@private`, `@protected`, `@readonly`, `@override`: the
+    /// modifier, at the tag.
+    Modifier(JsDocModifier, TextSpan),
     Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JsDocModifier {
+    Public,
+    Private,
+    Protected,
+    Readonly,
+    Override,
 }
 
 #[derive(Clone, Debug)]
@@ -638,6 +650,18 @@ impl<'s> TagParser<'s> {
                 let ty = self.parse_jsdoc_type_expression(true);
                 self.parse_trailing_tag_comments(start, self.node_pos(), margin, &indent_text);
                 JsDocTag::Augments(ty)
+            }
+            "public" | "private" | "protected" | "readonly" | "override" => {
+                let modifier = match tag_name.as_str() {
+                    "public" => JsDocModifier::Public,
+                    "private" => JsDocModifier::Private,
+                    "protected" => JsDocModifier::Protected,
+                    "readonly" => JsDocModifier::Readonly,
+                    _ => JsDocModifier::Override,
+                };
+                let span = TextSpan { start, end: self.s.token_start.max(start + 1) };
+                self.parse_trailing_tag_comments(start, self.node_pos(), margin, &indent_text);
+                JsDocTag::Modifier(modifier, span)
             }
             "import" => {
                 let import = self.parse_import_tag(start);
@@ -1587,6 +1611,9 @@ pub(crate) struct JsDocIndex {
     aliases: Vec<ParsedTypeAliasDeclaration>,
     /// `@import` declarations.
     imports: Vec<crate::ParsedImportDeclaration>,
+    /// A class member's JSDoc modifiers, by the member's start (a `this.x = e`
+    /// member's by the assignment's).
+    member_modifiers: std::collections::HashMap<u32, Vec<(JsDocModifier, TextSpan)>>,
 }
 
 thread_local! {
@@ -1719,6 +1746,25 @@ pub(crate) fn written_or_jsdoc_type_parameters(
         Some(_) => super::types::parse_type_parameters(written),
         None => type_parameters_at(start).unwrap_or_default(),
     }
+}
+
+/// The JSDoc modifiers of the class member (or `this.x = e` assignment)
+/// starting at `start`, in tag order.
+pub(crate) fn member_modifiers_at(start: u32) -> Vec<(JsDocModifier, TextSpan)> {
+    with_index(|index| index.member_modifiers.get(&start).cloned()).unwrap_or_default()
+}
+
+/// The accessibility a member's JSDoc gives it.
+pub(crate) fn member_accessibility_at(start: u32) -> Option<crate::ParsedMemberAccessibility> {
+    member_modifiers_at(start).iter().find_map(|(modifier, _)| match modifier {
+        JsDocModifier::Private => Some(crate::ParsedMemberAccessibility::Private),
+        JsDocModifier::Protected => Some(crate::ParsedMemberAccessibility::Protected),
+        _ => None,
+    })
+}
+
+pub(crate) fn member_has_modifier(start: u32, modifier: JsDocModifier) -> bool {
+    member_modifiers_at(start).iter().any(|(written, _)| *written == modifier)
 }
 
 /// The type-only imports the file's `@import` tags declare.
@@ -2024,6 +2070,22 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
         })
     }
 
+    /// `reparseHosted` for the modifier tags, on a class member or a
+    /// `this.x = e` assignment.
+    fn host_modifiers(&mut self, start: u32, comment: &JsDocComment) {
+        let modifiers: Vec<(JsDocModifier, TextSpan)> = comment
+            .tags
+            .iter()
+            .filter_map(|tag| match tag {
+                JsDocTag::Modifier(modifier, span) => Some((*modifier, *span)),
+                _ => None,
+            })
+            .collect();
+        if !modifiers.is_empty() {
+            self.index.member_modifiers.entry(start).or_insert(modifiers);
+        }
+    }
+
     fn declare(&mut self, start: u32, ty: &JsDocType) {
         self.index.declared.entry(start).or_insert((lowered_with_optionality(ty), ty.span));
     }
@@ -2118,6 +2180,7 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
 
     fn visit_method_definition(&mut self, it: &MethodDefinition<'a>) {
         if let Some(comment) = self.last_comment(it.span.start, false) {
+            self.host_modifiers(it.span.start, &comment);
             self.host_function(FunctionHost::Function(&it.value), &comment);
             if it.kind == MethodDefinitionKind::Get && it.value.return_type.is_none() {
                 if let Some(ty) = Self::type_tag(&comment) {
@@ -2131,6 +2194,7 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
 
     fn visit_property_definition(&mut self, it: &PropertyDefinition<'a>) {
         if let Some(comment) = self.last_comment(it.span.start, false) {
+            self.host_modifiers(it.span.start, &comment);
             if it.type_annotation.is_none() {
                 if let Some(ty) = Self::type_tag(&comment) {
                     let ty = ty.clone();
@@ -2168,6 +2232,9 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
 
     fn visit_expression_statement(&mut self, it: &ExpressionStatement<'a>) {
         if let Some(comment) = self.last_comment(it.span.start, false) {
+            if let Expression::AssignmentExpression(assignment) = &it.expression {
+                self.host_modifiers(assignment.span.start, &comment);
+            }
             // `reparseHosted`: an assignment declaration (`o.x = e`,
             // `this.x = e`, `exports.x = e`) takes the `@type` as its type.
             if let Some(ty) = Self::type_tag(&comment)

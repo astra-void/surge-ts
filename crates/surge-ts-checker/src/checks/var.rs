@@ -149,7 +149,8 @@ pub(crate) fn check_variable_declaration_against_symbols(
 
     let variable_name = variable.name.clone();
     let variable_name_span = variable.name_span;
-    let redeclaration_candidate = !variable.is_declare && variable.declared_type.is_some();
+    let annotated = variable.declared_type.is_some();
+    let redeclaration_candidate = !variable.is_declare && (annotated || variable.initializer.is_some());
     let auto_array = is_auto_array_candidate(&variable, ctx);
 
     // A generic annotation is kept for call-site instantiation; a type-predicate
@@ -465,8 +466,17 @@ pub(crate) fn check_variable_declaration_against_symbols(
         })
     })?;
 
+    if matches!(symbol.kind, SymbolKind::Var)
+        && symbols.get_own(&variable_name).is_none_or(|existing| !matches!(existing.kind, SymbolKind::Var))
+    {
+        if !annotated && matches!(symbol.ty, Type::Any) {
+            ctx.inferred_any_vars.insert(variable_name.clone());
+        } else {
+            ctx.inferred_any_vars.remove(&variable_name);
+        }
+    }
     if redeclaration_candidate {
-        report_redeclared_var_type(&variable_name, variable_name_span, &symbol, symbols, ctx);
+        report_redeclared_var_type(&variable_name, variable_name_span, &symbol, annotated, symbols, ctx);
         // A `var` has one type, its first declaration's: a later declaration
         // is checked against it (TS2403) and never replaces it.
         if matches!(symbol.kind, SymbolKind::Var)
@@ -496,10 +506,9 @@ pub(crate) fn check_variable_declaration_against_symbols(
 ///
 /// tsc compares each later declaration's widened type
 /// (`getWidenedTypeForVariableLikeDeclaration`: its annotation, its widened
-/// initializer, or `any`) with the first's. Only an annotated later
-/// declaration is compared here: an unannotated one reads its initializer
-/// through inference that still answers `any` where tsc has a type (an
-/// unannotated method's return, a namespace's unannotated members).
+/// initializer, or `any`) with the first's. An initializer surge infers as
+/// `any` is not compared: its inference still answers `any` where tsc has a
+/// type.
 ///
 /// An ambient `declare var` is skipped for the reason the duplicate `let`/`const`
 /// check skips it: it is pre-registered before this runs, so its own
@@ -508,10 +517,11 @@ fn report_redeclared_var_type(
     variable_name: &str,
     variable_name_span: Option<surge_ts_syntax::TextSpan>,
     symbol: &SymbolInfoHandle,
+    annotated: bool,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
-    if !matches!(symbol.kind, SymbolKind::Var) {
+    if !matches!(symbol.kind, SymbolKind::Var) || (!annotated && matches!(symbol.ty, Type::Any)) {
         return;
     }
     // The binding may carry a flow-narrowed type; the symbol's own is the
@@ -525,7 +535,8 @@ fn report_redeclared_var_type(
     };
     // A type with one of surge's holes in it (the sentinel, an unsubstituted
     // parameter) is not the type tsc compares.
-    if previous.is_unknown()
+    if (matches!(previous, Type::Any) && ctx.inferred_any_vars.contains(variable_name))
+        || previous.is_unknown()
         || symbol.ty.is_unknown()
         || surge_ts_types::parameter_type_is_degraded(&previous)
         || surge_ts_types::parameter_type_is_degraded(&symbol.ty)

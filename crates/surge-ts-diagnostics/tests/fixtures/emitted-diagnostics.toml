@@ -1155,6 +1155,60 @@ oracle = [
   "ky real-project parity (noImplicitOverride)",
 ]
 
+[TS4115]
+status = "emitted"
+oracle = [
+  "override-and-modifier-order",
+]
+
+[TS4116]
+status = "emitted"
+oracle = [
+  "override-and-modifier-order",
+]
+
+[TS4117]
+status = "emitted"
+oracle = [
+  "override-and-modifier-order",
+]
+
+[TS4119]
+status = "emitted"
+oracle = [
+  "override-and-modifier-order",
+]
+
+[TS4121]
+status = "emitted"
+oracle = [
+  "override-and-modifier-order",
+]
+
+[TS4122]
+status = "emitted"
+oracle = [
+  "override-and-modifier-order",
+]
+
+[TS4123]
+status = "emitted"
+oracle = [
+  "override-and-modifier-order",
+]
+
+[TS4127]
+status = "emitted"
+oracle = [
+  "override-and-modifier-order",
+]
+
+[TS4128]
+status = "emitted"
+oracle = [
+  "override-and-modifier-order",
+]
+
 [TS6133]
 status = "emitted"
 fixtures = [

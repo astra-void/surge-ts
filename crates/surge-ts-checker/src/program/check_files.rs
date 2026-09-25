@@ -1280,14 +1280,6 @@ fn grammar_finding_diagnostic(
             };
             Diagnostic::ts7008(name, "any", ctx.file_name.clone())
         }
-        Kind::ModifierMustPrecede => {
-            let Some((first, second)) =
-                finding.name.as_deref().and_then(|pair| pair.split_once('\0'))
-            else {
-                return None;
-            };
-            Diagnostic::ts1029(first, second, ctx.file_name.clone())
-        }
         Kind::AsyncReturnTypeNotPromise => {
             let Some(written) = finding.name.as_deref() else {
                 return None;

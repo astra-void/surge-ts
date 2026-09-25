@@ -395,7 +395,7 @@ fn properties_identical(left: &surge_ts_types::ObjectProperty, right: &surge_ts_
         && surge_ts_types::is_type_identical_to(&left.ty, &right.ty)
 }
 
-fn named_type_with(name: &str, span: Option<TextSpan>, type_arguments: Vec<ParsedType>) -> ParsedType {
+pub(crate) fn named_type_with(name: &str, span: Option<TextSpan>, type_arguments: Vec<ParsedType>) -> ParsedType {
     ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
         name: name.to_string(),
         span,
@@ -404,7 +404,7 @@ fn named_type_with(name: &str, span: Option<TextSpan>, type_arguments: Vec<Parse
 }
 
 /// `typeToString` of a generic declaration's own type: `I<T, U>`.
-fn type_display(name: &str, type_parameters: &[String]) -> String {
+pub(crate) fn type_display(name: &str, type_parameters: &[String]) -> String {
     if type_parameters.is_empty() {
         name.to_string()
     } else {

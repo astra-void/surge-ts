@@ -217,7 +217,17 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                 .as_ref()
                 .map(|annotation| text_span_from_oxc_span(annotation.span))
                 .or(jsdoc_type.as_ref().map(|(_, span)| *span));
-            let declared_type = declared_type.or(jsdoc_type.map(|(ty, _)| ty));
+            let declared_type = declared_type.or(jsdoc_type.map(|(ty, _)| ty)).or_else(|| {
+                // tsc's `getESSymbolLikeTypeForNode`: `Symbol()` initializing a
+                // `const` creates that declaration's own unique symbol.
+                let (BindingPattern::BindingIdentifier(identifier), ParsedVariableKind::Const, Some(init)) =
+                    (&declarator.id, kind, declarator.init.as_ref())
+                else {
+                    return None;
+                };
+                is_symbol_constructor_call(init.without_parentheses())
+                    .then(|| crate::ParsedType::UniqueSymbol(std::sync::Arc::from(identifier.name.as_str())))
+            });
             let Some(init) = declarator.init.as_ref() else {
                 // A destructuring declaration with no initializer — an ambient
                 // one — declares its elements with the annotation's types.
@@ -1510,4 +1520,19 @@ fn parse_ts_global_declaration(global: &TSGlobalDeclaration<'_>) -> Vec<ParsedSt
             is_shorthand: false,
         },
     ))]
+}
+
+/// `Symbol(…)` or `Symbol.for(…)` (tsc's `isSymbolOrSymbolForCall`).
+fn is_symbol_constructor_call(expression: &Expression<'_>) -> bool {
+    let Expression::CallExpression(call) = expression else {
+        return false;
+    };
+    match call.callee.without_parentheses() {
+        Expression::Identifier(callee) => callee.name == "Symbol",
+        Expression::StaticMemberExpression(member) => {
+            member.property.name == "for"
+                && matches!(&member.object, Expression::Identifier(object) if object.name == "Symbol")
+        }
+        _ => false,
+    }
 }

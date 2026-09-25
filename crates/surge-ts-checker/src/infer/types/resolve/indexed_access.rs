@@ -1055,6 +1055,22 @@ fn property_type_for_index_type(
             }
         }
     }
+    // A unique symbol names the member declared under it (`[s]`, or
+    // `[ns.s]` through a namespace), tsc's late-bound name.
+    if let Type::Reference(reference) = &view
+        && let Some(name) = reference.unique_symbol_name()
+        && let Type::Object(object) = apparent
+    {
+        let own = format!("[{name}]");
+        let qualified = format!(".{name}]");
+        if let Some((_, property)) = object
+            .properties
+            .iter()
+            .find(|(key, _)| key.as_ref() == own.as_str() || key.ends_with(&qualified))
+        {
+            return Some(property.ty.clone());
+        }
+    }
     if !is_nullable(&view) && is_assignable_to_key_kind(&view, ANY_KEY_KIND) {
         if matches!(apparent, Type::Any | Type::ErrorType | Type::Never) {
             return Some(apparent.clone());
