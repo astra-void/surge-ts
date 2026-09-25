@@ -275,8 +275,9 @@ const STRING_MEMBERS: &[&str] = &[
     "match", "replace", "search", "slice", "split", "substring", "toLowerCase",
     "toLocaleLowerCase", "toUpperCase", "toLocaleUpperCase", "trim", "length", "substr",
     "valueOf", "codePointAt", "includes", "endsWith", "normalize", "repeat", "startsWith",
-    "padStart", "padEnd", "trimEnd", "trimStart", "trimLeft", "trimRight", "matchAll",
-    "replaceAll", "at",
+    "anchor", "big", "blink", "bold", "fixed", "fontcolor", "fontsize", "italics", "link",
+    "small", "strike", "sub", "sup", "padStart", "padEnd", "trimEnd", "trimStart", "trimLeft",
+    "trimRight", "matchAll", "replaceAll", "at", "isWellFormed", "toWellFormed",
 ];
 
 const NUMBER_MEMBERS: &[&str] =

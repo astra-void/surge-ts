@@ -202,7 +202,7 @@ pub(super) struct DeclarationEnvironmentData {
         Arc<Mutex<FxHashMap<InterfaceOverloadInstantiationKey, FunctionType>>>,
     pub(super) lazy_member_annotation_templates: Arc<Mutex<LazyMemberTemplateTable>>,
     pub(super) ambient_modules: Arc<FxHashMap<String, ModuleExportTable>>,
-    pub(super) import_type_namespaces: Arc<Mutex<FxHashMap<(Arc<str>, String), Type>>>,
+    pub(super) import_type_namespaces: Arc<Mutex<FxHashMap<(Arc<str>, String), super::ImportTypeTarget>>>,
     pub(super) import_type_globals: Arc<Mutex<FxHashSet<String>>>,
     pub(super) ambient_file_type_scopes: Arc<FxHashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
     pub(super) module_augmentations: Arc<FxHashMap<String, ModuleExportTable>>,

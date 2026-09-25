@@ -789,7 +789,9 @@ fn is_commonjs_export_declaration(target: &ParsedExpression, ctx: &CheckerContex
 /// is a function declaration or a `const` initialized with a function or arrow
 /// expression (`getInitializerSymbol`). surge does not keep the initializer, so
 /// any `const` holding a function counts.
-fn is_expando_receiver(object: &ParsedExpression, symbols: &SymbolTable) -> bool {
+/// In JavaScript any variable holding a function is one, and so is one
+/// initialized with an empty object literal.
+fn is_expando_receiver(object: &ParsedExpression, symbols: &SymbolTable, ctx: &CheckerContext) -> bool {
     let ParsedExpression::Identifier { name, .. } = object else {
         return false;
     };
@@ -801,14 +803,16 @@ fn is_expando_receiver(object: &ParsedExpression, symbols: &SymbolTable) -> bool
         Type::Object(object) => object.call_signature().is_some(),
         _ => false,
     };
+    let javascript = surge_ts_syntax::is_javascript_file_name(&ctx.file_name);
     match symbol.kind {
         SymbolKind::Function => true,
         // A member declared in one branch only leaves the join of the function
         // with and without it; it is the same expando receiver.
         SymbolKind::Const => match &symbol.ty {
             Type::Union(union) => union.types().iter().all(callable),
-            other => callable(other),
+            other => callable(other) || (javascript && ctx.javascript_expando_objects.contains(name)),
         },
+        SymbolKind::Var | SymbolKind::Let if javascript => ctx.javascript_expando_objects.contains(name),
         _ => false,
     }
 }
@@ -843,16 +847,21 @@ fn declare_expando_member(
     };
     let mut call_signature = None;
     let mut properties = surge_ts_types::PropertyMap::default();
+    let plain_object = surge_ts_syntax::is_javascript_file_name(&ctx.file_name)
+        && ctx.javascript_expando_objects.contains(name);
     for member in &members {
         match member.peeled() {
             Type::Function(function) => {
                 call_signature.get_or_insert(function);
             }
             Type::Object(object) => {
-                let Some(signature) = object.call_signature() else {
-                    return;
-                };
-                call_signature.get_or_insert(signature.clone());
+                match object.call_signature() {
+                    Some(signature) => {
+                        call_signature.get_or_insert(signature.clone());
+                    }
+                    None if plain_object => {}
+                    None => return,
+                }
                 // A member only some branches declared may be absent.
                 for (name, property) in object.properties.iter() {
                     properties.entry(name.clone()).or_insert_with(|| {
@@ -865,9 +874,9 @@ fn declare_expando_member(
             _ => return,
         }
     }
-    let Some(call_signature) = call_signature else {
+    if call_signature.is_none() && !plain_object {
         return;
-    };
+    }
     let value_type = crate::checks::var::widen_implicit_variable_initializer_type(
         SymbolKind::Let,
         &assignment.value,
@@ -878,10 +887,12 @@ fn declare_expando_member(
         property_name.into(),
         surge_ts_types::ObjectProperty::required(value_type),
     );
+    let object = crate::metrics::alloc_object_type(properties, None);
     let updated = SymbolInfo {
-        ty: Type::Object(
-            crate::metrics::alloc_object_type(properties, None).with_call_signature(call_signature),
-        ),
+        ty: Type::Object(match call_signature {
+            Some(call_signature) => object.with_call_signature(call_signature),
+            None => object,
+        }),
         kind: symbol.kind,
         function_signature: symbol.function_signature.clone(),
     };
@@ -1092,7 +1103,7 @@ fn check_member_assignment_itself(
         // peels to `ComponentType`'s union alone, and reporting off that made
         // `MyApp.getInitialProps = …` a false TS2339.
         let receiver = declared_object_type.as_ref().unwrap_or(&object_type);
-        if is_expando_receiver(object, &visible_symbols) {
+        if is_expando_receiver(object, &visible_symbols, ctx) {
             declare_expando_member(object, property_name, &assignment, scopes, ctx);
             return;
         }

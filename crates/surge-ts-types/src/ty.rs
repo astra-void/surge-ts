@@ -725,6 +725,14 @@ fn string_property_access_type(name: &str) -> Option<Type> {
         "charCodeAt" | "codePointAt" => {
             Some(function_type(vec![Type::Number], Type::Number, false, 1))
         }
+        // lib.es2015.core's HTML methods and lib.es2024.string.
+        "anchor" | "fontcolor" | "link" => {
+            Some(function_type(vec![Type::String], Type::String, false, 1))
+        }
+        "fontsize" => Some(function_type(vec![Type::Any], Type::String, false, 1)),
+        "big" | "blink" | "bold" | "fixed" | "italics" | "small" | "strike" | "sub" | "sup"
+        | "toWellFormed" => Some(function_type(vec![], Type::String, false, 0)),
+        "isWellFormed" => Some(function_type(vec![], Type::Boolean, false, 0)),
         // `(that, locales?, options?)`.
         "localeCompare" => Some(function_type(
             vec![Type::String, Type::Any, Type::Any],

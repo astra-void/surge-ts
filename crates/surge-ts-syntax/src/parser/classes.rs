@@ -17,7 +17,7 @@ use super::functions::{
     parse_function_parameter, parse_rest_function_parameter, parse_statement_list_as_function_body,
 };
 use super::spans::text_span_from_oxc_span;
-use super::types::{parse_type_annotation, parse_type_arguments, parse_type_parameters};
+use super::types::{parse_type_annotation, parse_type_arguments};
 
 pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDeclaration> {
     let id = class.id.as_ref()?;
@@ -78,7 +78,10 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
         is_abstract: class.r#abstract,
         name: id.name.to_string(),
         name_span: Some(text_span_from_oxc_span(id.span)),
-        type_parameters: parse_type_parameters(class.type_parameters.as_deref()),
+        type_parameters: super::jsdoc::written_or_jsdoc_type_parameters(
+            class.type_parameters.as_deref(),
+            class.span.start,
+        ),
         extends: parse_class_heritage(class),
         heritage_expression: class
             .super_class
@@ -356,6 +359,7 @@ fn parse_class_heritage(class: &Class<'_>) -> Vec<ParsedNamedType> {
         .super_type_arguments
         .as_deref()
         .and_then(parse_type_arguments)
+        .or_else(|| super::jsdoc::extends_type_arguments_at(class.span.start))
         .unwrap_or_default();
 
     vec![ParsedNamedType {
@@ -459,14 +463,11 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                             key => (super::types::computed_key_name(key)?, key.span()),
                         }
                     };
-                    let return_type = method
-                        .value
-                        .return_type
-                        .as_ref()
-                        .and_then(|annotation| parse_type_annotation(annotation));
-                    let return_type_span = method.value.return_type.as_ref().map(|annotation| {
-                        text_span_from_oxc_span(annotation.type_annotation.span())
-                    });
+                    let (return_type, return_type_span) =
+                        super::jsdoc::annotated_or_jsdoc_return_type(
+                            method.value.return_type.as_deref(),
+                            method.value.span.start,
+                        );
 
                     Some(ParsedClassMember::Method(ParsedClassMethod {
                         span: Some(text_span_from_oxc_span(method.span)),
@@ -478,8 +479,9 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                             method.r#type,
                             MethodDefinitionType::TSAbstractMethodDefinition
                         ),
-                        type_parameters: parse_type_parameters(
+                        type_parameters: super::jsdoc::written_or_jsdoc_type_parameters(
                             method.value.type_parameters.as_deref(),
+                            method.value.span.start,
                         ),
                         parameters,
                         this_parameter_type: method
@@ -487,7 +489,8 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                             .this_param
                             .as_ref()
                             .and_then(|this_param| this_param.type_annotation.as_ref())
-                            .and_then(|annotation| parse_type_annotation(annotation)),
+                            .and_then(|annotation| parse_type_annotation(annotation))
+                            .or_else(|| super::jsdoc::this_type_at(method.value.span.start)),
                         return_type,
                         return_type_span,
                         body,
@@ -510,24 +513,27 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
 
                     let is_getter = matches!(method.kind, MethodDefinitionKind::Get);
                     let getter_return_type = if is_getter {
-                        method
-                            .value
-                            .return_type
-                            .as_ref()
-                            .and_then(|annotation| parse_type_annotation(annotation))
+                        super::jsdoc::annotated_or_jsdoc_return_type(
+                            method.value.return_type.as_deref(),
+                            method.value.span.start,
+                        )
+                        .0
                     } else {
                         None
                     };
                     let setter_param_type = if is_getter {
                         None
                     } else {
-                        method
-                            .value
-                            .params
-                            .items
-                            .first()
-                            .and_then(|param| param.type_annotation.as_ref())
-                            .and_then(|annotation| parse_type_annotation(annotation))
+                        method.value.params.items.first().and_then(|param| {
+                            param
+                                .type_annotation
+                                .as_ref()
+                                .and_then(|annotation| parse_type_annotation(annotation))
+                                .or_else(|| {
+                                    super::jsdoc::parameter_at(param.span.start)
+                                        .and_then(|jsdoc| jsdoc.ty.map(|(ty, _)| ty))
+                                })
+                        })
                     };
 
                     Some(ParsedClassMember::Accessor(ParsedClassAccessor {
@@ -573,7 +579,8 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             let declared_type = property
                 .type_annotation
                 .as_ref()
-                .and_then(|annotation| parse_type_annotation(annotation));
+                .and_then(|annotation| parse_type_annotation(annotation))
+                .or_else(|| super::jsdoc::declared_type_at(property.span.start).map(|(ty, _)| ty));
             let (initializer, initializer_span) = match property.value.as_ref() {
                 Some(value) => {
                     let (expression, span) = parse_expression(value);

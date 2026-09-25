@@ -464,7 +464,7 @@ pub(crate) struct CheckerContext {
     /// Namespace value types behind `typeof import("spec")`, keyed by the
     /// querying file and the specifier; registered when that file's imports
     /// are bound, read when the query resolves under that file's name.
-    pub(crate) import_type_namespaces: Arc<Mutex<FxHashMap<(Arc<str>, String), Type>>>,
+    pub(crate) import_type_namespaces: Arc<Mutex<FxHashMap<(Arc<str>, String), ImportTypeTarget>>>,
     /// Ambient globals declared through `typeof import("spec")…`: they are
     /// derived from a module's export, so that module's own declaration of the
     /// same name must bind ahead of the global (see `collect_exportable_value_symbols_from_statement`).
@@ -650,6 +650,10 @@ pub(crate) struct CheckerContext {
     /// inherits it (that is what makes `function f() { return () => this }`
     /// report), while a class method or an object-literal method clears it.
     pub(crate) this_is_implicitly_any: bool,
+    /// The current JavaScript file's module-level variables initialized with
+    /// a function or an empty object literal, which a member write declares
+    /// members on (`IsExpandoInitializer`).
+    pub(crate) javascript_expando_objects: Arc<HashSet<String>>,
     /// The members the constructor being checked may initialize even when they
     /// are `readonly`: its class's own instance properties and parameter
     /// properties. `None` everywhere else — tsc allows the write only when the
@@ -927,6 +931,7 @@ impl CheckerContext {
             instantiation_depth: 0,
             unmodelled_jsx_props_depth: 0,
             this_is_implicitly_any: false,
+            javascript_expando_objects: Arc::default(),
             constructor_writable_members: None,
             super_constructor_type: None,
             collecting_signatures: false,
@@ -1116,6 +1121,7 @@ impl CheckerContext {
             instantiation_depth: 0,
             unmodelled_jsx_props_depth: 0,
             this_is_implicitly_any: false,
+            javascript_expando_objects: Arc::default(),
             constructor_writable_members: None,
             super_constructor_type: None,
             collecting_signatures: false,
@@ -1250,11 +1256,40 @@ impl CheckerContext {
         &self,
         file_name: &str,
         specifier: &str,
-        ty: Type,
+        target: ImportTypeTarget,
     ) {
         if let Ok(mut namespaces) = self.import_type_namespaces.lock() {
-            namespaces.insert((Arc::from(file_name), specifier.to_string()), ty);
+            namespaces.insert((Arc::from(file_name), specifier.to_string()), target);
         }
+    }
+
+    /// The declaration an import type (`import("m").T`) written in the
+    /// current file names: the module's type export, resolving in the
+    /// module's own scope.
+    pub(crate) fn import_type_declaration_handle(
+        &self,
+        name: &str,
+    ) -> Option<crate::symbols::TypeDeclarationHandle> {
+        let (specifier, qualifier) = surge_ts_syntax::split_import_type_name(name)?;
+        let mut namespaces = self.import_type_namespaces.lock().ok()?;
+        let target = namespaces.get_mut(&(Arc::from(self.file_name.as_str()), specifier.to_string()))?;
+        if let Some(handle) = target.attached.get(qualifier) {
+            return Some(handle.clone());
+        }
+        let key = match (target.export_assignment, qualifier.is_empty()) {
+            (true, true) => crate::modules::EXPORT_ASSIGNMENT_NAME.to_string(),
+            (true, false) => format!("{}.{qualifier}", crate::modules::EXPORT_ASSIGNMENT_NAME),
+            (false, _) => qualifier.to_string(),
+        };
+        let declaration = target.declarations.get(&key)?.clone();
+        let handle = crate::symbols::TypeDeclarationHandle::new(
+            crate::modules::exports::attach_type_resolution_scope_if_missing(
+                declaration,
+                target.scope.as_ref(),
+            ),
+        );
+        target.attached.insert(qualifier.to_string(), handle.clone());
+        Some(handle)
     }
 
     pub(crate) fn register_import_type_global(&self, name: &str) {
@@ -1277,7 +1312,7 @@ impl CheckerContext {
             .and_then(|namespaces| {
                 namespaces
                     .get(&(Arc::from(file_name), specifier.to_string()))
-                    .cloned()
+                    .map(|target| target.namespace.clone())
             })
     }
 
@@ -1726,6 +1761,7 @@ impl CheckerContext {
         self.exhaustive_switches.clear();
         self.genuine_any_bindings.clear();
         self.this_is_implicitly_any = false;
+        self.javascript_expando_objects = Arc::default();
         self.constructor_writable_members = None;
         self.super_constructor_type = None;
         self.collecting_signatures = false;
@@ -2514,5 +2550,27 @@ mod diagnostic_dedup_index_tests {
             1,
             "the rebuild must re-derive the surviving diagnostic's key"
         );
+    }
+}
+
+/// What an import type's module (`import("m")`) offers the file that writes
+/// it: its value (`typeof import("m")`) and its type exports.
+pub(crate) struct ImportTypeTarget {
+    pub(crate) namespace: Type,
+    pub(crate) declarations: Arc<crate::symbols::TypeDeclarationTable>,
+    pub(crate) scope: Option<Arc<crate::symbols::TypeDeclarationScope>>,
+    /// The module is `export =`: its types are the assigned entity's members.
+    pub(crate) export_assignment: bool,
+    /// Declarations already given the module's scope, by qualifier.
+    pub(crate) attached: FxHashMap<String, crate::symbols::TypeDeclarationHandle>,
+}
+
+impl std::fmt::Debug for ImportTypeTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ImportTypeTarget")
+            .field("namespace", &self.namespace)
+            .field("export_assignment", &self.export_assignment)
+            .finish_non_exhaustive()
     }
 }

@@ -402,20 +402,20 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     self.parse_keyword_type()
                 }
             }
-            // TODO: js doc types: `JSDocAllType`, `JSDocFunctionType`
-            // Kind::StarEq => {
-            // scanner.reScanAsteriskEqualsToken();
-            // falls through
-            // }
-            // Kind::Star => {
-            // return parseJSDocAllType();
-            // }
-            // case SyntaxKind.QuestionQuestionToken:
-            // // If there is '??', treat it as prefix-'?' in JSDoc type.
-            // scanner.reScanQuestionToken();
-            // // falls through
-            // case SyntaxKind.FunctionKeyword:
-            // return parseJSDocFunctionType();
+            // surge: tsgo's `parseJSDocAllType`, which `getTypeFromTypeNode` reads as `any`.
+            Kind::Star if self.jsdoc_type => {
+                let span = self.start_span();
+                self.bump_any();
+                self.ast.ts_type_any_keyword(self.end_span(span))
+            }
+            // surge: `*=` is `*` followed by a postfix `=` (`reScanAsteriskEqualsToken`).
+            Kind::StarEq if self.jsdoc_type => {
+                let start = self.cur_token().start();
+                self.lexer.seek(start + 1);
+                self.prev_token_end = start + 1;
+                self.token = self.lexer.next_token();
+                self.ast.ts_type_any_keyword(oxc_span::Span::new(start, start + 1))
+            }
             Kind::Question => self.parse_js_doc_unknown_or_nullable_type(),
             Kind::Bang => self.parse_js_doc_non_nullable_type(),
             Kind::Str | Kind::True | Kind::False => self.parse_literal_type(),
@@ -824,6 +824,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         mut left_name: TSTypeName<'a>,
     ) -> TSTypeName<'a> {
         while self.eat(Kind::Dot) {
+            // surge: tsgo's `parseEntityName` stops at a JSDoc-style `Name.<T>`.
+            if self.jsdoc_type && self.at(Kind::LAngle) {
+                break;
+            }
             let right = self.parse_identifier_name();
             left_name = self.ast.ts_type_name_qualified_name(self.end_span(span), left_name, right);
         }
@@ -1294,6 +1298,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     fn parse_return_type(&mut self) -> TSType<'a> {
         self.bump_any();
         self.context_remove(Context::DisallowConditionalTypes, Self::parse_type_or_type_predicate)
+    }
+
+    /// surge: [`Self::parse_type_or_type_predicate`] for `parse_jsdoc_type`.
+    pub(crate) fn parse_type_or_type_predicate_for_jsdoc(&mut self) -> TSType<'a> {
+        self.parse_type_or_type_predicate()
     }
 
     fn parse_type_or_type_predicate(&mut self) -> TSType<'a> {

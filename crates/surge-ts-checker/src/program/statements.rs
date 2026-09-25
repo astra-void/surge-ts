@@ -783,10 +783,11 @@ fn check_program_statement_itself(
                 && let Some(current) = ctx.symbols.get(&name)
                 && updated.ty != current.ty
             {
-                let declares_expando = matches!(
+                let declares_expando = (matches!(
                     &updated.ty,
                     surge_ts_types::Type::Object(object) if object.call_signature().is_some()
-                ) && current.ty.get_property_access_type(&property_name).is_none();
+                ) || ctx.javascript_expando_objects.contains(&name))
+                    && current.ty.get_property_access_type(&property_name).is_none();
                 let declared = ctx
                     .symbols
                     .declared_type(&name)
@@ -824,8 +825,13 @@ fn check_program_statement_itself(
         }
         ParsedStatement::Expression(expression) => {
             let assertion = assertion_candidate(&expression).then(|| (*expression).clone());
+            let define_property =
+                (!ctx.javascript_expando_objects.is_empty()).then(|| (*expression).clone());
             expr::check_expression_statement(*expression, ctx);
             narrow_module_assertion_call(assertion, ctx);
+            if let Some(expression) = define_property {
+                declare_define_property_member(&expression, ctx);
+            }
         }
         ParsedStatement::If(if_statement) => check_module_if_statement(&if_statement, ctx),
         ParsedStatement::Block(statements) => check_module_block(statements, ctx),
@@ -1311,4 +1317,42 @@ pub(crate) fn count_local_type_declarations_in_statement(statement: &ParsedState
         },
         _ => 0,
     }
+}
+
+/// `Object.defineProperty(o, "name", descriptor)` on a JavaScript expando
+/// object declares `name` on it for the statements that follow.
+fn declare_define_property_member(expression: &surge_ts_syntax::ParsedExpression, ctx: &mut CheckerContext) {
+    let Some((name, member, descriptor)) = crate::modules::exports::define_property_declaration(expression) else {
+        return;
+    };
+    if !ctx.javascript_expando_objects.contains(name) {
+        return;
+    }
+    let Some(current) = ctx.symbols.get(name).cloned() else {
+        return;
+    };
+    let surge_ts_types::Type::Object(object) = &current.ty else {
+        return;
+    };
+    let symbols = ctx.symbols.clone();
+    let Some((member_type, readonly)) = crate::modules::exports::expando_member_type(
+        &crate::modules::exports::ExpandoValue::Descriptor(descriptor),
+        &symbols,
+        ctx,
+    ) else {
+        return;
+    };
+    let mut properties = (*object.properties).clone();
+    properties.insert(
+        member.into(),
+        surge_ts_types::ObjectProperty::required(member_type).with_readonly(readonly),
+    );
+    let _ = ctx.symbols.insert(
+        name.to_string(),
+        crate::symbols::SymbolInfo {
+            ty: surge_ts_types::Type::Object(crate::metrics::alloc_object_type(properties, None)),
+            kind: current.kind,
+            function_signature: current.function_signature.clone(),
+        },
+    );
 }

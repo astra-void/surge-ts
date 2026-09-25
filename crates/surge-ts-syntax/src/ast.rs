@@ -21,6 +21,10 @@ pub struct ParsedSource {
     pub parser_errors: Vec<ParserError>,
     /// oxc gave up at a fatal error, so `statements` holds nothing of the file.
     pub parse_aborted: bool,
+    /// A JavaScript file's JSDoc reparse errors (tsgo's
+    /// `checkNonIdentifierName`): parse errors tsc's parser port cannot see,
+    /// since it does not read JSDoc.
+    pub jsdoc_parse_errors: Vec<ParserError>,
     pub is_module: bool,
     /// Leading `/// <reference types="..." />` directives, in source order.
     pub reference_type_directives: Vec<ReferenceTypeDirective>,
@@ -358,6 +362,24 @@ pub enum ParsedVariableKind {
     Var,
     Let,
     Const,
+}
+
+/// The name an import type (`import("m").A.B`) is bound under in the
+/// importing file: the specifier, double-quoted, and the qualifier.
+pub fn import_type_name(specifier: &str, members: &[String]) -> String {
+    let mut name = format!("import(\"{specifier}\")");
+    for member in members {
+        name.push('.');
+        name.push_str(member);
+    }
+    name
+}
+
+/// The specifier and qualifier of an [`import_type_name`].
+pub fn split_import_type_name(name: &str) -> Option<(&str, &str)> {
+    let rest = name.strip_prefix("import(\"")?;
+    let (specifier, qualifier) = rest.split_once("\")")?;
+    Some((specifier, qualifier.strip_prefix('.').unwrap_or(qualifier)))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2127,6 +2149,10 @@ pub struct ParsedFunctionParameter {
     pub initializer: Option<ParsedExpression>,
     pub initializer_span: Option<TextSpan>,
     pub optional: bool,
+    /// A parameter of an untyped JavaScript signature
+    /// (`isUntypedSignatureInJSFile`): `optional` for arity only, so its type
+    /// gains no `undefined`.
+    pub untyped_javascript: bool,
     /// `...args` rest parameter. Marks the signature variadic so arity checks
     /// accept any number of trailing arguments.
     pub rest: bool,

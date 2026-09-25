@@ -19,7 +19,7 @@ use crate::{
 };
 
 use super::spans::text_span_from_oxc_span;
-use super::types::{parse_type_annotation, parse_type_arguments, parse_type_parameters};
+use super::types::parse_type_arguments;
 use super::{
     functions::parse_function_parameter, functions::parse_rest_function_parameter,
     functions::parse_statement_list_as_function_body,
@@ -50,7 +50,61 @@ fn lower_type_assertion(
     }
 }
 
+/// `/** @type {T} */ (e)` is `e as T`, and `/** @satisfies {T} */ (e)` is
+/// `e satisfies T` (tsgo's `makeNewCast`).
+fn lower_jsdoc_cast(
+    expression: &Expression<'_>,
+    (ty, type_span, is_assertion): (crate::ParsedType, crate::TextSpan, bool),
+) -> ParsedExpression {
+    let (expression, expression_span) = parse_expression(expression);
+    if !is_assertion {
+        return ParsedExpression::SatisfiesExpression {
+            expression: Box::new(expression),
+            span: Some(text_span_from_oxc_span(expression_span)),
+            target_type: ty,
+            target_span: Some(type_span),
+        };
+    }
+    if let crate::ParsedType::Named(named_type) = &ty
+        && named_type.name == "const"
+        && named_type.type_arguments.is_empty()
+    {
+        return ParsedExpression::ConstAssertion {
+            expression: Box::new(expression),
+            span: Some(text_span_from_oxc_span(expression_span)),
+        };
+    }
+    ParsedExpression::TypeAssertion {
+        expression: Box::new(expression),
+        expression_span: Some(text_span_from_oxc_span(expression_span)),
+        ty,
+        type_span: Some(type_span),
+        annotation: false,
+    }
+}
+
 pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression, Span) {
+    let (lowered, span) = parse_expression_unannotated(expression);
+    // A JSDoc-typed assignment declaration's value is checked against its
+    // type, which is what the declared member then has.
+    if super::spans::lowering_javascript()
+        && let Some((ty, type_span)) = super::jsdoc::assignment_type_at(expression.span().start, expression.span().end)
+    {
+        return (
+            ParsedExpression::TypeAssertion {
+                expression: Box::new(lowered),
+                expression_span: Some(text_span_from_oxc_span(span)),
+                ty,
+                type_span: Some(type_span),
+                annotation: true,
+            },
+            span,
+        );
+    }
+    (lowered, span)
+}
+
+fn parse_expression_unannotated(expression: &Expression<'_>) -> (ParsedExpression, Span) {
     let parsed_expression = match expression {
         Expression::StringLiteral(string_literal) => {
             ParsedExpression::StringLiteral(string_literal.value.to_string())
@@ -96,6 +150,12 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
             parse_function_expression(function),
         )),
         Expression::ParenthesizedExpression(parenthesized_expression) => {
+            if let Some(cast) = super::jsdoc::cast_at(parenthesized_expression.span.start) {
+                return (
+                    lower_jsdoc_cast(&parenthesized_expression.expression, cast),
+                    parenthesized_expression.span,
+                );
+            }
             return parse_expression(&parenthesized_expression.expression);
         }
         Expression::YieldExpression(yield_expression) => {
@@ -635,6 +695,9 @@ pub(crate) fn parse_call_expression(
 fn parse_call_expression_expression(
     call_expression: &oxc_ast::ast::CallExpression<'_>,
 ) -> Option<ParsedExpression> {
+    if let Some(require) = super::commonjs::require_call_expression(call_expression) {
+        return Some(require);
+    }
     let arguments = call_expression
         .arguments
         .iter()
@@ -1119,10 +1182,10 @@ fn parse_arrow_function_expression(
             parameters.push(rest_parameter);
         }
     }
-    let return_type = arrow_expression
-        .return_type
-        .as_ref()
-        .and_then(|annotation| parse_type_annotation(annotation));
+    let (return_type, return_type_span) = super::jsdoc::annotated_or_jsdoc_return_type(
+        arrow_expression.return_type.as_deref(),
+        arrow_expression.span.start,
+    );
 
     let body_span = arrow_expression
         .get_expression()
@@ -1139,13 +1202,13 @@ fn parse_arrow_function_expression(
     Some(ParsedArrowFunction {
         this_binding: ParsedThisBinding::Inherited,
         name: None,
-        type_parameters: parse_type_parameters(arrow_expression.type_parameters.as_deref()),
+        type_parameters: super::jsdoc::written_or_jsdoc_type_parameters(
+            arrow_expression.type_parameters.as_deref(),
+            arrow_expression.span.start,
+        ),
         parameters,
         return_type,
-        return_type_span: arrow_expression
-            .return_type
-            .as_ref()
-            .map(|annotation| text_span_from_oxc_span(annotation.type_annotation.span())),
+        return_type_span,
         is_async: arrow_expression.r#async,
         is_generator: false,
         body,
@@ -1610,19 +1673,20 @@ fn function_as_arrow(
         parameters.push(rest_parameter);
     }
 
+    let (return_type, return_type_span) = super::jsdoc::annotated_or_jsdoc_return_type(
+        function.return_type.as_deref(),
+        function.span.start,
+    );
     ParsedArrowFunction {
         this_binding,
         name: None,
-        type_parameters: parse_type_parameters(function.type_parameters.as_deref()),
+        type_parameters: super::jsdoc::written_or_jsdoc_type_parameters(
+            function.type_parameters.as_deref(),
+            function.span.start,
+        ),
         parameters,
-        return_type: function
-            .return_type
-            .as_ref()
-            .and_then(|annotation| parse_type_annotation(annotation)),
-        return_type_span: function
-            .return_type
-            .as_ref()
-            .map(|annotation| text_span_from_oxc_span(annotation.type_annotation.span())),
+        return_type,
+        return_type_span,
         is_async: function.r#async,
         is_generator: function.generator,
         body: ParsedArrowFunctionBody::Block(

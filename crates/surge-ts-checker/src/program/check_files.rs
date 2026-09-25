@@ -1417,6 +1417,9 @@ pub(super) fn check_program_file(
 
     emit_bind_diagnostics(parsed_file, ctx);
     emit_grammar_diagnostics(&parsed_file.grammar_diagnostics, ctx);
+    if surge_ts_syntax::is_javascript_file_name(&parsed_file.file_name) {
+        ctx.javascript_expando_objects = Arc::new(javascript_expando_containers(&parsed_file.statements));
+    }
     ctx.parenthesized_expressions = parsed_file.parenthesized_expressions.clone();
     ctx.let_assignments = parsed_file.let_assignments.clone();
     ctx.jsx_factory_uses = parsed_file.jsx_factory_uses.clone();
@@ -1764,4 +1767,36 @@ pub(super) fn check_program_file(
         diagnostics,
         stats,
     }
+}
+
+/// The module-level variables of a JavaScript file whose initializer makes a
+/// member write declare a member (`IsExpandoInitializer`): a function, or an
+/// empty object literal with no annotation. The binder looks the receiver up
+/// in the file's own scope only, so another file's variable is none of them.
+fn javascript_expando_containers(statements: &[surge_ts_syntax::ParsedStatement]) -> std::collections::HashSet<String> {
+    statements
+        .iter()
+        .map(|statement| match statement {
+            surge_ts_syntax::ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } => declaration.as_ref(),
+                _ => statement,
+            },
+            _ => statement,
+        })
+        .filter_map(|statement| match statement {
+            surge_ts_syntax::ParsedStatement::VariableDeclaration(variable)
+                if variable.declared_type.is_none()
+                    && match &variable.initializer {
+                        Some(surge_ts_syntax::ParsedExpression::ObjectLiteral { properties, .. }) => {
+                            properties.is_empty()
+                        }
+                        Some(surge_ts_syntax::ParsedExpression::ArrowFunction(_)) => true,
+                        _ => false,
+                    } =>
+            {
+                Some(variable.name.clone())
+            }
+            _ => None,
+        })
+        .collect()
 }

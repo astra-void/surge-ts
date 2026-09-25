@@ -190,6 +190,20 @@ impl<'a> Source<'a> {
         self.ptr = pos.ptr;
     }
 
+    /// surge: the position `offset` bytes from the start of source.
+    pub(super) fn position_at_offset(&self, offset: u32) -> SourcePosition<'a> {
+        let offset = (offset as usize).min(self.remaining_bytes_from_start());
+        // SAFETY: `offset` is clamped to the source length, so the pointer stays in bounds.
+        let pos = unsafe { SourcePosition::new(self.start.add(offset)) };
+        assert!(pos.ptr == self.end || !is_utf8_cont_byte(unsafe { pos.read() }));
+        pos
+    }
+
+    fn remaining_bytes_from_start(&self) -> usize {
+        // SAFETY: `start` is never after `end`.
+        unsafe { self.end.offset_from(self.start) as usize }
+    }
+
     /// Advance `Source`'s cursor to end.
     #[inline]
     pub(super) fn advance_to_end(&mut self) {

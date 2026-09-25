@@ -234,7 +234,10 @@ fn resolve_named_type_inner(
     // can read the (often large) interface/alias payload while `ctx` is borrowed
     // mutably, without deep-cloning it. The handle owns its payload, so the
     // borrowed declaration below is decoupled from `ctx`.
-    let Some(handle) = ctx.lookup_type_declaration_handle(&named_type.name) else {
+    let handle = ctx
+        .lookup_type_declaration_handle(&named_type.name)
+        .or_else(|| ctx.import_type_declaration_handle(&named_type.name));
+    let Some(handle) = handle else {
         if named_type.name == surge_ts_syntax::EXPRESSION_HERITAGE_BASE {
             return ResolvedType {
                 ty: Type::Any,
@@ -265,6 +268,13 @@ fn resolve_named_type_inner(
             && ctx.resolving_class_heritage
             && crate::program::current_dts_expansion_reason()
                 == crate::program::DtsExpansionReason::InterfaceHeritageResolution;
+        if let Some((specifier, qualifier)) = surge_ts_syntax::split_import_type_name(&named_type.name) {
+            let reported = report_missing_import_type_member(specifier, qualifier, &named_type, ctx);
+            return ResolvedType {
+                ty: if reported { Type::ErrorType } else { Type::Unknown },
+                had_error: true,
+            };
+        }
         let reported = !may_be_unbound_value_base
             && if named_type.name.contains('.') {
                 crate::infer::types::emit_unresolved_qualified_type_head(&named_type, ctx)
@@ -348,6 +358,7 @@ fn resolve_named_type_inner(
         };
     }
 
+    let named_type = javascript_filled_type_arguments(named_type, declaration, ctx);
     if let TypeDeclarationInfo::Interface(interface) = declaration
         && is_generic_declaration
         && !ctx.resolving_class_heritage
@@ -1667,6 +1678,66 @@ mod signature_context_cache_tests {
             "placeholder tuples must not hit"
         );
     }
+}
+
+/// An import type naming what its module does not export: TS2694 on the
+/// module (`"path"`, or `"path".export=` for an `export =` module). Reported
+/// only where the module's types were bound, a module file's import types.
+fn report_missing_import_type_member(
+    specifier: &str,
+    qualifier: &str,
+    named_type: &ParsedNamedType,
+    ctx: &mut CheckerContext,
+) -> bool {
+    if qualifier.is_empty() {
+        return false;
+    }
+    let Some(namespace) = ctx.import_type_namespace(&ctx.file_name, specifier) else {
+        return false;
+    };
+    let path = match &namespace {
+        Type::Object(object) => object
+            .alias_name
+            .as_deref()
+            .and_then(|alias| alias.strip_prefix("typeof import(\""))
+            .and_then(|rest| rest.strip_suffix("\")"))
+            .map(|path| format!("\"{}\"", path.trim_end_matches(".ts").trim_end_matches(".js"))),
+        _ => None,
+    }
+    .unwrap_or_else(|| format!("\"{specifier}\".export="));
+    let member = qualifier.split('.').next().unwrap_or(qualifier);
+    let diagnostic = crate::spans::diagnostic_with_syntax_span(
+        surge_ts_diagnostics::Diagnostic::ts2694(path, member, ctx.file_name.clone()),
+        named_type.span,
+    );
+    ctx.push(diagnostic);
+    true
+}
+
+/// tsc's `fillMissingTypeArguments` for a JavaScript reference to a generic
+/// class or interface: a missing argument is `any`, and too few arguments
+/// are reported only under `noImplicitAny` (`isJsImplicitAny`).
+fn javascript_filled_type_arguments(
+    named_type: std::sync::Arc<ParsedNamedType>,
+    declaration: &TypeDeclarationInfo,
+    ctx: &mut CheckerContext,
+) -> std::sync::Arc<ParsedNamedType> {
+    let TypeDeclarationInfo::Interface(interface) = declaration else {
+        return named_type;
+    };
+    if !surge_ts_syntax::is_javascript_file_name(&ctx.file_name) {
+        return named_type;
+    }
+    let min = super::substitution::min_type_argument_count(&interface.body.type_parameters);
+    if named_type.type_arguments.len() >= min {
+        return named_type;
+    }
+    if ctx.options.no_implicit_any && !ctx.resolving_class_heritage {
+        report_interface_type_argument_count(interface, &named_type, ctx);
+    }
+    let mut filled = (*named_type).clone();
+    filled.type_arguments.resize(min, ParsedType::Any);
+    std::sync::Arc::new(filled)
 }
 
 /// tsc's `getTypeFromClassOrInterfaceReference` arity check, at the reference

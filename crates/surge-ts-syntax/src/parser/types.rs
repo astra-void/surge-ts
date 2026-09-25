@@ -149,6 +149,27 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
         // `infer X` in a conditional `extends` clause. Carrying the name (rather
         // than dropping to `None`) keeps the enclosing conditional alive; the
         // resolver treats the capture as a permissive hole.
+        // `import("m").T`: the module's type export, bound in the importer
+        // under the name written here (`import_type_name`).
+        // An import attribute can pick another resolution mode for the
+        // specifier, which the binding by specifier cannot follow.
+        TSType::TSImportType(import_type) if import_type.options.is_some() => Some(ParsedType::Unknown),
+        TSType::TSImportType(import_type) => {
+            let mut members = Vec::new();
+            let mut spans = Vec::new();
+            if let Some(qualifier) = &import_type.qualifier {
+                flatten_import_type_qualifier(qualifier, &mut members, &mut spans);
+            }
+            let type_arguments = match import_type.type_arguments.as_deref() {
+                Some(arguments) => parse_type_arguments(arguments)?,
+                None => Vec::new(),
+            };
+            Some(ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+                name: crate::import_type_name(&import_type.source.value, &members),
+                span: Some(text_span_from_oxc_span(import_type.span)),
+                type_arguments,
+            })))
+        }
         TSType::TSInferType(infer_type) => Some(ParsedType::Infer(std::sync::Arc::new(
             crate::ParsedInferType {
                 name: infer_type.type_parameter.name.name.to_string(),

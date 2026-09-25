@@ -439,33 +439,25 @@ fn levenshtein_with_max(source: &str, target: &str, max: f64) -> Option<f64> {
     let big = max + 0.01;
     for (row, source_char) in source.iter().enumerate() {
         let row_number = row + 1;
-        current[0] = row_number as f64;
-        let min_column = if (row_number as f64) > max {
-            row_number - max as usize - 1
-        } else {
-            1
-        };
-        let max_column = if (target.len() as f64) > max + row_number as f64 {
-            row_number + max as usize
-        } else {
-            target.len()
-        };
-        let mut column_min = big;
-        for column in 1..min_column {
+        let min_column = ((row_number as f64 - max).ceil() as i64).max(1) as usize;
+        let max_column = ((max + row_number as f64).floor() as usize).min(target.len());
+        let mut column_min = row_number as f64;
+        current[0] = column_min;
+        for column in 1..min_column.min(target.len() + 1) {
             current[column] = big;
         }
-        for column in min_column.max(1)..=max_column {
+        for column in min_column..=max_column {
             let target_char = target[column - 1];
-            let substitution = if *source_char == target_char {
-                previous[column - 1]
-            } else if source_char.to_lowercase().eq(target_char.to_lowercase()) {
+            let substitution = if source_char.to_lowercase().eq(target_char.to_lowercase()) {
                 previous[column - 1] + 0.1
             } else {
                 previous[column - 1] + 2.0
             };
-            let deletion = previous[column] + 1.0;
-            let insertion = current[column - 1] + 1.0;
-            let value = substitution.min(deletion).min(insertion);
+            let value = if *source_char == target_char {
+                previous[column - 1]
+            } else {
+                (previous[column] + 1.0).min((current[column - 1] + 1.0).min(substitution))
+            };
             current[column] = value;
             column_min = column_min.min(value);
         }

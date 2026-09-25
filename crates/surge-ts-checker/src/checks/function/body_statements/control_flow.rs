@@ -1557,6 +1557,17 @@ pub(crate) fn check_function_try_statement(
                 insert_binding_name(binding_name, catch_type, scopes);
             }
             flow_state.begin_branch_capture();
+            // The catch variable is a binding of the clause, assigned when it
+            // is entered: a same-named `var` hoisted out of some block is not
+            // what the handler reads.
+            flow_state.push_scope(std::collections::HashMap::new());
+            if let Some(binding_name) = handler_clause.binding_name.as_ref() {
+                let mut names = Vec::new();
+                catch_binding_names(binding_name, &mut names);
+                for name in names {
+                    flow_state.declare_current(name, crate::flow::AssignmentState::Assigned);
+                }
+            }
             check_function_body(
                 handler_clause.body,
                 with_type_copy_reason(TypeCopyReason::ReturnChecking, || return_type.clone()),
@@ -1564,6 +1575,7 @@ pub(crate) fn check_function_try_statement(
                 flow_state,
                 ctx,
             );
+            flow_state.pop_scope();
             let mut catch_delta = flow_state.finish_branch_capture();
             catch_delta.continues = !catch_exits;
             catch_edge_types = branch_assignment_types(&edge_assignments, scopes);
@@ -1744,4 +1756,27 @@ fn catch_annotation_type(
     }
     ctx.push(diagnostic);
     Type::ErrorType
+}
+
+fn catch_binding_names(binding: &surge_ts_syntax::ParsedBindingName, names: &mut Vec<String>) {
+    match binding {
+        surge_ts_syntax::ParsedBindingName::Identifier { name, .. } => names.push(name.clone()),
+        surge_ts_syntax::ParsedBindingName::ObjectPattern(pattern) => {
+            for element in &pattern.elements {
+                catch_binding_names(&element.binding_name, names);
+            }
+            if let Some(rest) = &pattern.rest {
+                catch_binding_names(rest, names);
+            }
+        }
+        surge_ts_syntax::ParsedBindingName::ArrayPattern(pattern) => {
+            for element in pattern.elements.iter().flatten() {
+                catch_binding_names(element, names);
+            }
+            if let Some(rest) = &pattern.rest {
+                catch_binding_names(rest, names);
+            }
+        }
+        surge_ts_syntax::ParsedBindingName::Unsupported { .. } => {}
+    }
 }

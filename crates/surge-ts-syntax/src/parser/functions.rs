@@ -17,7 +17,7 @@ use crate::{
 
 use super::expressions::parse_expression;
 use super::spans::text_span_from_oxc_span;
-use super::types::{parse_type_annotation, parse_type_parameters};
+use super::types::parse_type_annotation;
 
 pub(crate) fn parse_function_declaration(
     function: &Function<'_>,
@@ -48,31 +48,36 @@ pub(crate) fn parse_function_declaration_named(
             parameters.push(rest_parameter);
         }
     }
-    let return_type = function
-        .return_type
-        .as_ref()
-        .and_then(|annotation| parse_type_annotation(annotation));
-    let return_type_span = function
-        .return_type
-        .as_ref()
-        .map(|annotation| text_span_from_oxc_span(annotation.type_annotation.span()));
+    let (return_type, return_type_span) = super::jsdoc::annotated_or_jsdoc_return_type(
+        function.return_type.as_deref(),
+        function.span.start,
+    );
     let body = function
         .body
         .as_ref()
         .map(|body| parse_statement_list_as_function_body(&body.statements))
         .unwrap_or_default();
+    let jsdoc_this_type = function
+        .this_param
+        .is_none()
+        .then(|| super::jsdoc::this_type_at(function.span.start))
+        .flatten();
 
     Some(ParsedFunctionDeclaration {
-        has_this_parameter: function.this_param.is_some(),
+        has_this_parameter: function.this_param.is_some() || jsdoc_this_type.is_some(),
         this_parameter_type: function
             .this_param
             .as_ref()
             .and_then(|this_param| this_param.type_annotation.as_ref())
-            .and_then(|annotation| parse_type_annotation(annotation)),
+            .and_then(|annotation| parse_type_annotation(annotation))
+            .or(jsdoc_this_type),
         is_declare: function.declare,
         name,
         name_span,
-        type_parameters: parse_type_parameters(function.type_parameters.as_deref()),
+        type_parameters: super::jsdoc::written_or_jsdoc_type_parameters(
+            function.type_parameters.as_deref(),
+            function.span.start,
+        ),
         parameters,
         return_type,
         return_type_span,
@@ -99,6 +104,25 @@ fn parse_return_statement(statement: &Statement<'_>) -> Option<ParsedReturnState
         .map(parse_expression)
         .map(|(expression, span)| (Some(expression), Some(text_span_from_oxc_span(span))))
         .unwrap_or((None, None));
+    // `/** @type {T} */ return e` returns `e as T` (tsgo's `makeNewCast`).
+    let expression = match (expression, super::jsdoc::return_cast_at(return_statement.span.start)) {
+        (Some(expression), Some((ty, type_span, true))) => Some(ParsedExpression::TypeAssertion {
+            expression: Box::new(expression),
+            expression_span,
+            ty,
+            type_span: Some(type_span),
+            annotation: false,
+        }),
+        (Some(expression), Some((ty, type_span, false))) => {
+            Some(ParsedExpression::SatisfiesExpression {
+                expression: Box::new(expression),
+                target_type: ty,
+                span: expression_span,
+                target_span: Some(type_span),
+            })
+        }
+        (expression, _) => expression,
+    };
 
     Some(ParsedReturnStatement {
         expression,
@@ -945,11 +969,17 @@ fn parse_try_statement(try_statement: &TryStatement<'_>) -> Option<ParsedTryStat
 }
 
 fn parse_catch_clause(catch_clause: &CatchClause<'_>) -> crate::ParsedCatchClause {
+    let jsdoc = catch_clause
+        .param
+        .as_ref()
+        .filter(|param| param.type_annotation.is_none())
+        .and_then(|param| super::jsdoc::declared_type_at(param.span.start));
     let declared_type = catch_clause
         .param
         .as_ref()
         .and_then(|param| param.type_annotation.as_ref())
-        .and_then(|annotation| parse_type_annotation(annotation));
+        .and_then(|annotation| parse_type_annotation(annotation))
+        .or_else(|| jsdoc.as_ref().map(|(ty, _)| ty.clone()));
     let binding_name = catch_clause
         .param
         .as_ref()
@@ -959,7 +989,8 @@ fn parse_catch_clause(catch_clause: &CatchClause<'_>) -> crate::ParsedCatchClaus
         .param
         .as_ref()
         .and_then(|param| param.type_annotation.as_ref())
-        .map(|annotation| text_span_from_oxc_span(annotation.type_annotation.span()));
+        .map(|annotation| text_span_from_oxc_span(annotation.type_annotation.span()))
+        .or(jsdoc.map(|(_, span)| span));
 
     crate::ParsedCatchClause {
         binding_name,
@@ -980,10 +1011,16 @@ fn parse_branch_body(statement: &Statement<'_>) -> Vec<ParsedFunctionBodyStateme
 pub(crate) fn parse_function_parameter(
     parameter: &FormalParameter<'_>,
 ) -> Option<ParsedFunctionParameter> {
+    let jsdoc = parameter
+        .type_annotation
+        .is_none()
+        .then(|| super::jsdoc::parameter_at(parameter.span.start))
+        .flatten();
     let declared_type = parameter
         .type_annotation
         .as_ref()
-        .and_then(|annotation| parse_type_annotation(annotation));
+        .and_then(|annotation| parse_type_annotation(annotation))
+        .or_else(|| jsdoc.as_ref().and_then(|jsdoc| jsdoc.ty.as_ref().map(|(ty, _)| ty.clone())));
     let initializer = parameter.initializer.as_ref().map(|expression| {
         let (parsed_expression, _) = parse_expression(expression);
         parsed_expression
@@ -992,18 +1029,21 @@ pub(crate) fn parse_function_parameter(
         .initializer
         .as_ref()
         .map(|initializer| text_span_from_oxc_span(initializer.span()));
+    // tsc's `isUntypedSignatureInJSFile`: a JavaScript signature no JSDoc
+    // types accepts any number of arguments.
+    let untyped_javascript = super::spans::lowering_javascript()
+        && !super::jsdoc::in_typed_signature(parameter.span.start);
 
     Some(ParsedFunctionParameter {
         binding_name: parse_binding_name(&parameter.pattern),
         declared_type,
         initializer,
         initializer_span,
-        // tsc's `isUntypedSignatureInJSFile`: every parameter of a JavaScript
-        // signature is optional. (A JSDoc `@param` would make it typed; surge
-        // does not read JSDoc, so it keeps the untyped reading.)
         optional: parameter.optional
             || parameter.initializer.is_some()
-            || super::spans::lowering_javascript(),
+            || jsdoc.is_some_and(|jsdoc| jsdoc.optional)
+            || untyped_javascript,
+        untyped_javascript,
         rest: false,
         is_parameter_property: parameter.accessibility.is_some() || parameter.readonly,
         is_readonly_parameter_property: parameter.readonly,
@@ -1016,7 +1056,10 @@ pub(crate) fn parse_rest_function_parameter(
     let declared_type = rest
         .type_annotation
         .as_ref()
-        .and_then(|annotation| parse_type_annotation(annotation));
+        .and_then(|annotation| parse_type_annotation(annotation))
+        .or_else(|| {
+            super::jsdoc::parameter_at(rest.span.start).and_then(|jsdoc| jsdoc.ty.map(|(ty, _)| ty))
+        });
 
     Some(ParsedFunctionParameter {
         binding_name: parse_binding_name(&rest.rest.argument),
@@ -1024,6 +1067,7 @@ pub(crate) fn parse_rest_function_parameter(
         initializer: None,
         initializer_span: None,
         optional: false,
+        untyped_javascript: false,
         rest: true,
         is_parameter_property: false,
         is_readonly_parameter_property: false,

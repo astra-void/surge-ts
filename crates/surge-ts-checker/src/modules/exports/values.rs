@@ -577,12 +577,18 @@ pub(crate) fn apply_namespace_members_to_declarations(
 /// *expando*): the value's type is `{ (…): R; x: typeof value }` for every
 /// reader, in this module and in its importers (`Card.Header = Header`, then
 /// `<Card.Header />`). Several writes of one name union their types.
+///
+/// In JavaScript any variable holding a function or an empty object literal
+/// is one too, and `Object.defineProperty(o, "x", descriptor)` declares `x`
+/// the same way (`getInitializerSymbol`, `JSDeclarationKindObjectDefinePropertyValue`).
 pub(crate) fn apply_expando_members(
     statements: &[ParsedStatement],
     exportable_values: &mut SymbolTable,
     ctx: &mut CheckerContext,
 ) {
+    let javascript = surge_ts_syntax::is_javascript_file_name(&ctx.file_name);
     let mut assignments = Vec::new();
+    let mut define_properties = Vec::new();
     for statement in statements {
         match statement {
             ParsedStatement::MemberAssignment(assignment) => assignments.push(assignment.as_ref()),
@@ -593,9 +599,15 @@ pub(crate) fn apply_expando_members(
             ParsedStatement::Block(body) => {
                 collect_nested_member_assignments(body, &[], &mut assignments)
             }
+            ParsedStatement::Expression(expression) if javascript => {
+                if let Some(define) = define_property_declaration(expression) {
+                    define_properties.push(define);
+                }
+            }
             _ => {}
         }
     }
+    let mut members: Vec<(&str, &str, ExpandoValue)> = Vec::new();
     for assignment in assignments {
         let surge_ts_syntax::ParsedExpression::PropertyAccess {
             object,
@@ -608,59 +620,203 @@ pub(crate) fn apply_expando_members(
         let surge_ts_syntax::ParsedExpression::Identifier { name, .. } = object.as_ref() else {
             continue;
         };
+        members.push((name.as_str(), property_name.as_str(), ExpandoValue::Assigned(&assignment.value)));
+    }
+    for (name, property_name, descriptor) in define_properties {
+        members.push((name, property_name, ExpandoValue::Descriptor(descriptor)));
+    }
+
+    // Whether a name is an expando is decided by its declaration, before any
+    // member is added to it; a JavaScript variable only in its own file.
+    let declared_here: std::collections::HashSet<&str> = statements
+        .iter()
+        .filter_map(|statement| match statement {
+            ParsedStatement::VariableDeclaration(variable) => Some(variable.name.as_str()),
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } => {
+                    match declaration.as_ref() {
+                        ParsedStatement::VariableDeclaration(variable) => Some(variable.name.as_str()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let mut containers: std::collections::HashMap<&str, Option<ExpandoContainer>> =
+        std::collections::HashMap::new();
+    for (name, property_name, value) in members {
+        let container = *containers.entry(name).or_insert_with(|| {
+            let symbol = exportable_values.get_own_shared(name)?;
+            expando_container(&symbol, javascript && declared_here.contains(name))
+        });
+        let Some(container) = container else {
+            continue;
+        };
         let Some(symbol) = exportable_values.get_own_shared(name) else {
             continue;
         };
-        let (call_signature, mut properties) = match (&symbol.kind, &symbol.ty) {
-            (SymbolKind::Function | SymbolKind::Const, Type::Function(function)) => {
-                (function.clone(), surge_ts_types::PropertyMap::default())
-            }
-            (SymbolKind::Function | SymbolKind::Const, Type::Object(object)) => {
-                let Some(signature) = object.call_signature() else {
-                    continue;
-                };
-                (signature.clone(), (*object.properties).clone())
-            }
+        let (call_signature, mut properties) = match &symbol.ty {
+            Type::Function(function) => (Some(function.clone()), surge_ts_types::PropertyMap::default()),
+            Type::Object(object) => (object.call_signature().cloned(), (*object.properties).clone()),
             _ => continue,
         };
-        let reported = ctx.diagnostics().len();
-        let inferred =
-            crate::infer::infer_expression(&assignment.value, exportable_values, ctx);
-        ctx.truncate_diagnostics(reported);
-        let crate::infer::InferredExpression::Known(value_type) = inferred else {
-            continue;
-        };
-        if value_type.is_unknown() {
+        if container == ExpandoContainer::Callable && call_signature.is_none() {
             continue;
         }
-        let value_type = crate::checks::var::widen_implicit_variable_initializer_type(
-            SymbolKind::Let,
-            &assignment.value,
-            &value_type,
-            false,
-        );
-        let member_type = match properties.get(property_name.as_str()) {
+        let Some((value_type, readonly)) = expando_member_type(&value, exportable_values, ctx) else {
+            continue;
+        };
+        let member_type = match properties.get(property_name) {
             Some(existing) => surge_ts_types::union_type(vec![existing.ty.clone(), value_type]),
             None => value_type,
         };
         properties.insert(
-            property_name.as_str().into(),
-            surge_ts_types::ObjectProperty::required(member_type),
+            property_name.into(),
+            surge_ts_types::ObjectProperty::required(member_type).with_readonly(readonly),
         );
+        let object = crate::metrics::alloc_object_type(properties, None);
+        let ty = match call_signature {
+            Some(call_signature) => Type::Object(object.with_call_signature(call_signature)),
+            None => Type::Object(object),
+        };
         let kind = symbol.kind;
         let function_signature = symbol.function_signature.clone();
         let _ = exportable_values.insert(
-            name.clone(),
+            name.to_string(),
             SymbolInfo {
-                ty: Type::Object(
-                    crate::metrics::alloc_object_type(properties, None)
-                        .with_call_signature(call_signature.clone()),
-                ),
+                ty,
                 kind,
                 function_signature,
             },
         );
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExpandoContainer {
+    /// A function: its call signature carries the members.
+    Callable,
+    /// A JavaScript variable initialized to an empty object literal.
+    Object,
+}
+
+fn expando_container(symbol: &SymbolInfo, javascript: bool) -> Option<ExpandoContainer> {
+    match (symbol.kind, &symbol.ty) {
+        (SymbolKind::Function | SymbolKind::Const, Type::Function(_)) => Some(ExpandoContainer::Callable),
+        (SymbolKind::Function | SymbolKind::Const, Type::Object(object))
+            if object.call_signature().is_some() =>
+        {
+            Some(ExpandoContainer::Callable)
+        }
+        (SymbolKind::Var | SymbolKind::Let, Type::Function(_)) if javascript => {
+            Some(ExpandoContainer::Callable)
+        }
+        (SymbolKind::Var | SymbolKind::Let | SymbolKind::Const, Type::Object(object))
+            if javascript
+                && object.properties.is_empty()
+                && object.call_signature().is_none()
+                && object.construct_signature().is_none()
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none() =>
+        {
+            Some(ExpandoContainer::Object)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) enum ExpandoValue<'a> {
+    Assigned(&'a surge_ts_syntax::ParsedExpression),
+    Descriptor(&'a surge_ts_syntax::ParsedExpression),
+}
+
+/// The member an expando declaration adds, and whether it is read-only
+/// (`isReadonlyAssignmentDeclaration`).
+pub(crate) fn expando_member_type(
+    value: &ExpandoValue<'_>,
+    exportable_values: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<(Type, bool)> {
+    let expression = match value {
+        ExpandoValue::Assigned(expression) | ExpandoValue::Descriptor(expression) => *expression,
+    };
+    let reported = ctx.diagnostics().len();
+    let inferred = crate::infer::infer_expression(expression, exportable_values, ctx);
+    ctx.truncate_diagnostics(reported);
+    let crate::infer::InferredExpression::Known(value_type) = inferred else {
+        return None;
+    };
+    if value_type.is_unknown() {
+        return None;
+    }
+    match value {
+        ExpandoValue::Assigned(expression) => Some((
+            crate::checks::var::widen_implicit_variable_initializer_type(
+                SymbolKind::Let,
+                expression,
+                &value_type,
+                false,
+            ),
+            false,
+        )),
+        // `getTypeFromPropertyDescriptor`: `value`, else the getter's return,
+        // else the setter's parameter.
+        ExpandoValue::Descriptor(_) => {
+            let has = |name: &str| value_type.get_property_access_type(name);
+            let (ty, readonly) = if let Some(value) = has("value") {
+                let writable = has("writable");
+                // Read-only unless `writable` is anything but a literal `false`.
+                let readonly = match writable {
+                    None => true,
+                    Some(writable) => matches!(writable, Type::BooleanLiteral(false)),
+                };
+                (value, readonly)
+            } else if let Some(Type::Function(getter)) = has("get") {
+                (getter.return_type().clone(), has("set").is_none())
+            } else if let Some(Type::Function(setter)) = has("set") {
+                (setter.parameters().first().cloned().unwrap_or(Type::Any), false)
+            } else {
+                (Type::Any, true)
+            };
+            Some((crate::checks::expr::widen_type(&ty), readonly))
+        }
+    }
+}
+
+/// `Object.defineProperty(o, "name", descriptor)` on a name: the name, the
+/// member and the descriptor.
+pub(crate) fn define_property_declaration(
+    expression: &surge_ts_syntax::ParsedExpression,
+) -> Option<(&str, &str, &surge_ts_syntax::ParsedExpression)> {
+    use surge_ts_syntax::ParsedExpression;
+    let ParsedExpression::PropertyCall {
+        object,
+        property_name,
+        arguments,
+        ..
+    } = expression
+    else {
+        return None;
+    };
+    if property_name != "defineProperty"
+        || !matches!(object.as_ref(), ParsedExpression::Identifier { name, .. } if name == "Object")
+        || arguments.len() != 3
+        || arguments.iter().any(|argument| argument.spread)
+    {
+        return None;
+    }
+    let ParsedExpression::Identifier { name, .. } = &arguments[0].expression else {
+        return None;
+    };
+    let ParsedExpression::StringLiteral(member) = &arguments[1].expression else {
+        return None;
+    };
+    if !matches!(arguments[2].expression, ParsedExpression::ObjectLiteral { .. }) {
+        return None;
+    }
+    Some((name.as_str(), member.as_str(), &arguments[2].expression))
 }
 
 /// tsc's binder declares `fn.x = value` on a function a body declares

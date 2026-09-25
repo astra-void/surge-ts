@@ -11,6 +11,7 @@ use crate::{
 };
 
 mod classes;
+mod commonjs;
 mod entry;
 mod enums;
 mod exports;
@@ -26,6 +27,7 @@ mod import_aliases;
 mod import_calls;
 mod imports;
 mod interfaces;
+mod jsdoc;
 mod json;
 mod reachability;
 mod reads;
@@ -62,6 +64,16 @@ pub use jsx_uses::{JsxRuntimeOptions, entity_root as jsx_entity_root, jsx_runtim
 pub use number_text::js_number_to_string;
 
 fn parse_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {
+    if let Statement::VariableDeclaration(declaration) = statement
+        && let Some(imports) = commonjs::require_imports(declaration)
+    {
+        return Some(imports);
+    }
+    if let Statement::ExpressionStatement(expression_statement) = statement
+        && let Some(exports) = commonjs::export_statement(expression_statement)
+    {
+        return Some(exports);
+    }
     if let Some(module_declaration) = statement.as_module_declaration() {
         return parse_module_declaration(module_declaration);
     }
@@ -195,6 +207,17 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                     annotation.and_then(|annotation| parse_type_annotation(annotation))
                 }
             };
+            let jsdoc_type = declarator
+                .type_annotation
+                .is_none()
+                .then(|| jsdoc::declared_type_at(declarator.span.start))
+                .flatten();
+            let annotation_span = declarator
+                .type_annotation
+                .as_ref()
+                .map(|annotation| text_span_from_oxc_span(annotation.span))
+                .or(jsdoc_type.as_ref().map(|(_, span)| *span));
+            let declared_type = declared_type.or(jsdoc_type.map(|(ty, _)| ty));
             let Some(init) = declarator.init.as_ref() else {
                 // A destructuring declaration with no initializer — an ambient
                 // one — declares its elements with the annotation's types.
@@ -226,22 +249,31 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
 
             let (initializer, initializer_span) = parse_expression(init);
             let initializer_span = Some(text_span_from_oxc_span(initializer_span));
+            let initializer = match jsdoc::initializer_satisfies_at(oxc_span::GetSpan::span(init).start) {
+                Some((ty, span)) => ParsedExpression::SatisfiesExpression {
+                    expression: Box::new(initializer),
+                    span: initializer_span,
+                    target_type: ty,
+                    target_span: Some(span),
+                },
+                None => initializer,
+            };
             // An annotated pattern's elements read from the annotation, which
             // the initializer must be assignable to; an unannotated pattern is
             // the initializer's contextual type.
-            let initializer = match (&declarator.id, declared_type.clone(), declarator.type_annotation.as_ref()) {
+            let initializer = match (&declarator.id, declared_type.clone(), annotation_span) {
                 (
                     BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_),
                     Some(ty),
-                    Some(annotation),
+                    Some(annotation_span),
                 ) => ParsedExpression::TypeAssertion {
                     expression: Box::new(initializer),
                     expression_span: initializer_span,
                     ty,
-                    type_span: Some(text_span_from_oxc_span(annotation.span)),
+                    type_span: Some(annotation_span),
                     annotation: true,
                 },
-                _ if declarator.type_annotation.is_none() => {
+                _ if annotation_span.is_none() => {
                     with_pattern_context(&declarator.id, initializer)
                 }
                 _ => initializer,
@@ -419,6 +451,9 @@ fn parse_expression_statement(
     expression_statement: &ExpressionStatement<'_>,
 ) -> Option<ParsedStatement> {
     match &expression_statement.expression {
+        Expression::CallExpression(call) if let Some(require) = commonjs::require_call_expression(call) => {
+            Some(ParsedStatement::Expression(Box::new(require)))
+        }
         Expression::CallExpression(_) => {
             if let Some(call) = parse_call_expression(match &expression_statement.expression {
                 Expression::CallExpression(call_expression) => call_expression,

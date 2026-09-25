@@ -573,7 +573,8 @@ impl<'a> ContextCollector<'a, '_> {
                 }
                 AstKind::Function(function)
                     if function.r#type == oxc_ast::ast::FunctionType::FunctionDeclaration
-                        && function.this_param.is_none() =>
+                        && function.this_param.is_none()
+                        && super::jsdoc::this_type_at(function.span.start).is_none() =>
                 {
                     self.push(2683, span, &[]);
                     return;
@@ -581,6 +582,7 @@ impl<'a> ContextCollector<'a, '_> {
                 AstKind::Function(function)
                     if function.r#type == oxc_ast::ast::FunctionType::FunctionExpression
                         && function.this_param.is_none()
+                        && super::jsdoc::this_type_at(function.span.start).is_none()
                         && self.function_expression_has_no_contextual_this(index) =>
                 {
                     self.push(2683, span, &[]);
@@ -703,7 +705,9 @@ impl<'a> ContextCollector<'a, '_> {
                     // An annotation written as a function type without a
                     // `this` parameter supplies no `this` either.
                     let untyped = match declarator.type_annotation.as_ref() {
-                        None => true,
+                        None => {
+                            super::jsdoc::declared_type_supplies_this(declarator.span.start) != Some(true)
+                        }
                         Some(annotation) => matches!(
                             &annotation.type_annotation,
                             oxc_ast::ast::TSType::TSFunctionType(signature) if signature.this_param.is_none()
@@ -713,6 +717,16 @@ impl<'a> ContextCollector<'a, '_> {
                         && declarator.init.as_ref().is_some_and(|init| init.span() == child_span);
                 }
                 AstKind::CallExpression(call) => return call.callee.span() == child_span,
+                // `exports.f = function () {}` gives `this` no contextual type
+                // in a CommonJS module (`getContextualThisParameterType`).
+                AstKind::AssignmentExpression(assignment) => {
+                    return assignment.right.span() == child_span
+                        && super::commonjs::is_commonjs_module()
+                        && matches!(
+                            assignment.left.as_member_expression().map(|member| member.object()),
+                            Some(oxc_ast::ast::Expression::Identifier(object)) if object.name == "exports"
+                        );
+                }
                 AstKind::ExpressionStatement(_) => return true,
                 AstKind::ReturnStatement(_) => {
                     return self.stack[..position].iter().rev().find_map(|kind| match kind {

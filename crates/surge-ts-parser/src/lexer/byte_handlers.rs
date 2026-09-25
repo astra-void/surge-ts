@@ -278,6 +278,9 @@ ascii_byte_handler!(ATR(lexer) {
         }
     } else if lexer.next_ascii_byte_eq(b'=') {
         Kind::StarEq
+    } else if lexer.skip_jsdoc_leading_asterisk() {
+        // surge: comment margin inside a multi-line JSDoc type
+        Kind::Skip
     } else {
         Kind::Star
     }

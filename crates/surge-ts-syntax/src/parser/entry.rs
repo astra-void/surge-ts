@@ -371,6 +371,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     // its own path and carries only the value's type.
     if super::is_json_file_name(file_name) {
         return ParsedSource {
+            jsdoc_parse_errors: Vec::new(),
             file_name: file_name.to_string(),
             statements: Vec::new(),
             parser_errors: Vec::new(),
@@ -421,11 +422,43 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     // (it would otherwise run over every dependency `.d.ts`). The conversion
     // still asks each body for its reads; without an index those calls fall back
     // to walking the body, which for a `.d.ts` is nothing.
+    let javascript = is_javascript_file_name(file_name);
+    let commonjs = javascript.then(|| super::commonjs::scan(&parsed.program));
+    let jsdoc_index = javascript
+        .then(|| std::rc::Rc::new(super::jsdoc::build_jsdoc_index(&parsed.program, source_text)));
+    let mut commonjs_findings = Vec::new();
     let (mut module_reads, statements) = if is_declaration_file_name(file_name) {
         (Vec::new(), collect_statements())
     } else {
-        super::spans::with_lowering_source(source_text, is_javascript_file_name(file_name), || {
-            super::reads::with_body_read_index(&parsed.program, collect_statements)
+        super::spans::with_lowering_source(source_text, javascript, || {
+            super::commonjs::with_commonjs(commonjs.clone(), || {
+                super::jsdoc::with_jsdoc_index(jsdoc_index.clone(), || {
+                    let (reads, mut statements) =
+                        super::reads::with_body_read_index(&parsed.program, collect_statements);
+                    if let Some(commonjs) = &commonjs {
+                        // An `@import` binds its names in the file, which surge
+                        // does only for a module.
+                        statements.splice(0..0, super::jsdoc::import_statements());
+                        let is_module = commonjs.module
+                            || parsed.program.source_type.is_module()
+                            || statements.iter().any(|statement| {
+                                matches!(
+                                    statement,
+                                    crate::ParsedStatement::ImportDeclaration(_)
+                                        | crate::ParsedStatement::ExportDeclaration(_)
+                                )
+                            });
+                        // With `module.exports` replaced, a typedef is a member
+                        // of that export (`bindCommonJSTypeExports`), not an
+                        // export beside it.
+                        let exported = is_module && !commonjs.exports_assigned();
+                        statements.extend(super::jsdoc::alias_statements(exported));
+                        statements.extend(super::commonjs::module_variables(&parsed.program, commonjs));
+                        commonjs_findings = super::commonjs::take_findings();
+                    }
+                    (reads, statements)
+                })
+            })
         })
     };
     let jsdoc_link_names = jsdoc_link_reads(&parsed.program.comments, source_text);
@@ -487,8 +520,23 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         &parsed.program,
         source_text,
     ));
+    let jsdoc_parse_errors: Vec<crate::ParserError> = jsdoc_index
+        .as_ref()
+        .map(|index| {
+            super::jsdoc::reparse_errors(index)
+                .into_iter()
+                .map(|(code, span)| crate::ParserError {
+                    code: Some(code),
+                    message: "Identifier expected.".to_string(),
+                    span: Some(span),
+                    span_text: source_text.get(span.start..span.end).map(str::to_string),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     let is_module = parsed.program.source_type.is_module()
+        || commonjs.as_ref().is_some_and(|commonjs| commonjs.module)
         || statements.iter().any(|statement| {
             matches!(
                 statement,
@@ -498,14 +546,24 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         });
 
     let import_call_specifiers =
-        super::import_calls::collect_import_call_specifiers(&parsed.program, source_text);
+        super::import_calls::collect_import_call_specifiers(&parsed.program, source_text, javascript);
 
-    // Grammar findings are reported for hand-written TypeScript only: a
-    // declaration file gets just the top-level `declare` requirement (which
-    // `skipLibCheck` then suppresses), and a `.js` file is not type-checked
-    // the way `checkJs` would need.
+    // A declaration file gets just the top-level `declare` requirement of the
+    // grammar findings (which `skipLibCheck` then suppresses).
     let (grammar_diagnostics, parenthesized_expressions) = if collects_grammar_diagnostics(file_name) {
         super::grammar::collect_grammar_diagnostics(&parsed.program)
+    } else if javascript {
+        // A JavaScript file's are reported only when it is checked (`checkJs`),
+        // its JSDoc's parse errors with them (`JSDocDiagnostics`).
+        super::commonjs::with_commonjs(commonjs.clone(), || {
+            super::jsdoc::with_jsdoc_index(jsdoc_index.clone(), || {
+                let (mut diagnostics, parenthesized) =
+                    super::grammar::collect_grammar_diagnostics(&parsed.program);
+                diagnostics.extend(super::jsdoc::diagnostics());
+                diagnostics.append(&mut commonjs_findings);
+                (diagnostics, parenthesized)
+            })
+        })
     } else if is_declaration_file_name(file_name) {
         let mut diagnostics = Vec::new();
         super::grammar_modifiers::collect_declaration_file_diagnostics(&parsed.program, &mut diagnostics);
@@ -519,7 +577,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     // finds the file clean. The parse drops some of it from the tree
     // (decorators before a declaration that cannot take them), so the grammar
     // walk cannot see it.
-    let collects = collects_grammar_diagnostics(file_name);
+    let collects = collects_grammar_diagnostics(file_name) || javascript;
     parser_errors.retain(|error| {
         let Some(code) = checker_grammar_code(error) else {
             return true;
@@ -542,6 +600,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         Default::default()
     };
     ParsedSource {
+        jsdoc_parse_errors,
         file_name: file_name.to_string(),
         statements,
         parser_errors,

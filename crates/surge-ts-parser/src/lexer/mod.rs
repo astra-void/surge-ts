@@ -105,6 +105,11 @@ pub struct Lexer<'a, C: Config> {
 
     /// Config
     pub(crate) config: C,
+
+    // surge: tsgo's `skipJSDocLeadingAsterisks`. While a JSDoc type is being
+    // read, the first `*` after a line break on each line is comment margin.
+    pub(crate) skip_jsdoc_leading_asterisks: bool,
+    jsdoc_leading_asterisk_skipped: bool,
 }
 
 impl<'a, C: Config> Lexer<'a, C> {
@@ -153,7 +158,30 @@ impl<'a, C: Config> Lexer<'a, C> {
             multi_line_comment_end_finder: None,
             tokens,
             config,
+            skip_jsdoc_leading_asterisks: false,
+            jsdoc_leading_asterisk_skipped: false,
         }
+    }
+
+    /// surge: move the cursor to `offset` so the next token is read from there
+    /// (a JSDoc type expression inside a comment).
+    pub(crate) fn seek(&mut self, offset: u32) {
+        let position = self.source.position_at_offset(offset);
+        self.source.set_position(position);
+        // Unlike a file's first token, the type does not start a line.
+        self.token = Token::default();
+    }
+
+    /// surge: tsgo skips one leading `*` per line inside a JSDoc type.
+    pub(super) fn skip_jsdoc_leading_asterisk(&mut self) -> bool {
+        if self.skip_jsdoc_leading_asterisks
+            && self.token.is_on_new_line()
+            && !self.jsdoc_leading_asterisk_skipped
+        {
+            self.jsdoc_leading_asterisk_skipped = true;
+            return true;
+        }
+        false
     }
 
     /// Backdoor to create a `Lexer` without holding a `UniquePromise`, for benchmarks.
@@ -474,6 +502,7 @@ impl<'a, C: Config> Lexer<'a, C> {
     fn read_next_token(&mut self) -> Kind {
         self.trivia_builder.pure_comment = None;
         self.trivia_builder.has_no_side_effects_comment = false;
+        self.jsdoc_leading_asterisk_skipped = false;
 
         let end_pos = self.source.end();
         loop {

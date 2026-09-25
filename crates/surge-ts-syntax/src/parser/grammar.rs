@@ -1382,8 +1382,13 @@ impl GrammarCollector {
                         is_getter,
                         annotated: if is_getter {
                             method.value.return_type.is_some()
+                                || super::jsdoc::return_type_at(method.value.span.start).is_some()
                         } else {
                             setter_parameter_annotated(&method.value.params)
+                                || method.value.params.items.first().is_some_and(|parameter| {
+                                    super::jsdoc::parameter_at(parameter.span.start)
+                                        .is_some_and(|jsdoc| jsdoc.ty.is_some())
+                                })
                         },
                         has_body: method.value.body.is_some(),
                         private: method.accessibility == Some(oxc_ast::ast::TSAccessibility::Private)
@@ -1405,7 +1410,10 @@ impl GrammarCollector {
             let (key, is_typed, is_static) = match element {
                 ClassElement::PropertyDefinition(property) => (
                     &property.key,
-                    property.type_annotation.is_some() || property.value.is_some() || property.computed,
+                    property.type_annotation.is_some()
+                        || property.value.is_some()
+                        || property.computed
+                        || super::jsdoc::declared_type_at(property.span.start).is_some(),
                     property.r#static,
                 ),
                 ClassElement::AccessorProperty(property) => (

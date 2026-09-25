@@ -305,21 +305,15 @@ fn check_program_with_stats_and_jobs_inner(
     }
 
     // tsc's `SkipTypeChecking`: a `// @ts-nocheck` file keeps only its
-    // syntactic diagnostics. So does a JavaScript file: it declares what a
-    // TypeScript file may use, but surge does not model JavaScript's own
-    // semantics (JSDoc types, CommonJS exports, `this` members), so the
-    // semantic diagnostics tsc gives it under `checkJs` are not reported.
-    // EXPERIMENT KNOB (`SURGE_CHECK_JS=1`): report a checked JavaScript file's
-    // semantic diagnostics, to measure what surge's TypeScript semantics get
-    // right and wrong there.
-    let check_js_experiment = std::env::var_os("SURGE_CHECK_JS").is_some();
+    // syntactic diagnostics, and so does a JavaScript file unless `checkJs`
+    // or `// @ts-check` checks it (`IsCheckJSEnabledForFile`).
     let unchecked_files: HashSet<String> = files
         .iter()
         .filter(|file| {
             let directive = surge_ts_syntax::extract_check_directive(&file.source_text);
             directive == Some(false)
                 || (surge_ts_syntax::is_javascript_file_name(&file.file_name)
-                    && !(check_js_experiment && (directive == Some(true) || options.check_js == Some(true))))
+                    && !(directive == Some(true) || options.check_js == Some(true)))
         })
         .map(|file| file.file_name.clone())
         .collect();
@@ -332,6 +326,15 @@ fn check_program_with_stats_and_jobs_inner(
         mut ctx,
     } = start_program_run(files, prescanned, options, jobs, &store);
     namespaces::report_cross_file_namespace_merges(&mut parsed_files);
+    // tsc's grammar checks are part of checking a file, which an unchecked
+    // JavaScript file never is.
+    for file in &mut parsed_files {
+        if unchecked_files.contains(&file.file_name)
+            && surge_ts_syntax::is_javascript_file_name(&file.file_name)
+        {
+            file.grammar_diagnostics.clear();
+        }
+    }
     ctx.constructor_local_properties = constructor_local_properties_by_file(&parsed_files, &ctx.options);
     let syntax_errors = diagnostics::program_has_syntax_errors(&parsed_files);
     // tsc checks a program whose only syntax errors are oxc's. surge cannot
@@ -341,6 +344,11 @@ fn check_program_with_stats_and_jobs_inner(
     if syntax_errors && !oxc_aborted_only {
         for file in &mut parsed_files {
             file.bind_errors.clear();
+            // A JavaScript file's grammar and JSDoc diagnostics are its
+            // checker's, which a program with syntax errors never runs.
+            if surge_ts_syntax::is_javascript_file_name(&file.file_name) {
+                file.grammar_diagnostics.clear();
+            }
         }
     } else {
         diagnostics::report_global_merge_conflicts(&mut parsed_files);

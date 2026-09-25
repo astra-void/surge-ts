@@ -260,7 +260,11 @@ pub(crate) fn parameter_scope_type(
             // parameter is already an array, so neither widens. This only affects
             // the in-body view; the signature's parameter type (used to check
             // call arguments) is unchanged.
-            if parameter.optional && parameter.initializer.is_none() && !parameter.rest {
+            if parameter.optional
+                && !parameter.untyped_javascript
+                && parameter.initializer.is_none()
+                && !parameter.rest
+            {
                 surge_ts_types::union_type(vec![ty, Type::Undefined])
             } else {
                 ty
@@ -1445,7 +1449,7 @@ fn check_type_predicate_type(
         return;
     }
     let mut parameter_type = parameter_type.clone();
-    if parameter.optional && ctx.options.strict_null_checks {
+    if parameter.optional && !parameter.untyped_javascript && ctx.options.strict_null_checks {
         parameter_type = surge_ts_types::union_type(vec![parameter_type, Type::Undefined]);
     }
     let predicate_type = map_parsed_type_with_substitution(written.clone(), ctx, substitution);

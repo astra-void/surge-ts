@@ -13,9 +13,22 @@ use oxc_ast_visit::Visit;
 #[derive(Default)]
 struct ImportCallCollector {
     specifiers: Vec<String>,
+    /// A JavaScript file's `require("m")` reads a module too.
+    javascript: bool,
 }
 
 impl<'a> Visit<'a> for ImportCallCollector {
+    fn visit_call_expression(&mut self, call: &oxc_ast::ast::CallExpression<'a>) {
+        if self.javascript
+            && matches!(&call.callee, Expression::Identifier(callee) if callee.name == "require")
+            && call.arguments.len() == 1
+            && let Some(oxc_ast::ast::Argument::StringLiteral(literal)) = call.arguments.first()
+        {
+            self.specifiers.push(literal.value.to_string());
+        }
+        oxc_ast_visit::walk::walk_call_expression(self, call);
+    }
+
     fn visit_ts_import_type(&mut self, import_type: &TSImportType<'a>) {
         self.specifiers.push(import_type.source.value.to_string());
         oxc_ast_visit::walk::walk_ts_import_type(self, import_type);
@@ -53,11 +66,12 @@ fn has_import_call(source_text: &str) -> bool {
 pub(crate) fn collect_import_call_specifiers(
     program: &Program<'_>,
     source_text: &str,
+    javascript: bool,
 ) -> Vec<String> {
-    if !has_import_call(source_text) {
+    if !has_import_call(source_text) && !(javascript && source_text.contains("require")) {
         return Vec::new();
     }
-    let mut collector = ImportCallCollector::default();
+    let mut collector = ImportCallCollector { javascript, ..ImportCallCollector::default() };
     collector.visit_program(program);
 
     // Bundled `.d.ts` files repeat the same `import("pkg")` on dozens of

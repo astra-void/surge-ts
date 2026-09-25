@@ -223,6 +223,8 @@ pub(super) fn parse_program_file(
             tsc_globals = tsc_errors.globals.map(std::sync::Arc::new);
         }
     }
+    // Checked like any parse error: they stop the program's semantic checks.
+    parsed.parser_errors.append(&mut parsed.jsdoc_parse_errors);
     let parse_duration = parse_start.elapsed();
     let file_name = parsed.file_name;
     record_program_timing(timings, |timings| match file_kind {

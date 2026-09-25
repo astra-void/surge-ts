@@ -373,9 +373,36 @@ mod parser_parse {
             );
             parser.parse_expression()
         }
+
+        /// surge: parse the JSDoc type expression written at `start`. See
+        /// [`JsDocTypeReturn`].
+        pub fn parse_jsdoc_type(self, start: u32) -> JsDocTypeReturn<'a> {
+            let unique = UniquePromise::new();
+            let parser = ParserImpl::new(
+                self.allocator,
+                self.source_text,
+                self.source_type,
+                self.options,
+                self.config,
+                unique,
+            );
+            parser.parse_jsdoc_type(start)
+        }
     }
 }
 use parser_parse::UniquePromise;
+
+/// surge: the result of [`Parser::parse_jsdoc_type`].
+pub struct JsDocTypeReturn<'a> {
+    /// The type, or `None` when it did not parse.
+    pub ty: Option<oxc_ast::ast::TSType<'a>>,
+    /// A leading `...`: a rest parameter's element type.
+    pub variadic: bool,
+    /// A trailing `=`: an optional parameter.
+    pub optional: bool,
+    /// Where parsing stopped: the start of the token after the type.
+    pub end: u32,
+}
 
 /// Implementation of parser.
 /// `Parser` is just a public wrapper, the guts of the implementation is in this type.
@@ -424,6 +451,10 @@ struct ParserImpl<'a, C: ParserConfig> {
 
     /// Precomputed typescript detection
     is_ts: bool,
+
+    /// surge: parsing a JSDoc type expression (`*` is the all type, and a
+    /// `.<` after a name opens its type arguments).
+    jsdoc_type: bool,
 }
 
 impl<'a, C: ParserConfig> ParserImpl<'a, C> {
@@ -456,7 +487,25 @@ impl<'a, C: ParserConfig> ParserImpl<'a, C> {
             ast: AstBuilder::new(allocator),
             module_record_builder: ModuleRecordBuilder::new(allocator, source_type),
             is_ts: source_type.is_typescript(),
+            jsdoc_type: false,
         }
+    }
+
+    /// surge: tsgo's `parseJSDocType` over the type written at `start`: an
+    /// optional leading `...`, the type, and an optional trailing `=`. The
+    /// source text ends where the enclosing comment's `*/` begins.
+    pub fn parse_jsdoc_type(mut self, start: u32) -> JsDocTypeReturn<'a> {
+        self.jsdoc_type = true;
+        self.lexer.seek(start);
+        self.lexer.skip_jsdoc_leading_asterisks = true;
+        self.bump_any();
+        let variadic = self.eat(Kind::Dot3);
+        let ty = self.parse_type_or_type_predicate_for_jsdoc();
+        self.lexer.skip_jsdoc_leading_asterisks = false;
+        let optional = self.eat(Kind::Eq);
+        let end = self.cur_token().start();
+        let failed = self.fatal_error.is_some();
+        JsDocTypeReturn { ty: if failed { None } else { Some(ty) }, variadic, optional, end }
     }
 
     /// Main entry point

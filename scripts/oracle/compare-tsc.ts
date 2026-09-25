@@ -1089,6 +1089,7 @@ export const fixturePresets: Record<string, string> = {
   'variable-declaration-list-grammar': path.join(workspaceRoot, 'tests/compat-projects/variable-declaration-list-grammar/tsconfig.json'),
   'binding-patterns-and-nested-classes': path.join(workspaceRoot, 'tests/compat-projects/binding-patterns-and-nested-classes/tsconfig.json'),
   'namespace-values-and-generators': path.join(workspaceRoot, 'tests/compat-projects/namespace-values-and-generators/tsconfig.json'),
+  'javascript-jsdoc-and-commonjs': path.join(workspaceRoot, 'tests/compat-projects/javascript-jsdoc-and-commonjs/tsconfig.json'),
   'mapped-type-member-grammar': path.join(workspaceRoot, 'tests/compat-projects/mapped-type-member-grammar/tsconfig.json'),
 };
 

@@ -751,6 +751,10 @@ pub(crate) struct TypeDeclarationHandle {
 }
 
 impl TypeDeclarationHandle {
+    pub(crate) fn new(declaration: TypeDeclarationInfo) -> Self {
+        Self { declaration: Arc::new(declaration) }
+    }
+
     pub(crate) fn get(&self) -> &TypeDeclarationInfo {
         self.declaration.as_ref()
     }

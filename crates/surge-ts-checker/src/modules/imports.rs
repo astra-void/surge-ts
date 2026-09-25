@@ -513,20 +513,36 @@ pub(crate) fn register_import_type_namespaces(
         let Some((export_table, _scope, resolved_index)) = resolved else {
             continue;
         };
-        let namespace_type = namespace_export_object_type(&export_table);
-        let namespace_type = match resolved_index.and_then(|index| program_files.get(index)) {
-            Some(resolved_file) => {
-                tag_namespace_type_with_module_path(namespace_type, &resolved_file.file_name)
+        // `typeof import("m")` is the type of the module's symbol, which for
+        // an `export =` module is the assigned value (`resolveExternalModuleSymbol`).
+        let namespace_type = match &export_table.export_assignment_symbol {
+            Some(assignment) => assignment.ty.clone(),
+            None => {
+                let namespace_type = namespace_export_object_type(&export_table);
+                match resolved_index.and_then(|index| program_files.get(index)) {
+                    Some(resolved_file) => {
+                        tag_namespace_type_with_module_path(namespace_type, &resolved_file.file_name)
+                    }
+                    None => namespace_type,
+                }
             }
-            None => namespace_type,
+        };
+        let export_assignment = export_table.export_assignment_symbol.is_some()
+            || export_table.type_declarations.get(EXPORT_ASSIGNMENT_NAME).is_some();
+        let target = || crate::context::ImportTypeTarget {
+            namespace: namespace_type.clone(),
+            declarations: export_table.type_declarations.clone(),
+            scope: _scope.clone(),
+            export_assignment,
+            attached: Default::default(),
         };
         let canonical = crate::paths::canonicalize_if_exists_arc(std::path::Path::new(
             &parsed_file.file_name,
         ));
         if *canonical != *parsed_file.file_name {
-            ctx.register_import_type_namespace(&canonical, specifier, namespace_type.clone());
+            ctx.register_import_type_namespace(&canonical, specifier, target());
         }
-        ctx.register_import_type_namespace(&parsed_file.file_name, specifier, namespace_type);
+        ctx.register_import_type_namespace(&parsed_file.file_name, specifier, target());
     }
 }
 
