@@ -388,15 +388,10 @@ pub(crate) fn check_call_like_with_expected_type(
             let is_tagged_template = arguments.first().is_some_and(|argument| {
                 matches!(argument.expression, ParsedExpression::TemplateStringsArray { .. })
             });
-            let diagnostic = match other {
-                Type::Object(object)
-                    if !is_tagged_template
-                        && object.construct_signature().is_some()
-                        && object.call_signature().is_none() =>
-                {
-                    Diagnostic::ts2348(other.name(), ctx.file_name.clone())
-                }
-                _ => Diagnostic::ts2349(ctx.file_name.clone()),
+            let diagnostic = if is_tagged_template {
+                Diagnostic::ts2349(ctx.file_name.clone())
+            } else {
+                not_callable_diagnostic(&other, ctx)
             };
             ctx.push(diagnostic_with_syntax_span(diagnostic, callee_span));
             None
@@ -3659,4 +3654,15 @@ fn is_unnarrowable_literal(expression: &ParsedExpression) -> bool {
             | ParsedExpression::ArrayLiteral { .. }
             | ParsedExpression::TemplateLiteral { .. }
     )
+}
+
+/// tsc's `resolveCallExpression` for a callee with no call signature: one that
+/// can only be constructed is TS2348, which names it and suggests `new`.
+pub(crate) fn not_callable_diagnostic(callee: &Type, ctx: &CheckerContext) -> Diagnostic {
+    match callee {
+        Type::Object(object) if object.construct_signature().is_some() && object.call_signature().is_none() => {
+            Diagnostic::ts2348(callee.name(), ctx.file_name.clone())
+        }
+        _ => Diagnostic::ts2349(ctx.file_name.clone()),
+    }
 }

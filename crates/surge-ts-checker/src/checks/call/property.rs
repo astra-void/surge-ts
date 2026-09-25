@@ -899,9 +899,9 @@ pub(crate) fn check_property_call_like(
                         )?;
                         result_types.push(return_type);
                     }
-                    _ => {
+                    other => {
                         ctx.push(diagnostic_with_syntax_span(
-                            Diagnostic::ts2349(ctx.file_name.clone()),
+                            super::not_callable_diagnostic(&other, ctx),
                             crate::spans::choose_span(
                                 property_span,
                                 crate::spans::choose_span(call_span, object_span),
@@ -1057,9 +1057,9 @@ pub(crate) fn check_property_call_like(
                     symbols,
                     ctx,
                 ),
-                _ => {
+                other => {
                     ctx.push(diagnostic_with_syntax_span(
-                        Diagnostic::ts2349(ctx.file_name.clone()),
+                        super::not_callable_diagnostic(&other, ctx),
                         crate::spans::choose_span(
                             property_span,
                             crate::spans::choose_span(call_span, object_span),
@@ -1449,9 +1449,9 @@ pub(crate) fn check_optional_property_call(
                     }
                     Type::Any => result_types.push(Type::Any),
                     Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => return None,
-                    _ => {
+                    other => {
                         ctx.push(diagnostic_with_syntax_span(
-                            Diagnostic::ts2349(ctx.file_name.clone()),
+                            super::not_callable_diagnostic(&other, ctx),
                             crate::spans::choose_span(
                                 property_span,
                                 crate::spans::choose_span(call_span, object_span),
@@ -1583,9 +1583,9 @@ pub(crate) fn check_optional_property_call(
                     evaluate_arguments_context_free(object, arguments, symbols, ctx);
                     None
                 },
-                _ => {
+                other => {
                     ctx.push(diagnostic_with_syntax_span(
-                        Diagnostic::ts2349(ctx.file_name.clone()),
+                        super::not_callable_diagnostic(&other, ctx),
                         crate::spans::choose_span(
                             property_span,
                             crate::spans::choose_span(call_span, object_span),

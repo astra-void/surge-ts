@@ -1835,9 +1835,17 @@ fn merge_namespace_value_objects(previous: &Type, current: &Type) -> Type {
                 crate::metrics::alloc_object_type(current.properties.as_ref().clone(), None)
                     .with_call_signature(function.clone()),
             ),
+            (Type::Object(previous), Type::Function(function)) => Type::Object(
+                crate::metrics::alloc_object_type(previous.properties.as_ref().clone(), None)
+                    .with_call_signature(function.clone()),
+            ),
             _ => current.clone(),
         };
     };
+    let call_signature = previous.call_signature.clone().or_else(|| current.call_signature.clone());
+    // A class merged with a namespace stays constructable.
+    let construct_signature =
+        previous.construct_signature.clone().or_else(|| current.construct_signature.clone());
     let mut properties = previous.properties.as_ref().clone();
     for (name, property) in current.properties.iter() {
         let merged = match properties.get(name) {
@@ -1849,7 +1857,10 @@ fn merge_namespace_value_objects(previous: &Type, current: &Type) -> Type {
         };
         properties.insert(name.clone(), merged);
     }
-    Type::Object(crate::metrics::alloc_object_type(properties, None))
+    let mut merged = crate::metrics::alloc_object_type(properties, None);
+    merged.call_signature = call_signature;
+    merged.construct_signature = construct_signature;
+    Type::Object(merged)
 }
 
 pub(crate) fn namespace_value_object_type(namespace: &ParsedNamespaceDeclaration) -> Type {
@@ -1874,7 +1885,8 @@ pub(crate) fn namespace_value_object_type_resolved(
 ) -> Type {
     let mut properties = surge_ts_types::PropertyMap::default();
     fill_namespace_value_properties(namespace, &mut properties);
-    resolve_namespace_value_annotations(namespace, &namespace.name, &mut properties, ctx);
+    let ambient = namespace.is_declare || surge_ts_syntax::is_declaration_file_name(&ctx.file_name);
+    resolve_namespace_value_annotations(namespace, &namespace.name, ambient, &mut properties, ctx);
     Type::Object(crate::metrics::alloc_object_type(properties, None))
 }
 
@@ -1882,12 +1894,20 @@ pub(crate) fn namespace_value_object_type_resolved(
 /// leaves for annotated `let`/`const`/`var` members with the resolved
 /// annotation. Members without an annotation, and every other member kind, keep
 /// what the permissive pass produced.
+///
+/// A namespace written in source (not ambient) is tsc's: only what it exports
+/// is a member of its value, a function is its written signature, and a
+/// variable initialized with a literal has the literal's declared type.
 fn resolve_namespace_value_annotations(
     namespace: &ParsedNamespaceDeclaration,
     prefix: &str,
+    ambient: bool,
     properties: &mut surge_ts_types::PropertyMap,
     ctx: &mut CheckerContext,
 ) {
+    if !ambient {
+        resolve_source_namespace_members(namespace, prefix, properties, ctx);
+    }
     for statement in &namespace.statements {
         match peel_exported_statement(statement) {
             ParsedStatement::VariableDeclaration(variable) => {
@@ -1936,7 +1956,7 @@ fn resolve_namespace_value_annotations(
                 // already contributed, so the merge `fill_namespace_value_properties`
                 // performed is not thrown away when the annotations resolve —
                 // the call signature of a function it merged into included.
-                let (mut inner_properties, call_signature) = match properties
+                let (mut inner_properties, call_signature, construct_signature) = match properties
                     .get(member_name)
                     .map(|property| &property.ty)
                 {
@@ -1945,18 +1965,26 @@ fn resolve_namespace_value_annotations(
                     Some(Type::Object(previous)) => (
                         previous.properties.as_ref().clone(),
                         previous.call_signature.clone(),
+                        previous.construct_signature.clone(),
                     ),
-                    _ => (surge_ts_types::PropertyMap::default(), None),
+                    Some(Type::Function(function)) => (
+                        surge_ts_types::PropertyMap::default(),
+                        Some(std::sync::Arc::new(function.clone())),
+                        None,
+                    ),
+                    _ => (surge_ts_types::PropertyMap::default(), None, None),
                 };
                 fill_namespace_value_properties(inner, &mut inner_properties);
                 resolve_namespace_value_annotations(
                     inner,
                     &inner_prefix,
+                    ambient || inner.is_declare,
                     &mut inner_properties,
                     ctx,
                 );
                 let mut object = crate::metrics::alloc_object_type(inner_properties, None);
                 object.call_signature = call_signature;
+                object.construct_signature = construct_signature;
                 properties.insert(
                     member_name.into(),
                     surge_ts_types::ObjectProperty::required(Type::Object(object)),
@@ -1967,7 +1995,86 @@ fn resolve_namespace_value_annotations(
     }
 }
 
-/// Accumulate a `declare namespace`'s value members into `properties`. Split into
+/// The value members of a namespace written in source, as tsc's namespace
+/// exports: an unexported declaration is no member, a non-generic function
+/// declared once is its written signature, a non-generic class its
+/// constructor, and an unannotated variable initialized with a literal has the
+/// literal's type (widened unless `const`).
+fn resolve_source_namespace_members(
+    namespace: &ParsedNamespaceDeclaration,
+    prefix: &str,
+    properties: &mut surge_ts_types::PropertyMap,
+    ctx: &mut CheckerContext,
+) {
+    use surge_ts_syntax::{ParsedExpression, ParsedVariableKind};
+    let mut function_declarations: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for statement in &namespace.statements {
+        if let ParsedStatement::FunctionDeclaration(function) = peel_exported_statement(statement) {
+            *function_declarations.entry(function.name.as_str()).or_default() += 1;
+        }
+    }
+    for statement in &namespace.statements {
+        let declaration = peel_exported_statement(statement);
+        let exported = !std::ptr::eq(declaration, statement);
+        let name = match declaration {
+            ParsedStatement::FunctionDeclaration(function) => function.name.as_str(),
+            ParsedStatement::VariableDeclaration(variable) => variable.name.as_str(),
+            ParsedStatement::ClassDeclaration(class) => class.name.as_str(),
+            _ => continue,
+        };
+        if !exported {
+            properties.shift_remove(name);
+            continue;
+        }
+        match declaration {
+            ParsedStatement::FunctionDeclaration(function)
+                if function.type_parameters.is_empty() && function_declarations.get(name) == Some(&1) =>
+            {
+                let checkpoint = ctx.diagnostics().len();
+                let function_type = map_member_signature_in_namespace_scope(
+                    &function.parameters,
+                    function.return_type.as_ref(),
+                    &function.type_parameters,
+                    prefix,
+                    ctx,
+                );
+                ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+                properties.insert(name.into(), surge_ts_types::ObjectProperty::required(Type::Function(function_type)));
+            }
+            ParsedStatement::ClassDeclaration(class) if class.type_parameters.is_empty() && !class.is_declare => {
+                let checkpoint = ctx.diagnostics().len();
+                ctx.namespace_member_resolution_depth += 1;
+                ctx.namespace_member_prefix_stack.push(prefix.to_string());
+                let constructor = crate::program::build_class_value_symbol(class, ctx).ty;
+                ctx.namespace_member_prefix_stack.pop();
+                ctx.namespace_member_resolution_depth -= 1;
+                ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+                if !constructor.is_unmodelled() {
+                    properties.insert(name.into(), surge_ts_types::ObjectProperty::required(constructor));
+                }
+            }
+            ParsedStatement::VariableDeclaration(variable) if variable.declared_type.is_none() => {
+                let literal = match variable.initializer.as_ref() {
+                    Some(ParsedExpression::StringLiteral(value)) => Type::StringLiteral(value.clone()),
+                    Some(ParsedExpression::NumberLiteral(value)) => {
+                        Type::NumberLiteral(surge_ts_types::NumberLiteralType { value: value.clone() })
+                    }
+                    Some(ParsedExpression::BooleanLiteral(value)) => Type::BooleanLiteral(*value),
+                    _ => continue,
+                };
+                let is_const = matches!(variable.kind, ParsedVariableKind::Const);
+                let ty = if is_const { literal } else { literal.base_primitive().unwrap_or(literal) };
+                properties.insert(
+                    name.into(),
+                    surge_ts_types::ObjectProperty::required(ty).with_readonly(is_const),
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Accumulate a `declare namespace`'s value members into `properties`./// Accumulate a `declare namespace`'s value members into `properties`. Split into
 /// its own function so a namespace declared across multiple merged blocks (e.g.
 /// roblox-ts's `math`, declared with `noise`/`clamp` in one file and the Lua math
 /// surface in another) can be assembled into a single value object.

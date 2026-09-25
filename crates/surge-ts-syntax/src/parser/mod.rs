@@ -1374,6 +1374,8 @@ pub(crate) fn parse_ts_module_declaration(
         }
     };
 
+    let mut statements = statements;
+    mark_ambient_namespaces(&mut statements);
     vec![ParsedStatement::DeclareModuleDeclaration(Box::new(
         ParsedDeclareModuleDeclaration {
             module_specifier,
@@ -1383,6 +1385,26 @@ pub(crate) fn parse_ts_module_declaration(
             is_shorthand: module.body.is_none(),
         },
     ))]
+}
+
+/// A namespace inside an ambient module or `declare global` block is ambient
+/// like one written `declare namespace`: its declarations are exported
+/// without `export`.
+fn mark_ambient_namespaces(statements: &mut [ParsedStatement]) {
+    for statement in statements {
+        match statement {
+            ParsedStatement::NamespaceDeclaration(namespace) => {
+                namespace.is_declare = true;
+                mark_ambient_namespaces(&mut namespace.statements);
+            }
+            ParsedStatement::ExportDeclaration(export) => {
+                if let crate::ParsedExportDeclaration::Statement { declaration, .. } = export.as_mut() {
+                    mark_ambient_namespaces(std::slice::from_mut(declaration.as_mut()));
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn parse_ts_namespace_declaration(
@@ -1442,6 +1464,7 @@ fn parse_ts_global_declaration(global: &TSGlobalDeclaration<'_>) -> Vec<ParsedSt
         .flatten()
         .collect();
     enums::merge_lowered_enum_declarations(&mut statements);
+    mark_ambient_namespaces(&mut statements);
 
     vec![ParsedStatement::DeclareModuleDeclaration(Box::new(
         ParsedDeclareModuleDeclaration {

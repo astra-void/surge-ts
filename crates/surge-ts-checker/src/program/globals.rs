@@ -233,9 +233,23 @@ fn merge_namespace_value(
     right: &surge_ts_types::Type,
 ) -> surge_ts_types::Type {
     use surge_ts_types::Type;
-    let (Type::Object(left_object), Type::Object(right_object)) = (left, right) else {
-        return left.clone();
+    // A function merges with a namespace of the same name into one callable
+    // value carrying the namespace's members.
+    let (left_object, right_object) = match (left, right) {
+        (Type::Object(left_object), Type::Object(right_object)) => (left_object, right_object),
+        (Type::Function(function), Type::Object(object)) | (Type::Object(object), Type::Function(function))
+            if object.call_signature.is_none() =>
+        {
+            return Type::Object(
+                crate::metrics::alloc_object_type(object.properties.as_ref().clone(), None)
+                    .with_call_signature(function.clone()),
+            );
+        }
+        _ => return left.clone(),
     };
+    let call_signature = left_object.call_signature.clone().or_else(|| right_object.call_signature.clone());
+    let construct_signature =
+        left_object.construct_signature.clone().or_else(|| right_object.construct_signature.clone());
     let mut properties = left_object.properties.as_ref().clone();
     for (name, property) in right_object.properties.iter() {
         match properties.get(name).cloned() {
@@ -249,7 +263,10 @@ fn merge_namespace_value(
             }
         }
     }
-    Type::Object(crate::metrics::alloc_object_type(properties, None))
+    let mut merged = crate::metrics::alloc_object_type(properties, None);
+    merged.call_signature = call_signature;
+    merged.construct_signature = construct_signature;
+    Type::Object(merged)
 }
 
 /// The scripts' values as a module sees them. tsc merges every script's locals
