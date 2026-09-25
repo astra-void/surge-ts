@@ -5502,5 +5502,45 @@
     "source": "typescript",
     "arity": 0,
     "support": "emitted"
+  },
+  {
+    "code": "TS2506",
+    "category": "Error",
+    "message": "'{0}' is referenced directly or indirectly in its own base expression.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2310",
+    "category": "Error",
+    "message": "Type '{0}' recursively references itself as a base type.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1123",
+    "category": "Error",
+    "message": "Variable declaration list cannot be empty.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1009",
+    "category": "Error",
+    "message": "Trailing comma not allowed.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2320",
+    "category": "Error",
+    "message": "Interface '{0}' cannot simultaneously extend types '{1}' and '{2}'.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
   }
 ]

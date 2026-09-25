@@ -10,6 +10,7 @@
 mod ast;
 mod binder;
 mod chars;
+mod checker_grammar;
 mod flags;
 mod kind;
 mod merge;
@@ -244,7 +245,8 @@ pub fn file_diagnostics(text: &str, options: &ParseOptions) -> FileDiagnostics {
         }
         _ => Vec::new(),
     };
-    let (bind, globals) = binder.finish();
+    let (mut bind, globals) = binder.finish();
+    bind.extend(checker_grammar::checker_grammar_diagnostics(&parsed, text));
     let regular_expressions: Vec<Diagnostic> = parsed
         .regular_expression_literals()
         .into_iter()

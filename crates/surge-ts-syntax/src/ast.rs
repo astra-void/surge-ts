@@ -1975,7 +1975,7 @@ pub enum ParsedFunctionBodyStatement {
     /// [`ParsedFunctionBodyStatement::TypeAlias`].
     Interface(Box<ParsedInterfaceDeclaration>),
     /// A body-local `class`. Contributes both a type and a value binding; its
-    /// member bodies are not separately checked.
+    /// members are checked once its block is bound.
     Class(Box<ParsedClassDeclaration>),
 }
 

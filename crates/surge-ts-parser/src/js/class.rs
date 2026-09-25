@@ -126,7 +126,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         loop {
             match self.cur_kind() {
                 Kind::Extends => {
-                    if extends.is_some() {
+                    let already_seen = extends.is_some();
+                    if already_seen {
                         self.error(diagnostics::extends_clause_already_seen(
                             self.cur_token().span(),
                         ));
@@ -136,7 +137,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                             implements_span,
                         ));
                     }
-                    extends = Some(self.parse_extends_clause());
+                    let clause = self.parse_extends_clause();
+                    // surge: TS2506 — tsc's base is the first `extends` clause's type
+                    // (`getEffectiveBaseTypeNode`); a repeated clause is parsed and dropped.
+                    if !already_seen {
+                        extends = Some(clause);
+                    }
                 }
                 Kind::Implements => {
                     if let Some((implements_span, _)) = implements {

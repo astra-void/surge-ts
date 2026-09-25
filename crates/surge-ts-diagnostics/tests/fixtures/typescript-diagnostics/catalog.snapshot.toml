@@ -5504,3 +5504,43 @@ support = "emitted"
 message = "All type parameters are unused."
 arity = 0
 
+[[diagnostic]]
+code = "TS2506"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is referenced directly or indirectly in its own base expression."
+arity = 1
+
+[[diagnostic]]
+code = "TS2310"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' recursively references itself as a base type."
+arity = 1
+
+[[diagnostic]]
+code = "TS1123"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Variable declaration list cannot be empty."
+arity = 0
+
+[[diagnostic]]
+code = "TS1009"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Trailing comma not allowed."
+arity = 0
+
+[[diagnostic]]
+code = "TS2320"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Interface '{0}' cannot simultaneously extend types '{1}' and '{2}'."
+arity = 3
+

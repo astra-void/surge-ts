@@ -1272,13 +1272,8 @@ fn check_implemented_interfaces(class: &ParsedClassDeclaration, ctx: &mut Checke
             continue;
         }
         // tsc reports the member-specific errors first and falls back to the
-        // broad one only when that walk found nothing. A clause carrying type
-        // arguments is left to the broad check: resolving the interface by name
-        // alone would compare the class against its *uninstantiated* members
-        // (`v: number` against `v: T`).
-        if implemented.type_arguments.is_empty()
-            && super::heritage::report_incompatible_heritage_members(class, &implemented.name, ctx)
-        {
+        // broad one only when that walk found nothing.
+        if super::heritage::report_incompatible_heritage_members(class, implemented, ctx) {
             continue;
         }
         let Some(required) = unimplemented_interface_members(&implemented.name, &declared, ctx)
@@ -1309,16 +1304,15 @@ fn check_extended_base_class(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
         return;
     }
     for base in &class.extends {
-        if !base.type_arguments.is_empty() {
-            continue;
-        }
         // A base that names nothing is already reported, at its own span.
         if ctx.lookup_type_declaration(&base.name).is_none()
             && ctx.symbols.get(&base.name).is_none()
         {
             continue;
         }
-        if !super::heritage::report_incompatible_heritage_members(class, &base.name, ctx) {
+        if !super::heritage::report_incompatible_heritage_members(class, base, ctx)
+            && base.type_arguments.is_empty()
+        {
             super::heritage::check_base_class_relation(class, &base.name, ctx);
         }
     }
@@ -1558,6 +1552,28 @@ fn check_decorator_call(
 }
 
 pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    check_class_declaration_parts(class, true, ctx);
+}
+
+/// A class declared in a function body, checked once the body is bound, as a
+/// nested function is: its members run later and see every enclosing binding
+/// at its declared type. Its heritage and computed names were checked where
+/// its statement is.
+pub(crate) fn check_nested_class_declaration(
+    class: &ParsedClassDeclaration,
+    enclosing: &crate::symbols::SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    if class.is_declare {
+        return;
+    }
+    let symbols = enclosing.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols);
+    check_class_declaration_parts(class, false, ctx);
+    ctx.symbols = saved_symbols;
+}
+
+fn check_class_declaration_parts(class: &ParsedClassDeclaration, check_head: bool, ctx: &mut CheckerContext) {
     crate::checks::function::check_type_parameter_declarations(&class.type_parameters, ctx);
     crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
         for member in &class.members {
@@ -1569,8 +1585,11 @@ pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut 
             }
         }
     });
-    let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
-    check_class_head_expressions(class, &symbols, ctx);
+    super::heritage::report_circular_base(&class.name, class.name_span, &class.type_parameters, true, ctx);
+    if check_head {
+        let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+        check_class_head_expressions(class, &symbols, ctx);
+    }
     // Everything checked from here on is lexically inside the class, which is
     // what decides whether its `private`/`protected` members are reachable.
     let lineage = crate::checks::expr::enclosing_class_lineage(class, ctx);

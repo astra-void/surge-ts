@@ -88,6 +88,9 @@ pub(crate) struct ParsedProgramFile {
     /// tsc's binder ran over the file: its reports of the codes only the
     /// binder makes are the file's only ones.
     pub(crate) tsc_bound: bool,
+    /// oxc gave up on a file tsc's parser accepts: its statements are gone, but
+    /// what tsc's binder reports of it is known.
+    pub(crate) oxc_aborted: bool,
     /// What the file adds to tsc's global symbol table, for the program's
     /// merge (see [`diagnostics::report_global_merge_conflicts`]); dropped
     /// once merged.
@@ -325,7 +328,11 @@ fn check_program_with_stats_and_jobs_inner(
     namespaces::report_cross_file_namespace_merges(&mut parsed_files);
     ctx.constructor_local_properties = constructor_local_properties_by_file(&parsed_files, &ctx.options);
     let syntax_errors = diagnostics::program_has_syntax_errors(&parsed_files);
-    if syntax_errors {
+    // tsc checks a program whose only syntax errors are oxc's. surge cannot
+    // check a file oxc gave up on, so it reports what tsc's binder reports and
+    // nothing it checked.
+    let oxc_aborted_only = syntax_errors && diagnostics::syntax_errors_are_oxc_aborts(&parsed_files);
+    if syntax_errors && !oxc_aborted_only {
         for file in &mut parsed_files {
             file.bind_errors.clear();
         }
@@ -337,7 +344,7 @@ fn check_program_with_stats_and_jobs_inner(
     }
     let unchecked_bind_reports: HashSet<(String, u32, usize)> = parsed_files
         .iter()
-        .filter(|file| unchecked_files.contains(&file.file_name))
+        .filter(|file| oxc_aborted_only || unchecked_files.contains(&file.file_name))
         .flat_map(|file| {
             file.bind_errors
                 .iter()
@@ -434,7 +441,11 @@ fn check_program_with_stats_and_jobs_inner(
         census_external,
         skip_teardown,
     );
-    if syntax_errors {
+    if oxc_aborted_only {
+        result
+            .diagnostics
+            .retain(|diagnostic| is_unchecked_bind_report(diagnostic, &unchecked_bind_reports));
+    } else if syntax_errors {
         result.diagnostics.retain(diagnostics::is_syntactic_diagnostic);
         result.syntax_errors = true;
     }

@@ -84,6 +84,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     ) -> Box<'a, VariableDeclaration<'a>> {
         let mut declarations = self.ast.vec();
         loop {
+            // surge: TS1123/TS1009 — where no binding follows, tsc ends a declaration list
+            // quietly at anything that could end it (`var;`, `var a,`, `for (var a,;`), its
+            // `isVariableDeclaratorListTerminator`, and reports the empty list or the trailing
+            // comma from its checker (`checkGrammarVariableDeclarationList`).
+            let starts_binding =
+                self.cur_kind().is_binding_identifier() || matches!(self.cur_kind(), Kind::LBrack | Kind::LCurly);
+            if !starts_binding && (self.can_insert_semicolon() || matches!(self.cur_kind(), Kind::In | Kind::Of)) {
+                break;
+            }
             let declaration = self.parse_variable_declarator(decl_parent, kind);
             declarations.push(declaration);
             if !self.eat(Kind::Comma) {

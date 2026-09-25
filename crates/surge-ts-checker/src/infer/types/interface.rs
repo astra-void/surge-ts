@@ -609,7 +609,12 @@ pub(crate) fn resolve_interface(
         }
     }
 
-    let module_memo_key = module_instantiation_memo_active().then(|| {
+    // A body's own type variables differ by owner, not by name, and the memo's
+    // fingerprint renders them by name.
+    let instantiated_with_variables = local_substitution
+        .iter()
+        .any(|(_, ty)| surge_ts_types::type_variable::mentions_type_variable(ty));
+    let module_memo_key = (module_instantiation_memo_active() && !instantiated_with_variables).then(|| {
         module_instantiation_memo_key(
             &declaration_key,
             module_instantiation_memo_fingerprint(

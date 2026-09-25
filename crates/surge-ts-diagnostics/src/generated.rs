@@ -6885,6 +6885,56 @@ pub const TS6205: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2506: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2506",
+    number: Some(2506),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' is referenced directly or indirectly in its own base expression.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2310: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2310",
+    number: Some(2310),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Type '{0}' recursively references itself as a base type.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1123: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1123",
+    number: Some(1123),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Variable declaration list cannot be empty.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1009: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1009",
+    number: Some(1009),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Trailing comma not allowed.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2320: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2320",
+    number: Some(2320),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Interface '{0}' cannot simultaneously extend types '{1}' and '{2}'.",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
     TS2411,
@@ -7574,6 +7624,11 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2513,
     TS6138,
     TS6205,
+    TS2506,
+    TS2310,
+    TS1123,
+    TS1009,
+    TS2320,
 ];
 
 impl Diagnostic {
@@ -12578,5 +12633,51 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts6205(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS6205, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2506(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2506,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2310(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2310,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1123(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1123, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1009(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1009, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2320(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS2320,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
     }
 }

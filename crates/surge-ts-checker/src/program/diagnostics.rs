@@ -223,6 +223,19 @@ pub(super) fn program_has_syntax_errors(parsed_files: &[ParsedProgramFile]) -> b
     })
 }
 
+/// Every file with a syntax error is one oxc gave up on while tsc's parser
+/// accepted it.
+pub(super) fn syntax_errors_are_oxc_aborts(parsed_files: &[ParsedProgramFile]) -> bool {
+    parsed_files.iter().all(|file| {
+        file.oxc_aborted
+            || matches!(
+                file.file_kind,
+                crate::FileKind::GeneratedDeclaration | crate::FileKind::PhysicalDefaultLib
+            )
+            || !file.parser_errors.iter().any(is_syntactic_parser_error)
+    })
+}
+
 pub(super) fn is_syntactic_diagnostic(diagnostic: &Diagnostic) -> bool {
     match diagnostic.code {
         surge_ts_diagnostics::DiagnosticCode::TypeScript(code) => {

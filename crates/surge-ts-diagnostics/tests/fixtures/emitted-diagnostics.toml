@@ -4402,3 +4402,33 @@ status = "emitted"
 oracle = [
   "unused-identifiers-by-symbol",
 ]
+
+[TS2506]
+status = "emitted"
+oracle = [
+  "heritage-cycles-and-conflicts",
+]
+
+[TS2310]
+status = "emitted"
+oracle = [
+  "heritage-cycles-and-conflicts",
+]
+
+[TS2320]
+status = "emitted"
+oracle = [
+  "heritage-cycles-and-conflicts",
+]
+
+[TS1123]
+status = "emitted"
+oracle = [
+  "variable-declaration-list-grammar",
+]
+
+[TS1009]
+status = "emitted"
+oracle = [
+  "variable-declaration-list-grammar",
+]

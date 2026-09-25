@@ -162,6 +162,76 @@ pub(crate) fn bind<'a>(file: &'a ParsedFile, text: &'a str) -> Binder<'a> {
     binder
 }
 
+fn range_of_token_at(text: &str, jsx: bool, pos: usize) -> (usize, usize) {
+    let mut scanner = Scanner::new(text, jsx);
+    scanner.reset_pos(pos);
+    scanner.scan();
+    (scanner.token_start(), scanner.token_end())
+}
+
+/// `ast.GetNameOfDeclaration` for the declarations the binder declares.
+fn name_of_declaration(file: &ParsedFile, node: NodeId) -> Option<NodeId> {
+    match file.node(node).kind {
+        Kind::BinaryExpression | Kind::CallExpression => None,
+        Kind::ExportAssignment => {
+            let expression = file.node(node).expression?;
+            (file.node(expression).kind == Kind::Identifier).then_some(expression)
+        }
+        _ => file.node(node).name,
+    }
+}
+
+/// `scanner.GetErrorRangeForNode`.
+pub(crate) fn error_range_for_node(file: &ParsedFile, text: &str, node: NodeId) -> (usize, usize) {
+    let mut error_node = Some(node);
+    match file.node(node).kind {
+        Kind::SourceFile => {
+            let pos = scanner::skip_trivia(text, 0);
+            if pos == text.len() {
+                return (0, 0);
+            }
+            return range_of_token_at(text, file.jsx, pos);
+        }
+        Kind::FunctionDeclaration
+        | Kind::MethodDeclaration
+        | Kind::VariableDeclaration
+        | Kind::BindingElement
+        | Kind::ClassDeclaration
+        | Kind::InterfaceDeclaration
+        | Kind::ModuleDeclaration
+        | Kind::EnumDeclaration
+        | Kind::EnumMember
+        | Kind::FunctionExpression
+        | Kind::GetAccessor
+        | Kind::SetAccessor
+        | Kind::TypeAliasDeclaration
+        | Kind::PropertyDeclaration
+        | Kind::PropertySignature
+        | Kind::NamespaceImport => error_node = name_of_declaration(file, node),
+        Kind::ClassExpression => error_node = file.node(node).name,
+        Kind::Constructor => {
+            let mut scanner = Scanner::new(text, file.jsx);
+            scanner.reset_pos(file.node(node).pos);
+            scanner.scan();
+            let start = scanner.token_start();
+            while !matches!(scanner.token(), Kind::ConstructorKeyword | Kind::StringLiteral | Kind::EndOfFile) {
+                scanner.scan();
+            }
+            return (start, scanner.token_end());
+        }
+        _ => {}
+    }
+    let Some(error_node) = error_node else {
+        return range_of_token_at(text, file.jsx, file.node(node).pos);
+    };
+    let n = file.node(error_node);
+    let mut pos = n.pos;
+    if !(n.pos == n.end && n.kind != Kind::EndOfFile) && n.kind != Kind::JsxText {
+        pos = scanner::skip_trivia(text, pos);
+    }
+    (pos, n.end)
+}
+
 pub(crate) struct Binder<'a> {
     file: &'a ParsedFile,
     text: &'a str,
@@ -307,16 +377,8 @@ impl<'a> Binder<'a> {
         self.file.node(node).name
     }
 
-    /// `ast.GetNameOfDeclaration` for the declarations the binder declares.
     fn name_of_declaration(&self, node: NodeId) -> Option<NodeId> {
-        match self.kind(node) {
-            Kind::BinaryExpression | Kind::CallExpression => None,
-            Kind::ExportAssignment => {
-                let expression = self.file.node(node).expression?;
-                (self.kind(expression) == Kind::Identifier).then_some(expression)
-            }
-            _ => self.name_of(node),
-        }
+        name_of_declaration(self.file, node)
     }
 
     fn is_global_scope_augmentation(&self, node: NodeId) -> bool {
@@ -696,61 +758,11 @@ impl<'a> Binder<'a> {
     // --- diagnostics ---------------------------------------------------------
 
     fn range_of_token_at(&self, pos: usize) -> (usize, usize) {
-        let mut scanner = Scanner::new(self.text, self.jsx);
-        scanner.reset_pos(pos);
-        scanner.scan();
-        (scanner.token_start(), scanner.token_end())
+        range_of_token_at(self.text, self.jsx, pos)
     }
 
-    /// `scanner.GetErrorRangeForNode`.
     fn error_range_for_node(&self, node: NodeId) -> (usize, usize) {
-        let mut error_node = Some(node);
-        match self.kind(node) {
-            Kind::SourceFile => {
-                let pos = scanner::skip_trivia(self.text, 0);
-                if pos == self.text.len() {
-                    return (0, 0);
-                }
-                return self.range_of_token_at(pos);
-            }
-            Kind::FunctionDeclaration
-            | Kind::MethodDeclaration
-            | Kind::VariableDeclaration
-            | Kind::BindingElement
-            | Kind::ClassDeclaration
-            | Kind::InterfaceDeclaration
-            | Kind::ModuleDeclaration
-            | Kind::EnumDeclaration
-            | Kind::EnumMember
-            | Kind::FunctionExpression
-            | Kind::GetAccessor
-            | Kind::SetAccessor
-            | Kind::TypeAliasDeclaration
-            | Kind::PropertyDeclaration
-            | Kind::PropertySignature
-            | Kind::NamespaceImport => error_node = self.name_of_declaration(node),
-            Kind::ClassExpression => error_node = self.name_of(node),
-            Kind::Constructor => {
-                let mut scanner = Scanner::new(self.text, self.jsx);
-                scanner.reset_pos(self.file.node(node).pos);
-                scanner.scan();
-                let start = scanner.token_start();
-                while !matches!(scanner.token(), Kind::ConstructorKeyword | Kind::StringLiteral | Kind::EndOfFile) {
-                    scanner.scan();
-                }
-                return (start, scanner.token_end());
-            }
-            _ => {}
-        }
-        let Some(error_node) = error_node else {
-            return self.range_of_token_at(self.file.node(node).pos);
-        };
-        let n = self.file.node(error_node);
-        let mut pos = n.pos;
-        if !(n.pos == n.end && n.kind != Kind::EndOfFile) && n.kind != Kind::JsxText {
-            pos = scanner::skip_trivia(self.text, pos);
-        }
-        (pos, n.end)
+        error_range_for_node(self.file, self.text, node)
     }
 
     /// `rangeOfTypeParameters`: a type parameter list with its `<>`.

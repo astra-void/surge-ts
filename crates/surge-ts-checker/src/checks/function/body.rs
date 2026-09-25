@@ -444,10 +444,14 @@ pub(crate) fn check_function_body(
         .then(|| std::mem::take(&mut ctx.symbols));
 
     let mut nested_functions = Vec::new();
+    let mut nested_classes = Vec::new();
     for (statement_index, statement) in body.into_iter().enumerate() {
         if let ParsedFunctionBodyStatement::Function(function) = statement {
             nested_functions.push(function);
             continue;
+        }
+        if let ParsedFunctionBodyStatement::Class(class) = &statement {
+            nested_classes.push(class.clone());
         }
         if saved_symbols.is_some() {
             ctx.symbols = scopes.visible_symbols().clone();
@@ -466,10 +470,13 @@ pub(crate) fn check_function_body(
     // (called only once that binding exists), so its body is checked once the
     // whole block is bound. It sees every binding at its declared type — tsc
     // carries no narrowing into a function declaration.
-    if !nested_functions.is_empty() {
+    if !nested_functions.is_empty() || !nested_classes.is_empty() {
         let enclosing = declared_type_view(scopes.visible_symbols());
         for function in nested_functions {
             crate::checks::function::check_nested_function_declaration(*function, &enclosing, ctx);
+        }
+        for class in nested_classes {
+            crate::program::check_nested_class_declaration(&class, &enclosing, ctx);
         }
     }
 
@@ -913,8 +920,8 @@ fn check_function_body_statement_itself(
         // its body may query one (`type t = Expect<Equal<typeof x, string>>`),
         // and a body nothing reads was never resolved at all, so every
         // assertion a type-level test suite is made of reported nothing. A
-        // class's member bodies are not separately checked, matching the
-        // nested-function treatment above.
+        // class's members are checked with the block's nested functions, once
+        // the block is bound.
         ParsedFunctionBodyStatement::TypeAlias(alias) => {
             validate_body_local_declaration(&alias.name, ctx);
         }
@@ -927,7 +934,6 @@ fn check_function_body_statement_itself(
             }
             let visible_symbols = visible_symbols(scopes);
             crate::program::check_class_head_expressions(&class, &visible_symbols, ctx);
-            // Member bodies of a body-local class are not otherwise checked.
             crate::flow::check_class_member_flow(&class, ctx);
             let symbol = crate::program::build_class_value_symbol(&class, ctx);
             scopes.insert_current_handle(class.name.as_str(), std::sync::Arc::new(symbol));

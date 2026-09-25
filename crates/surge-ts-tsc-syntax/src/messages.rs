@@ -11,6 +11,8 @@ pub const X_0_expected: &Message = &Message { code: 1005, text: "'{0}' expected.
 #[allow(non_upper_case_globals, dead_code)]
 pub const The_parser_expected_to_find_a_1_to_match_the_0_token_here: &Message = &Message { code: 1007, text: "The parser expected to find a '{1}' to match the '{0}' token here." };
 #[allow(non_upper_case_globals, dead_code)]
+pub const Trailing_comma_not_allowed: &Message = &Message { code: 1009, text: "Trailing comma not allowed." };
+#[allow(non_upper_case_globals, dead_code)]
 pub const Asterisk_Slash_expected: &Message = &Message { code: 1010, text: "'*/' expected." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const An_element_access_expression_should_take_an_argument: &Message = &Message { code: 1011, text: "An element access expression should take an argument." };
@@ -34,6 +36,8 @@ pub const Expression_expected: &Message = &Message { code: 1109, text: "Expressi
 pub const Type_expected: &Message = &Message { code: 1110, text: "Type expected." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Octal_literals_are_not_allowed_Use_the_syntax_0: &Message = &Message { code: 1121, text: "Octal literals are not allowed. Use the syntax '{0}'." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Variable_declaration_list_cannot_be_empty: &Message = &Message { code: 1123, text: "Variable declaration list cannot be empty." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Digit_expected: &Message = &Message { code: 1124, text: "Digit expected." };
 #[allow(non_upper_case_globals, dead_code)]
@@ -334,6 +338,8 @@ pub const All_variables_are_unused: &Message = &Message { code: 6199, text: "All
 pub const X_and_here: &Message = &Message { code: 6204, text: "and here." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const All_type_parameters_are_unused: &Message = &Message { code: 6205, text: "All type parameters are unused." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const A_mapped_type_may_not_declare_properties_or_methods: &Message = &Message { code: 7061, text: "A mapped type may not declare properties or methods." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const X_import_can_only_be_used_in_TypeScript_files: &Message = &Message { code: 8002, text: "'import ... =' can only be used in TypeScript files." };
 #[allow(non_upper_case_globals, dead_code)]

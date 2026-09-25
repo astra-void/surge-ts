@@ -802,6 +802,13 @@ fn check_program_statement_itself(
                 &interface.type_parameters,
                 ctx,
             );
+            super::heritage::report_circular_base(
+                &interface.name,
+                interface.name_span,
+                &interface.type_parameters,
+                false,
+                ctx,
+            );
             super::heritage::check_interface_heritage(&interface, ctx);
             super::index_constraints::check_interface_index_constraints(&interface, ctx);
         }

@@ -1085,6 +1085,9 @@ export const fixturePresets: Record<string, string> = {
   'decorator-iife-use-before-declaration': path.join(workspaceRoot, 'tests/compat-projects/decorator-iife-use-before-declaration/tsconfig.json'),
   'super-abstract-member-access': path.join(workspaceRoot, 'tests/compat-projects/super-abstract-member-access/tsconfig.json'),
   'unused-identifiers-by-symbol': path.join(workspaceRoot, 'tests/compat-projects/unused-identifiers-by-symbol/tsconfig.json'),
+  'heritage-cycles-and-conflicts': path.join(workspaceRoot, 'tests/compat-projects/heritage-cycles-and-conflicts/tsconfig.json'),
+  'variable-declaration-list-grammar': path.join(workspaceRoot, 'tests/compat-projects/variable-declaration-list-grammar/tsconfig.json'),
+  'mapped-type-member-grammar': path.join(workspaceRoot, 'tests/compat-projects/mapped-type-member-grammar/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

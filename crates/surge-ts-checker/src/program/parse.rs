@@ -187,6 +187,7 @@ pub(super) fn parse_program_file(
     };
     let mut bind_errors = Vec::new();
     let mut tsc_bound = false;
+    let mut oxc_aborted = false;
     let mut tsc_globals = None;
     if let Some(tsc_errors) = tsc_errors {
         if !tsc_errors.syntactic.is_empty() {
@@ -207,6 +208,7 @@ pub(super) fn parse_program_file(
                         && !error.code.is_some_and(|code| (1499..=1538).contains(&code))
                 });
             }
+            oxc_aborted = parsed.parse_aborted;
             bind_errors = tsc_errors.bind;
             tsc_bound = true;
             tsc_globals = tsc_errors.globals.map(std::sync::Arc::new);
@@ -251,6 +253,7 @@ pub(super) fn parse_program_file(
         parser_errors: parsed.parser_errors,
         bind_errors,
         tsc_bound,
+        oxc_aborted,
         tsc_globals,
         no_check: surge_ts_syntax::extract_check_directive(&input.source_text) == Some(false),
         is_module: parsed.is_module,

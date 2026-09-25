@@ -124,6 +124,20 @@ fn walk_class_head(
     if class.is_declare {
         return;
     }
+    // The `extends` expression is evaluated with the declaration.
+    for base in &class.extends {
+        let head = base.name.split('.').next().unwrap_or(&base.name);
+        if let Some(declared) = classes.get(head)
+            && let Some(span) = base.span
+            && span.start < declared.span.start
+        {
+            let use_span = TextSpan { start: span.start, end: span.start + head.len() };
+            reported.push((head.to_string(), use_span, declared.is_enum));
+        }
+    }
+    if let Some(expression) = &class.heritage_expression {
+        walk(expression, classes, reported);
+    }
     for (key, _) in &class.computed_keys {
         walk(key, classes, reported);
         walk_self_reference(key, &class.name, reported);

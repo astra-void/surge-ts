@@ -153,6 +153,34 @@ impl Type {
     }
 }
 
+/// Whether `ty` mentions a type variable of a body being checked. Such a
+/// variable is identified by its owner, which a key that renders the type by
+/// name does not see: two bodies' `T` look alike.
+pub fn mentions_type_variable(ty: &Type) -> bool {
+    fn walk(ty: &Type, depth: usize) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        let nested = |ty: &Type| walk(ty, depth + 1);
+        match ty {
+            Type::TypeParameter(parameter) => parameter.owner != 0,
+            Type::Array(element) => nested(element),
+            Type::Tuple(elements) => elements.iter().any(nested),
+            Type::Union(union) => union.types().iter().any(nested),
+            Type::Function(function) => function.parameters().iter().any(nested) || nested(function.return_type()),
+            Type::Object(object) => {
+                object.properties.values().any(|property| nested(&property.ty))
+                    || object.string_index_type.as_deref().is_some_and(nested)
+                    || object.number_index_type.as_deref().is_some_and(nested)
+                    || object.intersection_operands.as_deref().is_some_and(|operands| operands.iter().any(nested))
+            }
+            Type::Reference(reference) => reference.arguments.iter().any(nested),
+            _ => false,
+        }
+    }
+    walk(ty, 0)
+}
+
 /// `variable & with`, as narrowing a type variable produces it (`T & string`
 /// under `typeof`, `T & C` under `instanceof`): a memberless intersection
 /// whose operands are the whole type. The relation reads the operands, and a

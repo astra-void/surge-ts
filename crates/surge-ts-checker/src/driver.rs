@@ -220,6 +220,7 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
                 parser_errors: parsed.parser_errors,
                 bind_errors: Vec::new(),
                 tsc_bound: false,
+                oxc_aborted: false,
                 tsc_globals: None,
                 no_check: false,
                 is_module: parsed.is_module,
