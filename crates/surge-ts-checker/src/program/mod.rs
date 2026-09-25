@@ -309,11 +309,17 @@ fn check_program_with_stats_and_jobs_inner(
     // TypeScript file may use, but surge does not model JavaScript's own
     // semantics (JSDoc types, CommonJS exports, `this` members), so the
     // semantic diagnostics tsc gives it under `checkJs` are not reported.
+    // EXPERIMENT KNOB (`SURGE_CHECK_JS=1`): report a checked JavaScript file's
+    // semantic diagnostics, to measure what surge's TypeScript semantics get
+    // right and wrong there.
+    let check_js_experiment = std::env::var_os("SURGE_CHECK_JS").is_some();
     let unchecked_files: HashSet<String> = files
         .iter()
         .filter(|file| {
-            surge_ts_syntax::extract_check_directive(&file.source_text) == Some(false)
-                || surge_ts_syntax::is_javascript_file_name(&file.file_name)
+            let directive = surge_ts_syntax::extract_check_directive(&file.source_text);
+            directive == Some(false)
+                || (surge_ts_syntax::is_javascript_file_name(&file.file_name)
+                    && !(check_js_experiment && (directive == Some(true) || options.check_js == Some(true))))
         })
         .map(|file| file.file_name.clone())
         .collect();

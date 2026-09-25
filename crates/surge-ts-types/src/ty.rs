@@ -401,6 +401,9 @@ impl Type {
             // answered `None` for every property, which the callers report as a
             // missing member (zod's `$ZodInternalIssue<T>`, a union of 12
             // `Identity<…>` references that all carry `path`).
+            // tsc's `createUnionOrIntersectionProperty` also finds none when a
+            // constituent declares it private or protected and another has it
+            // from a different declaration.
             Type::Union(union) => {
                 let mut members = Vec::with_capacity(union.types().len());
                 for member in union.types().iter() {
@@ -410,8 +413,33 @@ impl Type {
                     }
                     members.push(member.get_property_access_type(name)?);
                 }
+                if Type::union_property_declarations_differ(union.types(), name) {
+                    return None;
+                }
                 (!members.is_empty()).then(|| crate::union_type(members))
             }
+            _ => None,
+        }
+    }
+
+    /// tsc's `createUnionOrIntersectionProperty` for a union: a member one
+    /// constituent declares private or protected and another has from a
+    /// different declaration is no property of the union.
+    pub fn union_property_declarations_differ(members: &[Type], name: &str) -> bool {
+        let restrictions: Vec<_> = members
+            .iter()
+            .filter(|member| !matches!(member, Type::Undefined | Type::Null))
+            .map(|member| member.property_restriction(name))
+            .collect();
+        restrictions.iter().any(Option::is_some) && restrictions.windows(2).any(|pair| pair[0] != pair[1])
+    }
+
+    /// The private/protected restriction of the member `name` this type
+    /// declares, if it is restricted.
+    pub fn property_restriction(&self, name: &str) -> Option<crate::object::MemberRestriction> {
+        match self {
+            Type::Object(object) => object.get_property(name)?.restriction.clone(),
+            Type::Reference(reference) => reference.resolve().property_restriction(name),
             _ => None,
         }
     }

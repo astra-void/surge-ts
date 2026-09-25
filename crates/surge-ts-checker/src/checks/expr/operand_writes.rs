@@ -263,6 +263,23 @@ fn declared_property_type(receiver: &Type, property_name: &str) -> Option<Type> 
                 property.ty.clone()
             })
         }
+        // The member of what the receiver is once it is not nullish (an
+        // optional chain's short-circuit included), declared by every member.
+        Type::Union(union) => {
+            let members: Vec<&Type> = union
+                .types()
+                .iter()
+                .filter(|member| !matches!(member, Type::Undefined | Type::Null))
+                .collect();
+            if members.is_empty() || members.len() == union.types().len() && members.len() > 1 {
+                return None;
+            }
+            let types = members
+                .into_iter()
+                .map(|member| declared_property_type(member, property_name))
+                .collect::<Option<Vec<_>>>()?;
+            Some(union_type(types))
+        }
         _ => None,
     }
 }

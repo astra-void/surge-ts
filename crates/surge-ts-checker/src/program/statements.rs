@@ -333,12 +333,28 @@ pub(crate) fn check_module_assignment(
         return;
     }
     let original_ty = original.ty.clone();
+    let original_kind = original.kind;
     let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
     let checkpoint = ctx.diagnostics().len();
     let inferred = expr::evaluate_expression(&value, value_span, &symbols, ctx);
     ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
 
     if evolving_arrays::assign_module_evolving_array(&target_name, &value, &inferred, ctx) {
+        return;
+    }
+    // An auto-typed binding is whatever it was last assigned: a value surge
+    // could not type leaves it unknown, not still `undefined`.
+    let auto_typed = ctx
+        .symbols
+        .auto_array(&target_name)
+        .is_some_and(|(binding, _)| binding.module_level && !binding.declared_array);
+    if auto_typed && !matches!(&inferred, crate::infer::InferredExpression::Known(ty) if !ty.is_unmodelled()) {
+        let narrowed = crate::symbols::SymbolInfo {
+            ty: surge_ts_types::Type::Unknown,
+            kind: original_kind,
+            function_signature: None,
+        };
+        let _ = ctx.symbols.insert_narrowed(target_name, narrowed, surge_ts_types::Type::Any);
         return;
     }
 
@@ -637,36 +653,45 @@ fn with_module_declared_only(ctx: &mut CheckerContext, check: impl FnOnce(&mut C
     ctx.module_declared_only_depth -= 1;
 }
 
-/// A module-level `[]` binding tsc types as an evolving array (`autoArrayType`)
-/// under `noImplicitAny`. An exported one is not flow-typed: other modules can
-/// mutate it, so tsc keeps its declared type.
-fn module_auto_array(
+/// A module-level binding tsc types by control flow under `noImplicitAny`: a
+/// `[]` one as an evolving array (`autoArrayType`), a non-`const` one with no
+/// initializer (or an `undefined`/`null` one) as whatever is assigned
+/// (`autoType`), starting from `undefined`. An exported one is not flow-typed:
+/// other modules can write it, so tsc keeps its declared type.
+fn module_auto_binding(
     variable: &surge_ts_syntax::ParsedVariableDeclaration,
     ctx: &CheckerContext,
-) -> Option<(std::sync::Arc<str>, crate::symbols::AutoArrayBinding)> {
+) -> Option<(std::sync::Arc<str>, crate::symbols::AutoArrayBinding, Option<surge_ts_types::Type>)> {
     let name_span = variable.name_span?;
-    if !var::is_auto_array_candidate(variable, ctx) || ctx.module_export_depth > 0 {
+    if ctx.module_export_depth > 0 {
         return None;
     }
+    let auto = evolving_arrays::auto_declaration(variable, ctx)?;
+    let is_array = auto == evolving_arrays::AutoDeclaration::Array;
+    let initial = (!is_array).then(|| match variable.initializer {
+        Some(surge_ts_syntax::ParsedExpression::NullLiteral) => surge_ts_types::Type::Any,
+        _ => surge_ts_types::Type::Undefined,
+    });
     let is_let = matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Let);
     Some((
         variable.name.as_str().into(),
         crate::symbols::AutoArrayBinding {
             name_span: Some(name_span),
             is_const: matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const),
-            declared_array: true,
+            declared_array: is_array,
             is_let,
-            initialized: true,
+            initialized: is_array || variable.initializer.is_some(),
             assignments: is_let
                 .then(|| ctx.let_assignment(name_span.start))
                 .flatten(),
-            evolving: true,
+            evolving: is_array,
             elements: surge_ts_types::Type::Never,
             unsettled: false,
             pending_loops: 0,
             declared_only: false,
             module_level: true,
         },
+        initial,
     ))
 }
 
@@ -706,10 +731,20 @@ fn check_program_statement_itself(
     match statement {
         ParsedStatement::VariableDeclaration(variable) => {
             let start = Instant::now();
-            let auto_array = module_auto_array(&variable, ctx);
+            let auto_binding = module_auto_binding(&variable, ctx);
             var::check_variable_declaration(*variable, ctx);
-            if let Some((name, binding)) = auto_array {
+            if let Some((name, binding, initial)) = auto_binding {
                 ctx.auto_arrays_declared = true;
+                if let Some(initial) = initial
+                    && let Some(symbol) = ctx.symbols.get(&name).cloned()
+                {
+                    let narrowed = crate::symbols::SymbolInfo {
+                        ty: initial,
+                        kind: symbol.kind,
+                        function_signature: None,
+                    };
+                    let _ = ctx.symbols.insert_narrowed(name.clone(), narrowed, surge_ts_types::Type::Any);
+                }
                 ctx.symbols.set_auto_array(name, Some(binding));
             }
             record_program_timing(ctx.timings.as_ref(), |timings| {

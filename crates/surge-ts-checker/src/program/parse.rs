@@ -209,6 +209,15 @@ pub(super) fn parse_program_file(
                 });
             }
             oxc_aborted = parsed.parse_aborted;
+            // Opt-in (`SURGE_TRACE_PARSE_ABORT=1`): a file oxc gave up on while
+            // tsc's parser accepted it, with oxc's first complaint.
+            if oxc_aborted && std::env::var_os("SURGE_TRACE_PARSE_ABORT").is_some() {
+                eprintln!(
+                    "[parse-abort] {} {}",
+                    input.file_name,
+                    parsed.parser_errors.first().map_or("", |error| error.message.as_str())
+                );
+            }
             bind_errors = tsc_errors.bind;
             tsc_bound = true;
             tsc_globals = tsc_errors.globals.map(std::sync::Arc::new);

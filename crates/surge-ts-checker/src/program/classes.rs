@@ -1809,6 +1809,7 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
     // types, so they still get it.
     if class.is_declare {
         crate::flow::check_class_member_flow(class, ctx);
+        report_ambient_member_implicit_any(class, ctx);
         return;
     }
 
@@ -1819,6 +1820,53 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
     crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
         check_class_member_bodies(class, ctx)
     });
+}
+
+/// tsc's implicit-any report on an ambient class's member parameters, which
+/// spares only a private member's (`isPrivateWithinAmbient`). The signatures
+/// are mapped for that report alone.
+fn report_ambient_member_implicit_any(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+    if !ctx.options.no_implicit_any {
+        return;
+    }
+    let is_private = |name: &str, is_static: bool| {
+        name.starts_with('#')
+            || class.restricted_members.iter().any(|member| {
+                member.name == name
+                    && member.is_static == is_static
+                    && matches!(member.accessibility, surge_ts_syntax::ParsedMemberAccessibility::Private)
+            })
+    };
+    let checkpoint = ctx.diagnostics().len();
+    for member in &class.members {
+        match member {
+            ParsedClassMember::Method(method) if !is_private(&method.name, method.is_static) => {
+                let _ = crate::checks::function::map_function_signature(
+                    &method.parameters,
+                    method.return_type.as_ref(),
+                    &method.type_parameters,
+                    None,
+                    ctx,
+                );
+            }
+            ParsedClassMember::Constructor(constructor)
+                if !matches!(constructor.accessibility, Some(surge_ts_syntax::ParsedMemberAccessibility::Private)) =>
+            {
+                let _ = crate::checks::function::map_function_signature(&constructor.parameters, None, &[], None, ctx);
+            }
+            _ => {}
+        }
+    }
+    let reported: Vec<Diagnostic> = ctx.diagnostics()[checkpoint..].to_vec();
+    ctx.truncate_diagnostics(checkpoint);
+    for diagnostic in reported {
+        if matches!(
+            diagnostic.code,
+            surge_ts_diagnostics::DiagnosticCode::TypeScript(7006 | 7019 | 7031)
+        ) {
+            ctx.push(diagnostic);
+        }
+    }
 }
 
 fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {

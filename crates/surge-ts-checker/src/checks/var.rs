@@ -611,11 +611,21 @@ pub(crate) fn widen_implicit_variable_initializer_type(
     // surge does not track it on the type itself. A union of literals is not
     // widened unless it was written here, which is what keeps
     // `let status = state.status` at its declared union.
-    let widens_as_literal = match ty {
-        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => true,
-        Type::Reference(reference) => reference.enum_base.is_some(),
-        _ => false,
-    };
+    // A call written with type arguments returns their instantiation, whose
+    // literals were written as types and are regular.
+    let instantiated_by_written_arguments = matches!(
+        initializer,
+        ParsedExpression::Call { type_arguments, .. }
+            | ParsedExpression::PropertyCall { type_arguments, .. }
+            | ParsedExpression::New { type_arguments, .. }
+            if !type_arguments.is_empty()
+    );
+    let widens_as_literal = !instantiated_by_written_arguments
+        && match ty {
+            Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => true,
+            Type::Reference(reference) => reference.enum_base.is_some(),
+            _ => false,
+        };
     let widened = if matches!(symbol_kind, SymbolKind::Let | SymbolKind::Var)
         && !is_assertion
         && (widens_as_literal || initializer_type_is_fresh(initializer))
@@ -852,6 +862,12 @@ fn returns_body_inferred_type(
     let callee = match initializer {
         ParsedExpression::Await { operand, .. } => {
             return returns_body_inferred_type(operand, symbols, ctx);
+        }
+        // A type written as a type argument is no fresh literal to widen.
+        ParsedExpression::Call { type_arguments, .. } | ParsedExpression::PropertyCall { type_arguments, .. }
+            if !type_arguments.is_empty() =>
+        {
+            return false;
         }
         ParsedExpression::Call { callee_name, .. } => symbols.get(callee_name).map(|symbol| symbol.ty.clone()),
         ParsedExpression::PropertyCall {

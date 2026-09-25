@@ -363,6 +363,13 @@ pub(crate) fn infer_property_access(
                 {
                     return InferredExpression::Unknown;
                 }
+                if Type::union_property_declarations_differ(union_type.types(), property_name) {
+                    return InferredExpression::MissingProperty {
+                        property_name: property_name.to_string(),
+                        object_type: object_type.clone(),
+                        span: *property_span,
+                    };
+                }
                 // `a?.b.c` keeps the chain's `undefined`; a plain `x.c` on a
                 // possibly-`undefined` `x` is an error the check pass reports,
                 // and tsc then types the access from the defined part alone.
