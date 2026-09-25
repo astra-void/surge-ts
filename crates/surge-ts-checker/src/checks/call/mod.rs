@@ -3091,9 +3091,11 @@ fn select_overload_return_type(
 ) -> Option<Type> {
     let overloads = function_type.overloads()?;
     crate::program::record_overload_selection_attempt();
-    let picked = overloads
-        .iter()
-        .find(|candidate| signature_accepts_argument_types(candidate, argument_types))?;
+    let picked = overload_relations(overloads).find_map(|relation| {
+        overloads
+            .iter()
+            .find(|candidate| signature_accepts_argument_types(candidate, argument_types, relation))
+    })?;
     // A member whose return still names a type parameter, or stands at the
     // sentinel, was folded before instantiation and never re-resolved for this
     // call — a generic group reached without its written signature. Its return
@@ -3138,36 +3140,57 @@ fn choose_overload_return_type(
 ) -> Option<Type> {
     let overloads = function_type.overloads()?;
     crate::program::record_overload_selection_attempt();
-    for candidate in overloads {
-        let instantiated;
-        let candidate = if names_open_parameter(&Type::Function(candidate.clone())) {
-            let diagnostics_before = ctx.diagnostics.len();
-            instantiated = property::instantiate_declared_member_signature(
-                candidate,
-                None,
-                type_arguments,
-                callee_span,
-                arguments,
-                expected_return_type,
-                symbols,
-                ctx,
-            )
-            .into_owned();
-            ctx.diagnostics.truncate(diagnostics_before);
-            &instantiated
-        } else {
-            candidate
-        };
-        if !signature_accepts_argument_types(candidate, argument_types) {
-            continue;
+    let mut instantiated: Vec<Option<FunctionType>> = vec![None; overloads.len()];
+    for relation in overload_relations(overloads) {
+        for (index, candidate) in overloads.iter().enumerate() {
+            if names_open_parameter(&Type::Function(candidate.clone())) && instantiated[index].is_none() {
+                let diagnostics_before = ctx.diagnostics.len();
+                instantiated[index] = Some(
+                    property::instantiate_declared_member_signature(
+                        candidate,
+                        None,
+                        type_arguments,
+                        callee_span,
+                        arguments,
+                        expected_return_type,
+                        symbols,
+                        ctx,
+                    )
+                    .into_owned(),
+                );
+                ctx.diagnostics.truncate(diagnostics_before);
+            }
+            let candidate = instantiated[index].as_ref().unwrap_or(candidate);
+            if !signature_accepts_argument_types(candidate, argument_types, relation) {
+                continue;
+            }
+            if names_open_parameter(candidate.return_type()) {
+                return None;
+            }
+            crate::program::record_overload_selection_pick();
+            return Some(candidate.return_type().clone());
         }
-        if names_open_parameter(candidate.return_type()) {
-            return None;
-        }
-        crate::program::record_overload_selection_pick();
-        return Some(candidate.return_type().clone());
     }
     None
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OverloadRelation {
+    Subtype,
+    Assignable,
+}
+
+/// tsc's `resolveCall`: with more than one candidate, the arguments are first
+/// held to the subtype relation, so an overload the arguments only reach by
+/// assignability (`any` to `number`) loses to a later one they are a subtype
+/// of; only when none is do they fall back to assignability. A group with a
+/// generic member keeps to assignability alone: tsc rejects a candidate whose
+/// inferred type arguments break their constraints, which surge's instantiation
+/// does not check, so a generic member would win the subtype pass it loses.
+fn overload_relations(candidates: &[FunctionType]) -> impl Iterator<Item = OverloadRelation> {
+    let subtype = (candidates.len() > 1 && candidates.iter().all(|candidate| candidate.type_parameter_head().is_none()))
+        .then_some(OverloadRelation::Subtype);
+    subtype.into_iter().chain(std::iter::once(OverloadRelation::Assignable))
 }
 
 /// `type_contains_unknown` without the written `unknown`: an overload taking
@@ -3241,6 +3264,7 @@ fn first_rejected_argument(
 fn signature_accepts_argument_types(
     signature: &FunctionType,
     argument_types: &[ArgumentShape],
+    relation: OverloadRelation,
 ) -> bool {
     let parameters = signature.parameters();
     let expected = parameters.len();
@@ -3278,9 +3302,19 @@ fn signature_accepts_argument_types(
         // A parameter standing at the degradation sentinel proves nothing about
         // this position; committing to such an overload would hand its (equally
         // degraded) return to every consumer.
-        !names_open_parameter(&parameter_type)
-            && is_assignable_to(argument_type, &parameter_type)
-            && !weak_type_rejects(argument_type, &parameter_type)
+        let related = match (relation, argument.written_keys.as_deref()) {
+            (OverloadRelation::Subtype, Some(keys)) => {
+                let shape = surge_ts_types::LiteralShape::Object(
+                    keys.iter()
+                        .map(|key| (std::sync::Arc::from(key.as_str()), surge_ts_types::LiteralShape::Regular))
+                        .collect(),
+                );
+                surge_ts_types::is_subtype_of_expression(argument_type, &shape, &parameter_type)
+            }
+            (OverloadRelation::Subtype, None) => surge_ts_types::is_subtype_of(argument_type, &parameter_type),
+            (OverloadRelation::Assignable, _) => is_assignable_to(argument_type, &parameter_type),
+        };
+        !names_open_parameter(&parameter_type) && related && !weak_type_rejects(argument_type, &parameter_type)
     })
 }
 

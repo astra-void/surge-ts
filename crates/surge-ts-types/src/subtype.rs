@@ -51,6 +51,13 @@ pub fn is_subtype_of(source: &Type, target: &Type) -> bool {
     Relater::new(Relation::Subtype).related(source, &REGULAR, false, target, &REGULAR)
 }
 
+/// `isTypeRelatedTo(source, target, subtypeRelation)` for an expression's own
+/// type, read with the literal shape the expression was written in: an object
+/// literal need not have the target's optional properties.
+pub fn is_subtype_of_expression(source: &Type, source_shape: &LiteralShape, target: &Type) -> bool {
+    Relater::new(Relation::Subtype).related(source, source_shape, source_shape.is_object_literal(), target, &REGULAR)
+}
+
 /// `isTypeRelatedTo(source, target, strictSubtypeRelation)`.
 pub fn is_strict_subtype_of(source: &Type, target: &Type) -> bool {
     Relater::new(Relation::StrictSubtype).related(source, &REGULAR, false, target, &REGULAR)
