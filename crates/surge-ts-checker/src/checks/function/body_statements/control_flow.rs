@@ -531,6 +531,22 @@ pub(crate) fn check_function_for_of_statement(
     if let Some((target, span)) = &for_of_statement.head_target {
         let visible_symbols = visible_symbols(scopes);
         let _ = evaluate_expression(target, *span, &visible_symbols, ctx);
+        // A member head is written each iteration (`checkReferenceExpression`);
+        // the head is that member itself, not a default inside a pattern.
+        if let Some(span) = span
+            && matches!(
+                for_of_statement.binding_name,
+                surge_ts_syntax::ParsedBindingName::Unsupported { span: Some(head) } if head == *span
+            )
+            && matches!(
+                target,
+                surge_ts_syntax::ParsedExpression::PropertyAccess { .. }
+                    | surge_ts_syntax::ParsedExpression::ElementAccess { .. }
+                    | surge_ts_syntax::ParsedExpression::IndexAccess { .. }
+            )
+        {
+            crate::checks::expr::report_readonly_member_write(target, *span, &visible_symbols, ctx);
+        }
     }
     if !iterable_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);

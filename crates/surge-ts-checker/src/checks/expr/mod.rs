@@ -32,7 +32,9 @@ pub(crate) use operand_types::{
     check_object_spread_type,
     is_definitely_not_iterable,
 };
-pub(crate) use operand_writes::{check_delete_operand, check_update_operand, update_result_type};
+pub(crate) use operand_writes::{
+    check_delete_operand, check_update_operand, report_readonly_member_write, update_result_type,
+};
 pub(crate) use unresolved::{
     EnclosingClassMembers, UnresolvedNameSite, cannot_find_name_message,
     export_assignment_target_is_exempt, is_es2015_or_later_constructor_name, is_primitive_type_name,

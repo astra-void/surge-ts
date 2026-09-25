@@ -275,6 +275,38 @@ fn type_includes_undefined(ty: &Type) -> bool {
     }
 }
 
+/// tsc's `isAssignmentToReadonlyEntity` for a member write target: TS2540 on
+/// a read-only member, and on every member of a namespace import
+/// (`import * as ns`), which the module object never lets anyone write. A
+/// member the module does not export is not a read-only write (its read
+/// reports it); nor is a member of a local that shadows the import.
+pub(crate) fn report_readonly_member_write(
+    target: &ParsedExpression,
+    span: SyntaxTextSpan,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let Some((receiver, property_name)) = write_target(target, symbols, ctx) else {
+        return false;
+    };
+    let through_namespace_import = operand_property(target).is_some_and(|(object, _)| {
+        matches!(object, ParsedExpression::Identifier { name, .. }
+            if ctx.is_namespace_import_binding(name)
+                && symbols.get(name).is_some_and(|visible| {
+                    // A module-level statement is evaluated against the module
+                    // table itself, lent out of the context meanwhile.
+                    ctx.symbols.get(name).is_none_or(|module| visible.ty == module.ty)
+                }))
+    }) && receiver.get_property_access_type(&property_name).is_some();
+    if !through_namespace_import && !property_write_is_readonly(&receiver, &property_name, ctx) {
+        return false;
+    }
+    let file_name = ctx.file_name.clone();
+    let anchor = property_name_span(target).unwrap_or(span);
+    ctx.push(Diagnostic::ts2540(&property_name, file_name).with_span(convert_span(anchor)));
+    true
+}
+
 /// `x++` / `--o.p`. Mirrors the `++`/`--` arms of `checkPre/PostfixUnaryExpression`:
 /// the write is rejected first (tsc's `checkIdentifier` reports it and hands back
 /// the error type, which then satisfies the arithmetic check), and only an
@@ -315,12 +347,7 @@ pub(crate) fn check_update_operand(
                 return;
             }
         }
-    } else if let Some((receiver, property_name)) = write_target(operand, symbols, ctx)
-        && property_write_is_readonly(&receiver, &property_name, ctx)
-    {
-        let file_name = ctx.file_name.clone();
-        let anchor = property_name_span(operand).unwrap_or(span);
-        ctx.push(Diagnostic::ts2540(&property_name, file_name).with_span(convert_span(anchor)));
+    } else if report_readonly_member_write(operand, span, symbols, ctx) {
         return;
     }
 

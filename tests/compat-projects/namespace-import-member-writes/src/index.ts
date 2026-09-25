@@ -14,3 +14,12 @@ export function inBody() {
 export function shadowed(values: { counter: number }) {
     values.counter = 4;
 }
+
+values.counter++;
+values["counter"]--;
+for (values.counter of [1, 2]) {}
+
+export function updates() {
+    values.counter++;
+    for (values.counter of [3]) {}
+}
