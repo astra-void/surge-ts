@@ -524,6 +524,10 @@ pub(crate) struct CheckerContext {
     /// nested container reading them reports as TS2454 (tsc's
     /// `isNeverInitialized`); see `flow::never_initialized`.
     pub(crate) inherited_never_initialized: Vec<Arc<str>>,
+    /// The bindings the function body being checked assigns anywhere, which
+    /// tsc's `isConstantReference` reads: an element key named by one is not a
+    /// reference its guards narrow.
+    pub(crate) container_assigned_bindings: Arc<std::collections::HashSet<Arc<str>>>,
     /// The never-initialized bindings typed by a type parameter whose
     /// constraint carries `undefined`: a read of one where tsc substitutes the
     /// constraint is not reported (see `FunctionFlowState::constraint_exempt`).
@@ -822,6 +826,7 @@ impl CheckerContext {
             merge_script_interfaces_with_globals: false,
             definite_writes: Arc::default(),
             inherited_never_initialized: Vec::new(),
+            container_assigned_bindings: Arc::default(),
             never_initialized_constraint_exempt: HashSet::new(),
             file_type_only_import_names: FxHashSet::default(),
             file_type_only_alias_names: FxHashMap::default(),
@@ -1002,6 +1007,7 @@ impl CheckerContext {
             merge_script_interfaces_with_globals: false,
             definite_writes: Arc::default(),
             inherited_never_initialized: Vec::new(),
+            container_assigned_bindings: Arc::default(),
             never_initialized_constraint_exempt: HashSet::new(),
             file_type_only_import_names: FxHashSet::default(),
             file_type_only_alias_names: FxHashMap::default(),
@@ -1626,6 +1632,7 @@ impl CheckerContext {
         self.deferred_grammar_findings.clear();
         self.definite_writes = Arc::default();
         self.inherited_never_initialized.clear();
+        self.container_assigned_bindings = Arc::default();
         self.never_initialized_constraint_exempt.clear();
         self.non_exhaustive_switches.clear();
         self.exhaustive_switches.clear();

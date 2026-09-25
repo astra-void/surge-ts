@@ -244,7 +244,12 @@ pub fn remove_definitely_falsy(ty: &Type) -> Type {
         return remove_definitely_falsy(&flattened);
     }
     let Type::Union(union) = ty else {
-        return remove_nullish(ty);
+        return match ty {
+            Type::BooleanLiteral(false) => Type::Never,
+            Type::StringLiteral(value) if value.is_empty() => Type::Never,
+            Type::NumberLiteral(literal) if literal.value == "0" => Type::Never,
+            _ => remove_nullish(ty),
+        };
     };
     let kept: Vec<Type> = union
         .types()

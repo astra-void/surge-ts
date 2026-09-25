@@ -6,14 +6,66 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use surge_ts_syntax::{
-    ParsedArrowFunctionBody, ParsedBindingName, ParsedExpression, ParsedForBindingKind,
-    ParsedFunctionBodyStatement,
+    ParsedArrowFunctionBody, ParsedBindingName, ParsedClassMember, ParsedExportDeclaration,
+    ParsedExpression, ParsedForBindingKind, ParsedFunctionBodyStatement, ParsedStatement,
 };
 
 pub(crate) fn assigned_bindings(body: &[ParsedFunctionBodyStatement]) -> HashSet<Arc<str>> {
     let mut names = HashSet::new();
     statements(body, &mut names);
     names
+}
+
+/// [`assigned_bindings`] for a file's top-level statements, the container a
+/// module-scope binding is declared in.
+pub(crate) fn module_assigned_bindings(statements: &[ParsedStatement]) -> HashSet<Arc<str>> {
+    let mut names = HashSet::new();
+    module_statements(statements, &mut names);
+    names
+}
+
+fn module_statements(module: &[ParsedStatement], names: &mut HashSet<Arc<str>>) {
+    for statement in module {
+        match statement {
+            ParsedStatement::VariableDeclaration(variable) => {
+                if let Some(initializer) = &variable.initializer {
+                    expression(initializer, names);
+                }
+            }
+            ParsedStatement::Assignment(assignment) => {
+                names.insert(assignment.target_name.as_str().into());
+                expression(&assignment.value, names);
+            }
+            ParsedStatement::MemberAssignment(assignment) => {
+                expression(&assignment.target, names);
+                expression(&assignment.value, names);
+            }
+            ParsedStatement::Expression(value) => expression(value, names),
+            ParsedStatement::Block(body) => statements(body, names),
+            ParsedStatement::If(statement) => {
+                expression(&statement.condition, names);
+                statements(&statement.then_body, names);
+                statements(&statement.else_body, names);
+            }
+            ParsedStatement::FunctionDeclaration(function) => statements(&function.body, names),
+            ParsedStatement::ClassDeclaration(class) => {
+                for member in &class.members {
+                    match member {
+                        ParsedClassMember::Method(method) => statements(&method.body, names),
+                        ParsedClassMember::Constructor(constructor) => statements(&constructor.body, names),
+                        _ => {}
+                    }
+                }
+            }
+            ParsedStatement::NamespaceDeclaration(namespace) => module_statements(&namespace.statements, names),
+            ParsedStatement::ExportDeclaration(export) => {
+                if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
+                    module_statements(std::slice::from_ref(declaration.as_ref()), names);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn statements(body: &[ParsedFunctionBodyStatement], names: &mut HashSet<Arc<str>>) {

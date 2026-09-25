@@ -140,7 +140,105 @@ pub(super) fn narrowed_element_references(
         }
         narrowed.push((key, narrowed_ty, declared));
     }
+    narrowed_element_property_references(condition, branch_is_true, symbols, ctx, &mut narrowed);
     narrowed
+}
+
+/// tsc's `isMatchingReference` reads `xs[0]` as a reference like `xs.p`, so a
+/// guard on a property reached through it (`!results[0].success`,
+/// `xs[i].kind === "a"`) narrows the access. The condition is read with each
+/// keyed access standing as a name, which the reference-guard collector then
+/// sees as a base with a property path.
+fn narrowed_element_property_references(
+    condition: &ParsedExpression,
+    branch_is_true: bool,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+    narrowed: &mut Vec<(String, Type, Type)>,
+) {
+    let mut accesses: Vec<(String, ParsedExpression)> = Vec::new();
+    let mut rooted = condition.clone();
+    root_element_accesses(&mut rooted, &mut accesses);
+    if accesses.is_empty() {
+        return;
+    }
+    let mut guards = Vec::new();
+    super::collect_reference_guards(
+        &rooted,
+        branch_is_true,
+        &super::compared_operand_type(symbols),
+        &mut guards,
+    );
+    for (base, path, guard) in guards {
+        if path.is_empty() {
+            continue;
+        }
+        let Some((_, access)) = accesses.iter().find(|(key, _)| *key == base) else {
+            continue;
+        };
+        if !element_key_is_constant(access, symbols, ctx) {
+            continue;
+        }
+        let declared = match crate::infer::infer_expression(access, symbols, ctx) {
+            crate::infer::InferredExpression::Known(ty) if !ty.is_unknown() => ty,
+            _ => continue,
+        };
+        let Some(narrowed_ty) = super::narrowed_reference_type(&declared, &path, guard) else {
+            continue;
+        };
+        if narrowed_ty == declared {
+            continue;
+        }
+        narrowed.push((base, narrowed_ty, declared));
+    }
+}
+
+/// tsc's `isMatchingReference` for an element access: its key is a literal or
+/// a constant reference (`isConstantReference` — a `const`, or a parameter or
+/// `let` its function never assigns), so `arr[i]` stops narrowing once `i += 1`.
+fn element_key_is_constant(access: &ParsedExpression, symbols: &SymbolTable, ctx: &CheckerContext) -> bool {
+    let index = match access {
+        ParsedExpression::ElementAccess { index, .. }
+        | ParsedExpression::IndexAccess { index, .. }
+        | ParsedExpression::OptionalIndexAccess { index, .. } => index,
+        _ => return false,
+    };
+    match index.as_ref() {
+        ParsedExpression::NumberLiteral(_) | ParsedExpression::StringLiteral(_) => true,
+        ParsedExpression::Identifier { name, .. } => symbols.get(name).is_some_and(|symbol| match symbol.kind {
+            crate::symbols::SymbolKind::Const | crate::symbols::SymbolKind::ForInNumericKey => true,
+            crate::symbols::SymbolKind::Parameter | crate::symbols::SymbolKind::Let => {
+                !ctx.container_assigned_bindings.contains(name.as_str())
+            }
+            _ => false,
+        }),
+        _ => false,
+    }
+}
+
+fn root_element_accesses(expression: &mut ParsedExpression, accesses: &mut Vec<(String, ParsedExpression)>) {
+    match expression {
+        ParsedExpression::ElementAccess { .. }
+        | ParsedExpression::IndexAccess { .. }
+        | ParsedExpression::OptionalIndexAccess { .. } => {
+            let Some(key) = element_access_parts(expression) else {
+                return;
+            };
+            if !accesses.iter().any(|(existing, _)| *existing == key) {
+                accesses.push((key.clone(), expression.clone()));
+            }
+            *expression = ParsedExpression::Identifier { name: key, span: None };
+        }
+        ParsedExpression::Unary { operand, .. } => root_element_accesses(operand, accesses),
+        ParsedExpression::Binary { left, right, .. } | ParsedExpression::Logical { left, right, .. } => {
+            root_element_accesses(left, accesses);
+            root_element_accesses(right, accesses);
+        }
+        ParsedExpression::PropertyAccess { object, .. }
+        | ParsedExpression::OptionalPropertyAccess { object, .. }
+        | ParsedExpression::NonNullAssertion { expression: object, .. } => root_element_accesses(object, accesses),
+        _ => {}
+    }
 }
 
 /// `isIdentifier(node.arguments[0])`: a type predicate over an element access

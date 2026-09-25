@@ -19,7 +19,7 @@ mod module_scope;
 mod never_initialized;
 mod unassigned_reads;
 
-pub(crate) use assigned::assigned_bindings;
+pub(crate) use assigned::{assigned_bindings, module_assigned_bindings};
 pub(crate) use branch::*;
 pub(crate) use expr::*;
 pub(crate) use facts::*;
@@ -415,6 +415,10 @@ impl FunctionFlowState {
 
     pub(crate) fn set_assigned_bindings(&mut self, names: std::collections::HashSet<Arc<str>>) {
         self.assigned_bindings = Arc::new(names);
+    }
+
+    pub(crate) fn assigned_bindings(&self) -> Arc<std::collections::HashSet<Arc<str>>> {
+        Arc::clone(&self.assigned_bindings)
     }
 
     pub(crate) fn is_binding_assigned(&self, name: &str) -> bool {

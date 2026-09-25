@@ -23,6 +23,7 @@ pub(crate) fn check_program_file_statements(
     ctx: &mut CheckerContext,
 ) {
     let classes = super::forward_references::file_class_declarations(statements);
+    ctx.container_assigned_bindings = std::sync::Arc::new(crate::flow::module_assigned_bindings(statements));
     check_overload_implementation_compatibility(statements, file_index, function_signatures, ctx);
     for (statement_index, statement) in statements.iter().cloned().enumerate() {
         let statement = expand_module_if_alias(statement, &statements[..statement_index]);
@@ -508,6 +509,13 @@ fn narrowed_module_symbols(
         condition,
         narrowed.as_ref().unwrap_or(&base),
         branch_is_true,
+        ctx,
+    )
+    .or(narrowed);
+    let narrowed = crate::checks::function::narrow_element_reference_guards_symbol_table(
+        condition,
+        branch_is_true,
+        narrowed.as_ref().unwrap_or(&base),
         ctx,
     )
     .or(narrowed);

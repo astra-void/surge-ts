@@ -2688,6 +2688,14 @@ pub(crate) fn check_function_body_with_signature_and_this(
     );
     let saved_never_initialized =
         crate::flow::enter_container(type_parameters, &parameters, &body, &mut flow_state, ctx);
+    // An outer binding is assigned wherever its own container assigns it.
+    let own_assigned = flow_state.assigned_bindings();
+    let container_assigned = if ctx.container_assigned_bindings.is_empty() {
+        own_assigned
+    } else {
+        std::sync::Arc::new(own_assigned.union(&ctx.container_assigned_bindings).cloned().collect())
+    };
+    let saved_assigned_bindings = std::mem::replace(&mut ctx.container_assigned_bindings, container_assigned);
     crate::flow::check_parameter_default_flow(&parameters, &flow_state, ctx);
     flow_state.hoist_vars(
         crate::flow::collect_hoisted_vars(&body)
@@ -2763,6 +2771,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
         ctx.close_contextual_return_frame()
     });
     ctx.inherited_never_initialized = saved_never_initialized;
+    ctx.container_assigned_bindings = saved_assigned_bindings;
 
     if !is_constructor {
         ctx.constructor_writable_members = outer_constructor_writable_members;

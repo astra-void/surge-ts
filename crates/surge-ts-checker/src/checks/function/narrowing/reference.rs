@@ -345,7 +345,12 @@ pub(super) fn narrow_property_path(ty: &Type, path: &[String], guard: ReferenceG
                 match narrow_property_path(member, path, guard) {
                     Some(narrowed) => {
                         narrowed_any = true;
-                        members.push(narrowed);
+                        // tsc's `narrowTypeByDiscriminant`: a member whose
+                        // property the guard leaves nothing of cannot be the
+                        // narrowed value (`!o.r.success` drops `success: true`).
+                        if !matches!(property_path_leaf_type(&narrowed, path), Some(Type::Never)) {
+                            members.push(narrowed);
+                        }
                     }
                     // A truthy test of `base?.p` also proves `base` itself is
                     // not nullish — a nullish base makes the whole chain
