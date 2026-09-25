@@ -580,6 +580,19 @@ fn evaluate_expression_unsettled(
             }
             result
         }
+        ParsedExpression::Yield {
+            operand,
+            operand_span,
+            delegate,
+            span,
+        } => evaluate_yield_expression(
+            operand.as_deref(),
+            operand_span.or(fallback_span),
+            *delegate,
+            span.or(fallback_span),
+            symbols,
+            ctx,
+        ),
         ParsedExpression::Await {
             operand,
             operand_span,
@@ -1299,6 +1312,73 @@ pub(crate) fn literal_shape(expression: &ParsedExpression) -> surge_ts_types::Li
         }
         ParsedExpression::ArrowFunction(function) if function.return_type.is_none() => LiteralShape::Opaque,
         _ => LiteralShape::Regular,
+    }
+}
+
+/// tsc's `checkYieldExpression`: in a generator with a return type
+/// annotation, a `yield` operand is contextually typed by the declared yield
+/// type and must be assignable to it (an async generator's once awaited; a
+/// bare `yield` yields `undefined`, a `yield*` what its operand iterates).
+/// Outside a generator the operand is not checked. What the expression
+/// produces is the declared next type, which surge leaves `any`.
+fn evaluate_yield_expression(
+    operand: Option<&ParsedExpression>,
+    operand_span: Option<SyntaxTextSpan>,
+    delegate: bool,
+    span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    if !ctx.in_generator_function {
+        return InferredExpression::Known(Type::Any);
+    }
+    let yield_type = ctx
+        .generator_yield_type
+        .clone()
+        .filter(|ty| !matches!(ty, Type::Any) && !ty.is_unmodelled());
+    // tsc still types an operand from the generator's contextual return type
+    // (and a `yield*` operand's elements from the yield type), which surge
+    // does not model; the mismatch of what it yields is related below.
+    let expected = match &yield_type {
+        Some(yield_type) if !delegate && !ctx.in_async_body => yield_type.clone(),
+        _ => Type::Unknown,
+    };
+    let Some(operand) = operand else {
+        if let Some(yield_type) = yield_type
+            && surge_ts_types::strict_null_checks()
+            && !is_assignable_to(&Type::Undefined, &yield_type)
+        {
+            let diagnostic = Diagnostic::ts2322("undefined", yield_type.name(), ctx.file_name.clone());
+            ctx.push(diagnostic_with_syntax_span(diagnostic, span));
+        }
+        return InferredExpression::Known(Type::Any);
+    };
+    let evaluated = crate::checks::expected::evaluate_expression_with_expected_type(
+        operand,
+        operand_span,
+        Some(&expected),
+        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+        symbols,
+        ctx,
+    );
+    if let (Some(yield_type), InferredExpression::Known(operand_type)) = (yield_type, evaluated) {
+        let yielded = if delegate { iterated_element_type(&operand_type) } else { Some(operand_type) };
+        if let Some(yielded) = yielded {
+            let yielded = if ctx.in_async_body { crate::checks::call::awaited_type(&yielded) } else { yielded };
+            crate::checks::var::report_initializer_mismatch(&yielded, &yield_type, operand_span, ctx);
+        }
+    }
+    InferredExpression::Known(Type::Any)
+}
+
+/// The element type a `yield*` operand iterates: an array's or tuple's
+/// elements, or the yield type argument of a lib iterable or generator.
+fn iterated_element_type(iterable: &Type) -> Option<Type> {
+    match iterable {
+        Type::Array(element) => Some((**element).clone()),
+        Type::Tuple(elements) => Some(union_type(elements.clone())),
+        Type::Reference(_) => crate::checks::function::generator_yield_type_argument(iterable),
+        _ => None,
     }
 }
 

@@ -2436,6 +2436,13 @@ pub(crate) fn check_function_body_with_signature_and_this(
         ctx.open_contextual_return_frame();
         let outer_async_body = std::mem::replace(&mut ctx.in_async_body, is_async);
         let outer_generator_body = std::mem::replace(&mut ctx.in_generator_body, is_generator);
+        let outer_yield_type = std::mem::replace(
+            &mut ctx.generator_yield_type,
+            (is_generator && has_explicit_return_type)
+                .then(|| super::body_statements::generator_yield_type_argument(function_type.return_type()))
+                .flatten(),
+        );
+        let outer_generator_function = std::mem::replace(&mut ctx.in_generator_function, is_generator);
         // Every caller is a declaration or a class member, neither of which is
         // ever contextually typed, so an unannotated one's returns relate to
         // nothing — Go checks a return only against the annotation.
@@ -2451,6 +2458,8 @@ pub(crate) fn check_function_body_with_signature_and_this(
         );
         ctx.in_async_body = outer_async_body;
         ctx.in_generator_body = outer_generator_body;
+        ctx.generator_yield_type = outer_yield_type;
+        ctx.in_generator_function = outer_generator_function;
         BODY_RETURN_CAPTURE.with(|slot| {
             if let Some((depth, captured)) = slot.borrow_mut().as_mut()
                 && *depth == body_depth

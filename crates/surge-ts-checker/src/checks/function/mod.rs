@@ -2347,6 +2347,13 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 );
                 let outer_generator_body =
                     std::mem::replace(&mut ctx.in_generator_body, annotated_generator);
+                let outer_yield_type = std::mem::replace(
+                    &mut ctx.generator_yield_type,
+                    annotated_generator
+                        .then(|| generator_yield_type_argument(&return_type))
+                        .flatten(),
+                );
+                let outer_generator_function = std::mem::replace(&mut ctx.in_generator_function, is_generator);
                 check_function_body(
                     statements,
                     return_type_for_body,
@@ -2356,6 +2363,8 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 );
                 ctx.in_async_body = outer_async_body;
                 ctx.in_generator_body = outer_generator_body;
+                ctx.generator_yield_type = outer_yield_type;
+                ctx.in_generator_function = outer_generator_function;
                 let body_flow = match recheck_body {
                     Some(body)
                         if !ctx.non_exhaustive_switches.is_empty()

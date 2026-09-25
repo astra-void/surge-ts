@@ -152,6 +152,18 @@ pub(crate) fn check_expression_flow_impl(
             statement_index,
             ctx,
         ),
+        ParsedExpression::Yield {
+            operand: Some(operand),
+            operand_span,
+            ..
+        } => check_expression_flow_impl(
+            operand,
+            operand_span.or(fallback_span),
+            flow_state,
+            statement_index,
+            ctx,
+        ),
+        ParsedExpression::Yield { operand: None, .. } => FlowCheck::Clear,
         ParsedExpression::Update {
             operand,
             operand_span,

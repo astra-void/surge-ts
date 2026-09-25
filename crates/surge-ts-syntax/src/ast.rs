@@ -1435,6 +1435,14 @@ pub enum ParsedExpression {
         operand: Box<ParsedExpression>,
         operand_span: Option<TextSpan>,
     },
+    /// `yield x` / `yield* x` / `yield`. The operand is checked against the
+    /// yield type of an annotated generator (`checkYieldExpression`).
+    Yield {
+        operand: Option<Box<ParsedExpression>>,
+        operand_span: Option<TextSpan>,
+        delegate: bool,
+        span: Option<TextSpan>,
+    },
     Binary {
         left: Box<ParsedExpression>,
         left_span: Option<TextSpan>,
@@ -2468,6 +2476,11 @@ impl ParsedExpression {
             ParsedExpression::Unary { operand, .. }
             | ParsedExpression::Update { operand, .. }
             | ParsedExpression::Await { operand, .. } => visit(operand),
+            ParsedExpression::Yield { operand, .. } => {
+                if let Some(operand) = operand {
+                    visit(operand);
+                }
+            }
             ParsedExpression::ObjectRest { source, .. } => visit(source),
             ParsedExpression::Binary { left, right, .. }
             | ParsedExpression::Logical { left, right, .. }

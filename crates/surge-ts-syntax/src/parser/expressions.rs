@@ -98,6 +98,24 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
         Expression::ParenthesizedExpression(parenthesized_expression) => {
             return parse_expression(&parenthesized_expression.expression);
         }
+        Expression::YieldExpression(yield_expression) => {
+            let (operand, operand_span) = match &yield_expression.argument {
+                Some(argument) => {
+                    let (operand, operand_span) = parse_expression(argument);
+                    (Some(Box::new(operand)), Some(text_span_from_oxc_span(operand_span)))
+                }
+                None => (None, None),
+            };
+            return (
+                ParsedExpression::Yield {
+                    operand,
+                    operand_span,
+                    delegate: yield_expression.delegate,
+                    span: Some(text_span_from_oxc_span(yield_expression.span)),
+                },
+                yield_expression.span,
+            );
+        }
         Expression::AwaitExpression(await_expression) => {
             let (operand, operand_span) = parse_expression(&await_expression.argument);
             return (

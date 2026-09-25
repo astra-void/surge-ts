@@ -288,6 +288,16 @@ pub(crate) fn check_function_return_statement(
 /// the iterator and iterable types a generator may be declared as), `any` when
 /// the argument is left to its default.
 fn generator_return_type_argument(declared: &Type) -> Option<Type> {
+    generator_type_argument(declared, 1)
+}
+
+/// The yield type a generator annotated `declared` yields: the first
+/// argument of the lib iterator type it names.
+pub(crate) fn generator_yield_type_argument(declared: &Type) -> Option<Type> {
+    generator_type_argument(declared, 0)
+}
+
+fn generator_type_argument(declared: &Type, index: usize) -> Option<Type> {
     let Type::Reference(reference) = declared else {
         return None;
     };
@@ -305,5 +315,5 @@ fn generator_return_type_argument(declared: &Type) -> Option<Type> {
             | "IteratorObject"
             | "AsyncIteratorObject"
     )
-    .then(|| reference.arguments.get(1).cloned().unwrap_or(Type::Any))
+    .then(|| reference.arguments.get(index).cloned().unwrap_or(Type::Any))
 }
