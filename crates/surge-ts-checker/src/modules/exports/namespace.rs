@@ -109,9 +109,11 @@ pub(crate) fn compute_namespace_export_object_type(export_table: &ModuleExportTa
             continue;
         }
         property_count += 1;
+        // A `const` is read-only through the module object too (`isReadonlySymbol`).
         properties.insert(
             name.clone(),
-            surge_ts_types::ObjectProperty::required(namespace_member_type(symbol)),
+            surge_ts_types::ObjectProperty::required(namespace_member_type(symbol))
+                .with_readonly(matches!(symbol.kind, crate::symbols::SymbolKind::Const)),
         );
     }
 

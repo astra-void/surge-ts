@@ -663,6 +663,108 @@ pub(crate) fn apply_expando_members(
     }
 }
 
+/// tsc's binder declares `fn.x = value` on a function a body declares
+/// wherever the write sits in that body (`bindSpecialPropertyAssignment`), so
+/// a closure checked before the write already reads the member. Applied once
+/// the body's function declarations are hoisted; the write itself still
+/// declares its own type when it is reached.
+pub(crate) fn apply_body_expando_members(
+    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+    scopes: &mut crate::symbols::ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+    let functions: Vec<&str> = body
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::Function(function) => Some(function.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    if functions.is_empty() {
+        return;
+    }
+    let mut assignments = Vec::new();
+    for statement in body {
+        match statement {
+            Statement::MemberAssignment(assignment) => assignments.push(assignment.as_ref()),
+            Statement::If(if_statement) => {
+                collect_nested_member_assignments(&if_statement.then_body, &[], &mut assignments);
+                collect_nested_member_assignments(&if_statement.else_body, &[], &mut assignments);
+            }
+            Statement::Block(block) => collect_nested_member_assignments(block, &[], &mut assignments),
+            _ => {}
+        }
+    }
+    for assignment in assignments {
+        let surge_ts_syntax::ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            is_bracketed: false,
+            ..
+        } = &assignment.target
+        else {
+            continue;
+        };
+        let surge_ts_syntax::ParsedExpression::Identifier { name, .. } = object.as_ref() else {
+            continue;
+        };
+        // A function's `prototype` is its own member, never an expando.
+        if !functions.contains(&name.as_str()) || property_name == "prototype" {
+            continue;
+        }
+        let Some(symbol) = scopes.resolve(name).cloned() else {
+            continue;
+        };
+        let (call_signature, mut properties) = match &symbol.ty {
+            Type::Function(function) => (function.clone(), surge_ts_types::PropertyMap::default()),
+            Type::Object(object) => {
+                let Some(signature) = object.call_signature() else {
+                    continue;
+                };
+                (signature.clone(), (*object.properties).clone())
+            }
+            _ => continue,
+        };
+        let reported = ctx.diagnostics().len();
+        let inferred = crate::infer::infer_expression(&assignment.value, scopes.visible_symbols(), ctx);
+        ctx.truncate_diagnostics(reported);
+        let crate::infer::InferredExpression::Known(value_type) = inferred else {
+            continue;
+        };
+        // A member whose type surge could not complete would be written
+        // against that gap when the statement is reached, and what its value
+        // reports discarded; that write declares it instead.
+        if crate::checks::assign::type_contains_unknown(&value_type) {
+            continue;
+        }
+        let value_type = crate::checks::var::widen_implicit_variable_initializer_type(
+            SymbolKind::Let,
+            &assignment.value,
+            &value_type,
+            false,
+        );
+        let member_type = match properties.get(property_name.as_str()) {
+            Some(existing) => surge_ts_types::union_type(vec![existing.ty.clone(), value_type]),
+            None => value_type,
+        };
+        properties.insert(
+            property_name.as_str().into(),
+            surge_ts_types::ObjectProperty::required(member_type),
+        );
+        let _ = scopes.update_visible(
+            name,
+            SymbolInfo {
+                ty: Type::Object(
+                    crate::metrics::alloc_object_type(properties, None).with_call_signature(call_signature),
+                ),
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            },
+        );
+    }
+}
+
 /// Member writes inside `if` and bare blocks: tsc binds an expando wherever it
 /// sits in its container, not only at the top of it. A block that declares the
 /// receiver's name itself (`const Y = …; Y.test = 42`) writes to its own
@@ -1808,7 +1910,8 @@ fn resolve_namespace_value_annotations(
                     );
                     properties.insert(
                         variable.name.as_str().into(),
-                        surge_ts_types::ObjectProperty::required(ty),
+                        surge_ts_types::ObjectProperty::required(ty)
+                            .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const)),
                     );
                     continue;
                 }
@@ -1822,7 +1925,8 @@ fn resolve_namespace_value_annotations(
                 }
                 properties.insert(
                     variable.name.as_str().into(),
-                    surge_ts_types::ObjectProperty::required(resolved),
+                    surge_ts_types::ObjectProperty::required(resolved)
+                        .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const)),
                 );
             }
             ParsedStatement::NamespaceDeclaration(inner) => {
@@ -1940,7 +2044,8 @@ pub(crate) fn fill_namespace_value_properties(
             ParsedStatement::VariableDeclaration(variable) => {
                 properties.insert(
                     variable.name.as_str().into(),
-                    ObjectProperty::required(Type::Any),
+                    ObjectProperty::required(Type::Any)
+                        .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const)),
                 );
             }
             ParsedStatement::ClassDeclaration(class) => {

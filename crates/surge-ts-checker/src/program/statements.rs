@@ -323,6 +323,7 @@ pub(crate) fn check_module_assignment(
     let target_name = assignment.target_name.clone();
     let value = assignment.value.clone();
     let value_span = assignment.value_span;
+    let compound = crate::flow::is_compound_assignment(&target_name, assignment.target_span, &value);
     assign::check_assignment(assignment, ctx);
 
     let Some(original) = ctx.symbols.get(&target_name) else {
@@ -342,7 +343,11 @@ pub(crate) fn check_module_assignment(
     }
 
     let mut scopes = crate::symbols::ScopeStack::from_root(symbols);
-    check_function::update_assigned_symbol_type(&target_name, inferred, &mut scopes);
+    if compound {
+        check_function::widen_compound_assigned_symbol_type(&target_name, &mut scopes);
+    } else {
+        check_function::update_assigned_symbol_type(&target_name, inferred, &mut scopes);
+    }
     let Some(updated) = scopes.resolve(&target_name) else {
         return;
     };

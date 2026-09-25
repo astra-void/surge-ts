@@ -1076,6 +1076,9 @@ export const fixturePresets: Record<string, string> = {
   'module-es2015-import-forms': path.join(workspaceRoot, 'tests/compat-projects/module-es2015-import-forms/tsconfig.json'),
   'class-member-duplicates': path.join(workspaceRoot, 'tests/compat-projects/class-member-duplicates/tsconfig.json'),
   'signature-pattern-implicit-any': path.join(workspaceRoot, 'tests/compat-projects/signature-pattern-implicit-any/tsconfig.json'),
+  'namespace-import-member-writes': path.join(workspaceRoot, 'tests/compat-projects/namespace-import-member-writes/tsconfig.json'),
+  'member-write-values-checked': path.join(workspaceRoot, 'tests/compat-projects/member-write-values-checked/tsconfig.json'),
+  'assignment-reduction-rules': path.join(workspaceRoot, 'tests/compat-projects/assignment-reduction-rules/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

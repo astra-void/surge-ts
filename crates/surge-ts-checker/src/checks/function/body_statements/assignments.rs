@@ -74,7 +74,9 @@ pub(crate) fn check_function_assignment(
         if checked {
             ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
         }
-        if !super::evolving_arrays::assign_evolving_array(
+        if compound {
+            widen_compound_assigned_symbol_type(&target_name, scopes);
+        } else if !super::evolving_arrays::assign_evolving_array(
             &target_name,
             assigns_empty_array,
             &inferred_value,
@@ -247,6 +249,43 @@ fn tuple_index_out_of_bounds(
         None => diagnostic,
     });
     Some(Type::Undefined)
+}
+
+/// tsc checks a write's value whatever its target turns out to be
+/// (`checkBinaryLikeExpression` checks both operands before the assignment).
+/// With no target type there is no contextual type either; where the receiver
+/// is one surge could not model rather than tsc's error type, what that
+/// missing context would report is surge's gap and is suppressed.
+fn check_value_without_target(
+    assignment: &ParsedMemberAssignment,
+    receiver: Option<&Type>,
+    symbols: &crate::symbols::SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let degraded = !matches!(receiver, Some(Type::ErrorType));
+    if degraded {
+        ctx.degraded_expected_type_depth += 1;
+    }
+    let (value, value_span) = compound_operand(assignment).unwrap_or((&assignment.value, assignment.value_span));
+    let _ = evaluate_expression(value, value_span, symbols, ctx);
+    if degraded {
+        ctx.degraded_expected_type_depth -= 1;
+    }
+}
+
+/// The written operand of `o.p op= v`, which the parser carries as the value
+/// `o.p op v`: the target's own read is the write the caller already
+/// resolved, so only `v` is left to check.
+fn compound_operand(assignment: &ParsedMemberAssignment) -> Option<(&ParsedExpression, Option<surge_ts_syntax::TextSpan>)> {
+    let (left, left_span, right, right_span) = match &assignment.value {
+        ParsedExpression::Binary { left, left_span, right, right_span, .. }
+        | ParsedExpression::Logical { left, left_span, right, right_span, .. }
+        | ParsedExpression::NullishCoalescing { left, left_span, right, right_span } => {
+            (left, left_span, right, right_span)
+        }
+        _ => return None,
+    };
+    (*left_span == assignment.target_span && **left == assignment.target).then_some((right.as_ref(), *right_span))
 }
 
 /// tsc's `isReadonlySymbol` for the members surge records it for: a `readonly`
@@ -942,17 +981,26 @@ fn check_member_assignment_itself(
 
     let visible_symbols = visible_symbols(scopes);
 
-    // A module namespace object's members are read-only properties.
+    // A module namespace object's members are read-only properties. The
+    // member is resolved first: one the module does not export is reported as
+    // a read of it would be, not as a read-only write.
     if let ParsedExpression::Identifier { name, .. } = object.as_ref()
         && ctx.is_namespace_import_binding(name)
         && !scopes.declares_locally(name)
     {
-        if let Some(span) = property_span.or(assignment.target_span) {
+        let exported = match evaluate_expression(object, object_span.or(assignment.target_span), &visible_symbols, ctx) {
+            InferredExpression::Known(namespace) => namespace.get_property_access_type(property_name).is_some(),
+            _ => true,
+        };
+        if !exported {
+            let _ = evaluate_expression(&assignment.target, assignment.target_span, &visible_symbols, ctx);
+        } else if let Some(span) = property_span.or(assignment.target_span) {
             ctx.push(
                 Diagnostic::ts2540(property_name, ctx.file_name.clone())
                     .with_span(convert_span(span)),
             );
         }
+        check_value_without_target(&assignment, None, &visible_symbols, ctx);
         return;
     }
 
@@ -968,7 +1016,10 @@ fn check_member_assignment_itself(
         ctx,
     ) {
         InferredExpression::Known(ty) => ty,
-        _ => return,
+        receiver => {
+            check_value_without_target(&assignment, receiver.flowing_type().as_ref(), &visible_symbols, ctx);
+            return;
+        }
     };
     // A write through a possibly-undefined receiver (`decl.id = x` with
     // `decl` from an indexed read) is the same TS18048 a read reports.
@@ -1016,6 +1067,7 @@ fn check_member_assignment_itself(
         property_span.or(assignment.target_span),
         ctx,
     ) {
+        check_value_without_target(&assignment, None, &visible_symbols, ctx);
         return;
     }
     let accessor_write_type = accessor_write_type(&receiver_for_declaration, property_name, ctx)
@@ -1042,7 +1094,10 @@ fn check_member_assignment_itself(
         let receiver = declared_object_type.as_ref().unwrap_or(&object_type);
         if is_expando_receiver(object, &visible_symbols) {
             declare_expando_member(object, property_name, &assignment, scopes, ctx);
-        } else if let Type::Union(union) = receiver
+            return;
+        }
+        let receiver = receiver.clone();
+        if let Type::Union(union) = &receiver
             && union.types().iter().all(|member| {
                 matches!(member.peeled(), Type::Object(_))
                     && !crate::checks::expr::carries_leaked_type_parameter(member, ctx)
@@ -1050,7 +1105,7 @@ fn check_member_assignment_itself(
         {
             let diagnostic = crate::checks::expr::missing_property_diagnostic(
                 property_name,
-                receiver,
+                &receiver,
                 &visible_symbols,
                 ctx,
             );
@@ -1087,6 +1142,7 @@ fn check_member_assignment_itself(
                 ctx.push(diagnostic.with_span(convert_span(span)));
             }
         }
+        check_value_without_target(&assignment, Some(&receiver), &visible_symbols, ctx);
         return;
     };
 
@@ -1335,7 +1391,9 @@ pub(super) fn assignment_reduced_type(declared: Option<&Type>, assigned: Type) -
     if matches!(assigned, Type::Any) {
         return assigned;
     }
-    let Some(Type::Union(declared)) = declared else {
+    // A mapped type applied to a union (`Partial<A | B>`) is the union of its
+    // applications, as tsc's instantiation distributes it.
+    let Some(Type::Union(declared)) = declared.map(Type::peeled) else {
         return assigned;
     };
     let kept: Vec<Type> = declared
@@ -1363,8 +1421,23 @@ fn type_maybe_assignable_to(source: &Type, target: &Type) -> bool {
         Type::Union(union) => union
             .types()
             .iter()
-            .any(|member| member == target || is_assignable_to(member, target)),
-        _ => is_assignable_to(source, target),
+            .any(|member| member == target || assignable_with_common_properties(member, target)),
+        _ => assignable_with_common_properties(source, target),
+    }
+}
+
+/// Assignability with tsc's weak-type rule, which surge's relation leaves
+/// out: an object whose properties are all optional accepts nothing that
+/// shares none of them (`isRelatedTo`'s common-property check).
+fn assignable_with_common_properties(source: &Type, target: &Type) -> bool {
+    if !is_assignable_to(source, target) {
+        return false;
+    }
+    match target.peeled() {
+        Type::Object(object) if crate::checks::call::is_weak_object(&object) => {
+            crate::checks::call::shares_a_property(source, &object)
+        }
+        _ => true,
     }
 }
 
@@ -1460,12 +1533,19 @@ fn apply_assignment_expression(
     ctx: &mut CheckerContext,
 ) {
     let ParsedExpression::Assignment {
-        target_name, value, ..
+        target_name,
+        target_span,
+        value,
+        ..
     } = assignment
     else {
         return;
     };
     let before = scopes.resolve(target_name).map(|symbol| symbol.ty.clone());
+    if crate::flow::is_compound_assignment(target_name, *target_span, value) {
+        widen_compound_assigned_symbol_type(target_name, scopes);
+        return;
+    }
     let inferred_value = crate::infer::infer_expression(value, visible_symbols(scopes), ctx);
     let assigns_empty_array = matches!(
         value.as_ref(),
@@ -1529,6 +1609,44 @@ fn assignment_reduced_declared_type(
     })
 }
 
+/// tsc's `getTypeAtFlowAssignment` for a compound assignment (`x += v`): the
+/// binding holds the base type of what it held before, whatever the operation
+/// computes — it is never narrowed to the value.
+pub(crate) fn widen_compound_assigned_symbol_type(target_name: &str, scopes: &mut ScopeStack) {
+    let Some(symbol) = scopes.resolve(target_name) else {
+        return;
+    };
+    let widened = base_type_of_literal(&symbol.ty);
+    if widened == symbol.ty {
+        return;
+    }
+    let updated = SymbolInfo {
+        ty: widened,
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+    let declared = scopes
+        .visible_symbols()
+        .declared_type(target_name)
+        .cloned()
+        .unwrap_or_else(|| symbol.ty.clone());
+    scopes.insert_current_narrowed(target_name, updated, declared);
+}
+
+/// tsc's `getBaseTypeOfLiteralType`.
+fn base_type_of_literal(ty: &Type) -> Type {
+    match ty {
+        Type::StringLiteral(_) => Type::String,
+        Type::NumberLiteral(_) => Type::Number,
+        Type::BooleanLiteral(_) => Type::Boolean,
+        Type::Reference(reference) if reference.enum_base.is_some() => {
+            reference.enum_base.as_deref().cloned().unwrap_or_else(|| ty.clone())
+        }
+        Type::Union(union) => union_type(union.types().iter().map(base_type_of_literal).collect()),
+        other => other.clone(),
+    }
+}
+
 fn widen_to_declared(target_name: &str, scopes: &mut ScopeStack) {
     let Some(symbol) = scopes.resolve(target_name) else {
         return;
@@ -1580,7 +1698,7 @@ pub(crate) fn update_assigned_symbol_type(
         .visible_symbols()
         .declared_type(target_name)
         .is_some_and(|declared| {
-            matches!(declared, Type::Union(_)) && is_assignable_to(&value_ty, declared)
+            matches!(declared.peeled(), Type::Union(_)) && is_assignable_to(&value_ty, declared)
         });
 
     let mut narrowed_by_assignment = false;
@@ -1605,7 +1723,7 @@ pub(crate) fn update_assigned_symbol_type(
             // assigned, as tsc does: the lazy-singleton idiom
             // (`let client: Redis | null = null; … client = new Redis(); return client;`)
             // otherwise keeps reading as the full union at every later use.
-            if matches!(symbol.ty, Type::Union(_)) && !value_ty.is_unmodelled() {
+            if matches!(symbol.ty.peeled(), Type::Union(_)) && !value_ty.is_unmodelled() {
                 narrowed_by_assignment = true;
                 let declared = scopes
                     .visible_symbols()
@@ -1627,7 +1745,7 @@ pub(crate) fn update_assigned_symbol_type(
             .visible_symbols()
             .declared_type(target_name)
             .is_some_and(|declared| {
-                matches!(declared, Type::Union(_)) && is_assignable_to(&value_ty, declared)
+                matches!(declared.peeled(), Type::Union(_)) && is_assignable_to(&value_ty, declared)
             })
         {
             // The binding is already narrowed (by its initializer, or by an earlier

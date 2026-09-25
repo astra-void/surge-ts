@@ -3314,7 +3314,7 @@ fn weak_type_rejects(argument_type: &Type, parameter_type: &Type) -> bool {
     accepting > 0 && accepting == weakly_rejected
 }
 
-fn is_weak_object(object: &surge_ts_types::ObjectType) -> bool {
+pub(crate) fn is_weak_object(object: &surge_ts_types::ObjectType) -> bool {
     !object.properties.is_empty()
         && object.required_properties().next().is_none()
         && !object.declares_string_index_access()
@@ -3325,7 +3325,7 @@ fn is_weak_object(object: &surge_ts_types::ObjectType) -> bool {
 /// Whether `argument_type` is an object carrying at least one of `target`'s
 /// property names, or an empty object (which tsc lets through). Primitives,
 /// arrays and functions share nothing.
-fn shares_a_property(argument_type: &Type, target: &surge_ts_types::ObjectType) -> bool {
+pub(crate) fn shares_a_property(argument_type: &Type, target: &surge_ts_types::ObjectType) -> bool {
     match argument_type.peeled() {
         Type::Any => true,
         Type::Object(object) => {

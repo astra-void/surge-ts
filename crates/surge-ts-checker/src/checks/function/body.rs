@@ -428,6 +428,7 @@ pub(crate) fn check_function_body(
         ctx.truncate_diagnostics(diagnostics_before);
     }
     hoist_nested_functions(&nested_functions, scopes, ctx);
+    crate::modules::exports::apply_body_expando_members(&body, scopes, ctx);
 
 
     // A body-local type declaration's own body may name a body-local *value*
