@@ -560,6 +560,9 @@ fn walk_statement(
             {
                 body_flow.mark_assigned(name);
             }
+            for (name, _) in &for_of_statement.head_names {
+                body_flow.mark_assigned(name);
+            }
             let _ = in_block(&for_of_statement.body, index, &mut body_flow, ctx);
             true
         }

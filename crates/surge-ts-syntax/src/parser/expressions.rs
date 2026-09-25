@@ -1854,9 +1854,43 @@ pub(super) fn parse_computed_member_expression(
     })
 }
 
+/// The expression the parser keeps for a write target tsc rejects
+/// (TS2364), in a non-null wrapper of exactly its span.
+pub(crate) fn rejected_assignment_target<'a, 'b>(
+    target: &'b oxc_ast::ast::AssignmentTarget<'a>,
+) -> Option<&'b Expression<'a>> {
+    match target {
+        oxc_ast::ast::AssignmentTarget::TSNonNullExpression(recovered)
+            if recovered.span == recovered.expression.span() =>
+        {
+            Some(&recovered.expression)
+        }
+        _ => None,
+    }
+}
+
+/// An assignment to a target tsc rejects: `checkBinaryLikeExpression` still
+/// checks the target as an expression, then the value, which is the result.
+pub(crate) fn parse_rejected_assignment(
+    assignment: &oxc_ast::ast::AssignmentExpression<'_>,
+) -> Option<ParsedExpression> {
+    let target = rejected_assignment_target(&assignment.left)?;
+    let (target, target_span) = parse_expression(target);
+    let (value, value_span) = parse_expression(&assignment.right);
+    Some(ParsedExpression::Sequence {
+        expressions: vec![
+            (target, Some(text_span_from_oxc_span(target_span))),
+            (value, Some(text_span_from_oxc_span(value_span))),
+        ],
+    })
+}
+
 fn parse_assignment_value(
     assignment: &oxc_ast::ast::AssignmentExpression<'_>,
 ) -> Option<ParsedExpression> {
+    if let Some(rejected) = parse_rejected_assignment(assignment) {
+        return Some(rejected);
+    }
     let oxc_ast::ast::AssignmentTarget::AssignmentTargetIdentifier(identifier) = &assignment.left
     else {
         return None;

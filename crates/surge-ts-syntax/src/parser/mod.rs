@@ -93,9 +93,11 @@ fn parse_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {
         | Statement::DoWhileStatement(_)
         | Statement::SwitchStatement(_)
         | Statement::TryStatement(_)
-        | Statement::ThrowStatement(_)
-        | Statement::LabeledStatement(_) => functions::parse_function_body_statement(statement)
+        | Statement::ThrowStatement(_) => functions::parse_function_body_statement(statement)
             .map(|statements| vec![ParsedStatement::Block(statements)]),
+        // A label is not a scope: what its statement declares is declared
+        // where the label is.
+        Statement::LabeledStatement(labeled) => parse_statement(&labeled.body),
         _ => None,
     }
 }
@@ -428,6 +430,9 @@ fn parse_expression_statement(
         Expression::AssignmentExpression(assignment) => {
             if let Some(assignment) = parse_assignment_expression(assignment) {
                 return Some(ParsedStatement::Assignment(Box::new(assignment)));
+            }
+            if let Some(rejected) = expressions::parse_rejected_assignment(assignment) {
+                return Some(ParsedStatement::Expression(Box::new(rejected)));
             }
             // A write to a member or element, which the identifier-target
             // parser above does not accept. Dropping it left every module-scope

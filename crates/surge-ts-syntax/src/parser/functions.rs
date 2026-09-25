@@ -294,6 +294,10 @@ fn parse_expression_as_function_body_statements(
                 )]);
             }
 
+            if let Some(rejected) = super::expressions::parse_rejected_assignment(assignment) {
+                return Some(vec![ParsedFunctionBodyStatement::Expression(Box::new(rejected))]);
+            }
+
             super::parse_assignment_expression(assignment).map(|assignment| {
                 vec![ParsedFunctionBodyStatement::Assignment(Box::new(
                     assignment,
@@ -712,9 +716,23 @@ fn for_binding_kind(left: &ForStatementLeft<'_>) -> crate::ParsedForBindingKind 
     }
 }
 
-fn parse_for_of_statement(for_of_statement: &ForOfStatement<'_>) -> Option<ParsedForOfStatement> {
-    let binding_kind = for_binding_kind(&for_of_statement.left);
-    let binding_name = match &for_of_statement.left {
+/// A `for…in`/`for…of` head that writes rather than declares.
+#[derive(Default)]
+struct ForHeadWrites {
+    /// Member targets read as expressions, and the defaults a pattern
+    /// evaluates.
+    reads: Vec<(ParsedExpression, Option<crate::TextSpan>)>,
+    names: Vec<(String, Option<crate::TextSpan>)>,
+}
+
+/// A `for…in`/`for…of` head: a declaration or a name binds; any other target
+/// (a member, a pattern, one tsc rejects) keeps the loop, with what the
+/// target reads checked (`checkDestructuringAssignment` and
+/// `checkReferenceExpression` in tsc).
+fn parse_for_head(
+    left: &ForStatementLeft<'_>,
+) -> Option<(ParsedBindingName, Option<(ParsedExpression, Option<crate::TextSpan>)>, Vec<(String, Option<crate::TextSpan>)>)> {
+    let binding = match left {
         ForStatementLeft::VariableDeclaration(declaration) => {
             let declarator = declaration.declarations.first()?;
             parse_binding_name(&declarator.id)
@@ -724,9 +742,102 @@ fn parse_for_of_statement(for_of_statement: &ForOfStatement<'_>) -> Option<Parse
             span: Some(text_span_from_oxc_span(identifier.span)),
         },
         _ => {
-            return None;
+            let span = Some(text_span_from_oxc_span(left.span()));
+            let mut writes = ForHeadWrites::default();
+            if let Some(target) = left.as_assignment_target() {
+                assignment_target_writes(target, &mut writes);
+            }
+            let target = match writes.reads.len() {
+                0 => None,
+                1 => writes.reads.pop(),
+                _ => Some((ParsedExpression::Sequence { expressions: writes.reads }, span)),
+            };
+            return Some((ParsedBindingName::Unsupported { span }, target, writes.names));
         }
     };
+    Some((binding, None, Vec::new()))
+}
+
+fn assignment_target_writes(target: &AssignmentTarget<'_>, writes: &mut ForHeadWrites) {
+    match target {
+        AssignmentTarget::AssignmentTargetIdentifier(identifier) => writes
+            .names
+            .push((identifier.name.to_string(), Some(text_span_from_oxc_span(identifier.span)))),
+        AssignmentTarget::StaticMemberExpression(member) => {
+            if let Some(read) = super::expressions::parse_static_member_expression(member) {
+                writes.reads.push((read, Some(text_span_from_oxc_span(member.span))));
+            }
+        }
+        AssignmentTarget::ComputedMemberExpression(member) => {
+            if let Some(read) = super::expressions::parse_computed_member_expression(member) {
+                writes.reads.push((read, Some(text_span_from_oxc_span(member.span))));
+            }
+        }
+        AssignmentTarget::TSNonNullExpression(recovered) if recovered.span == recovered.expression.span() => {
+            let (read, span) = parse_expression(&recovered.expression);
+            writes.reads.push((read, Some(text_span_from_oxc_span(span))));
+        }
+        AssignmentTarget::ArrayAssignmentTarget(array) => {
+            for element in array.elements.iter().flatten() {
+                assignment_target_maybe_default_writes(element, writes);
+            }
+            if let Some(rest) = &array.rest {
+                assignment_target_writes(&rest.target, writes);
+            }
+        }
+        AssignmentTarget::ObjectAssignmentTarget(object) => {
+            for property in &object.properties {
+                match property {
+                    oxc_ast::ast::AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(property) => {
+                        writes.names.push((
+                            property.binding.name.to_string(),
+                            Some(text_span_from_oxc_span(property.binding.span)),
+                        ));
+                        if let Some(init) = &property.init {
+                            let (read, span) = parse_expression(init);
+                            writes.reads.push((read, Some(text_span_from_oxc_span(span))));
+                        }
+                    }
+                    oxc_ast::ast::AssignmentTargetProperty::AssignmentTargetPropertyProperty(property) => {
+                        if property.computed
+                            && let Some(key) = property.name.as_expression()
+                        {
+                            let (read, span) = parse_expression(key);
+                            writes.reads.push((read, Some(text_span_from_oxc_span(span))));
+                        }
+                        assignment_target_maybe_default_writes(&property.binding, writes);
+                    }
+                }
+            }
+            if let Some(rest) = &object.rest {
+                assignment_target_writes(&rest.target, writes);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn assignment_target_maybe_default_writes(
+    target: &oxc_ast::ast::AssignmentTargetMaybeDefault<'_>,
+    writes: &mut ForHeadWrites,
+) {
+    match target {
+        oxc_ast::ast::AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(with_default) => {
+            assignment_target_writes(&with_default.binding, writes);
+            let (read, span) = parse_expression(&with_default.init);
+            writes.reads.push((read, Some(text_span_from_oxc_span(span))));
+        }
+        _ => {
+            if let Some(target) = target.as_assignment_target() {
+                assignment_target_writes(target, writes);
+            }
+        }
+    }
+}
+
+fn parse_for_of_statement(for_of_statement: &ForOfStatement<'_>) -> Option<ParsedForOfStatement> {
+    let binding_kind = for_binding_kind(&for_of_statement.left);
+    let (binding_name, head_target, head_names) = parse_for_head(&for_of_statement.left)?;
 
     let (iterable, iterable_span) = parse_expression(&for_of_statement.right);
     let body = parse_branch_body(&for_of_statement.body);
@@ -739,6 +850,8 @@ fn parse_for_of_statement(for_of_statement: &ForOfStatement<'_>) -> Option<Parse
         body,
         keys_only: false,
         is_await: for_of_statement.r#await,
+        head_target,
+        head_names,
     })
 }
 
@@ -750,17 +863,7 @@ fn parse_for_in_statement(
     for_in_statement: &ForInStatement<'_>,
 ) -> Option<ParsedForOfStatement> {
     let binding_kind = for_binding_kind(&for_in_statement.left);
-    let binding_name = match &for_in_statement.left {
-        ForStatementLeft::VariableDeclaration(declaration) => {
-            let declarator = declaration.declarations.first()?;
-            parse_binding_name(&declarator.id)
-        }
-        ForStatementLeft::AssignmentTargetIdentifier(identifier) => ParsedBindingName::Identifier {
-            name: identifier.name.to_string(),
-            span: Some(text_span_from_oxc_span(identifier.span)),
-        },
-        _ => return None,
-    };
+    let (binding_name, head_target, head_names) = parse_for_head(&for_in_statement.left)?;
 
     let (iterable, iterable_span) = parse_expression(&for_in_statement.right);
 
@@ -772,6 +875,8 @@ fn parse_for_in_statement(
         body: parse_branch_body(&for_in_statement.body),
         keys_only: true,
         is_await: false,
+        head_target,
+        head_names,
     })
 }
 

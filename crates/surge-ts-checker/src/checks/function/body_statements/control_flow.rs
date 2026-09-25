@@ -505,22 +505,32 @@ pub(crate) fn check_function_for_of_statement(
     // An existing binding at the head is checked as the expression it is
     // (`checkExpression(varExpr)` in `checkForInStatement` and
     // `checkForOfStatement`), so a name that resolves to nothing is reported.
-    if for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::ExistingBinding
-        && let surge_ts_syntax::ParsedBindingName::Identifier { name, span } = &for_of_statement.binding_name
-        && scopes.resolve(name).is_none()
-        && !ctx
-            .module_value_fallback
-            .as_ref()
-            .is_some_and(|fallback| fallback.get(name).is_some())
-    {
+    let head_name = match (&for_of_statement.binding_kind, &for_of_statement.binding_name) {
+        (surge_ts_syntax::ParsedForBindingKind::ExistingBinding, surge_ts_syntax::ParsedBindingName::Identifier { name, span }) => {
+            Some((name.clone(), *span))
+        }
+        _ => None,
+    };
+    for (name, span) in head_name.iter().chain(&for_of_statement.head_names) {
+        if scopes.resolve(name).is_none()
+            && !ctx
+                .module_value_fallback
+                .as_ref()
+                .is_some_and(|fallback| fallback.get(name).is_some())
+        {
+            let visible_symbols = visible_symbols(scopes);
+            crate::checks::expr::report_unresolved_value_name(
+                name,
+                *span,
+                crate::checks::expr::UnresolvedNameSite::Reference,
+                &visible_symbols,
+                ctx,
+            );
+        }
+    }
+    if let Some((target, span)) = &for_of_statement.head_target {
         let visible_symbols = visible_symbols(scopes);
-        crate::checks::expr::report_unresolved_value_name(
-            name,
-            *span,
-            crate::checks::expr::UnresolvedNameSite::Reference,
-            &visible_symbols,
-            ctx,
-        );
+        let _ = evaluate_expression(target, *span, &visible_symbols, ctx);
     }
     if !iterable_blocked.is_blocked() {
         let visible_symbols = visible_symbols(scopes);
@@ -678,6 +688,9 @@ pub(crate) fn check_function_for_of_statement(
         // Each iteration assigns the head before the body runs; the loop may
         // run zero times, so this stays inside the body's branch.
         if let Some(name) = &loop_assigned_name {
+            flow_state.mark_assigned(name);
+        }
+        for (name, _) in &for_of_statement.head_names {
             flow_state.mark_assigned(name);
         }
         check_function_body(for_of_statement.body, return_type, scopes, flow_state, ctx);

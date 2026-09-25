@@ -29,7 +29,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             let expr = self.parse_expr();
             self.parse_expression_statement(span, expr)
         // single statement let declaration: while (0) let
-        } else if (stmt_ctx.is_single_statement() && peeked != Kind::LBrack)
+        // surge: TS1156/TS1344 — tsc parses `let` followed by a name or a pattern as a declaration
+        // wherever a statement may appear (`isLetDeclaration`) and judges its placement later.
+        } else if (stmt_ctx.is_single_statement() && peeked != Kind::LBrack && !peeked.is_after_let())
             || peeked == Kind::Semicolon
         {
             let expr = self.parse_identifier_expression();

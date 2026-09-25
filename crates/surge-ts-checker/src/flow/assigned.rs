@@ -59,6 +59,9 @@ fn statements(body: &[ParsedFunctionBodyStatement], names: &mut HashSet<Arc<str>
                 if matches!(statement.binding_kind, ParsedForBindingKind::ExistingBinding) {
                     binding_names(&statement.binding_name, names);
                 }
+                for (name, _) in &statement.head_names {
+                    names.insert(Arc::from(name.as_str()));
+                }
                 expression(&statement.iterable, names);
                 statements(&statement.body, names);
             }

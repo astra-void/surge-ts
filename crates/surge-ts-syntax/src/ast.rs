@@ -2078,6 +2078,13 @@ pub struct ParsedForOfStatement {
     pub keys_only: bool,
     /// `for await (x of xs)`, which may iterate an async iterable.
     pub is_await: bool,
+    /// A head that writes something other than a name (`for (o.k in x)`,
+    /// or a target tsc rejects), checked as the expression it is; its
+    /// `binding_name` is `Unsupported`.
+    pub head_target: Option<(ParsedExpression, Option<TextSpan>)>,
+    /// The names a destructuring head (`for ([a, b] of pairs)`) writes, which
+    /// must resolve like any other reference.
+    pub head_names: Vec<(String, Option<TextSpan>)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1220,12 +1220,13 @@ impl<'a> ContextCollector<'a, '_> {
     }
 
     /// tsc's `checkGrammarForDisallowedBlockScopedVariableStatement`: a
-    /// `const`/`using` declaration as the whole body of an `if`, a loop or a
-    /// `with` — through any labels in between (`allowLetAndConstDeclarations`
-    /// looks past a label to its parent) — is TS1156. (A `let` there does not
-    /// survive oxc's parse.)
+    /// block-scoped declaration as the whole body of an `if` or a loop —
+    /// through any labels in between (`allowLetAndConstDeclarations` looks
+    /// past a label to its parent) — is TS1156. The body of a `with` would be
+    /// too, but tsc's `checkWithStatement` never checks it.
     fn check_single_statement_declaration(&mut self, declaration: &oxc_ast::ast::VariableDeclaration<'_>) {
         let keyword = match declaration.kind {
+            VariableDeclarationKind::Let => "let",
             VariableDeclarationKind::Const => "const",
             VariableDeclarationKind::Using => "using",
             VariableDeclarationKind::AwaitUsing => "await using",
@@ -1250,7 +1251,6 @@ impl<'a> ContextCollector<'a, '_> {
             Some(AstKind::ForStatement(statement)) => statement.body.span() == child,
             Some(AstKind::ForInStatement(statement)) => statement.body.span() == child,
             Some(AstKind::ForOfStatement(statement)) => statement.body.span() == child,
-            Some(AstKind::WithStatement(statement)) => statement.body.span() == child,
             _ => false,
         };
         if is_body {
