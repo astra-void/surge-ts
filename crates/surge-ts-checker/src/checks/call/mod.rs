@@ -1215,7 +1215,7 @@ pub(crate) fn check_new_like(
             // Check the arguments against the construct signature so callback
             // parameters get contextual types instead of collapsing to implicit
             // `any`. When no construct signature is reachable, evaluate bare.
-            if let Some(construct_signature) = construct_signature {
+            let resolved = if let Some(construct_signature) = construct_signature {
                 let substituted = substitution_args.as_ref().and_then(|args| {
                     constructor_type.as_ref().and_then(|ctor_ty| {
                         substituted_construct_signature(ctor_ty, &construct_signature, args, ctx)
@@ -1233,23 +1233,32 @@ pub(crate) fn check_new_like(
                         symbols,
                         ctx,
                     )
-                });
+                })
             } else {
                 for argument in arguments {
                     let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
                 }
-            }
+                None
+            };
 
             // The contextual expected reference IS the instance type when present.
             if let Some((instance, _)) = contextual_instance {
                 return Some(instance);
             }
 
-            // Build the instance interface type (`Map<K, V>`) so lib methods carry
-            // meaningful types. With explicit type arguments use them; otherwise
-            // default each missing argument to `any` — a bare `Set<>` would trip
-            // the generic-arity TS2314, while `Set<any>` stays assignable to
-            // whatever the use site expects.
+            // `resolveNewExpression` yields the return type of the construct
+            // signature `resolveCall` picked: `new Int8Array(4)` is
+            // `Int8Array<ArrayBuffer>`, not an instance rebuilt by name.
+            if let Some(resolved) = resolved.filter(is_resolved_construct_instance) {
+                return Some(resolved);
+            }
+
+            // When resolution did not produce the instance, build the instance
+            // interface type (`Map<K, V>`) by name so lib methods carry meaningful
+            // types. With explicit type arguments use them; otherwise default each
+            // missing argument to `any` — a bare `Set<>` would trip the
+            // generic-arity TS2314, while `Set<any>` stays assignable to whatever
+            // the use site expects.
             let type_arguments = if type_arguments.is_empty() && arity > 0 {
                 vec![ParsedType::Any; arity]
             } else {
@@ -3328,6 +3337,28 @@ fn shares_a_property(argument_type: &Type, target: &surge_ts_types::ObjectType) 
         }
         _ => false,
     }
+}
+
+/// Whether a construct signature's resolved return type is the instance tsc
+/// would produce. surge does not instantiate a generic construct signature's
+/// own type parameters yet, so a result still naming one (`Promise<T>`), or
+/// holding the sentinel a constrained one is erased to (`WeakRef<T>` for
+/// `T extends WeakKey`), is not.
+fn is_resolved_construct_instance(ty: &Type) -> bool {
+    fn names_signature_type_parameter(ty: &Type) -> bool {
+        match ty {
+            Type::Unknown => true,
+            Type::TypeParameter(parameter) => !parameter.is_active_variable(),
+            Type::Reference(reference) => {
+                reference.arguments.iter().any(names_signature_type_parameter)
+            }
+            Type::Union(union) => union.types().iter().any(names_signature_type_parameter),
+            Type::Array(element) => names_signature_type_parameter(element),
+            Type::Tuple(elements) => elements.iter().any(names_signature_type_parameter),
+            _ => false,
+        }
+    }
+    !ty.is_degraded() && !names_signature_type_parameter(ty)
 }
 
 /// When `expected` is a nominal reference to the interface `name` with `arity`

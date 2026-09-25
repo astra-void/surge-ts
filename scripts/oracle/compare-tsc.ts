@@ -934,6 +934,7 @@ export const fixturePresets: Record<string, string> = {
   'shorthand-ambient-module-basic': path.join(workspaceRoot, 'tests/compat-projects/shorthand-ambient-module-basic/tsconfig.json'),
   'lib-feature-missing-member-basic': path.join(workspaceRoot, 'tests/compat-projects/lib-feature-missing-member-basic/tsconfig.json'),
   'lib-feature-member-present': path.join(workspaceRoot, 'tests/compat-projects/lib-feature-member-present/tsconfig.json'),
+  'lib-constructor-resolved-instance': path.join(workspaceRoot, 'tests/compat-projects/lib-constructor-resolved-instance/tsconfig.json'),
   'callable-object-function-members': path.join(workspaceRoot, 'tests/compat-projects/callable-object-function-members/tsconfig.json'),
   'leading-zero-numeric-literal-basic': path.join(workspaceRoot, 'tests/compat-projects/leading-zero-numeric-literal-basic/tsconfig.json'),
   'numeric-literal-forms-valid': path.join(workspaceRoot, 'tests/compat-projects/numeric-literal-forms-valid/tsconfig.json'),
