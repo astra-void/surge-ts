@@ -4384,3 +4384,9 @@ status = "emitted"
 oracle = [
   "module-es2015-import-forms",
 ]
+
+[TS2513]
+status = "emitted"
+oracle = [
+  "super-abstract-member-access",
+]

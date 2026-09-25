@@ -295,6 +295,17 @@ pub(crate) fn check_member_accessibility(
     let Some((class, is_static)) = receiver_class(object, &receiver_type, symbols, ctx) else {
         return;
     };
+    // An abstract member has no implementation for `super` to reach
+    // (`checkPropertyAccessibilityAtLocation`); the nearest declaration of the
+    // name decides.
+    if !is_static
+        && matches!(object, ParsedExpression::Identifier { name, .. } if name == "super")
+        && let Some(declaring) = abstract_member_owner(&class, member, ctx)
+    {
+        let diagnostic = Diagnostic::ts2513(member, display_name(&declaring), ctx.file_name.clone());
+        ctx.push(diagnostic_with_syntax_span(diagnostic, member_span));
+        return;
+    }
     let Some((declaring, accessibility)) =
         restricted_member_owner(&class, member, is_static, is_write, ctx)
     else {
@@ -333,6 +344,18 @@ pub(crate) fn check_member_accessibility(
         }
     };
     ctx.push(diagnostic_with_syntax_span(diagnostic, member_span));
+}
+
+/// The class whose nearest declaration of an instance member is `abstract`.
+fn abstract_member_owner(class: &InterfaceInfo, member: &str, ctx: &CheckerContext) -> Option<InterfaceInfo> {
+    let mut current = class.clone();
+    for _ in 0..MAX_HERITAGE_DEPTH {
+        if let Some(declared) = current.body.members.iter().find(|declared| declared.name == member) {
+            return declared.is_abstract.then_some(current);
+        }
+        current = base_interface(&current, ctx)?;
+    }
+    None
 }
 
 /// The class a protected member is reached from: the innermost enclosing class

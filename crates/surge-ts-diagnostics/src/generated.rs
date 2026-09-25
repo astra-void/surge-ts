@@ -6855,6 +6855,16 @@ pub const TS1323: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2513: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2513",
+    number: Some(2513),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Abstract method '{0}' in class '{1}' cannot be accessed via super expression.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
     TS2411,
@@ -7541,6 +7551,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS6807,
     TS2823,
     TS1323,
+    TS2513,
 ];
 
 impl Diagnostic {
@@ -12519,5 +12530,17 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts1323(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS1323, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2513(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2513,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
     }
 }

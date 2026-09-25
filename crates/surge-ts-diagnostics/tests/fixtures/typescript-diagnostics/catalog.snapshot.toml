@@ -5480,3 +5480,11 @@ support = "emitted"
 message = "Dynamic imports are only supported when the '--module' flag is set to 'es2020', 'es2022', 'esnext', 'commonjs', 'amd', 'system', 'umd', 'node16', 'node18', 'node20', or 'nodenext'."
 arity = 0
 
+[[diagnostic]]
+code = "TS2513"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Abstract method '{0}' in class '{1}' cannot be accessed via super expression."
+arity = 2
+
