@@ -362,7 +362,7 @@ fn resolve_named_type_inner(
     if !has_type_arguments && !is_generic_declaration {
         let cache_key = type_declaration_resolution_key(declaration);
         if let Some(cached) = get_cached_named_type_resolution(ctx, &cache_key, resolving) {
-            return cached;
+            return with_enum_base(cached, declaration, &cache_key, &named_type.name, ctx, resolving, substitution);
         }
 
         // Defer a library-scoped interface: its body (which transitively pulls the
@@ -435,7 +435,7 @@ fn resolve_named_type_inner(
         let resolved =
             wrap_named_object_reference(resolved, &named_type.name, &alias_id, &cache_key, ctx);
         cache_named_type_resolution(ctx, &cache_key, &resolved);
-        return resolved;
+        return with_enum_base(resolved, declaration, &cache_key, &named_type.name, ctx, resolving, substitution);
     }
 
     // A generic library/dependency instantiation is context-free once its type
@@ -1382,6 +1382,79 @@ fn tag_generic_object_alias(resolved: ResolvedType, display_name: Option<&str>) 
 /// Tags a resolved object type with the interface/type-alias name it came from
 /// so diagnostics display the name (tsc behaviour). Non-object resolutions and
 /// errored resolutions pass through unchanged.
+/// tsc's `getBaseTypeOfEnumLikeType`: an enum member's literal type widens to
+/// its enum (`let x = E.A` is `E`). The enum is reached by the name the member
+/// was written under (`E.A` → `E`, `N.Color.Red` → `N.Color`), and only once
+/// it is not itself being resolved — the members of its own union go without,
+/// which also keeps a member from holding the enum that holds it.
+fn with_enum_base(
+    resolved: ResolvedType,
+    declaration: &TypeDeclarationInfo,
+    cache_key: &DeclarationResolutionKey,
+    written_name: &str,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    substitution: &TypeParameterSubstitution,
+) -> ResolvedType {
+    let TypeDeclarationInfo::Alias(alias) = declaration else {
+        return resolved;
+    };
+    let Some(enum_name) = alias.enum_name.as_deref() else {
+        return resolved;
+    };
+    let is_member = alias
+        .name
+        .rsplit_once(&format!("{enum_name}."))
+        .is_some_and(|(_, member)| !member.is_empty());
+    let Type::Reference(reference) = &resolved.ty else {
+        return resolved;
+    };
+    if !is_member || resolved.had_error || reference.enum_base.is_some() {
+        return resolved;
+    }
+    let Some(owner) = reference.enum_owner.clone() else {
+        return resolved;
+    };
+    let Some((prefix, _)) = written_name.rsplit_once('.') else {
+        return resolved;
+    };
+    let Some(handle) = ctx.lookup_type_declaration_handle(prefix) else {
+        return resolved;
+    };
+    let enum_key = type_declaration_resolution_key(handle.get());
+    if resolving.contains(&enum_key) || named_type_resolution_in_progress(ctx, &enum_key) {
+        return resolved;
+    }
+    let diagnostics_before = ctx.diagnostics().len();
+    let base = resolve_named_type_inner(
+        std::sync::Arc::new(ParsedNamedType {
+            name: prefix.to_string(),
+            span: None,
+            type_arguments: Vec::new(),
+        }),
+        ctx,
+        resolving,
+        substitution,
+    );
+    ctx.truncate_diagnostics(diagnostics_before);
+    if base.had_error {
+        return resolved;
+    }
+    let base = match base.ty {
+        Type::Reference(base) if base.enum_owner.as_deref() == Some(&*owner) => base,
+        _ => return resolved,
+    };
+    let Type::Reference(reference) = resolved.ty else {
+        return resolved;
+    };
+    let attached = ResolvedType {
+        ty: Type::Reference(reference.with_enum_base(Type::Reference(base))),
+        had_error: false,
+    };
+    cache_named_type_resolution(ctx, cache_key, &attached);
+    attached
+}
+
 /// Wraps an enum-lowered alias resolution in a nominal reference whose display
 /// is tsc's enum form (`import("<module>").Color`). The reference id stays
 /// per-member (`Color.Red`), so two members never compare equal to each other.

@@ -9,6 +9,10 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
         Type::StringLiteral(_) => Type::String,
         Type::NumberLiteral(_) => Type::Number,
         Type::BooleanLiteral(_) => Type::Boolean,
+        // An enum member widens to its enum (`getBaseTypeOfEnumLikeType`).
+        Type::Reference(reference) if reference.enum_base.is_some() => {
+            reference.enum_base.as_deref().cloned().unwrap_or_else(|| ty.clone())
+        }
         // A named interface/type-alias object is not a fresh literal; preserve
         // it (and its alias name) as-is rather than widening its members.
         Type::Object(obj) if obj.alias_name.is_some() => ty.clone(),

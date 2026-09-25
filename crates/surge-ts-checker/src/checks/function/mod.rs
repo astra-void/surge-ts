@@ -747,10 +747,11 @@ fn declaration_return_type(captured: signature::CapturedReturns) -> Type {
     } else {
         surge_ts_types::union_type(members.into_iter().map(|(ty, _)| ty).collect())
     };
-    let unit_literal = matches!(
-        union,
-        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
-    );
+    let unit_literal = match &union {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => true,
+        Type::Reference(reference) => reference.enum_base.is_some(),
+        _ => false,
+    };
     if unit_literal && fresh {
         crate::checks::expr::widen_type(&union)
     } else {
@@ -1861,10 +1862,12 @@ pub(crate) fn widen_unit_return_type(
     body_type: Type,
     contextual_return_type: Option<&Type>,
 ) -> Type {
-    if !matches!(
-        body_type,
-        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
-    ) {
+    let unit_literal = match &body_type {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => true,
+        Type::Reference(reference) => reference.enum_base.is_some(),
+        _ => false,
+    };
+    if !unit_literal {
         return body_type;
     }
     if contextual_return_type
@@ -1876,6 +1879,12 @@ pub(crate) fn widen_unit_return_type(
 }
 
 fn is_literal_of_contextual_type(candidate: &Type, contextual: &Type) -> bool {
+    // An enum member is the number or string literal it stands for.
+    if let Type::Reference(reference) = candidate
+        && reference.enum_base.is_some()
+    {
+        return is_literal_of_contextual_type(&reference.resolve(), contextual);
+    }
     match contextual {
         Type::Unknown | Type::TypeParameter(_) => true,
         Type::Reference(reference) => {

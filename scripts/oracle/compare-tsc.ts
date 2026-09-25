@@ -1070,6 +1070,7 @@ export const fixturePresets: Record<string, string> = {
   'var-redeclaration-types': path.join(workspaceRoot, 'tests/compat-projects/var-redeclaration-types/tsconfig.json'),
   'element-reference-narrowing': path.join(workspaceRoot, 'tests/compat-projects/element-reference-narrowing/tsconfig.json'),
   'method-return-inferred': path.join(workspaceRoot, 'tests/compat-projects/method-return-inferred/tsconfig.json'),
+  'enum-literal-widening': path.join(workspaceRoot, 'tests/compat-projects/enum-literal-widening/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

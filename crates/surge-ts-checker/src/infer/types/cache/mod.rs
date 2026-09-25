@@ -121,6 +121,13 @@ pub(crate) fn get_cached_named_type_resolution(
     }
 }
 
+/// Whether `key` is being resolved further up some resolution in flight.
+pub(crate) fn named_type_resolution_in_progress(ctx: &CheckerContext, key: &DeclarationResolutionKey) -> bool {
+    ctx.resolved_named_types
+        .lock()
+        .is_ok_and(|cache| matches!(cache.get(key), Some(DeclarationResolutionState::Resolving)))
+}
+
 pub(crate) fn mark_named_type_resolution_in_progress(
     ctx: &CheckerContext,
     key: &DeclarationResolutionKey,

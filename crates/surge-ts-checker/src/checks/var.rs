@@ -49,6 +49,10 @@ pub(crate) fn check_variable_declaration_with_symbols(
             SymbolKind::Let | SymbolKind::Const
         );
     let is_duplicate = tracks_duplicates && symbols.contains_let_or_const(&variable_name);
+    let enum_probe = (variable.declared_type.is_none()
+        && matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Let | surge_ts_syntax::ParsedVariableKind::Var))
+    .then(|| variable.initializer.clone().filter(may_read_enum_member))
+    .flatten();
 
     let symbol = check_variable_declaration_against_symbols(variable, symbols, ctx, options)?;
 
@@ -64,7 +68,24 @@ pub(crate) fn check_variable_declaration_with_symbols(
         }
     }
 
-    symbols.insert_handle(variable_name, Arc::clone(&symbol));
+    let narrowed = enum_probe
+        .and_then(|initializer| enum_member_initializer_narrowing(&initializer, &symbol.ty, symbols, ctx));
+    match narrowed {
+        Some(narrowed) => {
+            let _ = symbols.insert_narrowed(
+                variable_name,
+                SymbolInfo {
+                    ty: narrowed,
+                    kind: symbol.kind,
+                    function_signature: symbol.function_signature.clone(),
+                },
+                symbol.ty.clone(),
+            );
+        }
+        None => {
+            symbols.insert_handle(variable_name, Arc::clone(&symbol));
+        }
+    }
     Some(symbol)
 }
 
@@ -590,10 +611,11 @@ pub(crate) fn widen_implicit_variable_initializer_type(
     // surge does not track it on the type itself. A union of literals is not
     // widened unless it was written here, which is what keeps
     // `let status = state.status` at its declared union.
-    let widens_as_literal = matches!(
-        ty,
-        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
-    );
+    let widens_as_literal = match ty {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => true,
+        Type::Reference(reference) => reference.enum_base.is_some(),
+        _ => false,
+    };
     let widened = if matches!(symbol_kind, SymbolKind::Let | SymbolKind::Var)
         && !is_assertion
         && (widens_as_literal || initializer_type_is_fresh(initializer))
@@ -776,6 +798,48 @@ fn contains_nullish(ty: &Type) -> bool {
 /// from somewhere else (a property of a union-typed object, a call's declared
 /// return) is regular, so `let status = state.status` keeps the union instead
 /// of widening to `string`.
+/// tsc's `getAssignmentReducedType` at the declaration: a binding declared as
+/// the enum its initializer's member widened to (`let x = E.A` is `E`) holds
+/// that member until it is reassigned, so `x === E.B` has no overlap.
+pub(crate) fn enum_member_initializer_narrowing(
+    initializer: &ParsedExpression,
+    declared: &Type,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Type::Reference(declared_reference) = declared else {
+        return None;
+    };
+    declared_reference.enum_owner.as_ref()?;
+    let checkpoint = ctx.diagnostics().len();
+    let inferred = crate::infer::infer_expression(initializer, symbols, ctx);
+    ctx.truncate_diagnostics(checkpoint);
+    let InferredExpression::Known(ty) = inferred else {
+        return None;
+    };
+    let member_of_declared =
+        |ty: &Type| matches!(ty, Type::Reference(reference) if reference.enum_base.as_deref() == Some(declared));
+    let narrows = match &ty {
+        Type::Union(union) => union.types().iter().all(member_of_declared),
+        other => member_of_declared(other),
+    };
+    narrows.then_some(ty)
+}
+
+/// Whether an unannotated `let`/`var` initializer can read an enum member
+/// ([`enum_member_initializer_narrowing`]), so it is worth keeping for it.
+pub(crate) fn may_read_enum_member(initializer: &ParsedExpression) -> bool {
+    match initializer {
+        ParsedExpression::PropertyAccess { .. } => true,
+        ParsedExpression::Conditional {
+            when_true,
+            when_false,
+            ..
+        } => may_read_enum_member(when_true) && may_read_enum_member(when_false),
+        _ => false,
+    }
+}
+
 /// A call through a function whose return was read from its body hands back
 /// the fresh literal types its `return`s produced, which a mutable binding
 /// widens (`let mode = pick()` is `string` where `pick` returns `"a" | "b"`);
@@ -868,6 +932,13 @@ fn widen_object_literal_members(initializer: &ParsedExpression, ty: &Type) -> Ty
             | ParsedExpression::TemplateLiteral { .. } => widen_type(&member.ty),
             nested @ ParsedExpression::ObjectLiteral { .. } => {
                 widen_object_literal_members(nested, &member.ty)
+            }
+            // An enum member read off its enum (`{ k: E.A }`) is a fresh
+            // literal, as `getDeclaredTypeOfEnum` declares every member.
+            ParsedExpression::PropertyAccess { .. }
+                if matches!(&member.ty, Type::Reference(reference) if reference.enum_base.is_some()) =>
+            {
+                widen_type(&member.ty)
             }
             _ => continue,
         };

@@ -220,6 +220,11 @@ pub(crate) fn check_function_variable_declaration(
         && !initializer_flow_blocked)
         .then(|| variable.initializer.clone())
         .flatten();
+    let enum_probe = (!is_annotated
+        && matches!(variable_kind, ParsedVariableKind::Let | ParsedVariableKind::Var)
+        && !initializer_flow_blocked)
+        .then(|| variable.initializer.clone().filter(crate::checks::var::may_read_enum_member))
+        .flatten();
 
     if let Some(symbol) = check_variable_declaration_against_symbols(
         variable,
@@ -269,6 +274,14 @@ pub(crate) fn check_function_variable_declaration(
                     .collect();
                 (!kept.is_empty() && kept.len() < union.types().len())
                     .then(|| surge_ts_types::union_type(kept))
+            })
+            .or_else(|| {
+                crate::checks::var::enum_member_initializer_narrowing(
+                    enum_probe.as_ref()?,
+                    &symbol.ty,
+                    visible_symbols,
+                    ctx,
+                )
             });
         match narrowed {
             Some(initialized) => {

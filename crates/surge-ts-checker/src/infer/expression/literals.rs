@@ -449,6 +449,9 @@ fn widen_top_level_literals(ty: &Type) -> Type {
         Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => {
             crate::checks::expr::widen_type(ty)
         }
+        Type::Reference(reference) if reference.enum_base.is_some() => {
+            crate::checks::expr::widen_type(ty)
+        }
         Type::Union(union) => {
             union_type(union.types().iter().map(widen_top_level_literals).collect())
         }

@@ -97,6 +97,10 @@ pub struct TypeReference {
     /// relates to another enum, whatever the values. Provenance like
     /// `numeric_enum`, outside `nominal_eq` and canonical identity.
     pub enum_owner: Option<Arc<str>>,
+    /// The `enum` an enum member's literal type widens to (tsc's
+    /// `getBaseTypeOfEnumLikeType`), when the member was resolved where its
+    /// enum could be. Provenance like `enum_owner`, outside `nominal_eq`.
+    pub enum_base: Option<Arc<Type>>,
     resolver: Arc<dyn ResolveReference>,
 }
 
@@ -147,6 +151,7 @@ impl TypeReference {
             render_structurally: false,
             numeric_enum: false,
             enum_owner: None,
+            enum_base: None,
             resolver,
         }
     }
@@ -167,6 +172,12 @@ impl TypeReference {
     /// Marks this reference as the `enum` `owner`, or one of its member types.
     pub fn with_enum_owner(mut self, owner: Arc<str>) -> Self {
         self.enum_owner = Some(owner);
+        self
+    }
+
+    /// Records the `enum` this member type widens to.
+    pub fn with_enum_base(mut self, base: Type) -> Self {
+        self.enum_base = Some(Arc::new(base));
         self
     }
 
