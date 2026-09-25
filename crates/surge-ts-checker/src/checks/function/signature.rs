@@ -2548,8 +2548,16 @@ fn signature_over_type_variables(
 
 thread_local! {
     static DECLARATION_BODY_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static BODY_RETURN_CAPTURE: std::cell::RefCell<Option<(usize, Option<(Vec<Type>, bool)>)>> =
+    static BODY_RETURN_CAPTURE: std::cell::RefCell<Option<(usize, Option<CapturedReturns>)>> =
         const { std::cell::RefCell::new(None) };
+}
+
+/// What one declaration body's `return`s produced, and whether its end is
+/// reachable.
+pub(crate) struct CapturedReturns {
+    pub(crate) returned: Vec<Type>,
+    pub(crate) forms: Vec<crate::context::ReturnedForm>,
+    pub(crate) falls_through: bool,
 }
 
 /// Runs `check`, which checks one declaration body, and hands back what that
@@ -2558,7 +2566,7 @@ thread_local! {
 /// inside it record into their own frames and are not captured.
 pub(crate) fn capture_declaration_body_returns<R>(
     check: impl FnOnce() -> R,
-) -> (R, Option<(Vec<Type>, bool)>) {
+) -> (R, Option<CapturedReturns>) {
     let depth = DECLARATION_BODY_DEPTH.with(std::cell::Cell::get);
     let saved = BODY_RETURN_CAPTURE.with(|slot| slot.replace(Some((depth, None))));
     let result = check();
@@ -2765,7 +2773,11 @@ pub(crate) fn check_function_body_with_signature_and_this(
             if let Some((depth, captured)) = slot.borrow_mut().as_mut()
                 && *depth == body_depth
             {
-                *captured = Some((ctx.body_return_types().to_vec(), !body_flow.guarantees_exit));
+                *captured = Some(CapturedReturns {
+                    returned: ctx.body_return_types().to_vec(),
+                    forms: ctx.body_return_forms().to_vec(),
+                    falls_through: !body_flow.guarantees_exit,
+                });
             }
         });
         ctx.close_contextual_return_frame()

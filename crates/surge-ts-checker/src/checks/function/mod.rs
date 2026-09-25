@@ -254,7 +254,7 @@ fn infer_member_type(
     scope.insert(
         "this".to_string(),
         crate::symbols::SymbolInfo {
-            ty: instance,
+            ty: instance.clone(),
             kind: crate::symbols::SymbolKind::Const,
             function_signature: None,
         },
@@ -264,6 +264,36 @@ fn infer_member_type(
         surge_ts_syntax::ParsedInferredMemberSource::GetterBody(body) => {
             infer_statements_return(body, scope, ctx)
                 .map(|ty| crate::checks::var::widen_nullable_type(&ty))
+        }
+        surge_ts_syntax::ParsedInferredMemberSource::MethodBody(method) => {
+            let this_type = match &method.this_parameter_type {
+                Some(written) => Some(crate::infer::types::map_parsed_type(written.clone(), ctx)),
+                None if method.is_static => scope.get(&member.class_name).map(|class| class.ty.clone()),
+                None => Some(instance),
+            };
+            let parameter_types: Vec<Type> = method
+                .parameter_types
+                .iter()
+                .map(|parameter| crate::infer::types::map_parsed_type(parameter.clone(), ctx))
+                .collect();
+            let scope = match environment.current_module_local_values(file_name) {
+                Some(values) => module_body_scope(&values, ctx),
+                None => module_body_scope(&SymbolTable::new(), ctx),
+            };
+            checked_body_return_of(
+                BodyParts {
+                    parameters: &method.parameters,
+                    body: &method.body,
+                    is_generator: false,
+                    is_async: method.is_async,
+                    has_this_parameter: method.this_parameter_type.is_some(),
+                    this_type,
+                },
+                &parameter_types,
+                scope,
+                body_check_context(ctx),
+            )
+            .map(|ty| crate::checks::var::widen_nullable_type(&ty))
         }
         surge_ts_syntax::ParsedInferredMemberSource::Initializer(initializer) => {
             let mut shadow = body_inference_shadow_context(ctx);
@@ -369,6 +399,14 @@ pub(crate) fn settle_call_result(
         return result;
     };
     InferredExpression::Known(settle_body_return(ty))
+}
+
+/// Whether a function's return was read from its body — a declaration's or a
+/// class method's — and so carries the fresh literal types its `return`s
+/// produced.
+pub(crate) fn is_body_inferred_return(ty: &Type) -> bool {
+    matches!(ty, Type::Reference(reference)
+        if reference.id.contains(BODY_RETURN_ID_TAG) || reference.id.contains(INFERRED_MEMBER_ID_TAG))
 }
 
 fn is_settled_on_read(reference: &surge_ts_types::TypeReference) -> bool {
@@ -612,49 +650,112 @@ fn checked_body_return(
     function: &ParsedFunctionDeclaration,
     parameter_types: &[Type],
     scope: SymbolTable,
+    shadow: CheckerContext,
+) -> Option<Type> {
+    checked_body_return_of(
+        BodyParts {
+            parameters: &function.parameters,
+            body: &function.body,
+            is_generator: function.is_generator,
+            is_async: function.is_async,
+            has_this_parameter: function.has_this_parameter,
+            this_type: None,
+        },
+        parameter_types,
+        scope,
+        shadow,
+    )
+}
+
+/// The parts of a function-like declaration its body is checked from.
+struct BodyParts<'a> {
+    parameters: &'a [surge_ts_syntax::ParsedFunctionParameter],
+    body: &'a [surge_ts_syntax::ParsedFunctionBodyStatement],
+    is_generator: bool,
+    is_async: bool,
+    has_this_parameter: bool,
+    this_type: Option<Type>,
+}
+
+fn checked_body_return_of(
+    parts: BodyParts<'_>,
+    parameter_types: &[Type],
+    scope: SymbolTable,
     mut shadow: CheckerContext,
 ) -> Option<Type> {
     shadow.set_symbols(scope);
     let function_type = FunctionType::new(
         parameter_types.to_vec(),
         Type::Unknown,
-        function.parameters.last().is_some_and(|parameter| parameter.rest),
-        signature::required_parameter_count(&function.parameters),
+        parts.parameters.last().is_some_and(|parameter| parameter.rest),
+        signature::required_parameter_count(parts.parameters),
     );
     let ((), captured) = signature::capture_declaration_body_returns(|| {
         signature::check_function_body_with_signature_and_this(
             None,
-            function.parameters.clone(),
-            function.body.clone(),
+            parts.parameters.to_vec(),
+            parts.body.to_vec(),
             &function_type,
             &[],
             None,
             false,
             None,
-            None,
+            parts.this_type,
             false,
             None,
-            function.is_generator,
-            function.is_async,
-            function.has_this_parameter,
+            parts.is_generator,
+            parts.is_async,
+            parts.has_this_parameter,
             &mut shadow,
         )
     });
-    let (returned, falls_through) = captured?;
-    if returned.iter().any(Type::is_degraded) {
+    let captured = captured?;
+    if captured.returned.iter().any(Type::is_degraded) {
         return None;
     }
-    if returned.is_empty() {
+    if captured.returned.is_empty() {
         return Some(Type::Void);
     }
-    let mut members: Vec<Type> = returned
-        .into_iter()
-        .map(|member| widen_unit_return_type(member, None))
-        .collect();
-    if falls_through {
-        members.push(Type::Undefined);
+    Some(declaration_return_type(captured))
+}
+
+/// `getReturnTypeFromBody` over an unannotated declaration's returns: each one
+/// widened (`getWidenedType`), `undefined` for a reachable end, the union
+/// subtype-reduced, and a literal widened only when the union is that one
+/// fresh unit type (`getWidenedLiteralLikeTypeForContextualReturnTypeIfNeeded`
+/// with no contextual type) — a union of literals stays one.
+fn declaration_return_type(captured: signature::CapturedReturns) -> Type {
+    let fresh = captured.forms.iter().any(|form| form.fresh);
+    let mut members: Vec<(Type, surge_ts_types::LiteralShape)> =
+        if captured.forms.len() == captured.returned.len() {
+            captured.forms.into_iter().map(|form| (form.widened, form.shape)).collect()
+        } else {
+            captured
+                .returned
+                .into_iter()
+                .map(|ty| (ty, surge_ts_types::LiteralShape::Regular))
+                .collect()
+        };
+    if captured.falls_through {
+        members.push((Type::Undefined, surge_ts_types::LiteralShape::Regular));
     }
-    Some(surge_ts_types::union_type(members))
+    // The reduction relates the members, resolving what they reference; a read
+    // before the check phase is transient (only the check phase's answer is
+    // kept) and runs where those names may not resolve yet.
+    let union = if crate::program::in_check_phase() {
+        surge_ts_types::subtype_reduced_union(members)
+    } else {
+        surge_ts_types::union_type(members.into_iter().map(|(ty, _)| ty).collect())
+    };
+    let unit_literal = matches!(
+        union,
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)
+    );
+    if unit_literal && fresh {
+        crate::checks::expr::widen_type(&union)
+    } else {
+        union
+    }
 }
 
 fn inferred_declaration_return_type(

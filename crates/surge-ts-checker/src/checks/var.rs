@@ -296,10 +296,19 @@ pub(crate) fn check_variable_declaration_against_symbols(
                 && !inferred_initializer_type.is_unknown()
                 && let Some(initializer) = variable.initializer.as_ref()
             {
+                let widened_call;
+                let initializer_type = if matches!(symbol_kind, SymbolKind::Let | SymbolKind::Var)
+                    && returns_body_inferred_type(initializer, symbols, ctx)
+                {
+                    widened_call = crate::checks::expr::widen_type(inferred_initializer_type);
+                    &widened_call
+                } else {
+                    inferred_initializer_type
+                };
                 Some(widen_implicit_variable_initializer_type(
                     symbol_kind,
                     initializer,
-                    inferred_initializer_type,
+                    initializer_type,
                     auto_array,
                 ))
             } else {
@@ -767,6 +776,43 @@ fn contains_nullish(ty: &Type) -> bool {
 /// from somewhere else (a property of a union-typed object, a call's declared
 /// return) is regular, so `let status = state.status` keeps the union instead
 /// of widening to `string`.
+/// A call through a function whose return was read from its body hands back
+/// the fresh literal types its `return`s produced, which a mutable binding
+/// widens (`let mode = pick()` is `string` where `pick` returns `"a" | "b"`);
+/// a written return type's literals are regular and stay.
+fn returns_body_inferred_type(
+    initializer: &ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let callee = match initializer {
+        ParsedExpression::Await { operand, .. } => {
+            return returns_body_inferred_type(operand, symbols, ctx);
+        }
+        ParsedExpression::Call { callee_name, .. } => symbols.get(callee_name).map(|symbol| symbol.ty.clone()),
+        ParsedExpression::PropertyCall {
+            object,
+            object_span,
+            property_name,
+            property_span,
+            ..
+        } => match crate::infer::expression::infer_property_access(
+            object,
+            object_span,
+            property_name,
+            property_span,
+            symbols,
+            ctx,
+        ) {
+            InferredExpression::Known(ty) => Some(ty),
+            _ => None,
+        },
+        _ => None,
+    };
+    matches!(callee, Some(Type::Function(function))
+        if crate::checks::function::is_body_inferred_return(function.return_type()))
+}
+
 fn initializer_type_is_fresh(initializer: &ParsedExpression) -> bool {
     match initializer {
         ParsedExpression::StringLiteral(_)

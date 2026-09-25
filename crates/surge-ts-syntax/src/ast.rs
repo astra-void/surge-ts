@@ -448,6 +448,20 @@ pub enum ParsedInferredMemberSource {
     Initializer(ParsedExpression),
     GetterBody(Vec<ParsedFunctionBodyStatement>),
     ThisAssignments(ParsedThisAssignments),
+    /// An unannotated method's return, read from its body.
+    MethodBody(ParsedInferredMethodBody),
+}
+
+#[derive(Debug)]
+pub struct ParsedInferredMethodBody {
+    pub parameters: Vec<ParsedFunctionParameter>,
+    /// Each parameter's type as a caller sees it.
+    pub parameter_types: Vec<ParsedType>,
+    pub body: Vec<ParsedFunctionBodyStatement>,
+    /// A static method's `this` is the class itself.
+    pub is_static: bool,
+    pub is_async: bool,
+    pub this_parameter_type: Option<ParsedType>,
 }
 
 impl PartialEq for ParsedInferredMember {

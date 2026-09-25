@@ -99,7 +99,7 @@ fn class_member_to_interface_member(
             optional: false,
             is_abstract: method.is_abstract,
             is_method: true,
-            ty: method_function_type(class, method),
+            ty: method_function_type(class, method, infer_members),
             readonly: false,
             write_ty: None,
         }),
@@ -299,18 +299,61 @@ fn declared_signature_parameters(parameters: &[ParsedFunctionParameter]) -> Vec<
         .collect()
 }
 
-fn method_function_type(class: &ParsedClassDeclaration, method: &ParsedClassMethod) -> ParsedType {
+fn method_function_type(class: &ParsedClassDeclaration, method: &ParsedClassMethod, infer_members: bool) -> ParsedType {
     ParsedType::Function(std::sync::Arc::new(ParsedFunctionType {
         parameters: declared_signature_parameters(&method.parameters),
         return_type: Box::new(
             method
                 .return_type
                 .clone()
+                .or_else(|| inferred_method_return_type(class, method, infer_members))
                 .or_else(|| syntactic_method_return_type(class, method))
                 .unwrap_or(ParsedType::Any),
         ),
         type_parameters: method.type_parameters.clone(),
     }))
+}
+
+/// An unannotated method's return as `getReturnTypeFromBody` reads it, for a
+/// method whose parameters and `this` the member inference can bind: no type
+/// parameters of its own, and not a generator (whose result is a `Generator`,
+/// not what its body completes with).
+fn inferred_method_return_type(
+    class: &ParsedClassDeclaration,
+    method: &ParsedClassMethod,
+    infer_members: bool,
+) -> Option<ParsedType> {
+    if !infer_members
+        || method.return_type.is_some()
+        || !method.has_body
+        || method.body.is_empty()
+        || method.is_generator
+        || !method.type_parameters.is_empty()
+    {
+        return None;
+    }
+    let parameter_types = declared_signature_parameters(&method.parameters)
+        .into_iter()
+        .map(|parameter| parameter.ty)
+        .collect();
+    Some(ParsedType::InferredMember(Arc::new(
+        surge_ts_syntax::ParsedInferredMember {
+            class_name: class.name.clone(),
+            member_start: method.name_span.map_or(0, |span| span.start),
+            member_name: method.name.clone(),
+            keep_literal: false,
+            source: surge_ts_syntax::ParsedInferredMemberSource::MethodBody(
+                surge_ts_syntax::ParsedInferredMethodBody {
+                    parameters: method.parameters.clone(),
+                    parameter_types,
+                    body: method.body.clone(),
+                    is_static: method.is_static,
+                    is_async: method.is_async,
+                    this_parameter_type: method.this_parameter_type.clone(),
+                },
+            ),
+        },
+    )))
 }
 
 /// The return type an unannotated method takes from its body when every
@@ -496,10 +539,13 @@ fn collect_static_members(
                 );
             }
             ParsedClassMember::Method(method) if method.is_static => {
+                let infer_members = class.type_parameters.is_empty()
+                    && crate::checks::function::lazy_body_returns(&ctx.file_name);
+                let inferred_return = inferred_method_return_type(class, method, infer_members);
                 let function_type = static_signature_type(
                     &method.type_parameters,
                     &method.parameters,
-                    method.return_type.as_ref(),
+                    method.return_type.as_ref().or(inferred_return.as_ref()),
                     ctx,
                 );
                 properties.insert(

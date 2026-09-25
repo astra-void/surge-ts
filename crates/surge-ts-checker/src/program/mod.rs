@@ -381,6 +381,7 @@ fn check_program_with_stats_and_jobs_inner(
         &shared_state.module_import_bindings,
         &mut ctx,
     );
+    add_script_local_values(&parsed_files, &shared_state, &mut ctx);
     record_rss_stage(
         timings.as_ref(),
         "module_local_values",
@@ -1309,6 +1310,65 @@ pub(crate) fn build_module_local_values(
     ctx.file_name = saved_file_name;
     ctx.type_declarations = saved_type_declarations;
     ctx.set_module_local_values_by_file(module_local_values);
+}
+
+/// A script's declarations are globals: a lazy body return or member read in
+/// one resolves against the program's globals, every script's values and its
+/// own, the way a module's resolves against its local values.
+fn add_script_local_values(
+    parsed_files: &[ParsedProgramFile],
+    shared_state: &ProgramCheckSharedState,
+    ctx: &mut CheckerContext,
+) {
+    let scripts: Vec<usize> = parsed_files
+        .iter()
+        .enumerate()
+        .filter(|(_, parsed_file)| {
+            parsed_file.file_kind != FileKind::GeneratedDeclaration
+                && !parsed_file.is_module
+                && !parsed_file.file_kind.is_declaration()
+                && crate::checks::function::lazy_body_returns(&parsed_file.file_name)
+        })
+        .map(|(index, _)| index)
+        .collect();
+    if scripts.is_empty() {
+        return;
+    }
+    let saved_file_name = ctx.file_name.clone();
+    let saved_type_declarations = std::mem::replace(
+        &mut ctx.type_declarations,
+        shared_state.script_type_declarations.clone(),
+    );
+    let mut by_file = ctx.module_local_values_by_file.as_ref().clone();
+    for file_index in scripts {
+        let parsed_file = &parsed_files[file_index];
+        let mut seed = shared_state
+            .global_symbols
+            .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+        for (other_index, values) in shared_state.script_values.iter().enumerate() {
+            let Some(values) = values.as_ref().filter(|_| other_index != file_index) else {
+                continue;
+            };
+            for (name, symbol) in values.iter_shared() {
+                if seed.get_own(name).is_none() {
+                    let _ = seed.insert_shared(name.clone(), symbol.clone());
+                }
+            }
+        }
+        ctx.set_file_name(parsed_file.file_name.clone());
+        let table = crate::modules::collect_exportable_value_symbols(
+            &parsed_file.statements,
+            &ctx.type_declarations,
+            &seed,
+            None,
+            false,
+            ctx,
+        );
+        by_file.insert(Arc::from(parsed_file.file_name.as_str()), Arc::new(table));
+    }
+    ctx.set_file_name(saved_file_name);
+    ctx.type_declarations = saved_type_declarations;
+    ctx.set_module_local_values_by_file(by_file);
 }
 
 fn emit_check_phase_retention_census(

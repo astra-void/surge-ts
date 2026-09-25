@@ -699,6 +699,10 @@ pub(crate) fn reported_relation_target(source: &Type, target: &Type) -> Type {
 }
 
 pub(crate) fn source_display_name(source: &Type, target: &Type) -> String {
+    // A call through a declaration whose return is read from its body can
+    // reach here as the lazy reference standing in for that return.
+    let settled = crate::checks::function::settle_lazy_read(source.clone());
+    let source = &settled;
     // tsc does not generalize the source when the target is `never`, though
     // an object literal's own property types are already widened.
     if matches!(target, Type::Never) && matches!(source, Type::Object(_)) {

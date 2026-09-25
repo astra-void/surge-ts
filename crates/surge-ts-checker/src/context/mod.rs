@@ -117,6 +117,21 @@ pub(crate) struct ContextualReturnFrame {
     /// Collected only for an active frame, and capped — the render only needs a
     /// faithful union, not every duplicate.
     returned_types: Vec<surge_ts_types::Type>,
+    /// Beside each of `returned_types`, in an unannotated declaration's body:
+    /// what that return contributes to the inferred return type.
+    returned_forms: Vec<ReturnedForm>,
+}
+
+/// One `return <expr>` of an unannotated declaration as `getReturnTypeFromBody`
+/// reads it: the type after `getWidenedType` (a fresh object literal's members
+/// and, without `strictNullChecks`, `null`/`undefined`), the literal shape its
+/// subtype reduction needs, and whether a literal type in it is fresh — any
+/// return but a type assertion's.
+#[derive(Debug, Clone)]
+pub(crate) struct ReturnedForm {
+    pub(crate) widened: surge_ts_types::Type,
+    pub(crate) shape: surge_ts_types::LiteralShape,
+    pub(crate) fresh: bool,
 }
 
 impl CheckerContext {
@@ -178,7 +193,11 @@ impl CheckerContext {
     /// Records the type a `return <expr>` produced, for the `noImplicitReturns`
     /// decision. Unlike the mismatch bookkeeping this is not gated on the frame
     /// being the contextually-checked one — every body needs its own answer.
-    pub(crate) fn note_contextual_return_type(&mut self, ty: &surge_ts_types::Type) {
+    pub(crate) fn note_contextual_return_type(
+        &mut self,
+        ty: &surge_ts_types::Type,
+        expression: Option<&surge_ts_syntax::ParsedExpression>,
+    ) {
         fn admits_undefined(ty: &surge_ts_types::Type) -> bool {
             match ty {
                 surge_ts_types::Type::Void | surge_ts_types::Type::Undefined => true,
@@ -215,17 +234,62 @@ impl CheckerContext {
             // one: an unannotated block body infers its return type from these
             // (`getReturnTypeFromBody`), and that body has no expected type by
             // definition, so gating on `active` left it with the sentinel.
-            if frame.returned_types.len() < 16
-                && !frame.returned_types.iter().any(|existing| existing == ty)
-            {
-                frame
-                    .returned_types
-                    .push(surge_ts_types::with_type_copy_reason(
-                        surge_ts_types::TypeCopyReason::ReturnChecking,
-                        || ty.clone(),
-                    ));
+            let form = frame.unannotated_declaration.then(|| match expression {
+                Some(expression) => ReturnedForm {
+                    widened: crate::checks::var::widen_implicit_variable_initializer_type(
+                        crate::symbols::SymbolKind::Const,
+                        expression,
+                        ty,
+                        false,
+                    ),
+                    shape: crate::checks::expr::literal_shape(expression),
+                    fresh: !is_type_assertion(expression),
+                },
+                None => ReturnedForm {
+                    widened: ty.clone(),
+                    shape: surge_ts_types::LiteralShape::Regular,
+                    fresh: false,
+                },
+            });
+            match frame.returned_types.iter().position(|existing| existing == ty) {
+                Some(index) => {
+                    if let (Some(form), Some(recorded)) = (form, frame.returned_forms.get_mut(index)) {
+                        recorded.fresh |= form.fresh;
+                    }
+                }
+                None if frame.returned_types.len() < 16 => {
+                    frame
+                        .returned_types
+                        .push(surge_ts_types::with_type_copy_reason(
+                            surge_ts_types::TypeCopyReason::ReturnChecking,
+                            || ty.clone(),
+                        ));
+                    if let Some(form) = form {
+                        frame.returned_forms.push(form);
+                    }
+                }
+                None => {}
             }
         }
+
+        fn is_type_assertion(expression: &surge_ts_syntax::ParsedExpression) -> bool {
+            use surge_ts_syntax::ParsedExpression;
+            match expression {
+                ParsedExpression::ConstAssertion { .. } | ParsedExpression::TypeAssertion { .. } => true,
+                ParsedExpression::NonNullAssertion { expression, .. }
+                | ParsedExpression::SatisfiesExpression { expression, .. }
+                | ParsedExpression::Await { operand: expression, .. } => is_type_assertion(expression),
+                _ => false,
+            }
+        }
+    }
+
+    /// Beside [`Self::body_return_types`], in an unannotated declaration's
+    /// body: what each return contributes to the inferred return type.
+    pub(crate) fn body_return_forms(&self) -> &[ReturnedForm] {
+        self.contextual_return_frames
+            .last()
+            .map_or(&[], |frame| frame.returned_forms.as_slice())
     }
 
     /// The types the body currently being checked returned, for inferring an
