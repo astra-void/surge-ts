@@ -315,11 +315,25 @@ pub const Import_assertions_have_been_replaced_by_import_attributes_Use_with_ins
 #[allow(non_upper_case_globals, dead_code)]
 pub const Pattern_0_can_have_at_most_one_Asterisk_character: &Message = &Message { code: 5061, text: "Pattern '{0}' can have at most one '*' character." };
 #[allow(non_upper_case_globals, dead_code)]
+pub const X_0_is_declared_but_its_value_is_never_read: &Message = &Message { code: 6133, text: "'{0}' is declared but its value is never read." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Property_0_is_declared_but_its_value_is_never_read: &Message = &Message { code: 6138, text: "Property '{0}' is declared but its value is never read." };
+#[allow(non_upper_case_globals, dead_code)]
 pub const Numeric_separators_are_not_allowed_here: &Message = &Message { code: 6188, text: "Numeric separators are not allowed here." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Multiple_consecutive_numeric_separators_are_not_permitted: &Message = &Message { code: 6189, text: "Multiple consecutive numeric separators are not permitted." };
 #[allow(non_upper_case_globals, dead_code)]
+pub const All_imports_in_import_declaration_are_unused: &Message = &Message { code: 6192, text: "All imports in import declaration are unused." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const X_0_is_declared_but_never_used: &Message = &Message { code: 6196, text: "'{0}' is declared but never used." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const All_destructured_elements_are_unused: &Message = &Message { code: 6198, text: "All destructured elements are unused." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const All_variables_are_unused: &Message = &Message { code: 6199, text: "All variables are unused." };
+#[allow(non_upper_case_globals, dead_code)]
 pub const X_and_here: &Message = &Message { code: 6204, text: "and here." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const All_type_parameters_are_unused: &Message = &Message { code: 6205, text: "All type parameters are unused." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const X_import_can_only_be_used_in_TypeScript_files: &Message = &Message { code: 8002, text: "'import ... =' can only be used in TypeScript files." };
 #[allow(non_upper_case_globals, dead_code)]

@@ -26,9 +26,9 @@ pub struct ParsedSource {
     pub reference_type_directives: Vec<ReferenceTypeDirective>,
     /// Every value- and type-position identifier name referenced anywhere in the
     /// module (including export specifiers, collected from the full oxc AST).
-    /// Backs unused-import / unused-local diagnostics (TS6133): a top-level
-    /// binding whose name never appears here and is not exported is unused.
     pub module_reads: Vec<String>,
+    /// The names JSDoc `{@link X}` tags refer to, which tsc resolves as uses.
+    pub jsdoc_link_names: Vec<String>,
     /// Every name the file writes by definite assignment, sorted (tsc's
     /// `AssignmentKindDefinite`; see `parser::writes`). Backs TS2454's
     /// never-initialized rule for a `let` read from a nested function.

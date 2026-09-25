@@ -1084,6 +1084,7 @@ export const fixturePresets: Record<string, string> = {
   'this-before-super-flow': path.join(workspaceRoot, 'tests/compat-projects/this-before-super-flow/tsconfig.json'),
   'decorator-iife-use-before-declaration': path.join(workspaceRoot, 'tests/compat-projects/decorator-iife-use-before-declaration/tsconfig.json'),
   'super-abstract-member-access': path.join(workspaceRoot, 'tests/compat-projects/super-abstract-member-access/tsconfig.json'),
+  'unused-identifiers-by-symbol': path.join(workspaceRoot, 'tests/compat-projects/unused-identifiers-by-symbol/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

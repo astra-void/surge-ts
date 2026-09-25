@@ -5486,5 +5486,21 @@
     "source": "typescript",
     "arity": 2,
     "support": "emitted"
+  },
+  {
+    "code": "TS6138",
+    "category": "Error",
+    "message": "Property '{0}' is declared but its value is never read.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS6205",
+    "category": "Error",
+    "message": "All type parameters are unused.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
   }
 ]

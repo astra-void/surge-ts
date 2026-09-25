@@ -17,9 +17,9 @@ use super::{
     check_program_file_statements, clone_type_declaration_table,
     collect_function_signatures_from_statements, count_local_type_declarations_in_statements,
     apply_comment_directives, emit_unsupported_declaration_diagnostics,
-    extend_diagnostics_dedup, module_scope_declared_names, unused_locals,
+    extend_diagnostics_dedup, module_scope_declared_names,
 };
-use crate::context::{CheckerContext, CompatibilityStats, FileKind};
+use crate::context::{CheckerContext, CompatibilityStats};
 use crate::driver::validate_direct_utility_aliases;
 use crate::driver::validate_local_type_declarations;
 use crate::symbols::{TypeDeclarationScope, clone_symbol_info_handle};
@@ -1633,16 +1633,6 @@ pub(super) fn check_program_file(
         ctx.namespace_require_reads = None;
         ctx.module_value_fallback = None;
 
-        if ctx.options.no_unused_locals && ctx.current_file_kind == FileKind::RootSource {
-            let jsx_reads =
-                unused_locals::jsx_factory_reads(&parsed_file.jsx_factory_uses, &ctx.options);
-            unused_locals::emit_unused_module_bindings(
-                &parsed_file.statements,
-                &parsed_file.module_reads,
-                &jsx_reads,
-                ctx,
-            );
-        }
         record_program_timing(timings, |timings| {
             timings.per_file_statement_checking += statement_check_start.elapsed()
         });

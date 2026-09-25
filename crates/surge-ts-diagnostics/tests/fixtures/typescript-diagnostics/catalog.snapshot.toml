@@ -5488,3 +5488,19 @@ support = "emitted"
 message = "Abstract method '{0}' in class '{1}' cannot be accessed via super expression."
 arity = 2
 
+[[diagnostic]]
+code = "TS6138"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Property '{0}' is declared but its value is never read."
+arity = 1
+
+[[diagnostic]]
+code = "TS6205"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "All type parameters are unused."
+arity = 0
+

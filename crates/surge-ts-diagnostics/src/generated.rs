@@ -6865,6 +6865,26 @@ pub const TS2513: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS6138: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS6138",
+    number: Some(6138),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Property '{0}' is declared but its value is never read.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS6205: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS6205",
+    number: Some(6205),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "All type parameters are unused.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
     TS2411,
@@ -7552,6 +7572,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2823,
     TS1323,
     TS2513,
+    TS6138,
+    TS6205,
 ];
 
 impl Diagnostic {
@@ -12542,5 +12564,19 @@ impl Diagnostic {
             ],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts6138(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS6138,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts6205(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS6205, Vec::<DiagnosticArg>::new(), file_name)
     }
 }

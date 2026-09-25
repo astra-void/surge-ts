@@ -114,6 +114,8 @@ mod container_flags {
 
 use container_flags as cf;
 
+mod unused;
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ModuleInstanceState {
     Unknown,
@@ -127,6 +129,10 @@ type SymbolId = usize;
 struct Symbol {
     flags: u32,
     declarations: Vec<NodeId>,
+    /// `Symbol.ExportSymbol`: an exported declaration's local symbol names
+    /// the symbol its container exports.
+    export_symbol: Option<SymbolId>,
+    value_declaration: Option<NodeId>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -136,9 +142,9 @@ enum Table {
     Members(SymbolId),
 }
 
-/// The file's binder diagnostics, and the symbols it contributes to the
-/// program's global scope.
-pub(crate) fn bind(file: &ParsedFile, text: &str) -> (Vec<Diagnostic>, FileGlobals) {
+/// Binds the file: what the binder reports and what [`Binder::finish`] and
+/// the unused-identifier check read back.
+pub(crate) fn bind<'a>(file: &'a ParsedFile, text: &'a str) -> Binder<'a> {
     let mut binder = Binder {
         file,
         text,
@@ -146,17 +152,17 @@ pub(crate) fn bind(file: &ParsedFile, text: &str) -> (Vec<Diagnostic>, FileGloba
         symbols: Vec::new(),
         tables: HashMap::new(),
         node_symbol: HashMap::new(),
+        local_symbol: HashMap::new(),
         export_context: Vec::new(),
         container: file.root,
         block_scope_container: file.root,
         diagnostics: Vec::new(),
     };
     binder.bind(Some(file.root));
-    let globals = binder.globals();
-    (binder.diagnostics, globals)
+    binder
 }
 
-struct Binder<'a> {
+pub(crate) struct Binder<'a> {
     file: &'a ParsedFile,
     text: &'a str,
     jsx: bool,
@@ -164,6 +170,9 @@ struct Binder<'a> {
     tables: HashMap<Table, HashMap<String, SymbolId>>,
     /// `node.Symbol()`: the symbol a declaration was last added to.
     node_symbol: HashMap<NodeId, SymbolId>,
+    /// `node.LocalSymbol()`: an exported declaration's symbol in its
+    /// container's locals.
+    local_symbol: HashMap<NodeId, SymbolId>,
     /// `NodeFlagsExportContext`, which the binder sets on a source file or
     /// module declaration.
     export_context: Vec<NodeId>,
@@ -173,6 +182,13 @@ struct Binder<'a> {
 }
 
 impl<'a> Binder<'a> {
+    /// The file's binder diagnostics, and the symbols it contributes to the
+    /// program's global scope.
+    pub(crate) fn finish(self) -> (Vec<Diagnostic>, FileGlobals) {
+        let globals = self.globals();
+        (self.diagnostics, globals)
+    }
+
     fn kind(&self, id: NodeId) -> Kind {
         self.file.node(id).kind
     }
@@ -202,7 +218,7 @@ impl<'a> Binder<'a> {
     }
 
     fn new_symbol(&mut self, flags: u32) -> SymbolId {
-        self.symbols.push(Symbol { flags, declarations: Vec::new() });
+        self.symbols.push(Symbol { flags, declarations: Vec::new(), export_symbol: None, value_declaration: None });
         self.symbols.len() - 1
     }
 
@@ -737,6 +753,12 @@ impl<'a> Binder<'a> {
         (pos, n.end)
     }
 
+    /// `rangeOfTypeParameters`: a type parameter list with its `<>`.
+    fn range_of_type_parameters(&self, list: &ast::NodeList) -> (usize, usize) {
+        let end = scanner::skip_trivia(self.text, list.end) + 1;
+        (list.pos.saturating_sub(1), end.min(self.text.len()))
+    }
+
     fn diagnostic(&self, (start, end): (usize, usize), message: &'static Message, args: Vec<String>) -> Diagnostic {
         Diagnostic { start, end, message, args }
     }
@@ -899,10 +921,19 @@ impl<'a> Binder<'a> {
     }
 
     fn add_declaration_to_symbol(&mut self, symbol: SymbolId, node: NodeId, flags: u32) {
+        // `SetValueDeclaration`: any other kind of value declaration takes
+        // precedence over a namespace.
+        let replaces_value_declaration = flags & sf::Value != 0
+            && self.symbols[symbol].value_declaration.is_none_or(|existing| {
+                self.kind(existing) == Kind::ModuleDeclaration && self.kind(node) != Kind::ModuleDeclaration
+            });
         let s = &mut self.symbols[symbol];
         s.flags |= flags;
         if !s.declarations.contains(&node) {
             s.declarations.push(node);
+        }
+        if replaces_value_declaration {
+            s.value_declaration = Some(node);
         }
         self.node_symbol.insert(node, symbol);
     }
@@ -927,7 +958,9 @@ impl<'a> Binder<'a> {
             let export_kind = if flags & sf::Value != 0 { sf::ExportValue } else { sf::None };
             let local = self.declare_symbol(Some(Table::Locals(container)), false, node, export_kind, excludes);
             let exports = self.exports_of(container);
-            self.declare_symbol(exports, true, node, flags, excludes);
+            let export = self.declare_symbol(exports, true, node, flags, excludes);
+            self.symbols[local].export_symbol = Some(export);
+            self.local_symbol.insert(node, local);
             return local;
         }
         self.declare_symbol(Some(Table::Locals(container)), false, node, flags, excludes)
@@ -1050,6 +1083,13 @@ impl<'a> Binder<'a> {
                 name_range: self.error_range_for_node(self.name_of_declaration(declaration).unwrap_or(declaration)),
                 node_range: self.error_range_for_node(declaration),
                 is_type_declaration: self.is_type_declaration(declaration),
+                type_parameters_range: self
+                    .file
+                    .node(declaration)
+                    .type_parameters
+                    .as_ref()
+                    .filter(|list| !list.nodes.is_empty())
+                    .map(|list| self.range_of_type_parameters(list)),
             })
             .collect();
         let members = self

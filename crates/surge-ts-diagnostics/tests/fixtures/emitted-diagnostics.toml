@@ -4390,3 +4390,15 @@ status = "emitted"
 oracle = [
   "super-abstract-member-access",
 ]
+
+[TS6138]
+status = "emitted"
+oracle = [
+  "unused-identifiers-by-symbol",
+]
+
+[TS6205]
+status = "emitted"
+oracle = [
+  "unused-identifiers-by-symbol",
+]

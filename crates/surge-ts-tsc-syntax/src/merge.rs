@@ -88,6 +88,8 @@ pub(crate) struct GlobalDeclaration {
     /// `createDiagnosticForNode(declaration)`.
     pub node_range: (usize, usize),
     pub is_type_declaration: bool,
+    /// `rangeOfTypeParameters` of the declaration's type parameter list.
+    pub type_parameters_range: Option<(usize, usize)>,
 }
 
 /// A file taking part in the merge, in program order.
@@ -99,6 +101,21 @@ pub struct GlobalsInput<'a> {
 
 /// The errors the global merge reports, per file of `files`.
 pub fn merge_globals(files: &[GlobalsInput<'_>]) -> Vec<Vec<SyntaxDiagnostic>> {
+    merge_globals_report(files).diagnostics
+}
+
+/// What the global merge decides for each file of `files`.
+pub struct MergeReport {
+    /// The errors it reports.
+    pub diagnostics: Vec<Vec<SyntaxDiagnostic>>,
+    /// The type parameter lists of declarations whose symbol another file
+    /// declares too: tsc checks a list for unused type parameters only when
+    /// every declaration of its symbol is in one file
+    /// (`allDeclarationsInSameSourceFile`).
+    pub shared_type_parameters: Vec<Vec<(usize, usize)>>,
+}
+
+pub fn merge_globals_report(files: &[GlobalsInput<'_>]) -> MergeReport {
     let mut merger = Merger {
         files,
         merged: Vec::new(),
@@ -168,11 +185,23 @@ pub fn merge_globals(files: &[GlobalsInput<'_>]) -> Vec<Vec<SyntaxDiagnostic>> {
             }
         }
     }
-    let mut out = vec![Vec::new(); files.len()];
-    for (file, diagnostic) in merger.reported {
-        out[file as usize].push(diagnostic.render());
+    let mut shared_type_parameters = vec![Vec::new(); files.len()];
+    for symbol in &merger.merged {
+        let first_file = symbol.declarations.first().map(|&(file, _, _)| file);
+        if symbol.declarations.iter().all(|&(file, _, _)| Some(file) == first_file) {
+            continue;
+        }
+        for &(file, id, index) in &symbol.declarations {
+            if let Some(range) = merger.file_symbol(file, id).declarations[index].type_parameters_range {
+                shared_type_parameters[file as usize].push(range);
+            }
+        }
     }
-    out
+    let mut diagnostics = vec![Vec::new(); files.len()];
+    for (file, diagnostic) in merger.reported {
+        diagnostics[file as usize].push(diagnostic.render());
+    }
+    MergeReport { diagnostics, shared_type_parameters }
 }
 
 /// A symbol of one file, or one the merge made (tsc's transient clone).

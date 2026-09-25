@@ -15,7 +15,7 @@ use surge_ts_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
 use crate::checks::expr::evaluate_expression;
 use crate::checks::var::widen_implicit_variable_initializer_type;
 use crate::context::convert_span;
-use crate::context::{CheckerContext, FileKind};
+use crate::context::CheckerContext;
 use crate::flow::{FunctionFlowState, analyze_function_body_flow, collect_function_flow_facts};
 use crate::infer::{
     InferredExpression, TypeParameterSubstitution, map_parsed_type_with_substitution,
@@ -2099,335 +2099,6 @@ pub(crate) fn register_function_signature(
     duplicate_implementation
 }
 
-/// Whether `noUnusedParameters` reporting applies in the current file. Skips
-/// declaration files (ambient / `.d.ts`), where tsc never reports.
-pub(crate) fn should_track_unused_parameters(ctx: &CheckerContext) -> bool {
-    ctx.options.no_unused_parameters && ctx.current_file_kind == FileKind::RootSource
-}
-
-/// Whether the body read `name`. `reads` is the parser's sorted, deduplicated
-/// read list (see `ParsedFunctionDeclaration::body_reads`), so this binary-
-/// searches instead of scanning: the callers ask once per binding, and a linear
-/// scan made unused-binding reporting quadratic in function size.
-fn body_reads_name(reads: &[String], name: &str) -> bool {
-    reads
-        .binary_search_by(|read| read.as_str().cmp(name))
-        .is_ok()
-}
-
-/// Checked once per reporting call rather than per binding, so verifying the
-/// order the binary search depends on does not itself reintroduce the linear
-/// scan in debug builds.
-fn debug_assert_reads_sorted(reads: &[String]) {
-    debug_assert!(
-        reads.windows(2).all(|pair| pair[0] < pair[1]),
-        "body_reads must stay sorted and deduplicated for the binary search"
-    );
-}
-
-/// Reports TS6133 for each identifier parameter whose name never appears in the
-/// body's collected reads (and is not `_`-prefixed), and walks destructuring
-/// patterns for their unused bindings. The `this` pseudo-parameter is skipped.
-pub(crate) fn emit_unused_parameters(
-    parameters: &[ParsedFunctionParameter],
-    reads: &[String],
-    ctx: &mut CheckerContext,
-) {
-    debug_assert_reads_sorted(reads);
-    for parameter in parameters {
-        match &parameter.binding_name {
-            ParsedBindingName::Identifier { name, span } => {
-                if name == "this" || name.starts_with('_') || body_reads_name(reads, name) {
-                    continue;
-                }
-                let diagnostic = Diagnostic::ts6133(name, ctx.file_name.clone());
-                let diagnostic = match span {
-                    Some(span) => diagnostic.with_span(convert_span(*span)),
-                    None => diagnostic,
-                };
-                ctx.push(diagnostic);
-            }
-            ParsedBindingName::ObjectPattern(pattern) => {
-                emit_unused_object_pattern_bindings(pattern, reads, ctx);
-            }
-            ParsedBindingName::ArrayPattern(pattern) => {
-                emit_unused_array_pattern_bindings(pattern, reads, ctx);
-            }
-            ParsedBindingName::Unsupported { .. } => {}
-        }
-    }
-}
-
-/// One unused binding found inside a destructuring pattern: the name tsc
-/// renders (the *local* one, so `{ a: x }` reports `x`) and where it points.
-struct UnusedBinding<'a> {
-    name: &'a str,
-    span: Option<TextSpan>,
-}
-
-/// Reports the unused bindings of one pattern level. tsc groups them per
-/// pattern: when every element of the pattern is unused it collapses the whole
-/// group into a single TS6198 on the pattern, and otherwise names each binding
-/// with TS6133. A one-element group is always named, which is why
-/// `({ a }: O) => 1` reports `'a'` and `({ a, b }: O) => 1` reports the
-/// collapsed form.
-fn report_pattern_group(
-    unused: Vec<UnusedBinding<'_>>,
-    element_count: usize,
-    pattern_span: Option<TextSpan>,
-    ctx: &mut CheckerContext,
-) {
-    if unused.is_empty() {
-        return;
-    }
-    if unused.len() >= 2 && unused.len() == element_count {
-        let diagnostic = Diagnostic::ts6198(ctx.file_name.clone());
-        let diagnostic = match pattern_span {
-            Some(span) => diagnostic.with_span(convert_span(span)),
-            None => diagnostic,
-        };
-        ctx.push(diagnostic);
-        return;
-    }
-    for binding in unused {
-        let diagnostic = Diagnostic::ts6133(binding.name, ctx.file_name.clone());
-        let diagnostic = match binding.span {
-            Some(span) => diagnostic.with_span(convert_span(span)),
-            None => diagnostic,
-        };
-        ctx.push(diagnostic);
-    }
-}
-
-fn emit_unused_object_pattern_bindings(
-    pattern: &ParsedObjectBindingPattern,
-    reads: &[String],
-    ctx: &mut CheckerContext,
-) {
-    let mut unused = Vec::new();
-    // `const { a, ...rest } = o` uses `a` to keep it *out* of `rest`, so tsc
-    // never reports the named siblings of an object rest — only the rest
-    // binding itself can be unused. Array rest has no such role.
-    let has_rest = pattern.rest.is_some();
-    for element in &pattern.elements {
-        match &element.binding_name {
-            ParsedBindingName::Identifier { name, span } => {
-                // `_`-prefixing exempts an object binding only when it renames
-                // a property (`{ a: _a }`); shorthand `{ _a }` still reports.
-                let renamed_to_ignore = !element.shorthand && name.starts_with('_');
-                if has_rest || renamed_to_ignore || body_reads_name(reads, name) {
-                    continue;
-                }
-                unused.push(UnusedBinding {
-                    name,
-                    span: span.or(element.name_span),
-                });
-            }
-            ParsedBindingName::ObjectPattern(nested) => {
-                emit_unused_object_pattern_bindings(nested, reads, ctx);
-            }
-            ParsedBindingName::ArrayPattern(nested) => {
-                emit_unused_array_pattern_bindings(nested, reads, ctx);
-            }
-            ParsedBindingName::Unsupported { .. } => {}
-        }
-    }
-    collect_unused_rest(pattern.rest.as_deref(), reads, false, &mut unused);
-    let element_count = pattern.elements.len() + usize::from(has_rest);
-    report_pattern_group(unused, element_count, pattern.span, ctx);
-}
-
-fn emit_unused_array_pattern_bindings(
-    pattern: &ParsedArrayBindingPattern,
-    reads: &[String],
-    ctx: &mut CheckerContext,
-) {
-    let mut unused = Vec::new();
-    for element in pattern.elements.iter().flatten() {
-        match element {
-            ParsedBindingName::Identifier { name, span } => {
-                if name.starts_with('_') || body_reads_name(reads, name) {
-                    continue;
-                }
-                unused.push(UnusedBinding { name, span: *span });
-            }
-            ParsedBindingName::ObjectPattern(nested) => {
-                emit_unused_object_pattern_bindings(nested, reads, ctx);
-            }
-            ParsedBindingName::ArrayPattern(nested) => {
-                emit_unused_array_pattern_bindings(nested, reads, ctx);
-            }
-            ParsedBindingName::Unsupported { .. } => {}
-        }
-    }
-    collect_unused_rest(pattern.rest.as_deref(), reads, true, &mut unused);
-    let element_count = pattern.elements.len() + usize::from(pattern.rest.is_some());
-    report_pattern_group(unused, element_count, pattern.span, ctx);
-}
-
-/// An array rest (`[..._rest]`) honours the `_` exemption like any array
-/// element; an object rest (`{ ..._rest }`) renames nothing, so it does not.
-fn collect_unused_rest<'a>(
-    rest: Option<&'a ParsedBindingName>,
-    reads: &[String],
-    underscore_exempts: bool,
-    unused: &mut Vec<UnusedBinding<'a>>,
-) {
-    let Some(ParsedBindingName::Identifier { name, span }) = rest else {
-        return;
-    };
-    if (underscore_exempts && name.starts_with('_')) || body_reads_name(reads, name) {
-        return;
-    }
-    unused.push(UnusedBinding { name, span: *span });
-}
-
-/// Reports TS6133 for each function-local `const`/`let`/`var`, and TS6196 for
-/// each body-local `type`/`interface`, whose name never appears in the body's
-/// reads. Gated on `noUnusedLocals` in a root source file. Uses the
-/// function-wide read set, so a binding read in any nested scope counts (an
-/// over-approximation — never a false positive).
-pub(crate) fn emit_unused_locals(
-    statements: &[ParsedFunctionBodyStatement],
-    reads: &[String],
-    ctx: &mut CheckerContext,
-) {
-    if !ctx.options.no_unused_locals || ctx.current_file_kind != FileKind::RootSource {
-        return;
-    }
-    debug_assert_reads_sorted(reads);
-    let mut locals: Vec<(&str, Option<TextSpan>)> = Vec::new();
-    let mut lists: Vec<&std::sync::Arc<surge_ts_syntax::ParsedDeclarationList>> = Vec::new();
-    let mut local_types: Vec<(&str, Option<TextSpan>)> = Vec::new();
-    collect_local_var_declarations(statements, &mut locals, &mut lists);
-    collect_local_type_declarations(statements, &mut local_types);
-    for list in lists {
-        crate::program::report_unused_declaration_list(list, &|name| body_reads_name(reads, name), ctx);
-    }
-    for (name, span) in locals {
-        if body_reads_name(reads, name) {
-            continue;
-        }
-        let diagnostic = Diagnostic::ts6133(name, ctx.file_name.clone());
-        let diagnostic = match span {
-            Some(span) => diagnostic.with_span(convert_span(span)),
-            None => diagnostic,
-        };
-        ctx.push(diagnostic);
-    }
-    for (name, span) in local_types {
-        if body_reads_name(reads, name) {
-            continue;
-        }
-        let diagnostic = Diagnostic::ts6196(name, ctx.file_name.clone());
-        let diagnostic = match span {
-            Some(span) => diagnostic.with_span(convert_span(span)),
-            None => diagnostic,
-        };
-        ctx.push(diagnostic);
-    }
-}
-
-/// Body-local `type`/`interface` declarations, recursing through control flow
-/// but not into nested functions, mirroring
-/// [`collect_local_var_declarations`]. A body-local `class` is a value and
-/// reports TS6133 through the declaration path instead.
-fn collect_local_type_declarations<'a>(
-    statements: &'a [ParsedFunctionBodyStatement],
-    out: &mut Vec<(&'a str, Option<TextSpan>)>,
-) {
-    for statement in statements {
-        match statement {
-            ParsedFunctionBodyStatement::TypeAlias(alias) if !alias.is_declare => {
-                out.push((alias.name.as_str(), alias.name_span));
-            }
-            ParsedFunctionBodyStatement::Interface(interface) if !interface.is_declare => {
-                out.push((interface.name.as_str(), interface.name_span));
-            }
-            ParsedFunctionBodyStatement::Block(body) => {
-                collect_local_type_declarations(body, out);
-            }
-            ParsedFunctionBodyStatement::If(statement) => {
-                collect_local_type_declarations(&statement.then_body, out);
-                collect_local_type_declarations(&statement.else_body, out);
-            }
-            ParsedFunctionBodyStatement::While(statement) => {
-                collect_local_type_declarations(&statement.body, out);
-            }
-            ParsedFunctionBodyStatement::ForOf(statement) => {
-                collect_local_type_declarations(&statement.body, out);
-            }
-            ParsedFunctionBodyStatement::Switch(statement) => {
-                for case in &statement.cases {
-                    collect_local_type_declarations(&case.consequent, out);
-                }
-            }
-            ParsedFunctionBodyStatement::Try(statement) => {
-                collect_local_type_declarations(&statement.block, out);
-                if let Some(handler) = &statement.handler {
-                    collect_local_type_declarations(&handler.body, out);
-                }
-                collect_local_type_declarations(&statement.finalizer, out);
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Collects `const`/`let`/`var` declarations directly owned by this function
-/// body, recursing through control-flow statements but not into nested functions
-/// (whose locals belong to their own scope).
-/// The function's local declarations: the lists they were written in, and
-/// the declarations surge synthesized without one.
-fn collect_local_var_declarations<'a>(
-    statements: &'a [ParsedFunctionBodyStatement],
-    out: &mut Vec<(&'a str, Option<TextSpan>)>,
-    lists: &mut Vec<&'a std::sync::Arc<surge_ts_syntax::ParsedDeclarationList>>,
-) {
-    for statement in statements {
-        match statement {
-            ParsedFunctionBodyStatement::VariableDeclaration(variable) if !variable.is_declare => {
-                match &variable.declaration_list {
-                    Some(list) => {
-                        if !lists.iter().any(|seen| std::sync::Arc::ptr_eq(seen, list)) {
-                            lists.push(list);
-                        }
-                    }
-                    // tsc exempts an `_`-prefixed *destructured* binding: it is
-                    // the idiom for naming a property only to drop it from a
-                    // rest spread (`const { a: _a, ...rest } = x`).
-                    None if variable.from_binding_pattern && variable.name.starts_with('_') => {}
-                    None => out.push((variable.name.as_str(), variable.name_span)),
-                }
-            }
-            ParsedFunctionBodyStatement::Block(body) => collect_local_var_declarations(body, out, lists),
-            ParsedFunctionBodyStatement::If(statement) => {
-                collect_local_var_declarations(&statement.then_body, out, lists);
-                collect_local_var_declarations(&statement.else_body, out, lists);
-            }
-            ParsedFunctionBodyStatement::While(statement) => {
-                collect_local_var_declarations(&statement.body, out, lists)
-            }
-            ParsedFunctionBodyStatement::ForOf(statement) => {
-                collect_local_var_declarations(&statement.body, out, lists)
-            }
-            ParsedFunctionBodyStatement::Switch(statement) => {
-                for case in &statement.cases {
-                    collect_local_var_declarations(&case.consequent, out, lists);
-                }
-            }
-            ParsedFunctionBodyStatement::Try(statement) => {
-                collect_local_var_declarations(&statement.block, out, lists);
-                if let Some(handler) = &statement.handler {
-                    collect_local_var_declarations(&handler.body, out, lists);
-                }
-                collect_local_var_declarations(&statement.finalizer, out, lists);
-            }
-            _ => {}
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn check_function_body_with_signature(
     name: String,
@@ -2438,7 +2109,6 @@ pub(crate) fn check_function_body_with_signature(
     function_signature: Option<Arc<FunctionSignatureInfo>>,
     has_explicit_return_type: bool,
     missing_return_span: Option<TextSpan>,
-    body_reads: Option<&[String]>,
     is_generator: bool,
     is_async: bool,
     has_this_parameter: bool,
@@ -2464,7 +2134,6 @@ pub(crate) fn check_function_body_with_signature(
         missing_return_span,
         this_type,
         false,
-        body_reads,
         is_generator,
         is_async,
         has_this_parameter,
@@ -2595,7 +2264,6 @@ pub(crate) fn check_function_body_with_signature_and_this(
     missing_return_span: Option<TextSpan>,
     this_type: Option<Type>,
     is_constructor: bool,
-    body_reads: Option<&[String]>,
     is_generator: bool,
     is_async: bool,
     // `function f(this: T)`: oxc keeps the `this` parameter out of the parameter
@@ -2711,15 +2379,6 @@ pub(crate) fn check_function_body_with_signature_and_this(
             .filter(|name| !crate::flow::binds_parameter(&parameters, name))
             .collect(),
     );
-
-    // `None` is an overload signature (no body); tsc never flags its parameters
-    // or locals.
-    if let Some(reads) = body_reads {
-        if !is_constructor && should_track_unused_parameters(ctx) {
-            emit_unused_parameters(&parameters, reads, ctx);
-        }
-        emit_unused_locals(&body, reads, ctx);
-    }
 
     for (parameter, parameter_type) in parameters.iter().zip(function_type.parameters().iter()) {
         insert_parameter_bindings(parameter, parameter_type, &mut scopes);

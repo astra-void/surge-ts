@@ -183,7 +183,7 @@ pub(super) fn parse_program_file(
     };
     let tsc_errors = match file_kind {
         FileKind::GeneratedDeclaration | FileKind::PhysicalDefaultLib => None,
-        _ => super::diagnostics::tsc_file_errors(&input.source_text, &input.file_name, options),
+        _ => super::diagnostics::tsc_file_errors(&input.source_text, &input.file_name, options, &parsed),
     };
     let mut bind_errors = Vec::new();
     let mut tsc_bound = false;

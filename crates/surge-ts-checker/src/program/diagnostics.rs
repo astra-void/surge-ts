@@ -80,9 +80,22 @@ pub(super) fn tsc_file_errors(
     source_text: &str,
     file_name: &str,
     checker_options: &crate::CheckerOptions,
+    parsed: &surge_ts_syntax::ParsedSource,
 ) -> Option<TscFileErrors> {
     let mut options = surge_ts_tsc_syntax::ParseOptions::for_file_name(file_name)?;
     options.language_version = checker_options.language_version;
+    if checker_options.no_unused_locals || checker_options.no_unused_parameters {
+        let (jsx_element_reads, jsx_fragment_reads) =
+            super::unused_locals::jsx_factory_reads(&parsed.jsx_factory_uses, checker_options);
+        options.unused = Some(surge_ts_tsc_syntax::UnusedCheck {
+            locals: checker_options.no_unused_locals,
+            parameters: checker_options.no_unused_parameters,
+            jsx_element_reads,
+            jsx_fragment_reads,
+            jsdoc_link_names: parsed.jsdoc_link_names.clone(),
+            emit_standard_class_fields: checker_options.emit_standard_class_fields(),
+        });
+    }
     let detection = &checker_options.module_detection;
     if !options.is_declaration_file {
         if detection.legacy {
@@ -122,7 +135,11 @@ pub(super) fn tsc_file_errors(
         });
     }
     let is_javascript = surge_ts_syntax::is_javascript_file_name(file_name);
-    let reported = diagnostics.bind.into_iter().chain(diagnostics.regular_expressions);
+    let reported = diagnostics
+        .bind
+        .into_iter()
+        .chain(diagnostics.regular_expressions)
+        .chain(diagnostics.unused);
     let bind = match (surge_ts_syntax::extract_check_directive(source_text), check_js) {
         (Some(false), _) => Vec::new(),
         (Some(true), _) => reported.collect(),
@@ -158,12 +175,25 @@ pub(super) fn report_global_merge_conflicts(parsed_files: &mut [ParsedProgramFil
         .iter()
         .map(|globals| surge_ts_tsc_syntax::GlobalsInput { globals, plain_js: false })
         .collect();
-    let reports = surge_ts_tsc_syntax::merge_globals(&inputs);
-    for (&index, reports) in contributing.iter().zip(reports) {
+    let report = surge_ts_tsc_syntax::merge_globals_report(&inputs);
+    for ((&index, reports), shared) in contributing
+        .iter()
+        .zip(report.diagnostics)
+        .zip(report.shared_type_parameters)
+    {
         let file = &mut parsed_files[index];
         if file.no_check {
             continue;
         }
+        // The file checked a type parameter list alone for unused
+        // parameters; tsc does not check one whose symbol other files
+        // declare too.
+        file.bind_errors.retain(|error| {
+            !(matches!(error.code, Some(6196 | 6205))
+                && error
+                    .span
+                    .is_some_and(|span| shared.iter().any(|&(start, end)| start <= span.start && span.start < end)))
+        });
         file.bind_errors.extend(reports.into_iter().map(|diagnostic| surge_ts_syntax::ParserError {
             code: Some(diagnostic.code),
             span_text: None,

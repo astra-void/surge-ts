@@ -702,7 +702,6 @@ fn checked_body_return_of(
             None,
             parts.this_type,
             false,
-            None,
             parts.is_generator,
             parts.is_async,
             parts.has_this_parameter,
@@ -1210,7 +1209,6 @@ pub(crate) fn check_function_declaration(
         return_type_span,
         body,
         has_body,
-        body_reads,
         is_generator,
         is_async,
         ..
@@ -1291,7 +1289,6 @@ pub(crate) fn check_function_declaration(
             Some(signature_info),
             return_type.is_some(),
             return_type_span.or(name_span),
-            has_body.then(|| body_reads.as_slice()),
             is_generator,
             is_async,
             has_this_parameter,
@@ -1358,7 +1355,6 @@ pub(crate) fn check_nested_function_declaration(
         return_type,
         return_type_span,
         body,
-        body_reads,
         is_generator,
         is_async,
         ..
@@ -1388,7 +1384,6 @@ pub(crate) fn check_nested_function_declaration(
             Some(signature_info),
             return_type.is_some(),
             return_type_span.or(name_span),
-            Some(body_reads.as_slice()),
             is_generator,
             is_async,
             has_this_parameter,
@@ -1440,7 +1435,6 @@ pub(crate) fn check_function_declaration_body(
         return_type_span,
         body,
         has_body,
-        body_reads,
         is_generator,
         is_async,
         ..
@@ -1469,7 +1463,6 @@ pub(crate) fn check_function_declaration_body(
         Some(signature_info),
         return_type.is_some(),
         return_type_span.or(name_span),
-        has_body.then(|| body_reads.as_slice()),
         is_generator,
         is_async,
         has_this_parameter,
@@ -1955,7 +1948,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
         return_type_span,
         is_async,
         body,
-        body_reads,
+        body_reads: _,
         body_span,
         span: arrow_span,
     } = arrow;
@@ -2154,10 +2147,6 @@ pub(crate) fn check_arrow_function_expression_anchored(
             }
         });
 
-        if should_track_unused_parameters(ctx) {
-            emit_unused_parameters(&parameters, &body_reads, ctx);
-        }
-
         let visible_symbols = visible_symbols(&scopes);
         // tsc's `unwrapReturnType`: an async body is typed against the awaited
         // return type (`async (): Promise<R> => ({ … })` reads the literal
@@ -2300,7 +2289,6 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 }
             }
             ParsedArrowFunctionBody::Block(statements) => {
-                emit_unused_locals(&statements, &body_reads, ctx);
                 let flow_facts = collect_function_flow_facts(&statements);
                 let mut flow_state = FunctionFlowState::new(
                     flow_facts.has_let_or_const || flow_facts.has_future_block_scoped_declarations,

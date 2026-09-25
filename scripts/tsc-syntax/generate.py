@@ -28,12 +28,16 @@ lines += ['', '    pub const ALL: [Kind; ' + str(len(kinds)) + '] = [' + ', '.jo
 (out / 'kind.rs').write_text('\n'.join(lines))
 
 # Messages referenced by the parser, scanner (with its regular expression
-# validator) and binder, and by the checker's
-# merge of the global symbol table (initializeChecker, mergeSymbol).
+# validator) and binder, by the checker's
+# merge of the global symbol table (initializeChecker, mergeSymbol), and by its
+# unused-identifier check (checkUnusedIdentifiers).
 used = set()
 for f in ['parser/parser.go', 'parser/utilities.go', 'parser/references.go', 'scanner/scanner.go', 'scanner/regexp.go', 'scanner/utilities.go', 'ast/utilities.go', 'binder/binder.go']:
     used |= set(re.findall(r'diagnostics\.(\w+)', (root / f).read_text()))
 used |= {'Declaration_name_conflicts_with_built_in_global_identifier_0'}
+used |= {'X_0_is_declared_but_its_value_is_never_read', 'X_0_is_declared_but_never_used',
+         'Property_0_is_declared_but_its_value_is_never_read', 'All_imports_in_import_declaration_are_unused',
+         'All_destructured_elements_are_unused', 'All_variables_are_unused', 'All_type_parameters_are_unused'}
 diag = (root / 'diagnostics/diagnostics_generated.go').read_text()
 def rust_str(s):
     out = []

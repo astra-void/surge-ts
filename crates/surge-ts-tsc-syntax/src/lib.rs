@@ -141,6 +141,27 @@ pub struct ParseOptions {
     /// The checker's language version, for what its regular expression
     /// check allows.
     pub language_version: ScriptTarget,
+    /// The checker's unused-identifier check, when either option asks for it.
+    pub unused: Option<UnusedCheck>,
+}
+
+/// What tsc's unused-identifier check (`checkUnusedIdentifiers`) reads
+/// beyond the file itself.
+pub struct UnusedCheck {
+    /// `noUnusedLocals`.
+    pub locals: bool,
+    /// `noUnusedParameters`.
+    pub parameters: bool,
+    /// The names a JSX element resolves for its factory
+    /// (`markJsxAliasReferenced`); none under the automatic runtime.
+    pub jsx_element_reads: Vec<String>,
+    /// The names a JSX fragment resolves for its factories.
+    pub jsx_fragment_reads: Vec<String>,
+    /// The names JSDoc `{@link}` tags refer to: tsc resolves each
+    /// (`checkJSDocLinkLikeTag`), and this port does not parse JSDoc.
+    pub jsdoc_link_names: Vec<String>,
+    /// `GetEmitStandardClassFields`.
+    pub emit_standard_class_fields: bool,
 }
 
 impl ParseOptions {
@@ -159,6 +180,7 @@ impl ParseOptions {
             force_module,
             jsx_forces_module: false,
             language_version: ScriptTarget::default(),
+            unused: None,
         })
     }
 }
@@ -184,7 +206,7 @@ fn render<'d>(diagnostics: impl Iterator<Item = &'d Diagnostic>) -> Vec<SyntaxDi
     rendered
 }
 
-pub use merge::{FileGlobals, GlobalsInput, merge_globals};
+pub use merge::{FileGlobals, GlobalsInput, MergeReport, merge_globals, merge_globals_report};
 
 /// What tsc reports for a file before type checking: its syntactic
 /// diagnostics, and, for a file with none, what its binder reports
@@ -195,6 +217,9 @@ pub struct FileDiagnostics {
     pub bind: Vec<SyntaxDiagnostic>,
     /// The checker's grammar check of each regular expression literal.
     pub regular_expressions: Vec<SyntaxDiagnostic>,
+    /// What the checker's unused-identifier check reports, for a TypeScript
+    /// file the options ask it of.
+    pub unused: Vec<SyntaxDiagnostic>,
     pub globals: FileGlobals,
 }
 
@@ -206,10 +231,20 @@ pub fn file_diagnostics(text: &str, options: &ParseOptions) -> FileDiagnostics {
             syntactic,
             bind: Vec::new(),
             regular_expressions: Vec::new(),
+            unused: Vec::new(),
             globals: FileGlobals::default(),
         };
     }
-    let (bind, globals) = binder::bind(&parsed, text);
+    let binder = binder::bind(&parsed, text);
+    // A JavaScript file's uses include its JSDoc types, which this port does
+    // not parse.
+    let unused = match &options.unused {
+        Some(check) if !parsed.is_declaration_file && matches!(options.script_kind, ScriptKind::Ts | ScriptKind::Tsx) => {
+            render(binder.unused_diagnostics(check, options.language_version).iter())
+        }
+        _ => Vec::new(),
+    };
+    let (bind, globals) = binder.finish();
     let regular_expressions: Vec<Diagnostic> = parsed
         .regular_expression_literals()
         .into_iter()
@@ -221,6 +256,7 @@ pub fn file_diagnostics(text: &str, options: &ParseOptions) -> FileDiagnostics {
         syntactic,
         bind: render(bind.iter()),
         regular_expressions: render(regular_expressions.iter()),
+        unused,
         globals,
     }
 }

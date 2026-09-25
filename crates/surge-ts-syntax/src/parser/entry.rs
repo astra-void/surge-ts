@@ -378,6 +378,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             is_module: true,
             reference_type_directives: Vec::new(),
             module_reads: Vec::new(),
+            jsdoc_link_names: Vec::new(),
             definite_writes: Vec::new(),
             let_assignments: Vec::new(),
             comment_directives: Vec::new(),
@@ -427,7 +428,8 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             super::reads::with_body_read_index(&parsed.program, collect_statements)
         })
     };
-    module_reads.extend(jsdoc_link_reads(&parsed.program.comments, source_text));
+    let jsdoc_link_names = jsdoc_link_reads(&parsed.program.comments, source_text);
+    module_reads.extend(jsdoc_link_names.iter().cloned());
 
     let mut parser_errors: Vec<crate::ParserError> = parsed
         .errors
@@ -547,6 +549,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         is_module,
         reference_type_directives,
         module_reads,
+        jsdoc_link_names,
         definite_writes: super::writes::collect_definite_writes(&parsed.program),
         let_assignments,
         comment_directives,
