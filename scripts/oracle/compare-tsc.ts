@@ -1081,6 +1081,7 @@ export const fixturePresets: Record<string, string> = {
   'member-write-values-checked': path.join(workspaceRoot, 'tests/compat-projects/member-write-values-checked/tsconfig.json'),
   'assignment-reduction-rules': path.join(workspaceRoot, 'tests/compat-projects/assignment-reduction-rules/tsconfig.json'),
   'keyof-non-public-members': path.join(workspaceRoot, 'tests/compat-projects/keyof-non-public-members/tsconfig.json'),
+  'this-before-super-flow': path.join(workspaceRoot, 'tests/compat-projects/this-before-super-flow/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {
