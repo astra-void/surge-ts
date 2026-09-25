@@ -792,6 +792,10 @@ pub(crate) struct CheckerContext {
     /// A cycle reaching below `floor` means the result depends on an outer frame.
     /// See the generic instantiation cache in `resolve_named_type`.
     pub(crate) lowest_cycle_target_index: usize,
+    /// The subset of `lowest_cycle_target_index` whose re-entry handed back
+    /// the `unknown` fallback (a generic declaration re-entered mid-resolution)
+    /// instead of a lazy nominal reference that peels to the real shape later.
+    pub(crate) lowest_unknown_cycle_target_index: usize,
     /// `resolving`-stack indices of the frames that cross a structural type —
     /// an interface body, or a type alias whose body is itself structural
     /// (object/array/function/…). A type-alias cycle whose re-entry path passes
@@ -953,6 +957,7 @@ impl CheckerContext {
             module_declared_only_depth: 0,
             module_export_depth: 0,
             lowest_cycle_target_index: usize::MAX,
+            lowest_unknown_cycle_target_index: usize::MAX,
             structural_resolution_frames: Vec::new(),
             type_literal_member_frames: Vec::new(),
             file_kinds: Arc::new(file_kinds),
@@ -989,6 +994,11 @@ impl CheckerContext {
 
     pub(crate) fn note_resolution_cycle(&mut self, target_index: usize) {
         self.lowest_cycle_target_index = self.lowest_cycle_target_index.min(target_index);
+    }
+
+    pub(crate) fn note_unknown_resolution_cycle(&mut self, target_index: usize) {
+        self.lowest_unknown_cycle_target_index =
+            self.lowest_unknown_cycle_target_index.min(target_index);
     }
 
     /// A per-file scratch clone that does not copy the run's accumulated
@@ -1134,6 +1144,7 @@ impl CheckerContext {
             module_declared_only_depth: 0,
             module_export_depth: 0,
             lowest_cycle_target_index: usize::MAX,
+            lowest_unknown_cycle_target_index: usize::MAX,
             structural_resolution_frames: Vec::new(),
             type_literal_member_frames: Vec::new(),
             file_kinds: data.file_kinds.clone(),

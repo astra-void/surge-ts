@@ -881,7 +881,9 @@ fn resolve_named_type_inner(
     let utility_keys_before_body = ctx.utility_diagnostic_keys.len();
     let degradation_epoch_before_body = crate::program::expansion_degradation_epoch();
 
+    use crate::infer::types::interface::LAST_EXPANSION_HERITAGE_UNKNOWN_CYCLE;
     ctx.instantiation_depth += 1;
+    LAST_EXPANSION_HERITAGE_UNKNOWN_CYCLE.with(|cell| cell.set(usize::MAX));
     let resolved = match declaration {
         TypeDeclarationInfo::Alias(alias) => resolve_type_alias(
             alias,
@@ -905,6 +907,11 @@ fn resolve_named_type_inner(
         ),
     };
     ctx.instantiation_depth -= 1;
+    // A base that was mid-resolution on an outer frame contributed no members
+    // (a generic declaration re-entered on the stack resolves to `unknown`), so
+    // the expansion is a function of what the caller had open, not of its key.
+    let heritage_cycle_free = !matches!(declaration, TypeDeclarationInfo::Interface(_))
+        || LAST_EXPANSION_HERITAGE_UNKNOWN_CYCLE.with(std::cell::Cell::get) >= floor;
 
     let subtree_lowest_cycle = ctx.lowest_cycle_target_index;
     ctx.lowest_cycle_target_index = saved_lowest_cycle.min(subtree_lowest_cycle);
@@ -931,7 +938,8 @@ fn resolve_named_type_inner(
     // every sibling reference, hundreds of thousands of times per file. A degraded
     // re-entry (bounded peel, illegal cycle) sets `had_error`/emits, which the
     // remaining guards still exclude, so a thin shape is never frozen program-wide.
-    let cacheable = concrete_instantiation && !body_emitted_diagnostics && !resolved.had_error;
+    let cacheable =
+        concrete_instantiation && !body_emitted_diagnostics && !resolved.had_error && heritage_cycle_free;
     // The signature-context tier stores under stricter gates than the concrete
     // tier: additionally no degradation anywhere in the subtree (a nested
     // bounded peel embeds a transient `unknown` that depends on the consumer's

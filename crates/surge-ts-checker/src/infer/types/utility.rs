@@ -380,6 +380,7 @@ pub(crate) fn resolve_type_alias(
                 had_error: false,
             };
         }
+        ctx.note_unknown_resolution_cycle(index);
         if !legal_recursion {
             emit_type_alias_cycle(&alias.name, alias.name_span, ctx);
         }

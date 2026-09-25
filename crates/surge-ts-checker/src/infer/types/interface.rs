@@ -331,6 +331,7 @@ pub(crate) fn resolve_interface(
                 had_error: false,
             };
         }
+        ctx.note_unknown_resolution_cycle(index);
         emit_type_declaration_cycle(&interface.name, interface.name_span, ctx);
         return ResolvedType {
             ty: Type::Unknown,
@@ -846,6 +847,12 @@ thread_local! {
     /// before any member annotation. Read at the same memo-store site.
     pub(crate) static LAST_EXPANSION_HERITAGE_LOWEST_CYCLE: std::cell::Cell<usize> =
         const { std::cell::Cell::new(usize::MAX) };
+    /// `ctx.lowest_unknown_cycle_target_index` over the heritage of the most
+    /// recently completed `resolve_interface_declaration`, published at its end
+    /// so that it is that frame's own: the outermost frame whose re-entry left
+    /// a base, or a base's argument, `unknown`. Read by `resolve_named_type`.
+    pub(crate) static LAST_EXPANSION_HERITAGE_UNKNOWN_CYCLE: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(usize::MAX) };
 }
 
 /// A member's own resolution context, installed while its annotation resolves.
@@ -933,6 +940,8 @@ pub(crate) fn resolve_interface_declaration(
     // tsc still flags missing-member access, so it must stay closed there.
     let in_declaration_file = is_declaration_file_name(&ctx.file_name);
     let mut base_is_open = false;
+    let outer_unknown_cycle =
+        std::mem::replace(&mut ctx.lowest_unknown_cycle_target_index, usize::MAX);
     for base in extends {
         // `resolveBaseTypesOfClass`: a class whose base is not a class derives
         // from a constructor function, and its type arguments select among the
@@ -1089,6 +1098,8 @@ pub(crate) fn resolve_interface_declaration(
         }
     }
     LAST_EXPANSION_HERITAGE_LOWEST_CYCLE.with(|cell| cell.set(ctx.lowest_cycle_target_index));
+    let heritage_unknown_cycle = ctx.lowest_unknown_cycle_target_index;
+    ctx.lowest_unknown_cycle_target_index = outer_unknown_cycle.min(heritage_unknown_cycle);
 
     let mut own_method_group_contaminated =
         surge_ts_types::fx::FxHashMap::<String, bool>::default();
@@ -1479,6 +1490,9 @@ pub(crate) fn resolve_interface_declaration(
     // it while `base_is_open` is still true, and it is exactly those expansions
     // whose shape depended on a base the resolver could not pin down.
     LAST_EXPANSION_BASE_IS_OPEN.with(|flag| flag.set(base_is_open));
+    // Published last, like the flag above: the members resolved since the
+    // heritage loop run nested expansions that publish their own.
+    LAST_EXPANSION_HERITAGE_UNKNOWN_CYCLE.with(|cell| cell.set(heritage_unknown_cycle));
     let resolved_index_type = match string_index_type {
         Some(parsed) => {
             let resolved = crate::program::with_dts_expansion_reason(
