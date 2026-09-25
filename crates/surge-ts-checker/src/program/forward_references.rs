@@ -208,6 +208,34 @@ fn walk(
     for_each_child_expression(expression, &mut |child| walk(child, classes, reported));
 }
 
+/// The expressions an immediately invoked body evaluates as it runs, nested
+/// functions excluded.
+fn for_each_body_statement_expression(
+    statements: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+    visit: &mut impl FnMut(&ParsedExpression),
+) {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+    for statement in statements {
+        match statement {
+            Statement::VariableDeclaration(variable) => {
+                if let Some(initializer) = &variable.initializer {
+                    visit(initializer);
+                }
+            }
+            Statement::Return(statement) => {
+                if let Some(expression) = &statement.expression {
+                    visit(expression);
+                }
+            }
+            Statement::Expression(expression) => visit(expression),
+            Statement::Assignment(assignment) => visit(&assignment.value),
+            Statement::MemberAssignment(assignment) => visit(&assignment.value),
+            Statement::Block(statements) => for_each_body_statement_expression(statements, visit),
+            _ => {}
+        }
+    }
+}
+
 /// Sub-expressions evaluated as part of this one. A function or arrow body is
 /// deliberately not among them: its contents run later, which is exactly what
 /// makes an early reference inside one legal.
@@ -238,6 +266,16 @@ fn for_each_child_expression(
             visit(callee);
             for argument in arguments {
                 visit(&argument.expression);
+            }
+            // An immediately invoked function's body runs as it is called
+            // (`isUsedInFunctionOrInstanceProperty` walks past an IIFE).
+            if let ParsedExpression::ArrowFunction(function) = callee.as_ref() {
+                match &function.body {
+                    surge_ts_syntax::ParsedArrowFunctionBody::Expression(body) => visit(body),
+                    surge_ts_syntax::ParsedArrowFunctionBody::Block(statements) => {
+                        for_each_body_statement_expression(statements, visit);
+                    }
+                }
             }
         }
         ParsedExpression::PropertyCall {
