@@ -670,10 +670,10 @@ pub(crate) fn resolve_parsed_type(
                     // spells as a string: `keyof` must not enumerate it, or a
                     // mapped type and `T[keyof T]` read a property that no
                     // written key can name.
-                    for key in object_type
+                    for (key, _) in object_type
                         .properties
-                        .keys()
-                        .filter(|key| !key.starts_with('['))
+                        .iter()
+                        .filter(|(key, property)| !key.starts_with('[') && is_public_key(key, property))
                     {
                         keys.push(Type::StringLiteral(key.to_string()));
                     }
@@ -784,6 +784,13 @@ pub(crate) fn resolve_parsed_type_with_substitution(
     })
 }
 
+/// tsc's `getLiteralTypeFromProperty` without `includeNonPublic`: a private
+/// or protected member, or a `#private` one, is no key of its type — not for
+/// `keyof`, and so not for any homomorphic mapped type over it.
+pub(crate) fn is_public_key(name: &str, property: &surge_ts_types::ObjectProperty) -> bool {
+    property.restriction.is_none() && !name.starts_with('#')
+}
+
 /// `keyof (A | B)` is the intersection of the members' key sets (tsc's
 /// `getIndexType` over a union): a named key survives when every member has it
 /// or answers it through a string index. `None` when a member is not an object
@@ -805,9 +812,9 @@ fn union_key_type(members: &[Type]) -> Option<Type> {
         .iter()
         .find(|object| object.string_index_type.is_none())?
         .properties
-        .keys()
-        .map(|key| key.as_ref())
-        .filter(|key| !key.starts_with('['))
+        .iter()
+        .filter(|(key, property)| !key.starts_with('[') && is_public_key(key, property))
+        .map(|(key, _)| key.as_ref())
         .collect();
     named.retain(|key| {
         objects

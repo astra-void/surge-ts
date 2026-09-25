@@ -1080,6 +1080,7 @@ export const fixturePresets: Record<string, string> = {
   'namespace-import-member-writes': path.join(workspaceRoot, 'tests/compat-projects/namespace-import-member-writes/tsconfig.json'),
   'member-write-values-checked': path.join(workspaceRoot, 'tests/compat-projects/member-write-values-checked/tsconfig.json'),
   'assignment-reduction-rules': path.join(workspaceRoot, 'tests/compat-projects/assignment-reduction-rules/tsconfig.json'),
+  'keyof-non-public-members': path.join(workspaceRoot, 'tests/compat-projects/keyof-non-public-members/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

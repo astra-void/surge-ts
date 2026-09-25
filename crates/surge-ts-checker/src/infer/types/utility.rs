@@ -635,7 +635,9 @@ pub(crate) fn resolve_partial_utility_type(
 
     let mut properties = PropertyMap::default();
     for (name, property) in object_type.properties.iter() {
-        properties.insert(name.clone(), ObjectProperty::optional(property.ty.clone()));
+        if crate::infer::types::resolve::is_public_key(name, property) {
+            properties.insert(name.clone(), ObjectProperty::optional(property.ty.clone()));
+        }
     }
 
     ResolvedType {
@@ -676,7 +678,9 @@ pub(crate) fn resolve_required_utility_type(
     // (`jitter?: boolean | … | undefined` stays assignable from `undefined`).
     let mut properties = PropertyMap::default();
     for (name, property) in object_type.properties.iter() {
-        properties.insert(name.clone(), ObjectProperty::required(property.ty.clone()));
+        if crate::infer::types::resolve::is_public_key(name, property) {
+            properties.insert(name.clone(), ObjectProperty::required(property.ty.clone()));
+        }
     }
 
     ResolvedType {
@@ -724,6 +728,9 @@ fn readonly_shape(source: &Type) -> Type {
         Type::Object(object_type) => {
             let mut properties = PropertyMap::default();
             for (name, property) in object_type.properties.iter() {
+                if !crate::infer::types::resolve::is_public_key(name, property) {
+                    continue;
+                }
                 properties.insert(
                     name.clone(),
                     ObjectProperty {
@@ -822,7 +829,11 @@ pub(crate) fn resolve_pick_utility_type(
 
     let mut properties = PropertyMap::default();
     for key in keys {
-        let Some(property) = object_type.properties.get(key.as_str()) else {
+        let Some(property) = object_type
+            .properties
+            .get(key.as_str())
+            .filter(|property| crate::infer::types::resolve::is_public_key(&key, property))
+        else {
             let key_type_name = key_type.name();
             let constraint_name = format!("keyof {}", Type::Object(object_type.clone()).name());
             let mut diagnostic =
@@ -878,7 +889,7 @@ pub(crate) fn resolve_omit_utility_type(substitution: &TypeParameterSubstitution
     let keys: surge_ts_types::fx::FxHashSet<&str> = keys.iter().map(String::as_str).collect();
     let mut properties = PropertyMap::default();
     for (key, property) in object_type.properties.iter() {
-        if keys.contains(key.as_ref()) {
+        if keys.contains(key.as_ref()) || !crate::infer::types::resolve::is_public_key(key, property) {
             continue;
         }
 
