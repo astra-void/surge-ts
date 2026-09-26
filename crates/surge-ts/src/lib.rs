@@ -814,6 +814,15 @@ impl Project {
             }
             diagnostics
         };
+        let mut diagnostics = diagnostics;
+        if loaded.compiler_options.isolated_declarations
+            && (loaded.compiler_options.declaration || loaded.compiler_options.composite)
+        {
+            diagnostics.extend(isolated_declaration_diagnostics(
+                &sources,
+                loaded.compiler_options.strict_null_checks,
+            ));
+        }
 
         if !options.retain_all_sources {
             let needed: std::collections::HashSet<&str> = diagnostics
@@ -838,6 +847,47 @@ impl Project {
             timings,
         })
     }
+}
+
+/// tsc's declaration emit under `isolatedDeclarations`, which reports through
+/// `Program.Emit` even with `noEmit` and whatever else the program reports:
+/// every emitted TypeScript source — not a declaration file, not a package's.
+fn isolated_declaration_diagnostics(
+    sources: &[(PathBuf, String, String)],
+    strict_null_checks: bool,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for (file_path, file_name, source_text) in sources {
+        let typescript = [".ts", ".tsx", ".mts", ".cts"].iter().any(|extension| file_name.ends_with(extension));
+        if !typescript
+            || surge_ts_syntax::is_declaration_file_name(file_name)
+            || file_name.contains("/node_modules/")
+        {
+            continue;
+        }
+        let read;
+        let text = if source_text.is_empty() {
+            let Ok(text) = std::fs::read_to_string(file_path) else {
+                continue;
+            };
+            read = text;
+            &read
+        } else {
+            source_text
+        };
+        for finding in surge_ts_syntax::isolated_declaration_diagnostics(text, file_name, strict_null_checks) {
+            let Some(descriptor) = surge_ts_diagnostics::emitted_descriptor_for_number(finding.code) else {
+                continue;
+            };
+            diagnostics.push(
+                Diagnostic::from_descriptor(descriptor, Vec::new(), file_name.clone()).with_span(TextSpan {
+                    start: finding.start as usize,
+                    end: finding.end as usize,
+                }),
+            );
+        }
+    }
+    diagnostics
 }
 
 type SourceReadResult = Result<ProjectSource, (PathBuf, std::io::Error)>;

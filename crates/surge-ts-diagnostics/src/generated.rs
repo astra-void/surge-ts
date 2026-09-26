@@ -7025,6 +7025,196 @@ pub const TS2320: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS9007: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9007",
+    number: Some(9007),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Function must have an explicit return type annotation with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9008: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9008",
+    number: Some(9008),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Method must have an explicit return type annotation with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9009: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9009",
+    number: Some(9009),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "At least one accessor must have an explicit type annotation with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9010: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9010",
+    number: Some(9010),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Variable must have an explicit type annotation with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9011: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9011",
+    number: Some(9011),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Parameter must have an explicit type annotation with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9012: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9012",
+    number: Some(9012),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Property must have an explicit type annotation with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9013: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9013",
+    number: Some(9013),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Expression type can't be inferred with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9015: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9015",
+    number: Some(9015),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Objects that contain spread assignments can't be inferred with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9016: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9016",
+    number: Some(9016),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Objects that contain shorthand properties can't be inferred with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9017: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9017",
+    number: Some(9017),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Only const arrays can be inferred with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9018: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9018",
+    number: Some(9018),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Arrays with spread elements can't inferred with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9019: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9019",
+    number: Some(9019),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Binding elements can't be exported directly with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9020: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9020",
+    number: Some(9020),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Enum member initializers must be computable without references to external symbols with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9021: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9021",
+    number: Some(9021),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Extends clause can't contain an expression with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9022: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9022",
+    number: Some(9022),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Inference from class expressions is not supported with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9023: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9023",
+    number: Some(9023),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Assigning properties to functions without declaring them is not supported with --isolatedDeclarations. Add an explicit declaration for the properties assigned to this function.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9025: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9025",
+    number: Some(9025),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Declaration emit for this parameter requires implicitly adding undefined to its type. This is not supported with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9037: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9037",
+    number: Some(9037),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Default exports can't be inferred with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS9038: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS9038",
+    number: Some(9038),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Computed property names on class or object literals cannot be inferred with --isolatedDeclarations.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1029,
     TS2411,
@@ -7728,6 +7918,25 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1123,
     TS1009,
     TS2320,
+    TS9007,
+    TS9008,
+    TS9009,
+    TS9010,
+    TS9011,
+    TS9012,
+    TS9013,
+    TS9015,
+    TS9016,
+    TS9017,
+    TS9018,
+    TS9019,
+    TS9020,
+    TS9021,
+    TS9022,
+    TS9023,
+    TS9025,
+    TS9037,
+    TS9038,
 ];
 
 impl Diagnostic {
@@ -12857,5 +13066,100 @@ impl Diagnostic {
             ],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9007(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9007, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9008(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9008, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9009(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9009, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9010(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9010, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9011(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9011, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9012(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9012, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9013(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9013, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9015(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9015, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9016(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9016, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9017(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9017, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9018(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9018, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9019(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9019, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9020(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9020, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9021(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9021, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9022(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9022, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9023(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9023, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9025(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9025, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9037(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9037, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts9038(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS9038, Vec::<DiagnosticArg>::new(), file_name)
     }
 }

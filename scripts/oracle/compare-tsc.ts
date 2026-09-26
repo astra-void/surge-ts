@@ -1092,6 +1092,7 @@ export const fixturePresets: Record<string, string> = {
   'javascript-jsdoc-and-commonjs': path.join(workspaceRoot, 'tests/compat-projects/javascript-jsdoc-and-commonjs/tsconfig.json'),
   'mapped-type-member-grammar': path.join(workspaceRoot, 'tests/compat-projects/mapped-type-member-grammar/tsconfig.json'),
   'override-and-modifier-order': path.join(workspaceRoot, 'tests/compat-projects/override-and-modifier-order/tsconfig.json'),
+  'isolated-declarations': path.join(workspaceRoot, 'tests/compat-projects/isolated-declarations/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

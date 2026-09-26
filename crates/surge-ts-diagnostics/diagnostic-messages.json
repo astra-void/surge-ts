@@ -5614,5 +5614,157 @@
     "source": "typescript",
     "arity": 3,
     "support": "emitted"
+  },
+  {
+    "code": "TS9007",
+    "category": "Error",
+    "message": "Function must have an explicit return type annotation with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9008",
+    "category": "Error",
+    "message": "Method must have an explicit return type annotation with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9009",
+    "category": "Error",
+    "message": "At least one accessor must have an explicit type annotation with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9010",
+    "category": "Error",
+    "message": "Variable must have an explicit type annotation with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9011",
+    "category": "Error",
+    "message": "Parameter must have an explicit type annotation with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9012",
+    "category": "Error",
+    "message": "Property must have an explicit type annotation with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9013",
+    "category": "Error",
+    "message": "Expression type can't be inferred with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9015",
+    "category": "Error",
+    "message": "Objects that contain spread assignments can't be inferred with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9016",
+    "category": "Error",
+    "message": "Objects that contain shorthand properties can't be inferred with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9017",
+    "category": "Error",
+    "message": "Only const arrays can be inferred with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9018",
+    "category": "Error",
+    "message": "Arrays with spread elements can't inferred with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9019",
+    "category": "Error",
+    "message": "Binding elements can't be exported directly with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9020",
+    "category": "Error",
+    "message": "Enum member initializers must be computable without references to external symbols with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9021",
+    "category": "Error",
+    "message": "Extends clause can't contain an expression with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9022",
+    "category": "Error",
+    "message": "Inference from class expressions is not supported with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9023",
+    "category": "Error",
+    "message": "Assigning properties to functions without declaring them is not supported with --isolatedDeclarations. Add an explicit declaration for the properties assigned to this function.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9025",
+    "category": "Error",
+    "message": "Declaration emit for this parameter requires implicitly adding undefined to its type. This is not supported with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9037",
+    "category": "Error",
+    "message": "Default exports can't be inferred with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS9038",
+    "category": "Error",
+    "message": "Computed property names on class or object literals cannot be inferred with --isolatedDeclarations.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
   }
 ]

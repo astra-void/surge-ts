@@ -79,6 +79,18 @@ pub(crate) fn normalize_compiler_options(
                     parse_bool_option(key, value, config_dir, diagnostics)
                         .unwrap_or(normalized.no_implicit_override);
             }
+            "declaration" => {
+                normalized.declaration = parse_bool_option(key, value, config_dir, diagnostics)
+                    .unwrap_or(normalized.declaration);
+            }
+            "composite" => {
+                normalized.composite = parse_bool_option(key, value, config_dir, diagnostics)
+                    .unwrap_or(normalized.composite);
+            }
+            "isolatedDeclarations" => {
+                normalized.isolated_declarations = parse_bool_option(key, value, config_dir, diagnostics)
+                    .unwrap_or(normalized.isolated_declarations);
+            }
             "noPropertyAccessFromIndexSignature" => {
                 normalized.no_property_access_from_index_signature =
                     parse_bool_option(key, value, config_dir, diagnostics)

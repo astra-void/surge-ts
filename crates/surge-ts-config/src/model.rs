@@ -36,6 +36,12 @@ pub struct NormalizedCompilerOptions {
     pub no_fallthrough_cases_in_switch: bool,
     /// `compilerOptions.noImplicitOverride`. Independent of `strict`; defaults off.
     pub no_implicit_override: bool,
+    /// `compilerOptions.declaration`.
+    pub declaration: bool,
+    /// `compilerOptions.composite`, which implies `declaration`.
+    pub composite: bool,
+    /// `compilerOptions.isolatedDeclarations`.
+    pub isolated_declarations: bool,
     /// `compilerOptions.noPropertyAccessFromIndexSignature`. Independent of `strict`; defaults off.
     pub no_property_access_from_index_signature: bool,
     /// `compilerOptions.noUncheckedIndexedAccess`. Independent of `strict`; defaults off.
@@ -145,6 +151,9 @@ impl Default for NormalizedCompilerOptions {
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
+            declaration: false,
+            composite: false,
+            isolated_declarations: false,
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
             allow_importing_ts_extensions: false,

@@ -4486,3 +4486,117 @@ status = "emitted"
 oracle = [
   "variable-declaration-list-grammar",
 ]
+
+[TS9007]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9008]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9009]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9010]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9011]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9012]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9013]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9015]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9016]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9017]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9018]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9019]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9020]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9021]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9022]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9023]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9025]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9037]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]
+
+[TS9038]
+status = "emitted"
+oracle = [
+  "isolated-declarations",
+]

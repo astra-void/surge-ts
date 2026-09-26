@@ -68,7 +68,7 @@ pub(crate) fn collect_context_grammar_diagnostics(
 
 /// tsc's `ExternalModuleIndicator` under the default `moduleDetection: auto`:
 /// a top-level import or export of any form makes the file a module.
-fn is_external_module(program: &Program<'_>) -> bool {
+pub(crate) fn is_external_module(program: &Program<'_>) -> bool {
     program.body.iter().any(|statement| {
         matches!(
             statement,
