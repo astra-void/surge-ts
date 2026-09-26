@@ -515,6 +515,12 @@ enum PropsResolution {
     Props {
         contextual: Type,
         candidates: Vec<JsxProps>,
+        /// What the element resolves to when no candidate matches (tsc's
+        /// `createUnionOfSignaturesForOverloadFailure`): one signature returning
+        /// the intersection of the overloads' return types, and whether it
+        /// constructs. Generic overloads are never combined
+        /// (`getCandidateForOverloadFailure`).
+        failure_returns: Option<(Type, bool)>,
     },
     /// tsc's error type or a non-component value: nothing to check against,
     /// and no contextual type for a callback attribute — tsc reports its
@@ -554,6 +560,7 @@ pub(crate) fn check_jsx_element(
         ChildrenPropertyName::Empty => (None, None, false),
         ChildrenPropertyName::Unmodelled => (None, None, has_children),
     };
+    let mut value_tag_type = None;
     let resolution = match &tag.expression {
         Some(expression) => resolve_component_props(
             &JsxCallSite {
@@ -567,6 +574,7 @@ pub(crate) fn check_jsx_element(
                 element_span: tag.span.or(fallback_span),
             },
             tag_name_span,
+            &mut value_tag_type,
             symbols,
             ctx,
         ),
@@ -575,16 +583,17 @@ pub(crate) fn check_jsx_element(
             intrinsic_element_props(tag_name, tag.span.or(fallback_span), ctx)
         }
     };
-    let (contextual, candidates, unmodelled_props) = match resolution {
+    let (contextual, candidates, failure_returns, unmodelled_props) = match resolution {
         PropsResolution::Props { .. } | PropsResolution::Unmodelled if children_unmodelled => {
-            (None, Vec::new(), true)
+            (None, Vec::new(), None, true)
         }
         PropsResolution::Props {
             contextual,
             candidates,
-        } => (Some(contextual), candidates, false),
-        PropsResolution::Unchecked => (None, Vec::new(), false),
-        PropsResolution::Unmodelled => (None, Vec::new(), true),
+            failure_returns,
+        } => (Some(contextual), candidates, failure_returns, false),
+        PropsResolution::Unchecked => (None, Vec::new(), None, false),
+        PropsResolution::Unmodelled => (None, Vec::new(), None, true),
     };
     let overloaded = candidates.len() > 1;
     let contextual = contextual.map(|contextual| {
@@ -666,9 +675,27 @@ pub(crate) fn check_jsx_element(
                             span,
                         ));
                     }
+                    if let Some(returns) = failure_returns {
+                        let failure = JsxProps {
+                            returns: Some(returns),
+                            ..JsxProps::plain(Type::Any)
+                        };
+                        check_jsx_return_bound(&failure, &site, ctx);
+                    }
                 }
             }
         }
+    }
+
+    // tsc's `checkJsxOpeningLikeElementOrOpeningFragment`: an intrinsic tag is
+    // judged as its name's string literal type, a value tag as its type (an
+    // unresolved one is tsc's error type, which fits).
+    match &value_tag_type {
+        Some(tag_type) => check_jsx_element_type(tag_type, &site, ctx),
+        None if tag.expression.is_none() => {
+            check_jsx_element_type(&Type::StringLiteral(tag_name.to_string()), &site, ctx);
+        }
+        None => {}
     }
 
     if let Some(closing) = &tag.closing {
@@ -756,6 +783,7 @@ struct JsxCallSite<'a> {
 fn resolve_component_props(
     site: &JsxCallSite<'_>,
     span: Option<SyntaxTextSpan>,
+    tag_type: &mut Option<Type>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> PropsResolution {
@@ -771,6 +799,7 @@ fn resolve_component_props(
         InferredExpression::UnresolvedIdentifier { .. }
         | InferredExpression::MissingProperty { .. } => return PropsResolution::Unchecked,
     };
+    *tag_type = Some(component_type.clone());
     check_class_component_type_arguments(site, span, symbols, ctx);
     let Some((signatures, construct)) = jsx_signatures(&component_type) else {
         if component_is_unmodelled(&component_type) {
@@ -807,13 +836,14 @@ fn resolve_component_props(
     let mut candidates = Vec::with_capacity(signatures.len());
     for signature in &signatures {
         let declared = if construct {
-            class_component_props(signature, site, ctx)
+            class_component_props(signature, &component_type, site, ctx)
         } else {
-            signature
+            let props = signature
                 .parameters()
                 .first()
                 .cloned()
-                .unwrap_or(Type::GenuineUnknown)
+                .unwrap_or(Type::GenuineUnknown);
+            managed_attributes(&component_type, props, ctx)
         };
         if is_unmodelled_props(&declared) {
             return PropsResolution::Unmodelled;
@@ -830,9 +860,21 @@ fn resolve_component_props(
         [single] => single.target.clone(),
         _ => union_type(candidates.iter().map(|props| props.target.clone()).collect()),
     };
+    let failure_returns = (signatures.len() > 1
+        && signatures
+            .iter()
+            .all(|signature| signature.type_parameter_head().is_none()))
+    .then(|| {
+        let returns = signatures
+            .iter()
+            .map(|signature| signature.return_type().clone())
+            .collect();
+        (crate::infer::types::merge_intersection_members(returns), construct)
+    });
     PropsResolution::Props {
         contextual,
         candidates,
+        failure_returns,
     }
 }
 
@@ -880,6 +922,7 @@ fn string_literal_tag_props(
     PropsResolution::Props {
         contextual: props.target.clone(),
         candidates: vec![props],
+        failure_returns: None,
     }
 }
 
@@ -1211,6 +1254,7 @@ fn jsx_signatures(component_type: &Type) -> Option<(Vec<FunctionType>, bool)> {
 /// parameter when the JSX namespace has no such interface.
 fn class_component_props(
     signature: &FunctionType,
+    component_type: &Type,
     site: &JsxCallSite<'_>,
     ctx: &mut CheckerContext,
 ) -> Type {
@@ -1222,12 +1266,14 @@ fn class_component_props(
             .unwrap_or(Type::GenuineUnknown)
     };
     match jsx_attributes_container_member("ElementAttributesProperty", ctx) {
-        ContainerMember::Missing => first_parameter(),
+        ContainerMember::Missing => managed_attributes(component_type, first_parameter(), ctx),
         ContainerMember::Unmodelled => Type::Unknown,
-        ContainerMember::Empty => signature.return_type().clone(),
+        ContainerMember::Empty => {
+            managed_attributes(component_type, signature.return_type().clone(), ctx)
+        }
         ContainerMember::Name(name) => match signature.return_type().peeled() {
             Type::Object(instance) => match instance.get_property(&name) {
-                Some(property) => property.ty.clone(),
+                Some(property) => managed_attributes(component_type, property.ty.clone(), ctx),
                 // tsc's `getJsxPropsTypeFromClassType`: TS2607 at the element
                 // when it writes any attribute; the props are then `unknown`,
                 // which any attributes object fits.
@@ -1241,11 +1287,65 @@ fn class_component_props(
                     Type::GenuineUnknown
                 }
             },
-            Type::Any => Type::Any,
+            Type::Any => managed_attributes(component_type, Type::Any, ctx),
             other if other.is_unknown() => other,
             _ => Type::GenuineUnknown,
         },
     }
+}
+
+/// tsc's `getJsxManagedAttributesFromLocatedAttributes`: a component's props
+/// are what the namespace's `LibraryManagedAttributes<C, P>` makes of the tag's
+/// own type and the props the component declares, when the namespace declares
+/// it with room for both (`instantiateAliasOrInterfaceWithDefaults`). A result
+/// surge cannot resolve leaves the declared props.
+fn managed_attributes(component_type: &Type, props: Type, ctx: &mut CheckerContext) -> Type {
+    if is_unmodelled_props(&props) {
+        return props;
+    }
+    let (prefix, scope) = match jsx_namespace(ctx) {
+        JsxNamespace::Qualified(prefix) => (prefix, None),
+        JsxNamespace::Declared { scope, prefix } => (prefix, Some(scope)),
+        JsxNamespace::Unmodelled | JsxNamespace::Missing => return props,
+    };
+    let name = format!("{prefix}.LibraryManagedAttributes");
+    let resolve = |ctx: &mut CheckerContext| {
+        let parameter_count = match ctx.lookup_type_declaration(&name)? {
+            crate::symbols::TypeDeclarationInfo::Interface(info) => info.body.type_parameters.len(),
+            crate::symbols::TypeDeclarationInfo::Alias(info) => info.body.type_parameters.len(),
+        };
+        if parameter_count < 2 {
+            return None;
+        }
+        // Each slot is named after the type it holds, as for
+        // `IntrinsicClassAttributes`: a reference renders its written arguments.
+        let component_slot = component_type.name();
+        let mut props_slot = props.name();
+        if props_slot == component_slot {
+            props_slot.push('\'');
+        }
+        let mut substitution = crate::infer::TypeParameterSubstitution::new();
+        substitution.insert(component_slot.clone(), component_type.clone());
+        substitution.insert(props_slot.clone(), props.clone());
+        // Errors inside the declaration are its own, reported where it is
+        // declared.
+        let checkpoint = ctx.diagnostics().len();
+        let managed = crate::infer::map_parsed_type_with_substitution(
+            named_type(
+                &name,
+                vec![named_type(&component_slot, Vec::new()), named_type(&props_slot, Vec::new())],
+            ),
+            ctx,
+            &substitution,
+        );
+        ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+        (!is_unmodelled_props(&managed)).then_some(managed)
+    };
+    let managed = match scope {
+        Some(scope) => crate::infer::with_type_declaration_scope(&Some(scope), ctx, resolve),
+        None => resolve(ctx),
+    };
+    managed.unwrap_or(props)
 }
 
 /// tsc's `getJsxPropsTypeFromCallSignature` / `getJsxPropsTypeFromClassType`
@@ -1453,6 +1553,7 @@ fn intrinsic_element_props(
     PropsResolution::Props {
         contextual: with_intrinsic_attributes(props.clone(), None, ctx).target,
         candidates: vec![JsxProps::plain(props)],
+        failure_returns: None,
     }
 }
 
@@ -2170,6 +2271,31 @@ fn check_jsx_return_bound(props: &JsxProps, site: &RelationSite<'_>, ctx: &mut C
     ));
 }
 
+/// tsc's `checkJsxOpeningLikeElementOrOpeningFragment` for a namespace that
+/// declares `ElementType` (`getJsxElementTypeTypeAt`): the tag's own type must
+/// be assignable to it, else TS2786 at the tag name. It replaces the return
+/// bound.
+fn check_jsx_element_type(tag_type: &Type, site: &RelationSite<'_>, ctx: &mut CheckerContext) {
+    let constraint = match jsx_namespace_member("ElementType", ctx) {
+        JsxMember::Found(constraint) if !is_unmodelled_member(&constraint) => constraint,
+        _ => return,
+    };
+    if constraint.is_unknown()
+        || tag_type.is_unknown()
+        || matches!(tag_type.peeled(), Type::Any)
+        || is_assignable_to(tag_type, &constraint)
+        || mentions_type_parameter(tag_type)
+        || crate::checks::call::type_contains_unknown(tag_type)
+        || crate::checks::call::type_contains_unknown(&constraint)
+    {
+        return;
+    }
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts2786(site.tag_name, ctx.file_name.clone()),
+        site.tag_name_span,
+    ));
+}
+
 /// The relation's own report when no attribute or child elaborates it.
 fn relation_failure(
     evaluated: &EvaluatedAttributes<'_>,
@@ -2210,6 +2336,37 @@ fn relation_failure(
             Diagnostic::ts2322(source_name(), props.target.name(), ctx.file_name.clone()),
             tag_name_span,
         ));
+    }
+    // A union of props is related member by member; the attributes object
+    // fitting none of them fails as a whole, at the tag. A written value that
+    // does not fit the members its discriminants select is elaborated where it
+    // is written instead (`getBestMatchIndexedAccessTypeOrUndefined`), which
+    // surge does not model, so that relation is left unreported.
+    if let Type::Union(_) = target {
+        let members = excess_check_members(target, evaluated);
+        let values_fit = evaluated.explicit.iter().all(|value| {
+            let name = value.attribute.name.as_str();
+            let Some(ty) = value.overridden.as_ref().or(value.ty.as_ref()) else {
+                return true;
+            };
+            is_hyphenated_jsx_name(name)
+                || members.iter().all(|member| {
+                    attribute_target_type(&member.peeled(), name).is_none_or(|expected| {
+                        type_contains_unknown_or_any(&expected) || is_assignable_to(ty, &expected)
+                    })
+                })
+        });
+        let fits = !values_fit
+            || evaluated.opaque_spread
+            || type_contains_unknown_or_any(target)
+            || attributes_object_type(evaluated, body, &members)
+                .is_none_or(|source| is_assignable_to(&source, target));
+        return (!fits).then(|| {
+            (
+                Diagnostic::ts2322(source_name(), props.target.name(), ctx.file_name.clone()),
+                tag_name_span,
+            )
+        });
     }
     let Type::Object(object) = target else {
         return None;
@@ -2256,7 +2413,23 @@ fn relation_failure(
                     })
                 })
         });
-        return hyphenated_mismatch.then(|| {
+        // Nor is a member a spread supplies (`elaborateJsxComponents` skips
+        // spread attributes). A written attribute of the same name is what the
+        // object holds, and is elaborated on its own.
+        let spread_mismatch = evaluated.spread.iter().any(|(name, property)| {
+            !property.is_optional()
+                && !evaluated
+                    .explicit
+                    .iter()
+                    .any(|value| value.attribute.name.as_str() == name.as_ref())
+                && object.get_property(name).is_some_and(|target_property| {
+                    let expected = optional_aware_property_type(target_property);
+                    !type_contains_unknown_or_any(&expected)
+                        && !type_contains_unknown_or_any(&property.ty)
+                        && !is_assignable_to(&property.ty, &expected)
+                })
+        });
+        return (hyphenated_mismatch || spread_mismatch).then(|| {
             (
                 Diagnostic::ts2322(source_name(), props.target.name(), ctx.file_name.clone()),
                 tag_name_span,
@@ -2534,6 +2707,38 @@ fn attributes_object_name(
         return "{}".to_string();
     }
     Type::Object(alloc_object_type(properties, None)).name()
+}
+
+/// The attributes object as tsc relates it (`createJsxAttributesTypeFromAttributesProperty`):
+/// the spreads' members, then each written attribute's value — or what a later
+/// spread writes over it — and the children the body forms. `None` when surge
+/// could not type one of them.
+/// A hyphenated attribute no member declares is left out: tsc's
+/// `isKnownProperty` takes it as known when comparing JSX attributes, so it
+/// neither is excess nor fails the weak-type check.
+fn attributes_object_type(
+    evaluated: &EvaluatedAttributes<'_>,
+    body: Option<&JsxBody>,
+    members: &[Type],
+) -> Option<Type> {
+    let mut properties = evaluated.spread.clone();
+    for value in &evaluated.explicit {
+        let written = value.attribute.name.as_str();
+        if is_hyphenated_jsx_name(written)
+            && members.iter().all(|member| attribute_target_type(&member.peeled(), written).is_none())
+        {
+            continue;
+        }
+        let ty = value.overridden.clone().or_else(|| value.ty.clone())?;
+        let name: Arc<str> = written.into();
+        properties.shift_remove(&name);
+        properties.insert(name, ObjectProperty::required(ty));
+    }
+    if let Some(body) = body {
+        let children = body.children.ty.clone()?;
+        properties.insert(body.name.as_str().into(), ObjectProperty::required(children));
+    }
+    Some(Type::Object(alloc_object_type(properties, None)))
 }
 
 fn type_contains_unknown_or_any(ty: &Type) -> bool {

@@ -1201,6 +1201,24 @@ fn is_mts_or_cts_file(file_name: &str) -> bool {
     lower.ends_with(".mts") || lower.ends_with(".cts")
 }
 
+/// tsgo's module-kind switch in `checkGrammarAwaitOrAwaitUsing` and
+/// `checkGrammarForInOrForOfStatement`: top-level `await` needs `module`
+/// `es2022`, `esnext`, `preserve`, `system` or a node kind (where a
+/// CommonJS-format file is TS1309 instead) and a target of ES2017 or later.
+fn top_level_await_unsupported(ctx: &CheckerContext) -> bool {
+    use crate::ModuleEmitKind as Module;
+    let target_supported = ctx.options.language_version >= crate::LanguageVersion::ES2017;
+    match ctx.options.module_emit {
+        Module::Node16 | Module::Node18 | Module::Node20 | Module::NodeNext => {
+            !target_supported
+                && crate::modules::implied_format_for_emit(ctx, &ctx.file_name)
+                    != Some(crate::modules::ModuleFormat::CommonJs)
+        }
+        Module::ES2022 | Module::ESNext | Module::Preserve => !target_supported,
+        Module::CommonJS | Module::ES2015 | Module::ES2020 => true,
+    }
+}
+
 fn grammar_finding_diagnostic(
     finding: &surge_ts_syntax::ParsedGrammarDiagnostic,
     ctx: &CheckerContext,
@@ -1324,6 +1342,20 @@ fn grammar_finding_diagnostic(
         {
             return None;
         }
+        // A file without an import or export that module detection still makes
+        // a module (`IsEffectiveExternalModule`). A JavaScript file's CommonJS
+        // use can too, which is not known here, so one is never reported.
+        Kind::Ts(1375 | 1431 | 2853)
+            if surge_ts_syntax::is_javascript_file_name(&ctx.file_name)
+                || crate::program::file_is_forced_module(
+                    &ctx.file_name,
+                    ctx.file_name.to_ascii_lowercase().ends_with(".tsx"),
+                    &ctx.options,
+                ) =>
+        {
+            return None;
+        }
+        Kind::Ts(1378 | 1432 | 2854) if !top_level_await_unsupported(ctx) => return None,
         Kind::Ts(1470)
             if !ctx.options.module_emit.is_node()
                 || crate::modules::implied_format_for_emit(ctx, &ctx.file_name)
@@ -1349,7 +1381,7 @@ fn grammar_finding_diagnostic(
             )?;
             Diagnostic::from_descriptor(descriptor, args, ctx.file_name.clone())
         }
-        Kind::ConstNotInitialized => Diagnostic::ts1155(ctx.file_name.clone()),
+        Kind::ConstNotInitialized => Diagnostic::ts1155("const", ctx.file_name.clone()),
         Kind::AwaitOutsideAsyncFunction => Diagnostic::ts1308(ctx.file_name.clone()),
         Kind::ExportDeclarationInNamespace => Diagnostic::ts1194(ctx.file_name.clone()),
         Kind::DeleteOnIdentifierInStrictMode => Diagnostic::ts1102(ctx.file_name.clone()),

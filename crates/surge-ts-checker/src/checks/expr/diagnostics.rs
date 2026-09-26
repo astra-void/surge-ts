@@ -539,9 +539,7 @@ pub(crate) fn report_missing_element(
         return;
     }
     let static_owner = static_member_owner_for_missing_instance_property(key, object_type, symbols);
-    if static_owner.is_none()
-        && matches!(object_type.peeled(), Type::Object(object) if object.number_index_type.is_some())
-    {
+    if static_owner.is_none() && has_number_index_info(object_type) {
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts7015(file_name),
             key_span.or(access_span),
@@ -571,6 +569,16 @@ pub(crate) fn report_missing_element(
         },
     };
     ctx.push(diagnostic_with_syntax_span(diagnostic, access_span));
+}
+
+/// `getIndexInfoOfType(t, numberType)` as TS7015 asks it: a union has a number
+/// index signature only when every member declares one (`getUnionIndexInfos`).
+fn has_number_index_info(ty: &Type) -> bool {
+    match ty.peeled() {
+        Type::Object(object) => object.number_index_type.is_some(),
+        Type::Union(union) => union.types().iter().all(has_number_index_info),
+        _ => false,
+    }
 }
 
 /// `object[key]` from the start of the object through the closing bracket.

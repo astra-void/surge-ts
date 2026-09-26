@@ -290,7 +290,7 @@ pub(crate) fn emit_implicit_return_diagnostic(
 
 /// See the call site in [`check_function_body`]. Returns the previous
 /// `module_value_fallback` when one was installed, for the caller to restore.
-fn install_deferred_block_value_fallback(
+pub(crate) fn install_deferred_block_value_fallback(
     body: &[ParsedFunctionBodyStatement],
     ctx: &mut CheckerContext,
 ) -> Option<Option<std::sync::Arc<crate::symbols::SymbolTable>>> {
@@ -325,6 +325,25 @@ fn install_deferred_block_value_fallback(
                     }
                     _ => crate::symbols::SymbolKind::Const,
                 },
+                function_signature: None,
+            },
+        );
+    }
+    // A `var` is declared in its function's locals, not at its statement
+    // (`declareSymbolAndAddToSymbolTable`): a closure or a hoisted function's
+    // parameter default evaluated ahead of the statement resolves it too.
+    let mut var_names = Vec::new();
+    crate::flow::collect_var_names(body, &mut var_names);
+    for name in var_names {
+        if annotated.get_own(&name).is_some() {
+            continue;
+        }
+        found = true;
+        let _ = annotated.insert(
+            name,
+            SymbolInfo {
+                ty: Type::Unknown,
+                kind: crate::symbols::SymbolKind::Var,
                 function_signature: None,
             },
         );
@@ -1047,7 +1066,9 @@ fn check_function_body_statement_itself(
             if let Some((name, bodies)) = enum_members {
                 let symbols = visible_symbols(scopes)
                     .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
-                crate::checks::enum_members::check_enum_members(&name, &bodies, symbols, ctx);
+                crate::checks::enum_members::check_enum_members(
+                    &name, &bodies, symbols, false, ctx,
+                );
             }
             record_program_timing(ctx.timings.as_ref(), |timings| {
                 timings.variable_declaration_checking += start.elapsed()

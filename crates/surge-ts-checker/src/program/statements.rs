@@ -793,7 +793,10 @@ fn check_program_statement_itself(
                 let symbols = ctx
                     .symbols
                     .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
-                crate::checks::enum_members::check_enum_members(&name, &bodies, symbols, ctx);
+                let top_level = ctx.namespace_member_prefix_stack.is_empty();
+                crate::checks::enum_members::check_enum_members(
+                    &name, &bodies, symbols, top_level, ctx,
+                );
             }
             if let Some((name, binding, initial)) = auto_binding {
                 ctx.auto_arrays_declared = true;
@@ -1065,15 +1068,20 @@ fn check_namespace_body(
             let _ = body_values.insert_shared(name.clone(), symbol.clone());
         }
     }
-    let merged = (!namespace.name.contains('.'))
-        .then(|| {
-            enclosing.get_handle(&namespace.name).or_else(|| {
-                ctx.module_value_fallback
-                    .as_ref()
-                    .and_then(|fallback| fallback.get_handle(&namespace.name))
-            })
+    // `namespace A.B {}` is `A` holding a block named `A.B`, so the merged `B`
+    // is the member the enclosing block took from the merged `A`, not a name
+    // of the scope around it.
+    let merged = if namespace.name.contains('.') {
+        ctx.module_value_fallback
+            .as_ref()
+            .and_then(|fallback| fallback.get_own_shared(namespace.member_name()))
+    } else {
+        enclosing.get_handle(&namespace.name).or_else(|| {
+            ctx.module_value_fallback
+                .as_ref()
+                .and_then(|fallback| fallback.get_handle(&namespace.name))
         })
-        .flatten();
+    };
     if let Some(merged) = merged
         && let surge_ts_types::Type::Object(object) = &merged.ty
     {

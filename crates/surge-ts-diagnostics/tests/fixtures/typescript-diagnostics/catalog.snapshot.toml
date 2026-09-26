@@ -9,6 +9,14 @@ message = "'{0}' modifier must precede '{1}' modifier."
 arity = 2
 
 [[diagnostic]]
+code = "TS1281"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot access '{0}' from another file without qualification when '{1}' is enabled. Use '{2}' instead."
+arity = 3
+
+[[diagnostic]]
 code = "TS2411"
 category = "Error"
 source = "typescript"
@@ -1277,8 +1285,8 @@ code = "TS1155"
 category = "Error"
 source = "typescript"
 support = "emitted"
-message = "'const' declarations must be initialized."
-arity = 0
+message = "'{0}' declarations must be initialized."
+arity = 1
 
 [[diagnostic]]
 code = "TS2378"
@@ -3041,11 +3049,27 @@ message = "Overload signatures must all be public, private or protected."
 arity = 0
 
 [[diagnostic]]
+code = "TS2516"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "All declarations of an abstract method must be consecutive."
+arity = 0
+
+[[diagnostic]]
 code = "TS2386"
 category = "Error"
 source = "typescript"
 support = "emitted"
 message = "Overload signatures must all be optional or required."
+arity = 0
+
+[[diagnostic]]
+code = "TS1341"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class constructor may not be an accessor."
 arity = 0
 
 [[diagnostic]]
@@ -3070,6 +3094,14 @@ category = "Error"
 source = "typescript"
 support = "emitted"
 message = "Function implementation name must be '{0}'."
+arity = 1
+
+[[diagnostic]]
+code = "TS1245"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Method '{0}' cannot have an implementation because it is marked abstract."
 arity = 1
 
 [[diagnostic]]
@@ -5577,6 +5609,22 @@ message = "Expression must be enclosed in parentheses to be used as a decorator.
 arity = 0
 
 [[diagnostic]]
+code = "TS1270"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Decorator function return type '{0}' is not assignable to type '{1}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS1271"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Decorator function return type is '{0}' but is expected to be 'void' or 'any'."
+arity = 1
+
+[[diagnostic]]
 code = "TS1329"
 category = "Error"
 source = "typescript"
@@ -5945,6 +5993,30 @@ message = "The 'import.meta' meta-property is not allowed in files which will bu
 arity = 0
 
 [[diagnostic]]
+code = "TS8026"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expected {0} type arguments; provide these with an '@extends' tag."
+arity = 1
+
+[[diagnostic]]
+code = "TS8027"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Expected {0}-{1} type arguments; provide these with an '@extends' tag."
+arity = 2
+
+[[diagnostic]]
+code = "TS1340"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Module '{0}' does not refer to a type, but is used as a type here. Did you mean 'typeof import('{0}')'?"
+arity = 1
+
+[[diagnostic]]
 code = "TS8024"
 category = "Error"
 source = "typescript"
@@ -6215,4 +6287,124 @@ source = "typescript"
 support = "emitted"
 message = "This syntax requires an imported helper named '{1}' with {2} parameters, which is not compatible with the one in '{0}'. Consider upgrading your version of '{0}'."
 arity = 3
+
+[[diagnostic]]
+code = "TS1492"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' declarations may not have binding patterns."
+arity = 1
+
+[[diagnostic]]
+code = "TS1547"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'using' declarations are not allowed in 'case' or 'default' clauses unless contained within a block."
+arity = 0
+
+[[diagnostic]]
+code = "TS1548"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'await using' declarations are not allowed in 'case' or 'default' clauses unless contained within a block."
+arity = 0
+
+[[diagnostic]]
+code = "TS18054"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'await using' statements cannot be used inside a class static block."
+arity = 0
+
+[[diagnostic]]
+code = "TS2852"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'await using' statements are only allowed within async functions and at the top levels of modules."
+arity = 0
+
+[[diagnostic]]
+code = "TS1375"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'await' expressions are only allowed at the top level of a file when that file is a module, but this file has no imports or exports. Consider adding an empty 'export {}' to make this file a module."
+arity = 0
+
+[[diagnostic]]
+code = "TS1378"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Top-level 'await' expressions are only allowed when the 'module' option is set to 'es2022', 'esnext', 'system', 'node16', 'node18', 'node20', 'nodenext', or 'preserve', and the 'target' option is set to 'es2017' or higher."
+arity = 0
+
+[[diagnostic]]
+code = "TS1431"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'for await' loops are only allowed at the top level of a file when that file is a module, but this file has no imports or exports. Consider adding an empty 'export {}' to make this file a module."
+arity = 0
+
+[[diagnostic]]
+code = "TS1432"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Top-level 'for await' loops are only allowed when the 'module' option is set to 'es2022', 'esnext', 'system', 'node16', 'node18', 'node20', 'nodenext', or 'preserve', and the 'target' option is set to 'es2017' or higher."
+arity = 0
+
+[[diagnostic]]
+code = "TS2853"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'await using' statements are only allowed at the top level of a file when that file is a module, but this file has no imports or exports. Consider adding an empty 'export {}' to make this file a module."
+arity = 0
+
+[[diagnostic]]
+code = "TS2854"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Top-level 'await using' statements are only allowed when the 'module' option is set to 'es2022', 'esnext', 'system', 'node16', 'node18', 'node20', 'nodenext', or 'preserve', and the 'target' option is set to 'es2017' or higher."
+arity = 0
+
+[[diagnostic]]
+code = "TS1013"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A rest parameter or binding pattern may not have a trailing comma."
+arity = 0
+
+[[diagnostic]]
+code = "TS5059"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Invalid value for '--reactNamespace'. '{0}' is not a valid identifier."
+arity = 1
+
+[[diagnostic]]
+code = "TS5067"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Invalid value for 'jsxFactory'. '{0}' is not a valid identifier or qualified-name."
+arity = 1
+
+[[diagnostic]]
+code = "TS18035"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Invalid value for 'jsxFragmentFactory'. '{0}' is not a valid identifier or qualified-name."
+arity = 1
 

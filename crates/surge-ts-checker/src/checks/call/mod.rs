@@ -435,6 +435,13 @@ fn check_call_like_with_expected_type_unrecorded(
             }
             Some(Type::Any)
         }
+        // tsc's `isUntypedFunctionCall`: no signatures, but a `Function`.
+        ref other if surge_ts_types::is_untyped_function_callee(other) => {
+            for argument in arguments {
+                let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            }
+            Some(Type::Any)
+        }
         ref other => {
             if std::env::var("SURGE_CALL_DEBUG").is_ok() {
                 let shown = match other {
@@ -3079,6 +3086,105 @@ fn effective_parameter_type(function_type: &FunctionType, index: usize) -> Optio
     )
 }
 
+/// A rest parameter tsc relates to its arguments as one gathered tuple:
+/// `start` is `getParameterCount - 1`, past the fixed elements a variadic
+/// tuple leads with (those are positions of their own, `getTypeAtPosition`),
+/// and `target` is `getNonArrayRestType`.
+struct GatheredRest {
+    start: usize,
+    target: Type,
+}
+
+impl GatheredRest {
+    /// The contextual type `getSpreadArgumentType` gives the argument at
+    /// `position` of `count` gathered ones: a tuple's trailing element counted
+    /// from the end, else its rest element (`getContextualTypeForElementExpression`),
+    /// and the indexed element of any other rest type.
+    fn contextual_element_type(&self, position: usize, count: usize) -> Type {
+        match &self.target {
+            Type::OpenTuple(tuple) => {
+                let from_end = count - position;
+                if from_end <= tuple.trailing.len() {
+                    tuple.trailing[tuple.trailing.len() - from_end].clone()
+                } else {
+                    tuple.rest.as_ref().clone()
+                }
+            }
+            other => rest_parameter_element_type(other, position),
+        }
+    }
+}
+
+/// relater.go `getNonArrayRestType` over `getEffectiveRestType`: a variadic
+/// tuple is sliced at its fixed length, which leaves an array unless fixed
+/// elements follow the variable one; a union of tuples, or a named object type
+/// that is not the lib's array (an interface extending it), is gathered as it
+/// is written.
+fn gathered_rest_parameter(function_type: &FunctionType) -> Option<GatheredRest> {
+    if !function_type.is_variadic() {
+        return None;
+    }
+    let parameters = function_type.parameters();
+    let rest = parameters.last()?;
+    let rest_index = parameters.len() - 1;
+    match rest.peeled() {
+        Type::OpenTuple(tuple) if !tuple.trailing.is_empty() => Some(GatheredRest {
+            start: rest_index + tuple.leading.len(),
+            target: Type::OpenTuple(surge_ts_types::OpenTupleType {
+                leading: Vec::new(),
+                rest: tuple.rest,
+                trailing: tuple.trailing,
+            }),
+        }),
+        Type::Union(union)
+            if union
+                .types()
+                .iter()
+                .all(|member| matches!(member.peeled(), Type::Tuple(_) | Type::OpenTuple(_))) =>
+        {
+            Some(GatheredRest {
+                start: rest_index,
+                target: rest.clone(),
+            })
+        }
+        Type::Object(_) if matches!(rest, Type::Reference(_)) && !names_lib_array(rest) => {
+            Some(GatheredRest {
+                start: rest_index,
+                target: rest.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// `isArrayType`: the lib's `Array<T>` or `ReadonlyArray<T>` written by name.
+fn names_lib_array(ty: &Type) -> bool {
+    matches!(ty, Type::Reference(reference)
+        if reference.arguments.len() == 1
+            && matches!(reference.id.split('\u{0}').next_back(), Some("Array" | "ReadonlyArray")))
+}
+
+/// Whether a gathered rest's target still carries a hole surge could not
+/// fill, in any element of a tuple or member of a union. A recursive alias
+/// deeper than the bound counts as one.
+fn gathered_rest_is_unmodelled(ty: &Type, depth: usize) -> bool {
+    if depth > 4 {
+        return true;
+    }
+    let unmodelled = |ty: &Type| gathered_rest_is_unmodelled(ty, depth + 1);
+    match ty.peeled() {
+        Type::Tuple(elements) => elements.iter().any(unmodelled),
+        Type::OpenTuple(tuple) => tuple
+            .leading
+            .iter()
+            .chain(std::iter::once(tuple.rest.as_ref()))
+            .chain(tuple.trailing.iter())
+            .any(unmodelled),
+        Type::Union(union) => union.types().iter().any(unmodelled),
+        other => type_contains_unknown(&other) || surge_ts_types::parameter_type_is_degraded(&other),
+    }
+}
+
 fn rest_parameter_element_type(parameter_type: &Type, rest_offset: usize) -> Type {
     match parameter_type {
         Type::Array(element) => element.as_ref().clone(),
@@ -3257,6 +3363,17 @@ pub(crate) fn check_function_type_call(
         return None;
     }
 
+    // tsc's `isSignatureApplicable`: a rest parameter whose type is not an
+    // array (`getNonArrayRestType`) is related to the arguments it receives
+    // gathered into one tuple (`getSpreadArgumentType`), not one at a time. A
+    // spread argument or an overload fold keeps the positional reading.
+    let gathered_rest = if has_spread_argument || function_type.overloads().is_some() {
+        None
+    } else {
+        gathered_rest_parameter(function_type).filter(|rest| rest.start <= arguments.len())
+    };
+    let mut gathered_types: Option<Vec<Type>> = Some(Vec::new());
+
     // What each argument evaluated to, for overload selection afterwards. A
     // `None` type is a wildcard: a callback (typed by whichever overload is
     // picked, so it cannot pick), a degraded or unresolved argument, or a
@@ -3379,7 +3496,10 @@ pub(crate) fn check_function_type_call(
         // array) matches each remaining argument against its *element* type, not
         // the array itself — `cn(...inputs: string[])` accepts `cn("a", "b")`.
         let is_rest_position = function_type.is_variadic() && expected > 0 && i >= expected - 1;
-        let parameter_type: Type = if is_rest_position {
+        let gathered = gathered_rest.as_ref().filter(|rest| i >= rest.start);
+        let parameter_type: Type = if let Some(rest) = gathered {
+            rest.contextual_element_type(i - rest.start, arguments.len() - rest.start)
+        } else if is_rest_position {
             rest_parameter_element_type(
                 &function_type.parameters()[expected - 1],
                 i - (expected - 1),
@@ -3414,7 +3534,7 @@ pub(crate) fn check_function_type_call(
             &argument.expression,
             argument.span,
             Some(&parameter_type),
-            if mismatch_reported {
+            if mismatch_reported || gathered.is_some() {
                 ExpectedTypeDiagnostic::ContextOnly
             } else {
                 ExpectedTypeDiagnostic::ArgumentNotAssignable
@@ -3450,6 +3570,21 @@ pub(crate) fn check_function_type_call(
             written_keys: written_object_keys(&argument.expression),
         });
 
+        if gathered.is_some() {
+            gathered_types = match (&inferred_argument, gathered_types.take()) {
+                (InferredExpression::Known(argument_type), Some(mut types))
+                    if !argument_is_callback(&argument.expression)
+                        && !type_contains_unknown(argument_type)
+                        && !as_source(|| type_contains_degradation(argument_type))
+                        && !is_open_instantiation(argument_type) =>
+                {
+                    types.push(argument_type.clone());
+                    Some(types)
+                }
+                _ => None,
+            };
+        }
+
         match inferred_argument {
             InferredExpression::Known(argument_type) => {
                 // The sentinel and an open type parameter say nothing about
@@ -3457,6 +3592,7 @@ pub(crate) fn check_function_type_call(
                 // every parameter that is not `unknown`/`any`.
                 if matches!(argument_type, Type::Unknown | Type::TypeParameter(_))
                     || mismatch_reported
+                    || gathered.is_some()
                 {
                     continue;
                 }
@@ -3536,6 +3672,38 @@ pub(crate) fn check_function_type_call(
                 has_unresolved_argument = true;
             }
             InferredExpression::Unknown => {}
+        }
+    }
+
+    if let Some(rest) = gathered_rest.as_ref()
+        && let Some(types) = gathered_types
+        && !mismatch_reported
+        && !has_unresolved_argument
+        && !gathered_rest_is_unmodelled(&rest.target, 0)
+    {
+        let gathered = Type::Tuple(types);
+        if !is_assignable_to(&gathered, &rest.target) {
+            let reported_target = crate::checks::expr::reported_relation_target(&gathered, &rest.target);
+            let gathered_name = source_display_name(&gathered, &reported_target);
+            // No gathered argument reports on the call, one on itself, and
+            // several on the run from the first to the last.
+            let span = match arguments.len() - rest.start {
+                0 => call_span.or(callee_span),
+                1 => arguments[rest.start].span,
+                _ => excess_argument_span(arguments, rest.start),
+            };
+            ctx.push(diagnostic_with_syntax_span(
+                crate::checks::expr::assignability_mismatch_diagnostic(
+                    &gathered,
+                    &rest.target,
+                    &gathered_name,
+                    &reported_target.name(),
+                    true,
+                    ctx.file_name.clone(),
+                ),
+                span,
+            ));
+            mismatch_reported = true;
         }
     }
 

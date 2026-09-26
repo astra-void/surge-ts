@@ -1244,6 +1244,17 @@ pub(crate) fn check_function_switch_statement(
         })
         .collect();
 
+    // The case block is one block scope (`getContainerFlags`), so a clause
+    // resolves what another clause declares.
+    let mut saved_fallback = None;
+    for switch_case in &switch_statement.cases {
+        if let Some(previous) =
+            super::super::install_deferred_block_value_fallback(&switch_case.consequent, ctx)
+        {
+            saved_fallback.get_or_insert(previous);
+        }
+    }
+
     if flow_active {
         let mut branch_deltas = Vec::new();
 
@@ -1306,6 +1317,9 @@ pub(crate) fn check_function_switch_statement(
             }
             scopes.pop_child();
         }
+    }
+    if let Some(saved) = saved_fallback {
+        ctx.module_value_fallback = saved;
     }
     restore_branch_entry(&switch_entry, scopes);
     join_branch_edges(&edges, scopes);

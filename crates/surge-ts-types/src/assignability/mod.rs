@@ -746,7 +746,7 @@ fn is_empty_anonymous_object(ty: &Type) -> bool {
             && object.construct_signature().is_none()
             && !object.non_primitive
             && !object.is_intersection
-            && object.alias_id.is_none())
+            && !object.without_inferable_index)
 }
 
 /// The operands of an intersection holding a type variable of the body being
@@ -860,6 +860,25 @@ fn type_variable_related(from: &Type, to: &Type) -> Option<bool> {
     {
         return Some(true);
     }
+    // A generic mapped type is an object type, not a variable: past the target
+    // arms above, it relates to a type parameter through its template and to
+    // nothing else generic (the apparent-type arm finds no structure there).
+    if let Some(crate::type_variable::DeferredType::Mapped {
+        keys,
+        object,
+        modifiers,
+        ..
+    }) = crate::type_variable::mapped_type(from)
+    {
+        if target_deferred.is_some() {
+            return Some(false);
+        }
+        if let Type::TypeParameter(target) = to
+            && crate::type_variable::active_constraint(target).is_some()
+        {
+            return Some(mapped_source_related_to_variable(&keys, &object, modifiers, to));
+        }
+    }
     let source = active_variable(from);
     let target_is_variable = active_variable(to).is_some() || target_deferred.is_some();
     if source.is_none() && !target_is_variable {
@@ -883,8 +902,12 @@ fn type_variable_related(from: &Type, to: &Type) -> Option<bool> {
         }
         // relater.go `structuredTypeRelatedToWorker`: comparability is mostly
         // bidirectional, so a type parameter is comparable to another only
-        // through a constraint that itself holds a type parameter.
-        if current_relation() == Relation::Comparable && target_is_variable {
+        // through a constraint that itself holds a type parameter. A generic
+        // mapped target is an object type, which the carve-out does not cover.
+        if current_relation() == Relation::Comparable
+            && target_is_variable
+            && crate::type_variable::mapped_type(to).is_none()
+        {
             return Some(constraint.is_some_and(|constraint| {
                 constraint != *from && some_type(&constraint, |member| matches!(member, Type::TypeParameter(_)))
                     && is_assignable_to(&constraint, to)
@@ -934,12 +957,139 @@ fn deferred_target_related(from: &Type, target: &crate::type_variable::DeferredT
             }
             crate::type_variable::keyof_constraint_keys(operand)
         }
+        DeferredType::Mapped {
+            keys,
+            object,
+            modifiers,
+            modifiers_optionality,
+        } => {
+            return mapped_target_related(from, source.as_ref(), keys, object, *modifiers, *modifiers_optionality);
+        }
     };
     match constraint {
         TargetConstraint::Types(types) => types.iter().all(|ty| is_assignable_to(from, ty)),
         TargetConstraint::Absent => false,
         TargetConstraint::Unmodelled => true,
     }
+}
+
+/// The generic-mapped-type target arms of `structuredTypeRelatedToWorker`
+/// (relater.go) for `{ [P in keys]: object[P] }`. A source `S` relates when
+/// the target keeps `?` possible and `S` is `object` itself, or `S` is a type
+/// variable whose keys cover the target's (or overlap them, for a `?`
+/// mapping) and which relates to `object` — `S[P]` to `object[P]`. A generic
+/// mapped source relates through `mappedTypeRelatedTo`, and an empty object
+/// type relates to a mapping that adds `?` (`isPartialMappedType`). Nothing
+/// else does: a source with structure of its own never relates to `object`,
+/// a variable of the body being checked.
+fn mapped_target_related(
+    from: &Type,
+    source: Option<&crate::type_variable::DeferredType>,
+    keys: &Type,
+    object: &Type,
+    modifiers: crate::type_variable::MappedModifiers,
+    modifiers_optionality: i8,
+) -> bool {
+    if modifiers.optional >= 0 && object == from {
+        return true;
+    }
+    if let Some(crate::type_variable::DeferredType::Mapped {
+        keys: source_keys,
+        object: source_object,
+        modifiers: source_modifiers,
+        modifiers_optionality: source_modifiers_optionality,
+    }) = source
+    {
+        return mapped_type_related(
+            (source_keys, source_object, *source_modifiers, *source_modifiers_optionality),
+            (keys, object, modifiers, modifiers_optionality),
+        );
+    }
+    if modifiers.optional >= 0 && from.is_type_variable() {
+        // With `?` a key the source lacks is simply absent; without it every
+        // target key must be one of the source's.
+        let keys_related = modifiers.optional > 0
+            || crate::type_variable::keyof_variable(from).is_some_and(|source_keys| is_assignable_to(keys, &source_keys));
+        if keys_related && is_assignable_to(from, object) {
+            return true;
+        }
+    }
+    // A shape the checker had to leave open may be the empty object type.
+    if matches!(from, Type::Object(object) if object.synthetic_open_index) {
+        return true;
+    }
+    modifiers.optional > 0 && is_empty_object_type(from)
+}
+
+/// relater.go `mappedTypeRelatedTo` for two mappings of the deferred shape:
+/// the source may not add `?` the target does not
+/// (`getCombinedMappedTypeOptionality`), the target's keys must be the
+/// source's, and the source template must relate to the target's.
+fn mapped_type_related(
+    source: (&Type, &Type, crate::type_variable::MappedModifiers, i8),
+    target: (&Type, &Type, crate::type_variable::MappedModifiers, i8),
+) -> bool {
+    let optionality = |modifiers: crate::type_variable::MappedModifiers, modifiers_optionality: i8| {
+        if modifiers.optional != 0 { modifiers.optional } else { modifiers_optionality }
+    };
+    let modifiers_related = current_relation() == Relation::Comparable
+        || optionality(source.2, source.3) <= optionality(target.2, target.3);
+    if !modifiers_related || !is_assignable_to(target.0, source.0) {
+        return false;
+    }
+    let (source_object, source_optional) = simplified_mapped_template(source.1, source.2);
+    let (target_object, target_optional) = simplified_mapped_template(target.1, target.2);
+    (!source_optional || target_optional || !crate::strict_null_checks())
+        && is_assignable_to(&source_object, &target_object)
+}
+
+/// A mapping's template `object[P]` as `getSimplifiedType` leaves it: the
+/// object a chain of mapped objects bottoms out in (`substituteIndexedMappedType`
+/// at each step), and whether the template holds `undefined` — added by a
+/// mapping's own `?` (`getTemplateTypeFromMappedType`) or by a substituted
+/// mapping that adds `?`.
+fn simplified_mapped_template(object: &Type, modifiers: crate::type_variable::MappedModifiers) -> (Type, bool) {
+    let mut object = object.clone();
+    let mut optional = modifiers.optional > 0;
+    while let Some(crate::type_variable::DeferredType::Mapped {
+        object: inner_object,
+        modifiers: inner_modifiers,
+        modifiers_optionality,
+        ..
+    }) = crate::type_variable::mapped_type(&object)
+    {
+        optional |= inner_modifiers.optional > 0 || modifiers_optionality > 0;
+        object = inner_object;
+    }
+    (object, optional)
+}
+
+/// A generic mapped source against a type parameter target (relater.go's
+/// `TypeFlagsTypeParameter` target arm): `{ [P in Q]: X }` relates to `T`
+/// when it adds no `?`, `keyof T` relates to `Q`, and `X` to `T[Q]` — for the
+/// template `object[P]`, `object` to `T`.
+fn mapped_source_related_to_variable(
+    keys: &Type,
+    object: &Type,
+    modifiers: crate::type_variable::MappedModifiers,
+    target: &Type,
+) -> bool {
+    modifiers.optional <= 0
+        && crate::type_variable::keyof_variable(target).is_some_and(|target_keys| is_assignable_to(&target_keys, keys))
+        && is_assignable_to(object, target)
+}
+
+/// tsc's `isEmptyObjectType` for an object source: no members, signatures or
+/// index signatures, or the `object` keyword.
+fn is_empty_object_type(ty: &Type) -> bool {
+    matches!(ty, Type::Object(object)
+        if object.non_primitive
+            || (object.properties.is_empty()
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none()
+                && object.call_signature().is_none()
+                && object.construct_signature().is_none()
+                && !object.is_intersection))
 }
 
 fn assignability_arms(from: &Type, to: &Type) -> bool {
@@ -2756,10 +2906,16 @@ fn index_signatures_related(source: &ObjectType, target: &ObjectType) -> bool {
         {
             return false;
         }
+        // A computed member's key is a symbol, which no string or number index
+        // signature applies to (`membersRelatedToIndexInfo`,
+        // `isApplicableIndexType`).
         source
             .properties
             .iter()
-            .filter(|(name, _)| !numeric_only || crate::object::is_numeric_key(name.as_ref()))
+            .filter(|(name, _)| {
+                !name.starts_with('[')
+                    && (!numeric_only || crate::object::is_numeric_key(name.as_ref()))
+            })
             .all(|(_, property)| {
                 property.ty.is_unmodelled()
                     || is_assignable_to(&indexed_member_type(property, numeric_only), value)

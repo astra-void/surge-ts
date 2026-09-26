@@ -225,6 +225,12 @@ pub(crate) fn parse_in_condition(
     };
     let property = match left.as_ref() {
         ParsedExpression::StringLiteral(property) => property.as_str(),
+        // A template without substitutions has the string literal type it spells.
+        ParsedExpression::TemplateLiteral {
+            expressions,
+            quasis,
+            ..
+        } if expressions.is_empty() => quasis.first()?.as_deref()?,
         // A number names the property its canonical spelling does
         // (`getPropertyNameFromType`: `1 in x` tests `"1"`); a literal written
         // any other way is left unparsed.

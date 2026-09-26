@@ -2225,6 +2225,14 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 ctx.inherited_never_initialized
                     .retain(|name| !crate::flow::binds_parameter(&parameters, name));
                 let return_type_for_body = match &body_return_type {
+                    // An annotation naming the arrow's own type variable is a type
+                    // its returns are related to, as a declaration's are
+                    // (`checkReturnExpression`).
+                    Type::TypeParameter(_)
+                        if has_explicit_return_type && body_return_type.is_type_variable() =>
+                    {
+                        Some(&body_return_type)
+                    }
                     Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
                         None
                     }
@@ -2378,6 +2386,14 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     .flatten();
                 let tail_call = crate::checks::expr::tail_call_key(&statements);
                 let return_type_for_body = match &return_type {
+                    // An annotation naming the arrow's own type variable is a type
+                    // its returns are related to, as a declaration's are
+                    // (`checkReturnExpression`).
+                    Type::TypeParameter(_)
+                        if has_explicit_return_type && return_type.is_type_variable() =>
+                    {
+                        Some(&return_type)
+                    }
                     Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
                         None
                     }

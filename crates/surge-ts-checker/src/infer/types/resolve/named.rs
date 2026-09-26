@@ -1808,20 +1808,32 @@ mod signature_context_cache_tests {
 }
 
 /// An import type naming what its module does not export: TS2694 on the
-/// module (`"path"`, or `"path".export=` for an `export =` module). Reported
-/// only where the module's types were bound, a module file's import types.
+/// module (`"path"`, or `"path".export=` for an `export =` module), or TS1340
+/// when it names the module itself and only an `export =` of a type would be
+/// one. Reported only where the module's types were bound, a module file's
+/// import types.
 fn report_missing_import_type_member(
     specifier: &str,
     qualifier: &str,
     named_type: &ParsedNamedType,
     ctx: &mut CheckerContext,
 ) -> bool {
-    if qualifier.is_empty() {
-        return false;
-    }
     let Some(namespace) = ctx.import_type_namespace(&ctx.file_name, specifier) else {
         return false;
     };
+    if qualifier.is_empty() {
+        // A class assigned to `module.exports` is a type too
+        // (`getTypeFromImportTypeNode` takes its type meaning).
+        if matches!(namespace.peeled(), Type::Object(object) if object.construct_signature().is_some()) {
+            return false;
+        }
+        let diagnostic = crate::spans::diagnostic_with_syntax_span(
+            surge_ts_diagnostics::Diagnostic::ts1340(specifier, ctx.file_name.clone()),
+            named_type.span,
+        );
+        ctx.push(diagnostic);
+        return true;
+    }
     let path = match &namespace {
         Type::Object(object) => object
             .alias_name
@@ -1859,7 +1871,9 @@ fn javascript_filled_type_arguments(
     if named_type.type_arguments.len() >= min {
         return named_type;
     }
-    if ctx.options.no_implicit_any && !ctx.resolving_class_heritage {
+    if ctx.options.no_implicit_any
+        && (!ctx.resolving_class_heritage || crate::infer::types::is_javascript_heritage_reference(ctx))
+    {
         report_interface_type_argument_count(interface, &named_type, ctx);
     }
     let mut filled = (*named_type).clone();

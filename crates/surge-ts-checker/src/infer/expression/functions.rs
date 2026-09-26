@@ -19,6 +19,23 @@ pub(crate) fn infer_arrow_function(
     infer_arrow_function_with_contextual_parameters(arrow_function, &[], symbols, ctx)
 }
 
+thread_local! {
+    /// The contextual return type a generic call gives the callback argument it
+    /// is inferring from, taken by the first arrow sketched under it so the
+    /// arrows nested in its body do not see it.
+    static CALLBACK_CONTEXTUAL_RETURN: std::cell::RefCell<Option<Type>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `infer` with `contextual` as the contextual return type of the arrow
+/// it sketches first.
+pub(crate) fn with_callback_contextual_return<R>(contextual: Type, infer: impl FnOnce() -> R) -> R {
+    let outer = CALLBACK_CONTEXTUAL_RETURN.with(|cell| cell.replace(Some(contextual)));
+    let result = infer();
+    CALLBACK_CONTEXTUAL_RETURN.with(|cell| *cell.borrow_mut() = outer);
+    result
+}
+
 /// [`infer_arrow_function`] with the parameter types the signature the callback
 /// is being passed to gives it. A generic call's second inference pass supplies
 /// them: an un-annotated parameter sketched as `any` types the body as `any`
@@ -38,6 +55,7 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
     // mapping emits here are discarded. A generic arrow keeps the untyped
     // sketch: its annotations name type parameters no scope here declares.
     let typed_annotations = arrow_function.type_parameters.is_empty();
+    let contextual_return = CALLBACK_CONTEXTUAL_RETURN.with(|cell| cell.replace(None));
     let diagnostics_before = ctx.diagnostics().len();
     let parameters = arrow_function
         .parameters
@@ -86,7 +104,10 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
             declared_return_type.unwrap_or_else(|| {
                 let locals = body_locals(arrow_function, &parameters, symbols);
                 match infer_expression(expression, &locals, ctx).flowing_type() {
-                    Some(ty) => widen_fresh_literal_return(expression, ty),
+                    Some(ty) => match contextual_return.as_ref() {
+                        Some(contextual) => widen_literals_for_contextual_return(expression, ty, contextual),
+                        None => widen_fresh_literal_return(expression, ty),
+                    },
                     None => Type::Unknown,
                 }
             })
@@ -192,6 +213,107 @@ fn widen_fresh_literal_return(expression: &ParsedExpression, ty: Type) -> Type {
         crate::checks::expr::widen_type(&ty)
     } else {
         ty
+    }
+}
+
+/// [`widen_fresh_literal_return`] under a contextual return type: tsc's
+/// `checkExpressionForMutableLocation` keeps a literal the contextual type is
+/// literal-like for (`getWidenedLiteralLikeTypeForContextualType`), and an
+/// object literal's properties each take their contextual type from the
+/// contextual type's property of that name. Everything else widens as it does
+/// without one.
+fn widen_literals_for_contextual_return(expression: &ParsedExpression, ty: Type, contextual: &Type) -> Type {
+    if matches!(
+        expression,
+        ParsedExpression::StringLiteral(_) | ParsedExpression::NumberLiteral(_) | ParsedExpression::BooleanLiteral(_)
+    ) {
+        return crate::checks::function::widen_unit_return_type(ty, Some(contextual));
+    }
+    let widened = widen_fresh_literal_return(expression, ty.clone());
+    let kept = match (expression, &ty, &widened) {
+        (ParsedExpression::ObjectLiteral { properties, .. }, Type::Object(written), Type::Object(object)) => {
+            object_literal_members_kept_by_context(properties, written, object, contextual)
+        }
+        _ => None,
+    };
+    kept.unwrap_or(widened)
+}
+
+/// The widened object literal `widened` with each literal-valued property put
+/// back to its `written` type where the contextual property type keeps it;
+/// `None` when no property keeps anything.
+fn object_literal_members_kept_by_context(
+    properties: &[surge_ts_syntax::ParsedObjectProperty],
+    written: &surge_ts_types::ObjectType,
+    widened: &surge_ts_types::ObjectType,
+    contextual: &Type,
+) -> Option<Type> {
+    let mut members = (*widened.properties).clone();
+    let mut kept = false;
+    for property in properties {
+        if property.is_spread
+            || property.is_method
+            || property.is_accessor
+            || !matches!(
+                property.value,
+                ParsedExpression::StringLiteral(_)
+                    | ParsedExpression::NumberLiteral(_)
+                    | ParsedExpression::BooleanLiteral(_)
+                    | ParsedExpression::ObjectLiteral { .. }
+            )
+        {
+            continue;
+        }
+        let (Some(written_member), Some(contextual_member)) = (
+            written.properties.get(property.name.as_str()),
+            contextual_property_type(contextual, &property.name),
+        ) else {
+            continue;
+        };
+        if contextual_member.is_unknown() {
+            continue;
+        }
+        let member_type =
+            widen_literals_for_contextual_return(&property.value, written_member.ty.clone(), &contextual_member);
+        if let Some(member) = members.get_mut(property.name.as_str())
+            && member.ty != member_type
+        {
+            member.ty = member_type;
+            kept = true;
+        }
+    }
+    if !kept {
+        return None;
+    }
+    let mut rebuilt = crate::metrics::alloc_object_type(members, widened.string_index_type.as_deref().cloned());
+    if widened.synthetic_open_index {
+        rebuilt = rebuilt.with_open_index_marker();
+    }
+    if widened.non_primitive {
+        rebuilt = rebuilt.with_non_primitive_marker();
+    }
+    if let Some(call_signature) = widened.call_signature() {
+        rebuilt = rebuilt.with_call_signature(call_signature.clone());
+    }
+    if let Some(construct_signature) = widened.construct_signature() {
+        rebuilt = rebuilt.with_construct_signature(construct_signature.clone());
+    }
+    Some(Type::Object(rebuilt))
+}
+
+/// tsc's `getTypeOfPropertyOfContextualType`: a union contextual type gives a
+/// property what those of its members that have it give it.
+fn contextual_property_type(contextual: &Type, name: &str) -> Option<Type> {
+    match contextual.peeled() {
+        Type::Union(union) => {
+            let members: Vec<Type> = union
+                .types()
+                .iter()
+                .filter_map(|member| member.get_property_access_type(name))
+                .collect();
+            (!members.is_empty()).then(|| surge_ts_types::union_type(members))
+        }
+        _ => contextual.get_property_access_type(name),
     }
 }
 

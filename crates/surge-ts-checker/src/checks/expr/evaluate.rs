@@ -1983,7 +1983,12 @@ fn evaluate_property_access(
     // deeper in the chain, a possibly-`undefined` link — inferring it
     // types the access but reports none of that.
     let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
-    check_property_receiver(object, &receiver, *object_span, fallback_span, symbols, ctx);
+    if !binding_element {
+        check_property_receiver(object, &receiver, *object_span, fallback_span, symbols, ctx);
+    } else if let Some(parent) = destructured_parent_without_members(object, &receiver, symbols, ctx) {
+        report_property_of_unknown(property_name, &parent, *property_span, ctx);
+        return InferredExpression::Unknown;
+    }
     if !*is_bracketed && surge_ts_types::private_name::is_private_name_key(property_name) {
         let Some(private_receiver) = super::PrivateNameReceiver::of(&receiver) else {
             return InferredExpression::Unknown;
@@ -2052,6 +2057,85 @@ fn evaluate_property_access(
         );
     }
     inferred_expression
+}
+
+/// tsc reads a destructured name as an indexed access on the parent type
+/// (`getBindingElementTypeFromParentType`), never through
+/// `checkNonNullExpression`: a parent that is `unknown`, or admits `null`,
+/// `undefined` or `void`, has no such property, and TS2339 names the whole
+/// parent. Returns that name.
+fn destructured_parent_without_members(
+    object: &ParsedExpression,
+    receiver: &InferredExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<String> {
+    let InferredExpression::Known(parent) = receiver else {
+        return None;
+    };
+    let strict = surge_ts_types::strict_null_checks();
+    let parent = match parent {
+        Type::TypeParameter(_) => type_parameter_base_constraint(parent)?.unwrap_or(Type::GenuineUnknown),
+        other => other.clone(),
+    };
+    if parent == Type::GenuineUnknown {
+        // Without `strictNullChecks` the apparent type of `unknown` is `{}`.
+        return Some(if strict { "unknown" } else { "{}" }.to_string());
+    }
+    let parent = match object {
+        // An initializer that cannot be `undefined` takes it off the annotated
+        // parent; `null` stays.
+        ParsedExpression::TypeAssertion {
+            annotation: true,
+            expression,
+            ..
+        } if strict && !initializer_may_be_undefined(expression, symbols, ctx) => {
+            surge_ts_types::remove_undefined(&parent)
+        }
+        _ => parent,
+    };
+    let admits_void = match parent.peeled() {
+        Type::Void => true,
+        Type::Union(union) => union.types().iter().any(|member| *member == Type::Void),
+        _ => false,
+    };
+    (admits_void || receiver_nullability(&parent).is_some()).then(|| parent.name())
+}
+
+/// tsc's `getBaseConstraintOfType` for a type variable: `Some(None)` when it
+/// has no constraint, `None` when surge cannot resolve one.
+fn type_parameter_base_constraint(ty: &Type) -> Option<Option<Type>> {
+    let mut current = ty.clone();
+    for _ in 0..16 {
+        let Type::TypeParameter(parameter) = &current else {
+            return Some(Some(current));
+        };
+        match surge_ts_types::type_variable::active_constraint(parameter)? {
+            None => return Some(None),
+            Some(constraint) if constraint == current => return Some(None),
+            Some(constraint) => current = constraint,
+        }
+    }
+    None
+}
+
+/// Whether an initializer's own type has tsc's `EQUndefined` fact. An
+/// initializer surge cannot type is taken not to.
+fn initializer_may_be_undefined(
+    initializer: &ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let InferredExpression::Known(ty) = infer_expression(initializer, symbols, ctx) else {
+        return false;
+    };
+    let may_be_undefined = |ty: &Type| {
+        matches!(ty, Type::Undefined | Type::Void | Type::Any | Type::GenuineUnknown | Type::TypeParameter(_))
+    };
+    match ty.peeled() {
+        Type::Union(union) => union.types().iter().any(may_be_undefined),
+        other => may_be_undefined(&other),
+    }
 }
 
 /// Walks a JSX child for ordinary diagnostics. Text is inert; `{expression}`
@@ -2419,12 +2503,16 @@ fn symbols_after_assignments(
         if assigned.is_unknown() {
             continue;
         }
+        // tsc's `getTypeAtFlowAssignment` narrows the declared type by what
+        // was assigned, and a later write in the right operand is still
+        // checked against the declaration: `(x = "") && (x = 0)`.
+        let declared = after.declared_type(target_name).unwrap_or(&symbol.ty).clone();
         let updated = crate::symbols::SymbolInfo {
-            ty: assigned,
+            ty: crate::checks::function::body_statements::assignment_reduced_type(Some(&declared), assigned),
             kind: symbol.kind,
             function_signature: symbol.function_signature.clone(),
         };
-        let _ = after.insert(target_name.clone(), updated);
+        let _ = after.insert_narrowed(target_name.clone(), updated, declared);
     }
     Some(after)
 }

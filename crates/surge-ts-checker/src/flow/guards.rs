@@ -222,6 +222,11 @@ fn typeof_comparison<'e>(
     };
     let tag = |expression: &'e ParsedExpression| match expression {
         ParsedExpression::StringLiteral(tag) => Some(tag.as_str()),
+        ParsedExpression::TemplateLiteral {
+            expressions,
+            quasis,
+            ..
+        } if expressions.is_empty() => quasis.first()?.as_deref(),
         _ => None,
     };
     typeof_operand(left)

@@ -118,6 +118,21 @@ fn collect_option_ranges(text: &str) -> Option<ConfigOptionRanges> {
     })
 }
 
+/// Where tsc's `createOptionValueDiagnostic` reports on `name`'s value: the
+/// value in the root config, else its `compilerOptions` key (an option
+/// inherited through `extends`), else nowhere.
+pub fn option_value_range(config_path: &Path, name: &str) -> Option<(usize, usize)> {
+    let text = std::fs::read_to_string(config_path).ok()?;
+    let ranges = collect_option_ranges(&text)?;
+    Some(
+        ranges
+            .entries
+            .iter()
+            .find(|(option, _, _)| option == name)
+            .map_or(ranges.compiler_options_key, |(_, _, value)| *value),
+    )
+}
+
 /// Every removed option in the merged compiler options, in root-config source
 /// order, with inherited ones (no node in this file) last.
 pub(crate) fn collect_removed_options(

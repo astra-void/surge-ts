@@ -4,7 +4,7 @@
 //! must be numeric (TS18033).
 
 use surge_ts_diagnostics::Diagnostic;
-use surge_ts_syntax::ParsedEnumBody;
+use surge_ts_syntax::{ParsedEnumBody, ParsedExpression, TextSpan};
 use surge_ts_types::{Type, is_assignable_to};
 
 use crate::context::{CheckerContext, convert_span};
@@ -12,10 +12,13 @@ use crate::infer::InferredExpression;
 use crate::symbols::{ScopeStack, SymbolInfo, SymbolKind, SymbolTable};
 
 /// `symbols` is the scope the enum is declared in, after its object is bound.
+/// `top_level`: the enum is declared at a file's top level, where a script's
+/// enum merges with the same-named enums of the program's other scripts.
 pub(crate) fn check_enum_members(
     enum_name: &str,
     bodies: &[ParsedEnumBody],
     symbols: SymbolTable,
+    top_level: bool,
     ctx: &mut CheckerContext,
 ) {
     let Some(Type::Object(object)) = symbols.get(enum_name).map(|symbol| symbol.ty.peeled()) else {
@@ -24,7 +27,7 @@ pub(crate) fn check_enum_members(
     let mut scopes = ScopeStack::from_root(symbols);
     scopes.push_child();
     // A bare name in an initializer is first a member of the enum, of any of
-    // its declarations; the enum's object carries all of them.
+    // its declarations; the enum's object carries those of this file.
     for (name, property) in object.properties.iter() {
         let _ = scopes.insert_current(
             name.to_string(),
@@ -34,6 +37,9 @@ pub(crate) fn check_enum_members(
                 function_signature: None,
             },
         );
+    }
+    if top_level {
+        bind_members_of_other_files(enum_name, &object, bodies, &mut scopes, ctx);
     }
     for body in bodies {
         for member in &body.members {
@@ -63,4 +69,70 @@ pub(crate) fn check_enum_members(
             ctx.push(diagnostic);
         }
     }
+}
+
+/// The members other files' declarations of the enum give it, which tsc's
+/// `Resolve` finds in the merged enum's exports (`case ast.KindEnumDeclaration`).
+/// Under `isolatedModules` a reference to one is TS1281: a single-file
+/// transpiler cannot tell the name is a member.
+fn bind_members_of_other_files(
+    enum_name: &str,
+    object: &surge_ts_types::ObjectType,
+    bodies: &[ParsedEnumBody],
+    scopes: &mut ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    let mut references = Vec::new();
+    for body in bodies {
+        for member in &body.members {
+            collect_bare_names(&member.initializer, &mut references);
+        }
+    }
+    let isolated_flag = if ctx.options.verbatim_module_syntax {
+        Some("verbatimModuleSyntax")
+    } else if ctx.options.isolated_modules {
+        Some("isolatedModules")
+    } else {
+        None
+    };
+    for (name, span) in references {
+        if object.properties.contains_key(name) {
+            continue;
+        }
+        let qualified = format!("{enum_name}.{name}");
+        let declared_elsewhere = matches!(
+            ctx.lookup_type_declaration(&qualified),
+            Some(crate::symbols::TypeDeclarationInfo::Alias(alias))
+                if alias.enum_name.as_deref() == Some(enum_name)
+                    && alias.file_name.as_ref() != ctx.file_name.as_str()
+        );
+        if !declared_elsewhere {
+            continue;
+        }
+        let _ = scopes.insert_current(
+            name,
+            SymbolInfo {
+                ty: Type::Unknown,
+                kind: SymbolKind::Const,
+                function_signature: None,
+            },
+        );
+        if let (Some(flag), Some(span)) = (isolated_flag, span) {
+            let diagnostic = Diagnostic::ts1281(name, flag, &qualified, ctx.file_name.clone())
+                .with_span(convert_span(span));
+            ctx.push(diagnostic);
+        }
+    }
+}
+
+/// The names an initializer reads bare, outside any function it contains.
+fn collect_bare_names<'a>(
+    expression: &'a ParsedExpression,
+    names: &mut Vec<(&'a str, Option<TextSpan>)>,
+) {
+    if let ParsedExpression::Identifier { name, span } = expression {
+        names.push((name.as_str(), *span));
+        return;
+    }
+    expression.for_each_child(&mut |child| collect_bare_names(child, names));
 }

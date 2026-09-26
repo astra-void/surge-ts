@@ -583,6 +583,8 @@ pub(crate) fn constraint_names_a_sibling(
         | ParsedType::Tuple(members) => members
             .iter()
             .any(|member| constraint_names_a_sibling(member, siblings)),
+        // The `object` keyword, which lowers to a memberless object type.
+        ParsedType::Object(object) if object.non_primitive => false,
         _ => true,
     }
 }

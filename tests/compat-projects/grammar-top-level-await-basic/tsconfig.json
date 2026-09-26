@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "module": "es2015",
+    "target": "es2022",
+    "lib": ["esnext"]
+  },
+  "include": ["src/**/*"]
+}

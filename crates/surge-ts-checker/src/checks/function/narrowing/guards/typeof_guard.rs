@@ -280,10 +280,17 @@ pub(crate) fn parse_typeof_condition(
         else {
             return None;
         };
-        let ParsedExpression::StringLiteral(tag) = maybe_tag else {
-            return None;
+        let tag = match maybe_tag {
+            ParsedExpression::StringLiteral(tag) => tag.as_str(),
+            // `IsStringLiteralLike`: a template without substitutions.
+            ParsedExpression::TemplateLiteral {
+                expressions,
+                quasis,
+                ..
+            } if expressions.is_empty() => quasis.first()?.as_deref()?,
+            _ => return None,
         };
-        Some((operand.as_ref(), tag.as_str()))
+        Some((operand.as_ref(), tag))
     }
 
     let (operand, tag) = typeof_side(left, right).or_else(|| typeof_side(right, left))?;

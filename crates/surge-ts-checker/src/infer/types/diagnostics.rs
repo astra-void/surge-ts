@@ -500,12 +500,34 @@ pub(crate) fn emit_generic_arity(
         return;
     };
     let file_name = ctx.file_name.clone();
-    let diagnostic = if min_type_argument_count == type_parameter_count {
+    let diagnostic = if is_javascript_heritage_reference(ctx) {
+        // `isJsImplicitAny`: a JavaScript reference fills what it lacks with
+        // `any` and reports nothing without `noImplicitAny`.
+        if !ctx.options.no_implicit_any {
+            return;
+        }
+        if min_type_argument_count == type_parameter_count {
+            Diagnostic::ts8026(name, file_name)
+        } else {
+            Diagnostic::ts8027(name, min_type_argument_count, file_name)
+        }
+    } else if min_type_argument_count == type_parameter_count {
         Diagnostic::ts2314(name, type_parameter_count, file_name)
     } else {
         Diagnostic::ts2707(name, min_type_argument_count, type_parameter_count, file_name)
     };
     ctx.push_utility_diagnostic_once(diagnostic.with_span(convert_span(span)));
+}
+
+/// `missingAugmentsTag`: the reference is a JavaScript class's `extends`
+/// clause, whose type arguments only an `@extends` tag can supply. The
+/// reparser moves the tag's arguments onto the clause, so the clause is the
+/// reference either way.
+pub(crate) fn is_javascript_heritage_reference(ctx: &CheckerContext) -> bool {
+    ctx.resolving_class_heritage
+        && crate::program::current_dts_expansion_reason()
+            == crate::program::DtsExpansionReason::InterfaceHeritageResolution
+        && surge_ts_syntax::is_javascript_file_name(&ctx.file_name)
 }
 
 /// `Foo<Bad>` where `Foo`'s parameter is constrained. Only reported when both the

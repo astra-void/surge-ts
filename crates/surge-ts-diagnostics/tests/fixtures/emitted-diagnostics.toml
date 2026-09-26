@@ -1365,6 +1365,7 @@ oracle = [
 status = "emitted"
 oracle = [
   "grammar-const-not-initialized-basic",
+  "grammar-using-declarations-basic",
 ]
 
 [TS2390]
@@ -2132,6 +2133,7 @@ oracle = [
 status = "emitted"
 oracle = [
   "heritage-await-globalthis-basic",
+  "grammar-await-context-basic",
 ]
 
 [TS7017]
@@ -2398,10 +2400,22 @@ oracle = [
   "overload-agreement-basic",
 ]
 
+[TS2516]
+status = "emitted"
+oracle = [
+  "class-member-grammar-extra",
+]
+
 [TS2386]
 status = "emitted"
 oracle = [
   "overload-agreement-basic",
+]
+
+[TS1341]
+status = "emitted"
+oracle = [
+  "class-member-grammar-extra",
 ]
 
 [TS2387]
@@ -2495,6 +2509,12 @@ oracle = [
   "catch-yield-await-placement-basic",
 ]
 
+[TS1245]
+status = "emitted"
+oracle = [
+  "class-member-grammar-extra",
+]
+
 [TS2512]
 status = "emitted"
 oracle = [
@@ -2571,6 +2591,7 @@ oracle = [
 status = "emitted"
 oracle = [
   "catch-yield-await-placement-basic",
+  "grammar-await-context-basic",
 ]
 
 [TS2450]
@@ -2718,12 +2739,14 @@ oracle = [
 status = "emitted"
 oracle = [
   "variance-annotation-placement-basic",
+  "variance-annotation-declared-types-basic",
 ]
 
 [TS2637]
 status = "emitted"
 oracle = [
   "variance-annotation-placement-basic",
+  "variance-annotation-declared-types-basic",
 ]
 
 [TS1091]
@@ -4414,6 +4437,18 @@ oracle = [
   "decorator-expressions-checked",
 ]
 
+[TS1270]
+status = "emitted"
+oracle = [
+  "decorator-return-legacy",
+]
+
+[TS1271]
+status = "emitted"
+oracle = [
+  "decorator-return-legacy",
+]
+
 [TS1329]
 status = "emitted"
 oracle = [
@@ -4684,6 +4719,24 @@ oracle = [
   "node16-module-format-checks",
 ]
 
+[TS8026]
+status = "emitted"
+oracle = [
+  "javascript-extends-type-arguments",
+]
+
+[TS8027]
+status = "emitted"
+oracle = [
+  "javascript-extends-type-arguments",
+]
+
+[TS1340]
+status = "emitted"
+oracle = [
+  "import-type-module-without-type",
+]
+
 [TS8024]
 status = "emitted"
 oracle = [
@@ -4949,4 +5002,100 @@ oracle = [
 status = "emitted"
 oracle = [
   "import-helpers-incomplete-tslib",
+]
+
+[TS1492]
+status = "emitted"
+oracle = [
+  "grammar-using-declarations-basic",
+]
+
+[TS1547]
+status = "emitted"
+oracle = [
+  "grammar-using-declarations-basic",
+]
+
+[TS1548]
+status = "emitted"
+oracle = [
+  "grammar-using-declarations-basic",
+]
+
+[TS18054]
+status = "emitted"
+oracle = [
+  "grammar-using-declarations-basic",
+]
+
+[TS2852]
+status = "emitted"
+oracle = [
+  "grammar-using-declarations-basic",
+]
+
+[TS1375]
+status = "emitted"
+oracle = [
+  "grammar-top-level-await-basic",
+]
+
+[TS1378]
+status = "emitted"
+oracle = [
+  "grammar-top-level-await-basic",
+]
+
+[TS1431]
+status = "emitted"
+oracle = [
+  "grammar-top-level-await-basic",
+]
+
+[TS1432]
+status = "emitted"
+oracle = [
+  "grammar-top-level-await-basic",
+]
+
+[TS2853]
+status = "emitted"
+oracle = [
+  "grammar-top-level-await-basic",
+]
+
+[TS2854]
+status = "emitted"
+oracle = [
+  "grammar-top-level-await-basic",
+]
+
+[TS1013]
+status = "emitted"
+oracle = [
+  "grammar-rest-trailing-comma-basic",
+]
+
+[TS5059]
+status = "emitted"
+oracle = [
+  "jsx-react-namespace-option-value-basic",
+]
+
+[TS5067]
+status = "emitted"
+oracle = [
+  "jsx-factory-option-values-basic",
+]
+
+[TS18035]
+status = "emitted"
+oracle = [
+  "jsx-factory-option-values-basic",
+]
+
+[TS1281]
+status = "emitted"
+oracle = [
+  "isolated-modules-enum-cross-file-member",
 ]

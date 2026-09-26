@@ -560,10 +560,11 @@ pub(crate) fn narrow_assignment_target_in_scope(
     if path.is_empty() {
         return;
     }
-    let declared = scopes
-        .visible_symbols()
-        .declared_type(&base)
-        .and_then(|declared| declared_path_type(declared, &path));
+    // A binding no narrowing has touched yet is its own declaration.
+    let declared = match scopes.visible_symbols().declared_type(&base) {
+        Some(declared) => declared_path_type(declared, &path),
+        None => scopes.resolve(&base).and_then(|symbol| declared_path_type(&symbol.ty, &path)),
+    };
     narrow_reference_in_scope(
         &base,
         &path,

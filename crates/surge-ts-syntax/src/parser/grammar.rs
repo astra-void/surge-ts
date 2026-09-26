@@ -133,6 +133,13 @@ struct GrammarCollector {
     /// Whether each enclosing function is `async`, innermost last. Empty at the
     /// top level, where a module may `await`.
     function_async: Vec<bool>,
+    /// tsc's `NodeFlagsAwaitContext` for each enclosing function, class field
+    /// initializer, enum body and static block, innermost last.
+    await_context: Vec<bool>,
+    /// An import or export, or an `import.meta`, makes the file a module
+    /// (`IsFileProbablyExternalModule`); the checker adds the module
+    /// detection options.
+    external_module: bool,
     /// `declare namespace`/`declare module` nesting. An ambient container makes
     /// a bodyless declaration legal, so the implementation-missing checks stay
     /// quiet inside one.
@@ -304,7 +311,10 @@ impl GrammarCollector {
     /// class declared at the top of the same file: an instance member may not
     /// change kind between property, accessor and method. A private member on
     /// either side is not an override, and an abstract base property or
-    /// accessor may be implemented as either.
+    /// accessor may be implemented as either. Each derived name is judged
+    /// once, at its first declaration (the symbol's `valueDeclaration`); an
+    /// auto-accessor binds as an accessor and a parameter property as a
+    /// property.
     fn check_member_kind_overrides(&mut self, statements: &[Statement<'_>]) {
         #[derive(Clone, Copy, PartialEq)]
         enum MemberKind {
@@ -319,53 +329,82 @@ impl GrammarCollector {
             span: Span,
         }
         fn instance_members(class: &Class<'_>) -> Vec<(String, Member)> {
-            class
-                .body
-                .body
-                .iter()
-                .filter_map(|element| {
-                    let (key, is_static, member) = match element {
-                        ClassElement::MethodDefinition(method) => {
-                            let kind = match method.kind {
-                                MethodDefinitionKind::Method => MemberKind::Method,
-                                MethodDefinitionKind::Get | MethodDefinitionKind::Set => {
-                                    MemberKind::Accessor
+            let mut members = Vec::new();
+            for element in &class.body.body {
+                let (key, is_static, member) = match element {
+                    ClassElement::MethodDefinition(method) => {
+                        let kind = match method.kind {
+                            MethodDefinitionKind::Method => MemberKind::Method,
+                            MethodDefinitionKind::Get | MethodDefinitionKind::Set => {
+                                MemberKind::Accessor
+                            }
+                            MethodDefinitionKind::Constructor => {
+                                for parameter in &method.value.params.items {
+                                    if (parameter.accessibility.is_some() || parameter.readonly || parameter.r#override)
+                                        && let oxc_ast::ast::BindingPattern::BindingIdentifier(identifier) = &parameter.pattern
+                                    {
+                                        members.push((
+                                            identifier.name.to_string(),
+                                            Member {
+                                                kind: MemberKind::Property,
+                                                is_private: parameter.accessibility
+                                                    == Some(oxc_ast::ast::TSAccessibility::Private),
+                                                is_abstract: false,
+                                                span: identifier.span,
+                                            },
+                                        ));
+                                    }
                                 }
-                                MethodDefinitionKind::Constructor => return None,
-                            };
-                            (
-                                &method.key,
-                                method.r#static,
-                                Member {
-                                    kind,
-                                    is_private: method.accessibility
-                                        == Some(oxc_ast::ast::TSAccessibility::Private),
-                                    is_abstract: method.r#type
-                                        == MethodDefinitionType::TSAbstractMethodDefinition,
-                                    span: method.key.span(),
-                                },
-                            )
-                        }
-                        ClassElement::PropertyDefinition(property) => (
-                            &property.key,
-                            property.r#static,
+                                continue;
+                            }
+                        };
+                        (
+                            &method.key,
+                            method.r#static,
                             Member {
-                                kind: MemberKind::Property,
-                                is_private: property.accessibility
+                                kind,
+                                is_private: method.accessibility
                                     == Some(oxc_ast::ast::TSAccessibility::Private),
-                                is_abstract: property.r#type
-                                    == PropertyDefinitionType::TSAbstractPropertyDefinition,
-                                span: property.key.span(),
+                                is_abstract: method.r#type
+                                    == MethodDefinitionType::TSAbstractMethodDefinition,
+                                span: method.key.span(),
                             },
-                        ),
-                        _ => return None,
-                    };
-                    if is_static || matches!(key, PropertyKey::PrivateIdentifier(_)) {
-                        return None;
+                        )
                     }
-                    property_key_name(key).map(|name| (name, member))
-                })
-                .collect()
+                    ClassElement::PropertyDefinition(property) => (
+                        &property.key,
+                        property.r#static,
+                        Member {
+                            kind: MemberKind::Property,
+                            is_private: property.accessibility
+                                == Some(oxc_ast::ast::TSAccessibility::Private),
+                            is_abstract: property.r#type
+                                == PropertyDefinitionType::TSAbstractPropertyDefinition,
+                            span: property.key.span(),
+                        },
+                    ),
+                    ClassElement::AccessorProperty(property) => (
+                        &property.key,
+                        property.r#static,
+                        Member {
+                            kind: MemberKind::Accessor,
+                            is_private: property.accessibility
+                                == Some(oxc_ast::ast::TSAccessibility::Private),
+                            is_abstract: property.r#type
+                                == oxc_ast::ast::AccessorPropertyType::TSAbstractAccessorProperty,
+                            span: property.key.span(),
+                        },
+                    ),
+                    _ => continue,
+                };
+                if is_static || matches!(key, PropertyKey::PrivateIdentifier(_)) {
+                    continue;
+                }
+                if let Some(name) = property_key_name(key) {
+                    members.push((name, member));
+                }
+            }
+            members
         }
 
         let classes: Vec<&Class<'_>> = statements
@@ -417,7 +456,11 @@ impl GrammarCollector {
             let Some(base_name) = classes[base].id.as_ref() else {
                 continue;
             };
+            let mut judged: std::collections::HashSet<&str> = std::collections::HashSet::new();
             for (name, derived) in &member_lists[slot] {
+                if !judged.insert(name.as_str()) {
+                    continue;
+                }
                 let mut ancestor = Some(base);
                 let mut found = None;
                 let mut depth = 0;
@@ -898,7 +941,11 @@ impl GrammarCollector {
                 return;
             }
         }
-        self.push(Kind::FunctionImplementationMissing, node.name_span, None);
+        if node.is_abstract {
+            self.push(Kind::Ts(2516), node.name_span, None);
+        } else {
+            self.push(Kind::FunctionImplementationMissing, node.name_span, None);
+        }
     }
 
     /// tsc's `checkFlagAgreementBetweenOverloads` and
@@ -1119,6 +1166,7 @@ impl GrammarCollector {
         let mut group_slots: std::collections::HashMap<(String, bool), usize> =
             std::collections::HashMap::new();
         let mut constructors: Vec<(Span, bool, bool)> = Vec::new();
+        let mut constructor_accessibility: Vec<(Span, bool, Option<oxc_ast::ast::TSAccessibility>)> = Vec::new();
 
         for element in &class.body.body {
             let (key, is_static, member) = match element {
@@ -1132,6 +1180,18 @@ impl GrammarCollector {
                     {
                         self.push(Kind::AbstractMethodOutsideAbstractClass, method.span, None);
                     }
+                    if is_abstract
+                        && method.kind == MethodDefinitionKind::Method
+                        && method.value.body.is_some()
+                    {
+                        let span = method.key.span();
+                        let written = self
+                            .source_text
+                            .get(span.start as usize..span.end as usize)
+                            .unwrap_or_default()
+                            .to_string();
+                        self.push(Kind::Ts(1245), span, Some(&written));
+                    }
                     if method.kind == MethodDefinitionKind::Constructor {
                         if method.value.body.is_none() {
                             self.check_signature_parameters(&method.value.params);
@@ -1140,6 +1200,13 @@ impl GrammarCollector {
                             method.key.span(),
                             method.value.body.is_some(),
                             is_abstract,
+                        ));
+                        constructor_accessibility.push((
+                            Span::new(method.span.start, method.key.span().end),
+                            method.value.body.is_some(),
+                            method.accessibility.filter(|accessibility| {
+                                *accessibility != oxc_ast::ast::TSAccessibility::Public
+                            }),
                         ));
                         // A parameter property is an instance property
                         // declared where the constructor stands.
@@ -1157,6 +1224,12 @@ impl GrammarCollector {
                             }
                         }
                         continue;
+                    }
+                    if matches!(method.kind, MethodDefinitionKind::Get | MethodDefinitionKind::Set)
+                        && let PropertyKey::StaticIdentifier(name) = &method.key
+                        && name.name.as_str() == "constructor"
+                    {
+                        self.push(Kind::Ts(1341), name.span, None);
                     }
                     let member = match method.kind {
                         MethodDefinitionKind::Get | MethodDefinitionKind::Set => {
@@ -1305,6 +1378,21 @@ impl GrammarCollector {
             if implementations.len() > 1 {
                 for span in implementations {
                     self.push(Kind::MultipleConstructorImplementations, span, None);
+                }
+            }
+        }
+        // `checkFlagAgreementBetweenOverloads` for the constructor symbol,
+        // measured against the implementation (the first declaration when
+        // there is none).
+        if constructor_accessibility.iter().any(|(_, has_body, _)| !has_body) {
+            let canonical = constructor_accessibility
+                .iter()
+                .find(|(_, has_body, _)| *has_body)
+                .unwrap_or(&constructor_accessibility[0])
+                .2;
+            for (span, _, accessibility) in &constructor_accessibility {
+                if *accessibility != canonical {
+                    self.push(Kind::Ts(2385), *span, None);
                 }
             }
         }
@@ -1589,16 +1677,41 @@ impl GrammarCollector {
             return;
         }
 
-        // tsc's `checkGrammarVariableDeclaration`: a pattern without an
-        // initializer is TS1182 whatever its keyword, ahead of the `const` rule.
+        // tsc's `checkGrammarVariableDeclaration`: a `using` pattern is TS1492
+        // before anything else; a pattern without an initializer is TS1182
+        // whatever its keyword, ahead of the `const`/`using` rule (TS1155).
+        let using_keyword = using_declaration_keyword(declaration.kind);
         for declarator in &declaration.declarations {
+            let is_pattern = !matches!(declarator.id, oxc_ast::ast::BindingPattern::BindingIdentifier(_));
+            if is_pattern && let Some(keyword) = using_keyword {
+                self.push(Kind::Ts(1492), declarator.id.span(), Some(keyword));
+                continue;
+            }
             if declarator.init.is_some() {
                 continue;
             }
-            if !matches!(declarator.id, oxc_ast::ast::BindingPattern::BindingIdentifier(_)) {
+            if is_pattern {
                 self.push(Kind::Ts(1182), declarator.id.span(), None);
             } else if declaration.kind == VariableDeclarationKind::Const {
                 self.push(Kind::ConstNotInitialized, declarator.id.span(), None);
+            } else if let Some(keyword) = using_keyword {
+                self.push(Kind::Ts(1155), declarator.id.span(), Some(keyword));
+            }
+        }
+    }
+
+    /// tsc's `checkGrammarVariableDeclaration` on a `for...of` declaration,
+    /// which the loop initializes: only the `using` pattern rule applies.
+    fn check_using_loop_bindings(&mut self, left: &oxc_ast::ast::ForStatementLeft<'_>) {
+        let oxc_ast::ast::ForStatementLeft::VariableDeclaration(declaration) = left else {
+            return;
+        };
+        let Some(keyword) = using_declaration_keyword(declaration.kind) else {
+            return;
+        };
+        for declarator in &declaration.declarations {
+            if !matches!(declarator.id, oxc_ast::ast::BindingPattern::BindingIdentifier(_)) {
+                self.push(Kind::Ts(1492), declarator.id.span(), Some(keyword));
             }
         }
     }
@@ -2155,6 +2268,8 @@ fn property_key_name(key: &PropertyKey<'_>) -> Option<String> {
 impl<'a> Visit<'a> for GrammarCollector {
     fn visit_program(&mut self, program: &Program<'a>) {
         self.source_text = program.source_text.to_string();
+        self.external_module = super::grammar_context::is_external_module(program)
+            || program.source_text.contains("import.meta");
         self.collect_top_level_enums(&program.body);
         self.check_member_kind_overrides(&program.body);
         self.check_circular_type_aliases(&program.body);
@@ -2405,7 +2520,9 @@ impl<'a> Visit<'a> for GrammarCollector {
             self.check_signature_parameters(&function.params);
         }
         self.function_async.push(function.r#async);
+        self.await_context.push(function.r#async);
         oxc_ast_visit::walk::walk_function(self, function, flags);
+        self.await_context.pop();
         self.function_async.pop();
     }
 
@@ -2423,7 +2540,9 @@ impl<'a> Visit<'a> for GrammarCollector {
             self.push(Kind::Ts(7060), parameter.span, None);
         }
         self.function_async.push(arrow.r#async);
+        self.await_context.push(arrow.r#async);
         oxc_ast_visit::walk::walk_arrow_function_expression(self, arrow);
+        self.await_context.pop();
         self.function_async.pop();
     }
 
@@ -2431,12 +2550,23 @@ impl<'a> Visit<'a> for GrammarCollector {
     /// is not `async` — TS1308.
     fn visit_await_expression(&mut self, expression: &oxc_ast::ast::AwaitExpression<'a>) {
         let keyword = Span::new(expression.span.start, expression.span.start + 5);
-        if self.function_async.last() == Some(&false) {
-            self.push(Kind::AwaitOutsideAsyncFunction, keyword, None);
-        } else if self.in_top_level_context() {
-            // `checkGrammarAwaitOrAwaitUsing` under a node module kind; the
-            // checker keeps it for a CommonJS-format file.
+        // Outside an await context tsc's parser takes `await` for an operator
+        // only before a name, keyword or literal on its line
+        // (`isAwaitExpression`), and for a name otherwise.
+        let parsed_as_await = await_operand_on_same_line(&self.source_text, keyword.end);
+        if self.await_context.last() == Some(&false) {
+            if parsed_as_await {
+                self.push(Kind::AwaitOutsideAsyncFunction, keyword, None);
+            }
+        } else if self.in_top_level_context() && parsed_as_await {
+            // `checkGrammarAwaitOrAwaitUsing`: the checker keeps TS1309 for a
+            // CommonJS-format file under a node module kind, and TS1378 under
+            // a module kind or target that cannot run top-level `await`.
             self.push(Kind::Ts(1309), keyword, None);
+            if !self.external_module {
+                self.push(Kind::Ts(1375), keyword, None);
+            }
+            self.push(Kind::Ts(1378), keyword, None);
         }
         oxc_ast_visit::walk::walk_await_expression(self, expression);
     }
@@ -2445,6 +2575,48 @@ impl<'a> Visit<'a> for GrammarCollector {
         self.this_container_depth += 1;
         oxc_ast_visit::walk::walk_class_body(self, body);
         self.this_container_depth -= 1;
+    }
+
+    // tsc's parser clears the await context for a class field's initializer
+    // (`parsePropertyDeclaration`) and an enum's members
+    // (`parseEnumDeclaration`), and sets it for a static block's body
+    // (`parseClassStaticBlockBody`), whatever function encloses them.
+    fn visit_property_definition(&mut self, property: &oxc_ast::ast::PropertyDefinition<'a>) {
+        self.visit_decorators(&property.decorators);
+        self.visit_property_key(&property.key);
+        if let Some(type_annotation) = &property.type_annotation {
+            self.visit_ts_type_annotation(type_annotation);
+        }
+        if let Some(value) = &property.value {
+            self.await_context.push(false);
+            self.visit_expression(value);
+            self.await_context.pop();
+        }
+    }
+
+    fn visit_accessor_property(&mut self, property: &oxc_ast::ast::AccessorProperty<'a>) {
+        self.visit_decorators(&property.decorators);
+        self.visit_property_key(&property.key);
+        if let Some(type_annotation) = &property.type_annotation {
+            self.visit_ts_type_annotation(type_annotation);
+        }
+        if let Some(value) = &property.value {
+            self.await_context.push(false);
+            self.visit_expression(value);
+            self.await_context.pop();
+        }
+    }
+
+    fn visit_ts_enum_body(&mut self, body: &oxc_ast::ast::TSEnumBody<'a>) {
+        self.await_context.push(false);
+        oxc_ast_visit::walk::walk_ts_enum_body(self, body);
+        self.await_context.pop();
+    }
+
+    fn visit_static_block(&mut self, block: &oxc_ast::ast::StaticBlock<'a>) {
+        self.await_context.push(true);
+        oxc_ast_visit::walk::walk_static_block(self, block);
+        self.await_context.pop();
     }
 
     fn visit_ts_type_parameter_declaration(
@@ -2601,7 +2773,12 @@ impl<'a> Visit<'a> for GrammarCollector {
         {
             let start = statement.span.start + offset as u32;
             self.push(Kind::Ts(1309), Span::new(start, start + 5), None);
+            if !self.external_module {
+                self.push(Kind::Ts(1431), Span::new(start, start + 5), None);
+            }
+            self.push(Kind::Ts(1432), Span::new(start, start + 5), None);
         }
+        self.check_using_loop_bindings(&statement.left);
         self.visit_expression(&statement.right);
         self.visit_statement(&statement.body);
     }
@@ -2626,6 +2803,43 @@ impl<'a> Visit<'a> for GrammarCollector {
             outer: text_span_from_oxc_span(parenthesized.span),
         });
         self.visit_expression(inner);
+    }
+}
+
+/// How tsc's messages name a `using` declaration's keyword.
+fn using_declaration_keyword(kind: VariableDeclarationKind) -> Option<&'static str> {
+    match kind {
+        VariableDeclarationKind::Using => Some("using"),
+        VariableDeclarationKind::AwaitUsing => Some("await using"),
+        _ => None,
+    }
+}
+
+/// tsgo's `nextTokenIsIdentifierOrKeywordOrLiteralOnSameLine`, which
+/// `isAwaitExpression` asks outside an await context: whether the token after
+/// the `await` that ends at `from` is a name, a keyword, or a string or numeric
+/// literal on the same line.
+fn await_operand_on_same_line(source_text: &str, from: u32) -> bool {
+    let is_line_break = |c: char| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}');
+    let mut rest = source_text.get(from as usize..).unwrap_or("");
+    loop {
+        let trimmed = rest.trim_start_matches(|c: char| c.is_whitespace() && !is_line_break(c));
+        if let Some(comment) = trimmed.strip_prefix("/*") {
+            let Some(end) = comment.find("*/") else {
+                return false;
+            };
+            if comment[..end].contains(is_line_break) {
+                return false;
+            }
+            rest = &comment[end + 2..];
+            continue;
+        }
+        let mut chars = trimmed.chars();
+        return match chars.next() {
+            Some(c) if c.is_alphanumeric() || matches!(c, '_' | '$' | '\\' | '\'' | '"') => true,
+            Some('.') => chars.next().is_some_and(|c| c.is_ascii_digit()),
+            _ => false,
+        };
     }
 }
 

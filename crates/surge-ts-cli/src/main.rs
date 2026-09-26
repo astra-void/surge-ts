@@ -1560,5 +1560,6 @@ fn jsx_mode_to_string(jsx: &surge_ts_config::JsxMode) -> &'static str {
         surge_ts_config::JsxMode::React => "react",
         surge_ts_config::JsxMode::ReactJsx => "react-jsx",
         surge_ts_config::JsxMode::ReactJsxDev => "react-jsxdev",
+        surge_ts_config::JsxMode::ReactNative => "react-native",
     }
 }

@@ -42,6 +42,26 @@ struct Deferred {
 pub enum DeferredType {
     IndexedAccess { object: Type, index: Type },
     Keyof(Type),
+    /// A generic mapped type (`isGenericMappedType`) in the one template shape
+    /// surge defers, `{ [P in keys]: object[P] }`. It is an object type in
+    /// tsc, not a type variable: it has no constraint surge computes, and
+    /// relates only through the mapped-type arms of relater.go.
+    Mapped {
+        keys: Type,
+        object: Type,
+        modifiers: MappedModifiers,
+        /// `getCombinedMappedTypeOptionality` of the modifiers type (the `T`
+        /// of `keyof T`), which a mapping that leaves `?` alone inherits.
+        modifiers_optionality: i8,
+    },
+}
+
+/// A mapped type's `readonly` and `?` modifiers (`getMappedTypeModifiers`):
+/// `1` adds one, `-1` removes it, `0` leaves the source's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MappedModifiers {
+    pub readonly: i8,
+    pub optional: i8,
 }
 
 /// What a target-side rule of a deferred type admits: the types a source has
@@ -205,6 +225,24 @@ pub fn deferred_type(parameter: &TypeParameterType) -> Option<DeferredType> {
 /// when an operand is not something the deferred type can be built from (a
 /// placeholder, the sentinel, a key that is no key type).
 pub fn indexed_access_variable(object: &Type, index: &Type) -> Option<Type> {
+    // `getSimplifiedIndexedAccessType` over a generic mapped object:
+    // `substituteIndexedMappedType` reads `{ [P in K]: X[P] }[I]` as `X[I]`,
+    // optional when the mapping adds `?` or its modifiers type does.
+    if let Some(DeferredType::Mapped {
+        object: template_object,
+        modifiers,
+        modifiers_optionality,
+        ..
+    }) = mapped_type(object)
+    {
+        let substituted = indexed_access_variable(&template_object, index)?;
+        let optional = modifiers.optional > 0 || modifiers_optionality > 0;
+        return Some(if optional && crate::strict_null_checks() {
+            crate::union_type(vec![substituted, Type::Undefined])
+        } else {
+            substituted
+        });
+    }
     let mut bases = variable_bases(object)?;
     bases.extend(index_bases(index)?);
     let object_name = object.name();
@@ -223,10 +261,86 @@ pub fn indexed_access_variable(object: &Type, index: &Type) -> Option<Type> {
     )
 }
 
-/// tsc's deferred `keyof operand` over a type variable `operand`.
+/// tsc's deferred `keyof operand` over a type variable `operand`. The keys of
+/// a generic mapped type are not deferred: `getIndexTypeForMappedType`
+/// answers its constraint.
 pub fn keyof_variable(operand: &Type) -> Option<Type> {
+    if let Some(DeferredType::Mapped { keys, .. }) = mapped_type(operand) {
+        return Some(keys);
+    }
     let bases = variable_bases(operand)?;
     deferred_variable(DeferredType::Keyof(operand.clone()), format!("keyof {}", operand.name()), bases)
+}
+
+/// tsc's generic mapped type `{ [P in keys]: object[P] }` over a generic key
+/// set, deferred for as long as the variables it is built from. `None` when
+/// `keys` or `object` is not something it can be built from.
+pub fn mapped_variable(
+    keys: &Type,
+    object: &Type,
+    modifiers: MappedModifiers,
+    modifiers_type: Option<&Type>,
+    name: String,
+) -> Option<Type> {
+    let mut bases = variable_bases(keys)?;
+    bases.extend(variable_bases(object)?);
+    let modifiers_optionality = modifiers_type.map_or(0, combined_mapped_optionality);
+    deferred_variable(
+        DeferredType::Mapped {
+            keys: keys.clone(),
+            object: object.clone(),
+            modifiers,
+            modifiers_optionality,
+        },
+        name,
+        bases,
+    )
+}
+
+/// What `ty` is built from when it is a generic mapped type.
+pub fn mapped_type(ty: &Type) -> Option<DeferredType> {
+    let Type::TypeParameter(parameter) = ty else {
+        return None;
+    };
+    deferred_type(parameter).filter(|kind| matches!(kind, DeferredType::Mapped { .. }))
+}
+
+/// `getCombinedMappedTypeOptionality`: the `?` a mapping adds (`1`) or
+/// removes (`-1`), or, when it leaves `?` alone, its modifiers type's.
+pub fn combined_mapped_optionality(ty: &Type) -> i8 {
+    match mapped_type(ty) {
+        Some(DeferredType::Mapped {
+            modifiers,
+            modifiers_optionality,
+            ..
+        }) => {
+            if modifiers.optional != 0 {
+                modifiers.optional
+            } else {
+                modifiers_optionality
+            }
+        }
+        _ => 0,
+    }
+}
+
+/// The modifiers type of a mapping over `keys` (`getModifiersTypeFromMappedType`):
+/// the `T` of `keyof T`, directly or as the constraint of a key parameter.
+pub fn mapped_modifiers_type(keys: &Type) -> Option<Type> {
+    let Type::TypeParameter(parameter) = keys else {
+        return None;
+    };
+    match deferred_type(parameter) {
+        Some(DeferredType::Keyof(operand)) => Some(operand),
+        Some(_) => None,
+        None => match active_constraint(parameter)?? {
+            Type::TypeParameter(constraint) => match deferred_type(&constraint)? {
+                DeferredType::Keyof(operand) => Some(operand),
+                _ => None,
+            },
+            _ => None,
+        },
+    }
 }
 
 fn deferred_variable(kind: DeferredType, name: String, bases: Vec<(u32, Arc<str>)>) -> Option<Type> {
@@ -337,6 +451,10 @@ fn deferred_constraint(kind: &DeferredType) -> Option<Option<Type>> {
             }
             Some(indexed_access_lookup(&object, &index, false)?.map(crate::union_type))
         }
+        // An object type, whose apparent members come from the modifiers
+        // type's constraint (`resolveMappedTypeMembers`); surge does not
+        // resolve them.
+        DeferredType::Mapped { .. } => None,
     }
 }
 

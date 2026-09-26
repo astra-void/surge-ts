@@ -1665,7 +1665,8 @@ pub(crate) struct JsDocIndex {
     /// A variable statement's `@satisfies`, by the initializer's start.
     initializer_satisfies: std::collections::HashMap<u32, (ParsedType, TextSpan)>,
     /// `/** @type {T} */ o.x = e`: an assignment declaration typed `T`, by
-    /// the assigned value's span.
+    /// the assigned value's span; likewise a property assignment's value
+    /// (`{ /** @type {T} */ x: e }`).
     assignment_types: std::collections::HashMap<(u32, u32), (ParsedType, TextSpan)>,
     /// `/** @type {T} */ return e`: `e as T`, by the return statement's start.
     return_casts: std::collections::HashMap<u32, (ParsedType, TextSpan, bool)>,
@@ -1749,10 +1750,12 @@ pub(crate) fn declared_type_at(start: u32) -> Option<(ParsedType, TextSpan)> {
 
 /// Whether the JSDoc `@type` of the declaration at `start` gives a function
 /// initializer a contextual `this`: `None` without one, `Some(false)` for a
-/// function type with no `this` parameter.
+/// function type with no `this` parameter or for JSDoc's `Function`, which has
+/// no signature at all.
 pub(crate) fn declared_type_supplies_this(start: u32) -> Option<bool> {
     declared_type_at(start).map(|(ty, _)| match ty {
         ParsedType::Function(function) => function.parameters.iter().any(|parameter| parameter.is_this),
+        ParsedType::Named(named) => !is_jsdoc_function_type(&named),
         _ => true,
     })
 }
@@ -2013,6 +2016,33 @@ fn signature_takes(ty: &ParsedType, required: usize) -> Option<bool> {
         | ParsedType::BooleanLiteral(_)
         | ParsedType::Array(_)
         | ParsedType::Tuple(_) => Some(false),
+        ParsedType::Named(named) if is_jsdoc_function_type(named) => Some(false),
+        _ => None,
+    }
+}
+
+/// `getIntendedTypeFromJSDocTypeReference`: JSDoc's `Function` (or
+/// `function`) is the global `Function` whatever else is in scope, and that
+/// declares no call signature.
+fn is_jsdoc_function_type(named: &crate::ParsedNamedType) -> bool {
+    matches!(named.name.as_str(), "Function" | "function")
+}
+
+/// `getSingleCallSignature` of a written type: a function type, or a type
+/// literal whose one member is a call signature.
+fn single_call_signature(ty: &ParsedType) -> Option<&ParsedFunctionType> {
+    match ty {
+        ParsedType::Function(function) => Some(function.as_ref()),
+        ParsedType::Object(object)
+            if object.properties.is_empty()
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none()
+                && object.call_signature_overloads.is_empty()
+                && object.construct_signature.is_none()
+                && object.construct_signature_overloads.is_empty() =>
+        {
+            object.call_signature.as_deref()
+        }
         _ => None,
     }
 }
@@ -2236,6 +2266,48 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
         } else if tag.ty.as_ref().is_some_and(|ty| signature_takes(ty, 0).is_none()) {
             self.index.opaque_full_signatures.insert(host.start());
         }
+        if let Some(signature) = tag.ty.as_ref().and_then(single_call_signature) {
+            self.apply_full_signature(host, signature, tag.span);
+        }
+    }
+
+    /// `getParameterTypeOfFullSignature` and `getReturnTypeOfFullSignature`:
+    /// each parameter takes the type of the full signature's parameter at its
+    /// position, and the return type is the signature's. Callers see the full
+    /// signature itself (`getSignaturesOfSymbol`), which the declaration's own
+    /// signature reproduces only when the parameters pair one to one; a
+    /// generic or rest signature, or one of another length, is left to the
+    /// declaration. So is a signature the function's own tags already type,
+    /// which the reparser would not have made its full signature.
+    fn apply_full_signature(
+        &mut self,
+        host: FunctionHost<'_, '_>,
+        signature: &ParsedFunctionType,
+        span: TextSpan,
+    ) {
+        let params = host.params();
+        let start = host.start();
+        let parameters: Vec<&ParsedFunctionTypeParameter> =
+            signature.parameters.iter().filter(|parameter| !parameter.is_this).collect();
+        if !signature.type_parameters.is_empty()
+            || params.rest.is_some()
+            || params.items.len() != parameters.len()
+            || parameters.iter().any(|parameter| parameter.rest)
+            || self.index.returns.contains_key(&start)
+            || self.index.type_parameters.contains_key(&start)
+            || params.items.iter().any(|parameter| {
+                self.index.parameters.get(&parameter.span.start).is_some_and(|entry| entry.ty.is_some())
+            })
+        {
+            return;
+        }
+        for (parameter, typed) in params.items.iter().zip(parameters) {
+            let entry = self.index.parameters.entry(parameter.span.start).or_default();
+            entry.ty = Some((typed.ty.clone(), span));
+            entry.optional |= typed.optional;
+        }
+        self.index.returns.insert(start, ((*signature.return_type).clone(), span));
+        self.mark_typed(host);
     }
 
     /// tsc's `checkUnmatchedJSDocParameters` for a `@param` naming no
@@ -2402,7 +2474,10 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
         if let Some(comment) = self.last_comment(it.span.start, false) {
             self.host_modifiers(it.span.start, &comment);
             self.host_function(FunctionHost::Function(&it.value), &comment);
-            if it.kind != MethodDefinitionKind::Get {
+            // An accessor or a constructor keeps the full signature, but its
+            // check never reads it (`checkAccessorDeclaration`,
+            // `checkConstructorDeclaration`).
+            if it.kind == MethodDefinitionKind::Method {
                 self.check_full_signature(FunctionHost::Function(&it.value), &comment);
             }
             if it.kind == MethodDefinitionKind::Get && it.value.return_type.is_none() {
@@ -2437,11 +2512,21 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
                 if let Some(host) = function_of_expression(&it.value) {
                     self.host_function(host, &comment);
                     // A method is its own host; a property's `@type` types the
-                    // property.
-                    if it.method || it.kind == oxc_ast::ast::PropertyKind::Set {
+                    // property, and an accessor's is never checked.
+                    if it.method {
                         self.check_full_signature(host, &comment);
                     }
                 }
+            }
+            if !it.method
+                && it.kind == oxc_ast::ast::PropertyKind::Init
+                && let Some(ty) = Self::type_tag(&comment)
+            {
+                let value = it.value.span();
+                self.index
+                    .assignment_types
+                    .entry((value.start, value.end))
+                    .or_insert((lowered_with_optionality(ty), ty.span));
             }
         }
         walk::walk_object_property(self, it);

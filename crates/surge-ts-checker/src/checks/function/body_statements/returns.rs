@@ -65,6 +65,7 @@ pub(crate) fn check_function_return_statement(
     ctx: &mut CheckerContext,
 ) {
     let Some(expression) = return_statement.expression.as_ref() else {
+        check_bare_return(return_statement.span, return_type, ctx);
         return;
     };
 
@@ -282,6 +283,55 @@ pub(crate) fn check_function_return_statement(
             }
         }
     }
+}
+
+/// tsc's `checkReturnStatement` on a `return;`: the value is `undefined`,
+/// related to the unwrapped annotation under `strictNullChecks` and to a `never`
+/// annotation without it. An unannotated or contextually typed body has no
+/// annotation to relate it to.
+fn check_bare_return(
+    span: Option<surge_ts_syntax::TextSpan>,
+    return_type: Option<&Type>,
+    ctx: &mut CheckerContext,
+) {
+    let Some(return_type) = return_type else {
+        return;
+    };
+    if ctx.in_contextual_return_body()
+        || (!ctx.options.strict_null_checks && !matches!(return_type.peeled(), Type::Never))
+    {
+        return;
+    }
+    let target = if ctx.in_generator_body {
+        let Some(declared) = generator_return_type_argument(return_type) else {
+            return;
+        };
+        declared
+    } else {
+        return_type.clone()
+    };
+    let target = if ctx.in_async_body {
+        crate::checks::call::awaited_type(&target)
+    } else {
+        target
+    };
+    if is_assignable_to(&Type::Undefined, &target)
+        || crate::checks::function::type_contains_degradation(&target)
+    {
+        return;
+    }
+    let reported_target = crate::checks::expr::reported_relation_target(&Type::Undefined, &target);
+    let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+        &Type::Undefined,
+        &reported_target,
+        "undefined",
+        &reported_target.name(),
+        ctx.file_name.clone(),
+    );
+    ctx.push(match span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
 }
 
 /// The `TReturn` of a generator's declared `Generator<T, TReturn, TNext>` (or

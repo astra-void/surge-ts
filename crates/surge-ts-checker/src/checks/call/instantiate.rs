@@ -342,12 +342,17 @@ fn fold_overload_alternative_parameters<'a>(
 /// parameter is a rest tuple (`...params: [TClient] | [TClient, Config<T>]`):
 /// the tuple arm with the call's arity is selected and its element at the
 /// argument's offset is the inference target. `None` when the last parameter
-/// is not such a tuple, or no arm has that arity.
+/// is not such a tuple, or no arm has that arity. Only a rest parameter
+/// spreads over positions (`tryGetTypeAtPosition`): `f<T>(x: [T])` takes its
+/// one argument whole.
 fn rest_tuple_parameter_element(
     function_signature: &FunctionSignatureInfo,
     arity: usize,
     index: usize,
 ) -> Option<&ParsedType> {
+    if !function_signature.rest {
+        return None;
+    }
     let last = function_signature.parameter_types.len().checked_sub(1)?;
     if index < last {
         return None;
@@ -1781,6 +1786,7 @@ pub(crate) fn infer_type_argument_substitution(
         .then(|| function_signature.parameter_types.len().checked_sub(1))
         .flatten();
     let mut rest_tuple_bound = false;
+    let mut return_mapper: Option<Option<TypeParameterSubstitution>> = None;
     let mut deferred_callbacks: Vec<DeferredCallback<'_>> = Vec::new();
     // The written parameter each argument is inferred against, `None` where
     // the declaration writes none.
@@ -1868,6 +1874,15 @@ pub(crate) fn infer_type_argument_substitution(
             expected_return_type,
             ctx,
         );
+        let contextual_return = callback_contextual_return_type(
+            parameter_type,
+            &argument.expression,
+            function_signature,
+            expected_return_type,
+            &substitution,
+            &mut return_mapper,
+            ctx,
+        );
         let inferred_argument = match array_literal_tuple_inference(
             parameter_type,
             &function_signature.type_parameters,
@@ -1879,8 +1894,11 @@ pub(crate) fn infer_type_argument_substitution(
             written_tuple_argument_inference(parameter_type, &argument.expression, symbols, ctx)
         }) {
             Some(tuple) => InferredExpression::Known(tuple),
-            None => crate::infer::expression::with_literal_element_context(literal_context, || {
-                infer_expression(&argument.expression, symbols, ctx)
+            None => crate::infer::expression::with_literal_element_context(literal_context, || match contextual_return {
+                Some(contextual) => crate::infer::expression::with_callback_contextual_return(contextual, || {
+                    infer_expression(&argument.expression, symbols, ctx)
+                }),
+                None => infer_expression(&argument.expression, symbols, ctx),
             }),
         };
         ctx.truncate_diagnostics(diagnostics_before);
@@ -2024,6 +2042,101 @@ fn callback_parameter_annotation(
         }
         _ => None,
     }
+}
+
+/// tsc's `inferTypeArguments` return mapper: what the call's contextual type,
+/// inferred to the declared return type on its own (`InferencePriorityNone`),
+/// binds. `None` when it binds nothing, as tsc leaves `returnMapper` unset.
+fn return_mapper_substitution(
+    function_signature: &FunctionSignatureInfo,
+    expected_return_type: Option<&Type>,
+    ctx: &mut CheckerContext,
+) -> Option<TypeParameterSubstitution> {
+    let expected_return_type = expected_return_type?;
+    let declared_return_type = function_signature.return_type.as_ref()?;
+    let mut mapper = TypeParameterSubstitution::new();
+    for type_parameter in &function_signature.type_parameters {
+        mapper.insert_placeholder(type_parameter.name.clone(), Type::type_parameter(&type_parameter.name));
+    }
+    let diagnostics_before = ctx.diagnostics().len();
+    let outer_from_return = INFERRING_FROM_RETURN_TYPE.replace(true);
+    with_declaring_scope(function_signature, ctx, |ctx| {
+        collect_inferred_type_argument(declared_return_type, expected_return_type, &mut mapper, false, ctx, 0);
+    });
+    INFERRING_FROM_RETURN_TYPE.set(outer_from_return);
+    ctx.truncate_diagnostics(diagnostics_before);
+    mapper.clear_inference_candidates();
+    let binds_any = function_signature
+        .type_parameters
+        .iter()
+        .any(|type_parameter| mapper.get(&type_parameter.name).is_some_and(|bound| !bound.is_degraded()));
+    binds_any.then_some(mapper)
+}
+
+/// The contextual return type a non-context-sensitive arrow argument's
+/// expression body is checked under (tsc's `instantiateContextualType`): the
+/// callback's written return type with the inferences made so far, and the
+/// return mapper's for type parameters nothing has inferred yet. A literal it
+/// names keeps its type, so `const x: Promise<I> = g(() => ({ name: 'test' }))`
+/// infers `{ name: 'test' }` rather than widening the name to `string`. `None`
+/// where a type parameter stays open, which instantiates nothing.
+fn callback_contextual_return_type(
+    parameter_type: &ParsedType,
+    argument: &ParsedExpression,
+    function_signature: &FunctionSignatureInfo,
+    expected_return_type: Option<&Type>,
+    substitution: &TypeParameterSubstitution,
+    return_mapper: &mut Option<Option<TypeParameterSubstitution>>,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let ParsedExpression::ArrowFunction(arrow) = argument else {
+        return None;
+    };
+    if arrow.is_async
+        || arrow.is_generator
+        || !arrow.type_parameters.is_empty()
+        || arrow.return_type.is_some()
+        || !matches!(arrow.body, surge_ts_syntax::ParsedArrowFunctionBody::Expression(_))
+    {
+        return None;
+    }
+    let callback = callback_parameter_annotation(parameter_type)?;
+    let return_type = callback.return_type.as_ref();
+    if !function_signature
+        .type_parameters
+        .iter()
+        .any(|type_parameter| parsed_type_mentions_name(return_type, &type_parameter.name))
+    {
+        return None;
+    }
+    let mapper = return_mapper
+        .get_or_insert_with(|| return_mapper_substitution(function_signature, expected_return_type, ctx))
+        .as_ref()?;
+    let mut contextual_substitution = substitution.clone_with_reason(TypeCopyReason::CallResolution);
+    for type_parameter in &function_signature.type_parameters {
+        let name = type_parameter.name.as_str();
+        if contextual_substitution.get(name).is_some_and(|bound| !bound.is_degraded()) {
+            continue;
+        }
+        if let Some(returned) = mapper.get(name).filter(|returned| !returned.is_degraded()) {
+            contextual_substitution.set(name.to_string(), returned.clone(), false);
+        }
+    }
+    let contextual = with_declaring_scope(function_signature, ctx, |ctx| {
+        map_parsed_type_with_substitution(return_type.clone(), ctx, &contextual_substitution)
+    });
+    is_settled_contextual_type(&contextual).then_some(contextual)
+}
+
+/// A contextual type with no hole left in it, a reference's arguments
+/// included, so a literal is kept only by what the call has really inferred.
+fn is_settled_contextual_type(ty: &Type) -> bool {
+    !contains_unresolved_hole(ty)
+        && match ty {
+            Type::Reference(reference) => reference.arguments.iter().all(is_settled_contextual_type),
+            Type::Union(union) => union.types().iter().all(is_settled_contextual_type),
+            _ => true,
+        }
 }
 
 /// An arrow argument whose parameters this signature is the one to type: at

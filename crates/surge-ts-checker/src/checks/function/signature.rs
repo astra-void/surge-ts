@@ -411,15 +411,19 @@ pub(crate) fn check_annotated_parameter_initializer(
     let (Some(_), Some(initializer)) = (&parameter.declared_type, &parameter.initializer) else {
         return;
     };
-    let _ = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
+    let target_span = binding_name_span(&parameter.binding_name);
+    let checked = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
         initializer,
         parameter.initializer_span,
-        binding_name_span(&parameter.binding_name),
+        target_span,
         Some(parameter_type),
         crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
         symbols,
         ctx,
     );
+    if let InferredExpression::Known(initializer_type) = checked {
+        crate::checks::var::report_initializer_mismatch(&initializer_type, parameter_type, target_span, ctx);
+    }
 }
 
 /// A parameter's binding element reads a property that must be accessible where
@@ -1427,6 +1431,11 @@ impl<'p> ParameterListResolver<'p> {
                 | InferredExpression::MissingProperty { .. }
                 | InferredExpression::Unknown => Type::Unknown,
             }
+        } else if let Some(implied) = (!parameter.rest)
+            .then(|| binding_pattern_implied_type(&parameter.binding_name))
+            .flatten()
+        {
+            map_parsed_type_with_substitution(implied, ctx, substitution)
         } else {
             Type::Any
         };
@@ -1488,6 +1497,99 @@ impl<'p> ParameterListResolver<'p> {
 
     fn resolved_type(&self, index: usize) -> Type {
         self.types[index].clone().unwrap_or(Type::Any)
+    }
+}
+
+/// tsc's `getTypeFromBindingPattern`, the type an unannotated destructured
+/// parameter with no initializer or contextual type is given
+/// (`getTypeForVariableLikeDeclaration`): an object pattern implies an object of
+/// its named elements, an array pattern a tuple of its positions, each `any`
+/// unless it is itself a pattern. An element with a default is optional and
+/// read as `any` where tsc reads the default's widened type. `None` where the
+/// implied type is not a plain object or tuple: a computed key (tsc leaves it
+/// out and stops checking excess properties against the pattern), an array
+/// pattern of nothing but a rest (`Iterable<any>`), and a rest after an
+/// optional position, which an open tuple cannot state.
+fn binding_pattern_implied_type(binding: &ParsedBindingName) -> Option<ParsedType> {
+    match binding {
+        ParsedBindingName::ObjectPattern(pattern) => {
+            let mut properties = Vec::with_capacity(pattern.elements.len());
+            for element in &pattern.elements {
+                let ty = if element.has_default {
+                    ParsedType::Any
+                } else {
+                    binding_element_implied_type(&element.binding_name)?
+                };
+                properties.push(surge_ts_syntax::ParsedObjectTypeProperty {
+                    name: element.property_name.clone(),
+                    name_span: None,
+                    ty,
+                    optional: element.has_default,
+                    is_method: false,
+                    readonly: false,
+                    write_ty: None,
+                });
+            }
+            Some(ParsedType::Object(Arc::new(surge_ts_syntax::ParsedObjectType {
+                properties,
+                string_index_type: pattern.rest.is_some().then(|| Box::new(ParsedType::Any)),
+                number_index_type: None,
+                call_signature: None,
+                call_signature_overloads: Vec::new(),
+                construct_signature: None,
+                construct_signature_overloads: Vec::new(),
+                non_primitive: false,
+                display_name: None,
+            })))
+        }
+        ParsedBindingName::ArrayPattern(pattern) => {
+            if pattern.elements.is_empty() {
+                return None;
+            }
+            let has_default = |index: usize| pattern.defaults.get(index).copied().unwrap_or(false);
+            let min_length = (0..pattern.elements.len())
+                .rev()
+                .find(|&index| pattern.elements[index].is_some() && !has_default(index))
+                .map_or(0, |index| index + 1);
+            let mut elements = Vec::with_capacity(pattern.elements.len());
+            for (index, element) in pattern.elements.iter().enumerate() {
+                let ty = match element {
+                    Some(element) if !has_default(index) => binding_element_implied_type(element)?,
+                    _ => ParsedType::Any,
+                };
+                elements.push(if index < min_length {
+                    ty
+                } else {
+                    ParsedType::Union(Arc::new(vec![ParsedType::Undefined, ty]))
+                });
+            }
+            let Some(rest) = pattern.rest.as_deref() else {
+                return Some(ParsedType::Tuple(Arc::new(elements)));
+            };
+            if min_length < elements.len() || !matches!(rest, ParsedBindingName::Identifier { .. }) {
+                return None;
+            }
+            let mut elements: Vec<surge_ts_syntax::ParsedTupleElement> = elements
+                .into_iter()
+                .map(surge_ts_syntax::ParsedTupleElement::Fixed)
+                .collect();
+            elements.push(surge_ts_syntax::ParsedTupleElement::Rest(
+                ParsedType::Array(Arc::new(ParsedType::Any)),
+                None,
+            ));
+            Some(ParsedType::VariadicTuple(Arc::new(elements)))
+        }
+        ParsedBindingName::Identifier { .. } | ParsedBindingName::Unsupported { .. } => None,
+    }
+}
+
+/// tsc's `getTypeFromBindingElement` for an element with no default: a nested
+/// pattern's implied type, else `any`.
+fn binding_element_implied_type(binding: &ParsedBindingName) -> Option<ParsedType> {
+    match binding {
+        ParsedBindingName::Identifier { .. } => Some(ParsedType::Any),
+        ParsedBindingName::Unsupported { .. } => None,
+        pattern => binding_pattern_implied_type(pattern),
     }
 }
 

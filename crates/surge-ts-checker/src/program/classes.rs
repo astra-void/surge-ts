@@ -1605,6 +1605,7 @@ pub(crate) fn check_class_head_expressions(
         // so a function written as the decorator is checked as one whose
         // contextual type surge does not know.
         let legacy_decorators = ctx.options.experimental_decorators;
+        let class_type = symbols.get(&class.name).map(|symbol| symbol.ty.clone());
         for decorator in &class.decorators {
             if !super::forward_references::decorator_is_checked(decorator.target, legacy_decorators) {
                 continue;
@@ -1624,7 +1625,7 @@ pub(crate) fn check_class_head_expressions(
                 ctx.degraded_expected_type_depth -= 1;
             }
             if let crate::infer::InferredExpression::Known(decorator_type) = &decorator_type {
-                check_decorator_call(decorator_type, decorator, legacy_decorators, ctx);
+                check_decorator_call(decorator_type, decorator, legacy_decorators, class_type.as_ref(), ctx);
             }
         }
     });
@@ -1640,6 +1641,7 @@ fn check_decorator_call(
     decorator_type: &Type,
     decorator: &surge_ts_syntax::ParsedDecorator,
     legacy_decorators: bool,
+    class_type: Option<&Type>,
     ctx: &mut CheckerContext,
 ) {
     use surge_ts_syntax::ParsedDecoratorTarget as Target;
@@ -1683,6 +1685,11 @@ fn check_decorator_call(
         !too_many(signature) && argument_count(signature) >= surge_ts_types::min_argument_count(signature)
     };
     if signatures.iter().any(has_correct_arity) {
+        if legacy_decorators
+            && let [signature] = signatures.as_slice()
+        {
+            check_legacy_decorator_return(signature, decorator, class_type, ctx);
+        }
         return;
     }
     let file_name = ctx.file_name.clone();
@@ -1696,6 +1703,48 @@ fn check_decorator_call(
     // where they would be, the decorator's expression; too few, on the call.
     let span = if signatures.iter().all(too_many) { decorator.span } else { decorator.decorator_span };
     ctx.push(crate::spans::diagnostic_with_syntax_span(diagnostic, span));
+}
+
+/// tsc's `checkDecorator` return check under `experimentalDecorators`: what a
+/// class decorator returns replaces the class (`typeof C | void`, TS1270), and
+/// a property or parameter decorator returns nothing (`void`, TS1271). A
+/// method decorator's `TypedPropertyDescriptor<T>` needs the member's type and
+/// is not modelled; a return type that depends on inference is not decided.
+fn check_legacy_decorator_return(
+    signature: &surge_ts_types::FunctionType,
+    decorator: &surge_ts_syntax::ParsedDecorator,
+    class_type: Option<&Type>,
+    ctx: &mut CheckerContext,
+) {
+    use surge_ts_syntax::ParsedDecoratorTarget as Target;
+    let return_type = signature.return_type();
+    if matches!(return_type, Type::Any | Type::ErrorType)
+        || signature.type_parameter_head().is_some()
+        || crate::checks::function::type_contains_degradation(return_type)
+    {
+        return;
+    }
+    let file_name = ctx.file_name.clone();
+    let diagnostic = match decorator.target {
+        Target::Class => {
+            let Some(class_type) = class_type else {
+                return;
+            };
+            let expected = surge_ts_types::union_type(vec![Type::Void, class_type.clone()]);
+            if surge_ts_types::is_assignable_to(return_type, &expected) {
+                return;
+            }
+            Diagnostic::ts1270(return_type.name(), expected.name(), file_name)
+        }
+        Target::Property { .. } | Target::Parameter => {
+            if surge_ts_types::is_assignable_to(return_type, &Type::Void) {
+                return;
+            }
+            Diagnostic::ts1271(return_type.name(), file_name)
+        }
+        Target::Method { .. } => return,
+    };
+    ctx.push(crate::spans::diagnostic_with_syntax_span(diagnostic, decorator.span));
 }
 
 pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
@@ -1928,6 +1977,9 @@ fn constructor_writable_members(
 fn check_heritage_base_resolves(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
     for base in &class.extends {
         if base.name == surge_ts_syntax::EXPRESSION_HERITAGE_BASE {
+            if let Some(literal) = class.heritage_expression.as_deref().and_then(literal_base_type) {
+                report_non_constructor_base(&literal, base, ctx);
+            }
             continue;
         }
         if let Some((head, _)) = base.name.split_once('.') {
@@ -1936,6 +1988,10 @@ fn check_heritage_base_resolves(class: &ParsedClassDeclaration, ctx: &mut Checke
         }
         if ctx.symbols.get(&base.name).is_some() {
             check_base_is_constructor_type(base, ctx);
+            continue;
+        }
+        if base.name == "undefined" {
+            report_non_constructor_base(&Type::Undefined, base, ctx);
             continue;
         }
         // tsc's `checkAndReportErrorForUsingTypeAsValue`: a primitive keyword
@@ -2054,6 +2110,23 @@ fn check_base_is_constructor_type(base: &ParsedNamedType, ctx: &mut CheckerConte
     if constructable {
         return;
     }
+    report_non_constructor_base(&ty, base, ctx);
+}
+
+/// The type `checkExpression` gives a literal `extends` expression.
+fn literal_base_type(expression: &surge_ts_syntax::ParsedExpression) -> Option<Type> {
+    use surge_ts_syntax::ParsedExpression as Expression;
+    match expression {
+        Expression::StringLiteral(text) => Some(Type::StringLiteral(text.clone())),
+        Expression::NumberLiteral(text) => Some(Type::NumberLiteral(surge_ts_types::NumberLiteralType {
+            value: text.clone(),
+        })),
+        Expression::BooleanLiteral(value) => Some(Type::BooleanLiteral(*value)),
+        _ => None,
+    }
+}
+
+fn report_non_constructor_base(ty: &Type, base: &ParsedNamedType, ctx: &mut CheckerContext) {
     let diagnostic = Diagnostic::ts2507(ty.name(), ctx.file_name.clone());
     ctx.push(match base.span {
         Some(span) => diagnostic.with_span(convert_span(span)),

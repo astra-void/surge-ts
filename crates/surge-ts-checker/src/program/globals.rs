@@ -449,9 +449,11 @@ pub(crate) fn collect_function_signatures_from_statements(
         ctx.module_value_fallback = outer_fallback;
     }
     // Expando members are hoisted with the function they are written on, so a
-    // function declared earlier in the file can already read them.
-    crate::modules::exports::apply_expando_members(statements, symbols, ctx);
+    // function declared earlier in the file can already read them. A merged
+    // namespace's members come first: they are what a write to the same name
+    // assigns rather than declares.
     crate::modules::exports::apply_namespace_members_to_declarations(statements, symbols);
+    crate::modules::exports::apply_expando_members(statements, symbols, ctx);
     ctx.collecting_signatures = outer_collecting_signatures;
 }
 

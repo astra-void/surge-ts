@@ -528,6 +528,7 @@ fn parse_jsx_option(
         "react" => Some(JsxMode::React),
         "react-jsx" => Some(JsxMode::ReactJsx),
         "react-jsxdev" => Some(JsxMode::ReactJsxDev),
+        "react-native" => Some(JsxMode::ReactNative),
         other => {
             diagnostics.push(ConfigDiagnostic {
                 code: ConfigDiagnosticCode::InvalidCompilerOptionValue,

@@ -53,7 +53,7 @@ impl IndexKind {
 /// tsc's `isNumericLiteralName`: the name reads back unchanged through a
 /// number (`ToString(ToNumber(name)) == name`). JavaScript writes a number
 /// outside `[1e-6, 1e21)` with an exponent, which no such name can match.
-fn is_numeric_literal_name(name: &str) -> bool {
+pub(crate) fn is_numeric_literal_name(name: &str) -> bool {
     if matches!(name, "Infinity" | "-Infinity" | "NaN") {
         return true;
     }
@@ -89,16 +89,42 @@ impl IndexConstraintDeclaration<'_> {
     }
 }
 
+/// tsc checks a merged interface once, over the members of every fragment
+/// (`checkInterfaceDeclaration`), and reports a property on its first
+/// declaration (`checkIndexConstraintForProperty`, `prop.ValueDeclaration`).
+/// Checked here fragment by fragment: one without an index signature of its
+/// own still declares members another fragment's signature constrains, and a
+/// member an earlier fragment already declared is that fragment's to report.
 pub(crate) fn check_interface_index_constraints(
     interface: &ParsedInterfaceDeclaration,
     ctx: &mut CheckerContext,
 ) {
+    let merged = match ctx.lookup_type_declaration(&interface.name) {
+        Some(crate::symbols::TypeDeclarationInfo::Interface(info)) => Some(info.body.clone()),
+        _ => None,
+    };
+    let merged_has_index = merged
+        .as_ref()
+        .is_some_and(|body| body.string_index_type.is_some() || body.number_index_type.is_some());
     if interface.string_index_type.is_none()
         && interface.number_index_type.is_none()
         && interface.extends.is_empty()
+        && !merged_has_index
     {
         return;
     }
+    let declaration_start = interface.name_span.map_or(0, |span| span.start);
+    let first_declared_here = |name: &str| {
+        merged.as_ref().is_none_or(|body| {
+            body.members
+                .iter()
+                .zip(body.member_fragments.iter())
+                .find(|(member, _)| member.name == name)
+                .is_none_or(|(_, fragment)| {
+                    fragment.declaration_start == declaration_start && *fragment.file_name == *ctx.file_name
+                })
+        })
+    };
     let declaration = IndexConstraintDeclaration {
         name: &interface.name,
         name_span: interface.name_span,
@@ -106,6 +132,7 @@ pub(crate) fn check_interface_index_constraints(
         own_members: interface
             .members
             .iter()
+            .filter(|member| first_declared_here(&member.name))
             .map(|member| (member.name.as_str(), member.name_span))
             .collect(),
         string_index_span: interface.string_index_span,
@@ -241,7 +268,10 @@ pub(crate) fn check_type_literal_index_constraints(
         let Some(property) = object.properties.get(member.name.as_str()) else {
             continue;
         };
-        if crate::checks::function::type_contains_degradation(&property.ty) {
+        // As for an interface: only a member surge could not model at all is
+        // skipped. A library type (`String`) carries degraded members deep
+        // inside while its relation to the index type is still decided.
+        if property.ty.is_unmodelled() {
             continue;
         }
         let property_type = if property.optional

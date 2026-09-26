@@ -425,7 +425,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     p.bump_any(); // bump `of`
                     return matches!(p.cur_kind(), Kind::Eq | Kind::Semicolon | Kind::Colon);
                 }
-                kind.is_binding_identifier()
+                // surge: tsgo's `nextTokenIsBindingIdentifierOrStartOfDestructuringOnSameLine`
+                // also starts the declaration at an object pattern (`for (using {} of xs)`),
+                // which its checker rejects as TS1492.
+                kind.is_binding_identifier() || kind == Kind::LCurly
             })
         {
             return self.parse_using_declaration_for_statement(

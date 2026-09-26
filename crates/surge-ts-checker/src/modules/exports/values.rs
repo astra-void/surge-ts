@@ -661,6 +661,11 @@ pub(crate) fn apply_expando_members(
         .collect();
     let mut containers: std::collections::HashMap<&str, Option<ExpandoContainer>> =
         std::collections::HashMap::new();
+    // `bindDeferredExpandoAssignment` declares an expando only where no other
+    // declaration of the name exists: a write to a merged namespace's export
+    // is an assignment to it, checked against its declared type.
+    let mut declared_elsewhere: std::collections::HashMap<&str, Vec<String>> =
+        std::collections::HashMap::new();
     for (name, property_name, value) in members {
         let container = *containers.entry(name).or_insert_with(|| {
             let symbol = exportable_values.get_own_shared(name)?;
@@ -678,6 +683,12 @@ pub(crate) fn apply_expando_members(
             _ => continue,
         };
         if container == ExpandoContainer::Callable && call_signature.is_none() {
+            continue;
+        }
+        let declared = declared_elsewhere
+            .entry(name)
+            .or_insert_with(|| properties.keys().map(|key| key.to_string()).collect());
+        if declared.iter().any(|declared| declared == property_name) {
             continue;
         }
         let Some((value_type, readonly)) = expando_member_type(&value, exportable_values, ctx) else {

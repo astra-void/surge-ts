@@ -2527,20 +2527,34 @@ fn is_global_object_interface(object: &surge_ts_types::ObjectType) -> bool {
 /// declare, reported once. It runs only after the written properties have
 /// checked out — a property that fails against its expected type reports
 /// instead — and it takes precedence over the missing-required report.
+/// Only an empty target (`isEmptyResolvedType`: no properties, signatures or
+/// index signatures) accepts every property; a number index answers the
+/// numeric names alone (`isKnownProperty`, `getApplicableIndexInfoForName`).
+/// A computed key surge could not name stays out of a target that declares
+/// no property: tsc turns a key typed as a union or enum into an index
+/// signature of the literal (`checkObjectLiteral`), which is never excess.
 fn report_excess_property(
     properties: &[ParsedObjectProperty],
     expected_object_type: &surge_ts_types::ObjectType,
     fallback_span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) -> bool {
+    let is_empty_target = expected_object_type.properties.is_empty()
+        && expected_object_type.number_index_type.is_none()
+        && expected_object_type.call_signature().is_none()
+        && expected_object_type.construct_signature().is_none();
     if expected_object_type.allows_string_index_access()
-        || expected_object_type.properties.is_empty()
+        || is_empty_target
         || is_global_object_interface(expected_object_type)
     {
         return false;
     }
     let Some(property) = properties.iter().find(|property| {
-        !property.is_spread && !expected_object_type.contains_property(&property.name)
+        !property.is_spread
+            && !expected_object_type.contains_property(&property.name)
+            && !(expected_object_type.number_index_type.is_some()
+                && crate::program::is_numeric_literal_name(&property.name))
+            && !(expected_object_type.properties.is_empty() && property.computed_key.is_some())
     }) else {
         return false;
     };
@@ -2598,8 +2612,8 @@ fn evaluate_object_literal_with_expected_type(
     let has_spread = properties.iter().any(|property| property.is_spread);
 
     // Set when a property the literal *writes* is compared against an expected
-    // member surge could not model. tsc reports one error per literal and stops:
-    // a written property that fails is reported at the property, and the
+    // member surge could not model. tsc reports the written properties that
+    // fail, each at the property, and then nothing else for the literal: the
     // missing-required-property report never happens. When the member is a
     // degradation sentinel the comparison passes permissively, so a missing
     // property below would be reported *instead* of the property error tsc
@@ -2608,6 +2622,10 @@ fn evaluate_object_literal_with_expected_type(
     let mut degraded_property_comparison = false;
     let mut exact_optional_mismatch = false;
     let mut explicit_properties: Vec<(&str, Option<SyntaxTextSpan>)> = Vec::new();
+    // `elaborateObjectLiteral` relates every property and reports each one
+    // that fails (`elaborateElement`); once one has, the literal as a whole is
+    // not reported (no excess or missing property).
+    let mut elaborated_property_failure = false;
 
     for property in properties {
         if property.is_spread {
@@ -2621,11 +2639,15 @@ fn evaluate_object_literal_with_expected_type(
             explicit_properties.push((&property.name, property.name_span));
         }
         record_object_literal_property_check();
+        // `getIndexedAccessTypeOrUndefined(target, nameType)`: a numeric name
+        // prefers the number index signature (`findApplicableIndexInfo`).
         let expected_property = if let Some(expected_property) =
             expected_object_type.get_property(&property.name).cloned()
         {
             expected_property
-        } else if let Some(index_type) = expected_object_type.string_index_type.as_deref().cloned()
+        } else if let Some(index_type) = expected_object_type
+            .applicable_index_type(crate::program::is_numeric_literal_name(&property.name))
+            .cloned()
         {
             ObjectProperty::required(index_type)
         } else {
@@ -2805,29 +2827,27 @@ fn evaluate_object_literal_with_expected_type(
                                 choose_span(property.span, fallback_span),
                             ),
                         ));
-                        record_object_literal_own_type(properties, &inferred_property_types, expected_object_type, fallback_span, ctx);
-                        return InferredExpression::Unknown;
-                    }
-                    let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
-                        &actual_type,
-                        &expected_property_type,
-                        &actual_type_name,
-                        &expected_type_name,
-                        ctx.file_name.clone(),
-                    );
+                    } else {
+                        let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
+                            &actual_type,
+                            &expected_property_type,
+                            &actual_type_name,
+                            &expected_type_name,
+                            ctx.file_name.clone(),
+                        );
 
-                    ctx.push(diagnostic_with_syntax_span(
-                        diagnostic,
-                        choose_span(
-                            property.name_span,
+                        ctx.push(diagnostic_with_syntax_span(
+                            diagnostic,
                             choose_span(
-                                property.value_span,
-                                choose_span(property.span, fallback_span),
+                                property.name_span,
+                                choose_span(
+                                    property.value_span,
+                                    choose_span(property.span, fallback_span),
+                                ),
                             ),
-                        ),
-                    ));
-                    record_object_literal_own_type(properties, &inferred_property_types, expected_object_type, fallback_span, ctx);
-                    return InferredExpression::Unknown;
+                        ));
+                    }
+                    elaborated_property_failure = true;
                 }
             }
             InferredExpression::UnresolvedIdentifier { .. }
@@ -2836,13 +2856,21 @@ fn evaluate_object_literal_with_expected_type(
                 inferred_property_types.insert(property.name.clone(), Type::Unknown);
                 // The value's own error is already reported and the literal
                 // cannot be compared further, but an excess property is a
-                // separate report tsc still makes.
-                if expected_diagnostic != ExpectedTypeDiagnostic::ContextOnly {
+                // separate report tsc still makes — unless an earlier property
+                // already failed, which is all tsc reports for the literal.
+                if expected_diagnostic != ExpectedTypeDiagnostic::ContextOnly
+                    && !elaborated_property_failure
+                {
                     report_excess_property(properties, expected_object_type, fallback_span, ctx);
                 }
                 return InferredExpression::Unknown;
             }
         }
+    }
+
+    if elaborated_property_failure {
+        record_object_literal_own_type(properties, &inferred_property_types, expected_object_type, fallback_span, ctx);
+        return InferredExpression::Unknown;
     }
 
     // An assertion is related by comparability, so an extra member is no error.

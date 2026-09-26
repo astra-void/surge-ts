@@ -670,6 +670,23 @@ fn check_element_assignment(
         return;
     }
 
+    // `checkIndexedAccessIndexType`: a valid key written through into a
+    // mapped type that adds `readonly` only reads; the write is still checked.
+    if crate::infer::expression::deferred_element_access(&receiver_type, &index_type).is_some()
+        && matches!(
+            surge_ts_types::type_variable::mapped_type(&receiver_type),
+            Some(surge_ts_types::type_variable::DeferredType::Mapped { modifiers, .. }) if modifiers.readonly > 0
+        )
+    {
+        let diagnostic = Diagnostic::ts2542(receiver_type.name(), ctx.file_name.clone());
+        ctx.push(
+            match crate::checks::expr::element_access_span(object_span, index_span).or(assignment.target_span) {
+                Some(span) => diagnostic.with_span(convert_span(span)),
+                None => diagnostic,
+            },
+        );
+    }
+
     if report_readonly_element_write(
         &receiver_type,
         &index_type,
@@ -749,8 +766,11 @@ fn check_element_assignment(
     // A write is what a later read of the same element sees: tsc narrows an
     // element access with a literal or const-like key to the assigned type, and
     // without it `counts[key] = (counts[key] ?? 0) + 1` left the next read of
-    // `counts[key]` possibly-undefined under `noUncheckedIndexedAccess`.
+    // `counts[key]` possibly-undefined under `noUncheckedIndexedAccess`. A
+    // generic key names no property (`tryGetNameFromType`), so `x[k] = y[k]`
+    // leaves `x[k]` at its declared `T[K]`.
     if let Some(assigned) = assigned
+        && !surge_ts_types::type_variable::mentions_type_variable(&index_type)
         && let Some(key) = crate::checks::function::element_reference_key(object, index)
     {
         let _ = scopes.insert_current_narrowed(
@@ -1668,7 +1688,7 @@ pub(crate) fn check_this_property_assignment(
 /// narrowed here directly. When the members kept do not admit the value, the
 /// value itself stands in (tsc falls back to the declaration; surge's
 /// relation is incomplete enough that the value is the safer answer).
-pub(super) fn assignment_reduced_type(declared: Option<&Type>, assigned: Type) -> Type {
+pub(crate) fn assignment_reduced_type(declared: Option<&Type>, assigned: Type) -> Type {
     // An `any` fits every member, so tsc keeps the whole declaration; surge's
     // `any` here is mostly its own degradation of a value tsc can type, and
     // spreading it back over the declared union reports members (`undefined`)
@@ -2043,7 +2063,12 @@ pub(crate) fn update_assigned_symbol_type(
         } else if matches!(
             symbol.ty,
             Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_)
-        ) {
+        )
+            // A body's type variable is a declared type: tsc narrows only a
+            // union-declared binding on assignment (`getTypeAtFlowAssignment`),
+            // so a write it rejects leaves the binding its declaration.
+            && !symbol.ty.is_type_variable()
+        {
             union_type(vec![
                 with_type_copy_reason(TypeCopyReason::ScopeOrContext, || symbol.ty.clone()),
                 value_ty,

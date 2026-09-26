@@ -600,12 +600,15 @@ fn report_redeclared_var_type(
         return;
     };
     // A type with one of surge's holes in it (the sentinel, an unsubstituted
-    // parameter) is not the type tsc compares.
+    // parameter) is not the type tsc compares. A type variable of the body
+    // being checked is (`T`, `T[K]`, a generic mapped type), and is identical
+    // only to itself.
+    let carries_hole = |ty: &Type| {
+        !ty.is_type_variable() && (ty.is_unknown() || surge_ts_types::parameter_type_is_degraded(ty))
+    };
     if (matches!(previous, Type::Any) && ctx.inferred_any_vars.contains(variable_name))
-        || previous.is_unknown()
-        || symbol.ty.is_unknown()
-        || surge_ts_types::parameter_type_is_degraded(&previous)
-        || surge_ts_types::parameter_type_is_degraded(&symbol.ty)
+        || carries_hole(&previous)
+        || carries_hole(&symbol.ty)
         || surge_ts_types::is_type_identical_to(&previous, &symbol.ty)
     {
         return;
@@ -710,7 +713,7 @@ pub(crate) fn widen_implicit_variable_initializer_type(
         // tsc deep-widens `let`/`var` initializers, so object properties and
         // array/union members widen too (e.g. `let o = { a: 1 }` -> `{ a: number }`),
         // not just a top-level primitive literal.
-        widen_type(ty)
+        widen_fresh_object_literal(initializer, ty).unwrap_or_else(|| widen_type(ty))
     } else if matches!(initializer, ParsedExpression::ObjectLiteral { .. }) {
         widen_object_literal_members(initializer, ty)
     } else {
@@ -993,6 +996,41 @@ fn initializer_type_is_fresh(initializer: &ParsedExpression) -> bool {
         }
         _ => false,
     }
+}
+
+/// `getWidenedTypeOfObjectLiteral` widens each member's fresh literal type;
+/// a member a spread supplies has the type its source declares, which is not
+/// fresh (`let s = { ...state }` keeps `state.status: "a" | "b"`). `None` for
+/// a literal without spreads, which widens whole.
+fn widen_fresh_object_literal(initializer: &ParsedExpression, ty: &Type) -> Option<Type> {
+    let (ParsedExpression::ObjectLiteral { properties, .. }, Type::Object(object)) = (initializer, ty) else {
+        return None;
+    };
+    let last_spread = properties.iter().rposition(|property| property.is_spread)?;
+    let mut widened_properties = (*object.properties).clone();
+    for (index, property) in properties.iter().enumerate() {
+        if property.is_spread {
+            continue;
+        }
+        let Some(member) = widened_properties.get_mut(property.name.as_str()) else {
+            continue;
+        };
+        // Written before a spread, the member is the spread's when the spread
+        // supplies that name; a literal still standing is the written one.
+        let still_written = index > last_spread
+            || matches!(
+                (&property.value, &member.ty),
+                (ParsedExpression::StringLiteral(_), Type::StringLiteral(_))
+                    | (ParsedExpression::NumberLiteral(_), Type::NumberLiteral(_))
+                    | (ParsedExpression::BooleanLiteral(_), Type::BooleanLiteral(_))
+            );
+        if still_written {
+            member.ty = widen_type(&member.ty);
+        }
+    }
+    let mut widened = object.clone();
+    widened.properties = std::sync::Arc::new(widened_properties);
+    Some(Type::Object(widened))
 }
 
 /// A property initializer is a mutable location, so tsc widens its fresh

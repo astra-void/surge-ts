@@ -871,6 +871,7 @@ impl PreparedFinish<'_> {
         }
 
         let mut program_diagnostics = removed_option_diagnostics(loaded);
+        program_diagnostics.extend(jsx_factory_option_diagnostics(loaded));
         program_diagnostics.extend(
             type_package_missing
                 .iter()
@@ -1125,6 +1126,48 @@ pub fn removed_option_diagnostics(loaded: &LoadedTsConfig) -> Vec<Diagnostic> {
                 start: option.start,
                 end: option.end,
             })
+        })
+        .collect()
+}
+
+/// tsc's `verifyCompilerOptions` checks of the JSX factory options' values:
+/// `jsxFactory` and `jsxFragmentFactory` must parse as an entity name
+/// (`ParseIsolatedEntityName`), and a `reactNamespace` no `jsxFactory`
+/// overrides as an identifier (`IsIdentifierText`).
+fn jsx_factory_option_diagnostics(loaded: &LoadedTsConfig) -> Vec<Diagnostic> {
+    let options = &loaded.compiler_options;
+    let set = |value: &Option<String>| value.clone().filter(|value| !value.is_empty());
+    let file_name = loaded.config_path.display().to_string();
+    let mut invalid = Vec::new();
+    match set(&options.jsx_factory) {
+        Some(factory) => {
+            if surge_ts_syntax::jsx_entity_root(&factory).is_none() {
+                invalid.push(("jsxFactory", Diagnostic::ts5067(&factory, file_name.clone())));
+            }
+        }
+        None => {
+            if let Some(namespace) = set(&options.react_namespace)
+                && (namespace.contains('.') || surge_ts_syntax::jsx_entity_root(&namespace).is_none())
+            {
+                invalid.push(("reactNamespace", Diagnostic::ts5059(&namespace, file_name.clone())));
+            }
+        }
+    }
+    if let Some(fragment_factory) = set(&options.jsx_fragment_factory)
+        && surge_ts_syntax::jsx_entity_root(&fragment_factory).is_none()
+    {
+        invalid.push((
+            "jsxFragmentFactory",
+            Diagnostic::ts18035(&fragment_factory, file_name.clone()),
+        ));
+    }
+    invalid
+        .into_iter()
+        .map(|(option, diagnostic)| {
+            match surge_ts_config::option_value_range(&loaded.config_path, option) {
+                Some((start, end)) => diagnostic.with_span(TextSpan { start, end }),
+                None => diagnostic,
+            }
         })
         .collect()
 }

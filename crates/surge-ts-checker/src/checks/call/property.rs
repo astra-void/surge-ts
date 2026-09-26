@@ -961,6 +961,13 @@ fn check_property_call_like_unrecorded(
                         )?;
                         result_types.push(return_type);
                     }
+                    // tsc's `isUntypedFunctionCall`: no signatures, but a `Function`.
+                    other if surge_ts_types::is_untyped_function_callee(&other) => {
+                        for argument in arguments {
+                            let _ = crate::checks::expr::evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+                        }
+                        result_types.push(Type::Any);
+                    }
                     other => {
                         ctx.push(diagnostic_with_syntax_span(
                             super::not_callable_diagnostic(&other, ctx),
@@ -1129,6 +1136,13 @@ fn check_property_call_like_unrecorded(
                     symbols,
                     ctx,
                 ),
+                // tsc's `isUntypedFunctionCall`: no signatures, but a `Function`.
+                other if surge_ts_types::is_untyped_function_callee(&other) => {
+                    for argument in arguments {
+                        let _ = crate::checks::expr::evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+                    }
+                    Some(Type::Any)
+                }
                 other => {
                     ctx.push(diagnostic_with_syntax_span(
                         super::not_callable_diagnostic(&other, ctx),
@@ -1558,6 +1572,13 @@ fn check_optional_property_call_unrecorded(
                     }
                     Type::Any => result_types.push(Type::Any),
                     Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => return None,
+                    // tsc's `isUntypedFunctionCall`: no signatures, but a `Function`.
+                    other if surge_ts_types::is_untyped_function_callee(&other) => {
+                        for argument in arguments {
+                            let _ = crate::checks::expr::evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+                        }
+                        result_types.push(Type::Any);
+                    }
                     other => {
                         ctx.push(diagnostic_with_syntax_span(
                             super::not_callable_diagnostic(&other, ctx),
@@ -1702,6 +1723,13 @@ fn check_optional_property_call_unrecorded(
                     evaluate_arguments_context_free(object, arguments, symbols, ctx);
                     None
                 },
+                // tsc's `isUntypedFunctionCall`: no signatures, but a `Function`.
+                other if surge_ts_types::is_untyped_function_callee(&other) => {
+                    for argument in arguments {
+                        let _ = crate::checks::expr::evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+                    }
+                    Some(Type::Any)
+                }
                 other => {
                     ctx.push(diagnostic_with_syntax_span(
                         super::not_callable_diagnostic(&other, ctx),

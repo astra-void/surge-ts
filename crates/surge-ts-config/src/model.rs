@@ -291,6 +291,7 @@ pub enum JsxMode {
     React,
     ReactJsx,
     ReactJsxDev,
+    ReactNative,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

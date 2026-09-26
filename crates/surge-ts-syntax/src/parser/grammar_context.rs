@@ -1354,6 +1354,14 @@ impl<'a> ContextCollector<'a, '_> {
                 | oxc_ast::ast::TSType::TSVoidKeyword(_)
                 | oxc_ast::ast::TSType::TSNullKeyword(_)
                 | oxc_ast::ast::TSType::TSUndefinedKeyword(_) => invalid = true,
+                // `isGenericType`: a type parameter constituent makes the
+                // intersection generic, whatever it reduces to.
+                oxc_ast::ast::TSType::TSIntersectionType(intersection) => {
+                    if intersection.types.iter().any(|member| self.type_parameter_key_name(member).is_some()) {
+                        self.push(1337, name_span, &[]);
+                    }
+                    return;
+                }
                 _ => return,
             }
         }
@@ -1363,7 +1371,12 @@ impl<'a> ContextCollector<'a, '_> {
     }
 
     fn is_type_parameter_in_scope(&self, name: &str) -> bool {
-        self.stack.iter().any(|kind| {
+        self.type_parameter_in_scope(name).is_some()
+    }
+
+    /// The innermost in-scope declaration of the type parameter `name`.
+    fn type_parameter_in_scope(&self, name: &str) -> Option<&oxc_ast::ast::TSTypeParameter<'a>> {
+        self.stack.iter().rev().find_map(|kind| {
             let parameters = match kind {
                 AstKind::TSInterfaceDeclaration(d) => d.type_parameters.as_deref(),
                 AstKind::TSTypeAliasDeclaration(d) => d.type_parameters.as_deref(),
@@ -1373,12 +1386,45 @@ impl<'a> ContextCollector<'a, '_> {
                 AstKind::TSMethodSignature(d) => d.type_parameters.as_deref(),
                 _ => None,
             };
-            parameters.is_some_and(|parameters| parameters.params.iter().any(|p| p.name.name == name))
+            parameters?.params.iter().find(|p| p.name.name == name)
         })
     }
 
+    /// The in-scope type parameter a key type names.
+    fn type_parameter_key_name(&self, ty: &oxc_ast::ast::TSType<'_>) -> Option<String> {
+        let oxc_ast::ast::TSType::TSTypeReference(reference) = ty else {
+            return None;
+        };
+        let oxc_ast::ast::TSTypeName::IdentifierReference(name) = &reference.type_name else {
+            return None;
+        };
+        (reference.type_arguments.is_none() && self.is_type_parameter_in_scope(&name.name))
+            .then(|| name.name.to_string())
+    }
+
+    /// `getIntersectionType` reduces `T & P` to `T` when `T`'s constraint is a
+    /// strict subtype of the primitive `P`; syntactically, when the constraint
+    /// is written as that same keyword.
+    fn reduced_type_parameter_intersection(
+        &self,
+        intersection: &oxc_ast::ast::TSIntersectionType<'_>,
+    ) -> Option<String> {
+        let [first, second] = intersection.types.as_slice() else {
+            return None;
+        };
+        let (parameter, primitive) = match self.type_parameter_key_name(first) {
+            Some(parameter) => (parameter, second),
+            None => (self.type_parameter_key_name(second)?, first),
+        };
+        let keyword = keyword_text(primitive)
+            .filter(|keyword| matches!(*keyword, "string" | "number" | "bigint" | "boolean" | "symbol" | "object"))?;
+        let constraint = self.type_parameter_in_scope(&parameter)?.constraint.as_ref()?;
+        (keyword_text(constraint) == Some(keyword)).then_some(parameter)
+    }
+
     /// tsc's `checkTypeForDuplicateIndexSignatures` for keys written as a
-    /// keyword or template literal type, compared by their text.
+    /// keyword, a template literal type or a type parameter, compared by their
+    /// text.
     fn check_duplicate_index_signatures<'s>(
         &mut self,
         signatures: impl Iterator<Item = &'s oxc_ast::ast::TSIndexSignature<'s>>,
@@ -1401,6 +1447,16 @@ impl<'a> ContextCollector<'a, '_> {
                     oxc_ast::ast::TSType::TSTemplateLiteralType(template) => {
                         let span = template.span;
                         self.source_text[span.start as usize..span.end as usize].to_string()
+                    }
+                    oxc_ast::ast::TSType::TSTypeReference(_) => match self.type_parameter_key_name(member) {
+                        Some(name) => name,
+                        None => continue,
+                    },
+                    oxc_ast::ast::TSType::TSIntersectionType(intersection) => {
+                        match self.reduced_type_parameter_intersection(intersection) {
+                            Some(name) => name,
+                            None => continue,
+                        }
                     }
                     _ => continue,
                 };
@@ -1913,6 +1969,59 @@ impl<'a> ContextCollector<'a, '_> {
         if is_body {
             self.push(1156, declaration.span, &[keyword]);
         }
+    }
+
+    /// tsc's `checkGrammarVariableDeclarationList` on a `using` declaration
+    /// (oxc reports a `for...in` or ambient one): written directly in a `case`
+    /// or `default` clause it is TS1547/TS1548, and an `await using` must sit
+    /// where an `await` may (`checkGrammarAwaitOrAwaitUsing`) — TS18054 in a
+    /// class static block, TS2852 in a function that is not `async` or in a
+    /// namespace.
+    fn check_using_declaration_list(&mut self, declaration: &oxc_ast::ast::VariableDeclaration<'_>) {
+        let is_await = match declaration.kind {
+            VariableDeclarationKind::Using => false,
+            VariableDeclarationKind::AwaitUsing => true,
+            _ => return,
+        };
+        let Some(last) = declaration.declarations.last() else {
+            return;
+        };
+        if matches!(self.stack.last(), Some(AstKind::ForInStatement(_)))
+            || self.ambient_depth > 0
+            || declaration.declare
+        {
+            return;
+        }
+        let list = Span::new(declaration.span.start, last.span.end);
+        if matches!(self.stack.last(), Some(AstKind::SwitchCase(_))) {
+            self.push(if is_await { 1548 } else { 1547 }, list, &[]);
+            return;
+        }
+        if !is_await {
+            return;
+        }
+        let top_level = match self.nearest_function_or_static_block() {
+            Some(AstKind::StaticBlock(_)) => {
+                self.push(18054, list, &[]);
+                return;
+            }
+            Some(AstKind::Function(function)) if function.r#async => return,
+            Some(AstKind::ArrowFunctionExpression(arrow)) if arrow.r#async => return,
+            Some(_) => false,
+            None => !self.stack.iter().any(|kind| matches!(kind, AstKind::TSModuleDeclaration(_))),
+        };
+        let start = declaration.span.start;
+        let keyword = Span::new(start, start + 5);
+        if !top_level {
+            self.push(2852, keyword, &[]);
+            return;
+        }
+        if !self.external_module && !self.source_text.contains("import.meta") {
+            self.push(2853, keyword, &[]);
+        }
+        // The module-kind rules; the checker keeps the one that applies.
+        self.push(1309, keyword, &[]);
+        self.push(2854, keyword, &[]);
     }
 
     /// tsc's `renamedBindingElementsInTypes`: `{ a: string }` in the parameter
@@ -2548,31 +2657,34 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
-    /// `in`/`out` on a type parameter of anything but a class, interface, or
-    /// type alias — TS1274, on the first of them.
+    /// `in`/`out` on a type alias's type parameter where the alias does not
+    /// declare an object, function, constructor or mapped type — TS2637
+    /// (`checkTypeParameterDeferred`). Elsewhere they are TS1274, which
+    /// [`Self::check_type_parameter_modifiers`] reports.
     fn check_variance_modifier_owner(&mut self, parameter: &oxc_ast::ast::TSTypeParameter<'_>) {
         if !parameter.r#in && !parameter.out {
             return;
         }
         let owner = self.stack.iter().rev().nth(1);
         if let Some(AstKind::TSTypeAliasDeclaration(alias)) = owner {
-            if alias_is_not_anonymous(alias) {
+            if alias_is_not_anonymous(alias, self.alias_file_scope()) {
                 self.push(2637, parameter.span, &[]);
             }
-            return;
         }
-        if matches!(owner, Some(AstKind::Class(_) | AstKind::TSInterfaceDeclaration(_))) {
-            return;
+    }
+
+    /// The file's top-level statements, when the type alias owning the type
+    /// parameter being entered is declared among them.
+    fn alias_file_scope(&self) -> Option<&'a [Statement<'a>]> {
+        let mut ancestors = self.stack.iter().rev().skip(2).copied();
+        let mut parent = ancestors.next();
+        if matches!(parent, Some(AstKind::ExportNamedDeclaration(_))) {
+            parent = ancestors.next();
         }
-        let text = &self.source_text[parameter.span.start as usize..parameter.name.span.start as usize];
-        let (keyword, offset) = match (text.find("in"), text.find("out")) {
-            (Some(i), Some(o)) if o < i => ("out", o),
-            (Some(i), _) => ("in", i),
-            (None, Some(o)) => ("out", o),
-            (None, None) => return,
-        };
-        let start = parameter.span.start + offset as u32;
-        self.push(1274, Span::new(start, start + keyword.len() as u32), &[keyword]);
+        match parent {
+            Some(AstKind::Program(program)) => Some(&program.body[..]),
+            _ => None,
+        }
     }
 
     /// The declaration half of tsc's `checkGrammarForInOrForOfStatement`: one
@@ -3379,6 +3491,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     let start = declaration.span.start;
                     self.push(1184, Span::new(start, start + 7), &[]);
                 }
+                self.check_using_declaration_list(declaration);
             }
             AstKind::YieldExpression(expression) => self.check_yield(expression),
             AstKind::AwaitExpression(expression) => self.check_await(expression),
@@ -3600,7 +3713,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
 
 /// The modifier codes this pass reports from tsc's `checkGrammarModifiers`
 /// port; the rest of its table is oxc's or another check's to report.
-const OWNED_MODIFIER_CODES: &[u32] = &[1029, 1040, 1042, 1044, 1089, 1243, 1277, 1319];
+const OWNED_MODIFIER_CODES: &[u32] = &[1029, 1040, 1042, 1044, 1089, 1243, 1274, 1277, 1319];
 
 /// Declaration-position and modifier grammar: tsc's
 /// `checkGrammarModuleElementContext`, `checkModuleDeclaration`,
@@ -4196,26 +4309,27 @@ fn signature_index_signatures<'s>(
     })
 }
 
+fn keyword_text(ty: &oxc_ast::ast::TSType<'_>) -> Option<&'static str> {
+    use oxc_ast::ast::TSType as T;
+    Some(match ty {
+        T::TSStringKeyword(_) => "string",
+        T::TSNumberKeyword(_) => "number",
+        T::TSBooleanKeyword(_) => "boolean",
+        T::TSBigIntKeyword(_) => "bigint",
+        T::TSSymbolKeyword(_) => "symbol",
+        T::TSObjectKeyword(_) => "object",
+        T::TSAnyKeyword(_) => "any",
+        T::TSUnknownKeyword(_) => "unknown",
+        T::TSNeverKeyword(_) => "never",
+        T::TSVoidKeyword(_) => "void",
+        T::TSUndefinedKeyword(_) => "undefined",
+        T::TSNullKeyword(_) => "null",
+        _ => return None,
+    })
+}
+
 fn keywords_differ(left: &oxc_ast::ast::TSType<'_>, right: &oxc_ast::ast::TSType<'_>) -> bool {
-    fn keyword(ty: &oxc_ast::ast::TSType<'_>) -> Option<&'static str> {
-        use oxc_ast::ast::TSType as T;
-        Some(match ty {
-            T::TSStringKeyword(_) => "string",
-            T::TSNumberKeyword(_) => "number",
-            T::TSBooleanKeyword(_) => "boolean",
-            T::TSBigIntKeyword(_) => "bigint",
-            T::TSSymbolKeyword(_) => "symbol",
-            T::TSObjectKeyword(_) => "object",
-            T::TSAnyKeyword(_) => "any",
-            T::TSUnknownKeyword(_) => "unknown",
-            T::TSNeverKeyword(_) => "never",
-            T::TSVoidKeyword(_) => "void",
-            T::TSUndefinedKeyword(_) => "undefined",
-            T::TSNullKeyword(_) => "null",
-            _ => return None,
-        })
-    }
-    matches!((keyword(left), keyword(right)), (Some(l), Some(r)) if l != r)
+    matches!((keyword_text(left), keyword_text(right)), (Some(l), Some(r)) if l != r)
 }
 
 /// Whether a namespace body declares a value (tsc's `getModuleInstanceState`
@@ -4360,25 +4474,112 @@ fn eager_type_queries<'t>(ty: &'t oxc_ast::ast::TSType<'_>, out: &mut Vec<&'t st
     }
 }
 
+/// What a type parameter stands for while an alias body is classified for
+/// TS2637: a type variable of the annotated alias, or the argument a
+/// reference to another alias supplies.
+#[derive(Clone, Copy)]
+struct AliasArgument {
+    /// [`declared_type_is_not_anonymous`] of the argument.
+    not_anonymous: Option<bool>,
+    /// A type variable, which `isGenericObjectType` and `isGenericIndexType`
+    /// hold for.
+    variable: bool,
+}
+
+/// How many alias references a TS2637 classification follows; a circular
+/// chain is TS2456's to report.
+const ALIAS_CHAIN_LIMIT: usize = 8;
+
 /// tsc's TS2637 condition, `getDeclaredTypeOfSymbol(alias)` being neither
-/// anonymous nor mapped, where the alias body alone settles it. A reference to
-/// another type is left alone: it may name an object type.
-fn alias_is_not_anonymous(alias: &oxc_ast::ast::TSTypeAliasDeclaration<'_>) -> bool {
+/// anonymous nor mapped, where the syntax settles it. `statements` is the
+/// file's top level when the alias is declared there: a name no type
+/// parameter binds then resolves among them. Any other reference is left
+/// alone, since it may name an object type.
+fn alias_is_not_anonymous(
+    alias: &oxc_ast::ast::TSTypeAliasDeclaration<'_>,
+    statements: Option<&[Statement<'_>]>,
+) -> bool {
+    let variable = AliasArgument { not_anonymous: Some(true), variable: true };
+    let scope: Vec<(&str, AliasArgument)> = alias
+        .type_parameters
+        .iter()
+        .flat_map(|parameters| parameters.params.iter())
+        .map(|parameter| (parameter.name.name.as_str(), variable))
+        .collect();
+    declared_type_is_not_anonymous(&alias.type_annotation, &scope, statements, 0) == Some(true)
+}
+
+/// Whether the type `ty` declares is neither anonymous nor mapped
+/// (`Some(true)`), is one of them (`Some(false)`), or cannot be told without
+/// resolving it (`None`). `scope` binds the type parameters in effect.
+fn declared_type_is_not_anonymous(
+    ty: &oxc_ast::ast::TSType<'_>,
+    scope: &[(&str, AliasArgument)],
+    statements: Option<&[Statement<'_>]>,
+    depth: usize,
+) -> Option<bool> {
     use oxc_ast::ast::TSType as T;
-    let mut ty = &alias.type_annotation;
-    while let T::TSParenthesizedType(inner) = ty {
-        ty = &inner.type_annotation;
-    }
-    match ty {
-        T::TSTypeLiteral(_) | T::TSFunctionType(_) | T::TSConstructorType(_) | T::TSMappedType(_) => false,
+    match skip_type_parentheses(ty) {
+        T::TSTypeLiteral(_) | T::TSFunctionType(_) | T::TSConstructorType(_) | T::TSMappedType(_) => Some(false),
         T::TSTypeReference(reference) => {
-            reference.type_arguments.is_none()
-                && matches!(&reference.type_name, oxc_ast::ast::TSTypeName::IdentifierReference(name)
-                    if alias.type_parameters.as_ref().is_some_and(|params| {
-                        params.params.iter().any(|param| param.name.name == name.name)
-                    }))
+            let oxc_ast::ast::TSTypeName::IdentifierReference(name) = &reference.type_name else {
+                return None;
+            };
+            if let Some((_, argument)) = scope.iter().find(|(parameter, _)| *parameter == name.name.as_str()) {
+                return if reference.type_arguments.is_none() { argument.not_anonymous } else { None };
+            }
+            match file_type_declaration(statements?, name.name.as_str())? {
+                FileTypeDeclaration::ClassOrInterface => Some(true),
+                // `getTypeAliasInstantiation`: the target's declared type with
+                // its type parameters mapped to these arguments.
+                FileTypeDeclaration::Alias(target) => {
+                    if depth == ALIAS_CHAIN_LIMIT {
+                        return None;
+                    }
+                    let parameters = target.type_parameters.as_ref().map_or(&[][..], |list| &list.params[..]);
+                    let arguments = reference.type_arguments.as_ref().map_or(&[][..], |list| &list.params[..]);
+                    if parameters.len() != arguments.len() {
+                        return None;
+                    }
+                    let bound: Vec<(&str, AliasArgument)> = parameters
+                        .iter()
+                        .zip(arguments)
+                        .map(|(parameter, argument)| {
+                            let argument = AliasArgument {
+                                not_anonymous: declared_type_is_not_anonymous(argument, scope, statements, depth + 1),
+                                variable: names_type_variable(argument, scope),
+                            };
+                            (parameter.name.name.as_str(), argument)
+                        })
+                        .collect();
+                    declared_type_is_not_anonymous(&target.type_annotation, &bound, statements, depth + 1)
+                }
+            }
         }
-        T::TSStringKeyword(_)
+        // `getIndexedAccessType` defers on a generic object or index type,
+        // `getConditionalType` on a generic check or extends type.
+        T::TSIndexedAccessType(access) => (names_type_variable(&access.object_type, scope)
+            || names_type_variable(&access.index_type, scope)
+            || matches!(skip_type_parentheses(&access.index_type), T::TSTypeOperatorType(operator)
+                if operator.operator == oxc_ast::ast::TSTypeOperatorOperator::Keyof
+                    && names_type_variable(&operator.type_annotation, scope)))
+        .then_some(true),
+        T::TSConditionalType(conditional) => (names_type_variable(&conditional.check_type, scope)
+            || names_type_variable(&conditional.extends_type, scope))
+        .then_some(true),
+        // `getUnionType` drops `never`; a lone survivor is the type itself.
+        T::TSUnionType(union) => {
+            let mut members = union
+                .types
+                .iter()
+                .filter(|member| !matches!(skip_type_parentheses(member), T::TSNeverKeyword(_)));
+            match (members.next(), members.next()) {
+                (Some(member), None) => declared_type_is_not_anonymous(member, scope, statements, depth),
+                _ => Some(true),
+            }
+        }
+        T::TSTypeOperatorType(_)
+        | T::TSStringKeyword(_)
         | T::TSNumberKeyword(_)
         | T::TSBooleanKeyword(_)
         | T::TSBigIntKeyword(_)
@@ -4392,12 +4593,78 @@ fn alias_is_not_anonymous(alias: &oxc_ast::ast::TSTypeAliasDeclaration<'_>) -> b
         | T::TSNullKeyword(_)
         | T::TSLiteralType(_)
         | T::TSTemplateLiteralType(_)
-        | T::TSUnionType(_)
         | T::TSIntersectionType(_)
         | T::TSArrayType(_)
-        | T::TSTupleType(_) => true,
-        _ => false,
+        | T::TSTupleType(_) => Some(true),
+        _ => None,
     }
+}
+
+fn skip_type_parentheses<'t, 'a>(mut ty: &'t oxc_ast::ast::TSType<'a>) -> &'t oxc_ast::ast::TSType<'a> {
+    while let oxc_ast::ast::TSType::TSParenthesizedType(inner) = ty {
+        ty = &inner.type_annotation;
+    }
+    ty
+}
+
+/// A bare reference to a type parameter that stands for a type variable.
+fn names_type_variable(ty: &oxc_ast::ast::TSType<'_>, scope: &[(&str, AliasArgument)]) -> bool {
+    let oxc_ast::ast::TSType::TSTypeReference(reference) = skip_type_parentheses(ty) else {
+        return false;
+    };
+    let oxc_ast::ast::TSTypeName::IdentifierReference(name) = &reference.type_name else {
+        return false;
+    };
+    reference.type_arguments.is_none()
+        && scope
+            .iter()
+            .find(|(parameter, _)| *parameter == name.name.as_str())
+            .is_some_and(|(_, argument)| argument.variable)
+}
+
+/// The type meaning of a name among a file's top-level declarations.
+enum FileTypeDeclaration<'s, 'a> {
+    /// Interfaces and classes, merged or not: an interface or class type, or
+    /// a reference to one.
+    ClassOrInterface,
+    Alias(&'s oxc_ast::ast::TSTypeAliasDeclaration<'a>),
+}
+
+/// What `name` declares among `statements`, or `None` where nothing does or an
+/// import or a declaration that does not merge makes it more than the syntax.
+fn file_type_declaration<'s, 'a>(statements: &'s [Statement<'a>], name: &str) -> Option<FileTypeDeclaration<'s, 'a>> {
+    use oxc_ast::ast::Declaration as D;
+    let mut found = None;
+    for statement in statements {
+        if let Statement::ImportDeclaration(import) = statement
+            && import.specifiers.iter().flatten().any(|specifier| specifier.local().name.as_str() == name)
+        {
+            return None;
+        }
+        let declaration = match statement {
+            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            other => other.as_declaration(),
+        };
+        let current = match declaration {
+            Some(D::TSInterfaceDeclaration(interface)) if interface.id.name.as_str() == name => {
+                FileTypeDeclaration::ClassOrInterface
+            }
+            Some(D::ClassDeclaration(class)) if class.id.as_ref().is_some_and(|id| id.name.as_str() == name) => {
+                FileTypeDeclaration::ClassOrInterface
+            }
+            Some(D::TSTypeAliasDeclaration(alias)) if alias.id.name.as_str() == name => FileTypeDeclaration::Alias(alias),
+            Some(D::TSImportEqualsDeclaration(import)) if import.id.name.as_str() == name => return None,
+            _ => continue,
+        };
+        found = match (found, current) {
+            (None, current) => Some(current),
+            (Some(FileTypeDeclaration::ClassOrInterface), FileTypeDeclaration::ClassOrInterface) => {
+                Some(FileTypeDeclaration::ClassOrInterface)
+            }
+            _ => return None,
+        };
+    }
+    found
 }
 
 /// A name tsc treats as static: a string or numeric literal, a signed number,

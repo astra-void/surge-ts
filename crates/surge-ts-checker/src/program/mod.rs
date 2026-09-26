@@ -51,7 +51,7 @@ pub(crate) use diagnostics::*;
 pub(crate) use file_classify::*;
 pub(crate) use forward_references::decorator_is_checked;
 pub(crate) use globals::*;
-pub(crate) use index_constraints::check_type_literal_index_constraints;
+pub(crate) use index_constraints::{check_type_literal_index_constraints, is_numeric_literal_name};
 pub(crate) use namespaces::{
     MEANING_NAMESPACE, MEANING_TYPE, MEANING_VALUE, NamespaceInfo, NamespaceRegistry,
     is_instantiated_namespace,

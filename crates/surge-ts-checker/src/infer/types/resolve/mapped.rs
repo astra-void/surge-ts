@@ -52,6 +52,22 @@ fn mapped_literal_keys(constraint: &Type) -> Option<Vec<(String, Type)>> {
     }
 }
 
+fn mapped_modifier(modifier: MappedOptionality) -> i8 {
+    match modifier {
+        MappedOptionality::Keep => 0,
+        MappedOptionality::Add => 1,
+        MappedOptionality::Remove => -1,
+    }
+}
+
+fn parsed_type_names_key(ty: &ParsedType, key_name: &str) -> bool {
+    let mut names_key = false;
+    ty.for_each_named_type(&mut |named| {
+        names_key |= named.name == key_name && named.type_arguments.is_empty();
+    });
+    names_key
+}
+
 pub(crate) fn resolve_mapped_type(
     mapped: ParsedMappedType,
     ctx: &mut CheckerContext,
@@ -74,6 +90,7 @@ pub(crate) fn resolve_mapped_type(
     if let Some(ParsedType::Named(named)) = keyof_operand.as_ref()
         && named.type_arguments.is_empty()
         && let Some(Type::TypeParameter(parameter)) = substitution.get(&named.name)
+        && !parameter.is_active_variable()
         && !ctx.type_parameter_in_scope(parameter.name.as_ref())
     {
         return ResolvedType {
@@ -140,6 +157,64 @@ pub(crate) fn resolve_mapped_type(
             ty: Type::Unknown,
             had_error: true,
         };
+    }
+
+    // A generic key set (`keyof T`, `K`) leaves the mapped type generic
+    // (`isGenericMappedType`): tsc keeps it as a type of its own. surge defers
+    // the `{ [P in Q]: X[P] }` shape, `X` a type variable of the body being
+    // checked, with the modifiers type `getModifiersTypeFromMappedType` reads.
+    if resolved_constraint.ty.is_type_variable()
+        && mapped.name_type.is_none()
+        && let ParsedType::IndexedAccess(access) = mapped.value_type.as_ref()
+        && matches!(access.index_type.as_ref(), ParsedType::Named(index)
+            if index.name == mapped.key_name && index.type_arguments.is_empty())
+        && !parsed_type_names_key(access.object_type.as_ref(), &mapped.key_name)
+    {
+        let object = resolve_parsed_type(access.object_type.as_ref().clone(), ctx, resolving, substitution);
+        if !object.had_error && object.ty.is_type_variable() {
+            let modifiers_type = match keyof_operand.as_ref() {
+                Some(operand) => Some(resolve_parsed_type(operand.clone(), ctx, resolving, substitution).ty),
+                None => surge_ts_types::type_variable::mapped_modifiers_type(&resolved_constraint.ty),
+            };
+            let modifiers = surge_ts_types::type_variable::MappedModifiers {
+                readonly: mapped_modifier(mapped.readonly),
+                optional: mapped_modifier(mapped.optional),
+            };
+            let name = format!(
+                "{{ {}[{} in {}]{}: {}[{}]{}; }}",
+                match mapped.readonly {
+                    MappedOptionality::Keep => "",
+                    MappedOptionality::Add => "readonly ",
+                    MappedOptionality::Remove => "-readonly ",
+                },
+                mapped.key_name,
+                resolved_constraint.ty.name(),
+                match mapped.optional {
+                    MappedOptionality::Keep => "",
+                    MappedOptionality::Add => "?",
+                    MappedOptionality::Remove => "-?",
+                },
+                object.ty.name(),
+                mapped.key_name,
+                if matches!(mapped.optional, MappedOptionality::Add) && surge_ts_types::strict_null_checks() {
+                    " | undefined"
+                } else {
+                    ""
+                },
+            );
+            if let Some(mapped_variable) = surge_ts_types::type_variable::mapped_variable(
+                &resolved_constraint.ty,
+                &object.ty,
+                modifiers,
+                modifiers_type.as_ref(),
+                name,
+            ) {
+                return ResolvedType {
+                    ty: mapped_variable,
+                    had_error: false,
+                };
+            }
+        }
     }
 
     // A non-literal key constraint maps to an index signature: `{ [P in string]: T }`

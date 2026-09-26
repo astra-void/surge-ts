@@ -560,6 +560,28 @@ pub(crate) fn resolve_type_alias(
     }
 }
 
+/// A homomorphic lib utility (`Partial`, `Required`, `Readonly`: `{ [P in
+/// keyof T]: T[P] }` with modifiers) over a type variable of the body being
+/// checked stays a generic mapped type (`isGenericMappedType`) instead of
+/// resolving members.
+fn homomorphic_mapped_variable(
+    alias_name: &str,
+    source: &Type,
+    modifiers: surge_ts_types::type_variable::MappedModifiers,
+) -> Option<Type> {
+    if !source.is_type_variable() {
+        return None;
+    }
+    let keys = surge_ts_types::type_variable::keyof_variable(source)?;
+    surge_ts_types::type_variable::mapped_variable(
+        &keys,
+        source,
+        modifiers,
+        Some(source),
+        format!("{alias_name}<{}>", source.name()),
+    )
+}
+
 /// A utility that rebuilds its source's property map must carry the source's
 /// *checker-injected* openness marker, not just the index type it produced.
 /// Without it the openness is laundered into a declared-looking index
@@ -627,6 +649,17 @@ pub(crate) fn resolve_partial_utility_type(
         };
     };
 
+    let modifiers = surge_ts_types::type_variable::MappedModifiers {
+        readonly: 0,
+        optional: 1,
+    };
+    if let Some(mapped) = homomorphic_mapped_variable("Partial", &source_type, modifiers) {
+        return ResolvedType {
+            ty: mapped,
+            had_error: false,
+        };
+    }
+
     let Type::Object(object_type) = source_type.peeled() else {
         return ResolvedType {
             ty: Type::Unknown,
@@ -666,6 +699,17 @@ pub(crate) fn resolve_required_utility_type(
             had_error: false,
         };
     };
+
+    let modifiers = surge_ts_types::type_variable::MappedModifiers {
+        readonly: 0,
+        optional: -1,
+    };
+    if let Some(mapped) = homomorphic_mapped_variable("Required", &source_type, modifiers) {
+        return ResolvedType {
+            ty: mapped,
+            had_error: false,
+        };
+    }
 
     let Type::Object(object_type) = source_type.peeled() else {
         return ResolvedType {
@@ -720,10 +764,14 @@ pub(crate) fn resolve_readonly_utility_type(
 /// becomes the readonly shape; a union distributes (the mapped type is
 /// homomorphic); anything else is itself.
 fn readonly_shape(source: &Type) -> Type {
-    // A mapped type over a type variable stays deferred in tsc; surge does not
-    // model that, and the variable itself would claim to be it.
+    // A mapped type over a type variable stays deferred in tsc; the variable
+    // itself would claim to be it.
     if source.is_type_variable() {
-        return Type::Unknown;
+        let modifiers = surge_ts_types::type_variable::MappedModifiers {
+            readonly: 1,
+            optional: 0,
+        };
+        return homomorphic_mapped_variable("Readonly", source, modifiers).unwrap_or(Type::Unknown);
     }
     match source.peeled() {
         Type::Object(object_type) => {

@@ -16,7 +16,7 @@ pub use mapping::select_path_mapping_targets;
 pub use model::*;
 pub use options::*;
 pub use parse::{load_tsconfig, load_tsconfig_from_value, normalize_compiler_options_json, parse_config_text};
-pub use removed_options::RemovedCompilerOption;
+pub use removed_options::{RemovedCompilerOption, option_value_range};
 pub use paths::{
     CanonicalizeIoSnapshot, absolutize, canonicalize_if_exists, canonicalize_if_exists_string,
     canonicalize_io_snapshot, clear_canonicalize_cache, cycle_key, normalize_path_buf,

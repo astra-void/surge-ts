@@ -835,7 +835,7 @@ fn lower_assignment_pattern(
                         let Some((target, default)) = split_default(&property.binding) else {
                             continue;
                         };
-                        let span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(target)));
+                        let span = Some(text_span_from_oxc_span(oxc_span::GetSpan::span(&property.name)));
                         let read = match property.name.static_name() {
                             Some(name) => property_read(&name, span, default.is_some()),
                             // A computed key's target reads the source indexed by

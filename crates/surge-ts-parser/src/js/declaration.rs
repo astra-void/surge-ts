@@ -49,7 +49,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     fn is_next_token_using_keyword_then_binding_identifier(&mut self) -> bool {
         self.bump_any();
         if !self.cur_token().is_on_new_line() && self.eat(Kind::Using) {
-            self.cur_kind().is_binding_identifier() && !self.cur_token().is_on_new_line()
+            // surge: tsgo's `nextTokenIsUsingKeywordThenBindingIdentifierOrStartOfObjectDestructuringOnSameLine`
+            // also starts the declaration at an object pattern (`await using {} = r`),
+            // which its checker rejects as TS1492.
+            (self.cur_kind().is_binding_identifier() || self.cur_kind() == Kind::LCurly)
+                && !self.cur_token().is_on_new_line()
         } else {
             false
         }
