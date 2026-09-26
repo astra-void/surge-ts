@@ -1534,6 +1534,8 @@ fn binding_pattern_implied_type(binding: &ParsedBindingName) -> Option<ParsedTyp
                 properties,
                 string_index_type: pattern.rest.is_some().then(|| Box::new(ParsedType::Any)),
                 number_index_type: None,
+                string_index_readonly: false,
+                number_index_readonly: false,
                 call_signature: None,
                 call_signature_overloads: Vec::new(),
                 construct_signature: None,
@@ -1591,6 +1593,24 @@ fn binding_element_implied_type(binding: &ParsedBindingName) -> Option<ParsedTyp
         ParsedBindingName::Unsupported { .. } => None,
         pattern => binding_pattern_implied_type(pattern),
     }
+}
+
+/// tsc's report of a literal member the binding pattern contextually typing
+/// the literal does not name (`checkObjectLiteral`), which names the pattern's
+/// implied type.
+pub(crate) fn report_pattern_excess_property(
+    excess: &surge_ts_syntax::ParsedPatternExcessProperty,
+    ctx: &mut CheckerContext,
+) {
+    let Some(implied) = binding_pattern_implied_type(&excess.pattern) else {
+        return;
+    };
+    let implied = crate::infer::map_parsed_type(implied, ctx);
+    let diagnostic = Diagnostic::ts2353(&excess.name, implied.name(), ctx.file_name.clone());
+    ctx.push(match excess.name_span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
 }
 
 pub(crate) fn map_function_signature(
@@ -2691,6 +2711,13 @@ pub(crate) fn check_function_body_with_signature_and_this(
             Diagnostic::ts2505(ctx.file_name.clone()),
             missing_return_span,
         ));
+    } else if is_generator && has_explicit_return_type {
+        super::body_statements::check_generator_instantiation(
+            function_type.return_type(),
+            is_async,
+            missing_return_span,
+            ctx,
+        );
     }
     // tsc's `reportErrorsFromWidening` for an unannotated generator's yield
     // type; a declaration has no contextual signature to defer to.
@@ -2754,6 +2781,9 @@ pub(crate) fn check_function_body_with_signature_and_this(
     } else {
         ctx.constructor_writable_members.take()
     };
+    // tsc's `getReturnTypeFromAnnotation`: a constructor's returns are related
+    // to the class instance type, which is what `this` is here.
+    let constructor_return_type = if is_constructor { this_type.clone() } else { None };
 
     if let Some(this_type) = this_type {
         scopes.insert_current(
@@ -2834,6 +2864,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
         // its returns are checked. Opening one stops a nested declaration from
         // recording into an enclosing arrow's frame.
         ctx.open_contextual_return_frame();
+        let _constructor_body = super::body_statements::ConstructorBody::enter(is_constructor);
         let outer_async_body = std::mem::replace(&mut ctx.in_async_body, is_async);
         let outer_generator_body = std::mem::replace(&mut ctx.in_generator_body, is_generator);
         // A declaration or class member is never contextually typed, so an
@@ -2864,13 +2895,19 @@ pub(crate) fn check_function_body_with_signature_and_this(
         if !has_explicit_return_type {
             ctx.mark_unannotated_declaration_body();
         }
-        check_function_body(
-            body,
-            has_explicit_return_type.then(|| function_type.return_type()),
-            &mut scopes,
-            &mut flow_state,
-            ctx,
-        );
+        // A declaration's yields type nothing here; the frame keeps a generator
+        // nested in an unannotated one from reporting into it.
+        let ((), _) = super::body_statements::collecting_generator_yields(false, || {
+            check_function_body(
+                body,
+                has_explicit_return_type
+                    .then(|| function_type.return_type())
+                    .or(constructor_return_type.as_ref()),
+                &mut scopes,
+                &mut flow_state,
+                ctx,
+            )
+        });
         ctx.in_async_body = outer_async_body;
         ctx.in_generator_body = outer_generator_body;
         ctx.implicit_any_yields = outer_implicit_any_yields;

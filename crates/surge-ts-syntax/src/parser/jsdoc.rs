@@ -1541,6 +1541,8 @@ fn type_of_expression(expression: &JsDocTypeExpression) -> Option<ParsedType> {
                 properties,
                 string_index_type: None,
                 number_index_type: None,
+                string_index_readonly: false,
+                number_index_readonly: false,
                 call_signature: None,
                 call_signature_overloads: Vec::new(),
                 construct_signature: None,
@@ -1582,6 +1584,8 @@ fn template_parameters(tags: &[JsDocTag], typedef_or_callback: bool) -> Vec<Pars
                 default_type: parameter.default_type.as_ref().and_then(|ty| ty.ty.clone()),
                 span: Some(parameter.span),
                 is_const: parameter.is_const,
+                is_in: false,
+                is_out: false,
             });
         }
     }

@@ -39,9 +39,9 @@ pub(crate) fn take_examined_modifier_starts() -> Vec<u32> {
     EXAMINED_MODIFIERS.with(|examined| std::mem::take(&mut *examined.borrow_mut()))
 }
 
-/// Where every `this` the last walk found the script's top level to own
-/// starts (`tryGetThisTypeAt` answers those with `globalThis`), in source
-/// order.
+/// Where every `this` the last walk found the file's top level to own
+/// starts, in source order. `tryGetThisTypeAt` answers those with
+/// `globalThis` in a script and with `undefined` in a module.
 pub(crate) fn take_global_this_starts() -> Vec<u32> {
     GLOBAL_THIS_STARTS.with(|starts| std::mem::take(&mut *starts.borrow_mut()))
 }
@@ -718,11 +718,9 @@ impl<'a> ContextCollector<'a, '_> {
                 // `globalThis`, and an arrow that captured it is TS7041 under
                 // `noImplicitThis`; a module's top-level `this` is `undefined`.
                 AstKind::Program(_) => {
-                    if !self.external_module {
-                        self.global_this_starts.push(span.start);
-                        if captured_by_arrow {
-                            self.push(7041, span, &[]);
-                        }
+                    self.global_this_starts.push(span.start);
+                    if captured_by_arrow && !self.external_module {
+                        self.push(7041, span, &[]);
                     }
                     return;
                 }
@@ -1339,6 +1337,17 @@ impl<'a> ContextCollector<'a, '_> {
                         self.push(1337, name_span, &[]);
                         return;
                     }
+                    if members.len() == 1
+                        && reference.type_arguments.is_none()
+                        && let oxc_ast::ast::TSTypeName::IdentifierReference(name) = &reference.type_name
+                        && self.type_names_resolve_at_top_level()
+                    {
+                        self.out.push(ParsedGrammarDiagnostic {
+                            kind: Kind::IndexSignatureKeyReference,
+                            span: text_span_from_oxc_span(name_span),
+                            name: Some(format!("{}\0{}\0{}", name.name, reference.span.start, reference.span.end)),
+                        });
+                    }
                     return;
                 }
                 oxc_ast::ast::TSType::TSStringKeyword(_)
@@ -1372,6 +1381,31 @@ impl<'a> ContextCollector<'a, '_> {
 
     fn is_type_parameter_in_scope(&self, name: &str) -> bool {
         self.type_parameter_in_scope(name).is_some()
+    }
+
+    /// Whether a type name written here resolves in the file's top-level
+    /// scope: nothing encloses it that declares types of its own (a function,
+    /// block, namespace or `declare global`) or type parameters
+    /// `type_parameter_in_scope` does not see.
+    fn type_names_resolve_at_top_level(&self) -> bool {
+        !self.stack.iter().any(|kind| {
+            matches!(
+                kind,
+                AstKind::Function(_)
+                    | AstKind::ArrowFunctionExpression(_)
+                    | AstKind::FunctionBody(_)
+                    | AstKind::BlockStatement(_)
+                    | AstKind::StaticBlock(_)
+                    | AstKind::TSModuleDeclaration(_)
+                    | AstKind::TSGlobalDeclaration(_)
+                    | AstKind::TSMappedType(_)
+                    | AstKind::TSFunctionType(_)
+                    | AstKind::TSConstructorType(_)
+                    | AstKind::TSCallSignatureDeclaration(_)
+                    | AstKind::TSConstructSignatureDeclaration(_)
+                    | AstKind::TSConditionalType(_)
+            )
+        })
     }
 
     /// The innermost in-scope declaration of the type parameter `name`.
@@ -1521,79 +1555,6 @@ impl<'a> ContextCollector<'a, '_> {
                     .any(|(n, is_enum, e, _)| n == name && !is_enum && e == exported);
             if conflicts {
                 self.push(2567, *span, &[]);
-            }
-        }
-    }
-
-    /// tsc's `checkExportsOnMergedDeclarations` for the declarations that
-    /// merge (interfaces, namespaces, classes, enums, and a named default
-    /// export of one): a default-exported declaration sharing a space with
-    /// any other is TS2652; exported and local declarations sharing one are
-    /// TS2395. Each declaration reports at most one, TS2652 first.
-    fn check_merged_export_visibility(&mut self, statements: &[Statement<'_>]) {
-        const TYPE: u8 = 1;
-        const VALUE: u8 = 2;
-        const NAMESPACE: u8 = 4;
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        enum Visibility {
-            Local,
-            Exported,
-            Default,
-        }
-        let mut declarations: Vec<(&str, Span, Visibility, u8)> = Vec::new();
-        for statement in statements {
-            use oxc_ast::ast::Declaration as D;
-            let (declaration, visibility) = match statement {
-                Statement::ExportNamedDeclaration(export) => (export.declaration.as_ref(), Visibility::Exported),
-                Statement::ExportDefaultDeclaration(export) => {
-                    let entry = match &export.declaration {
-                        oxc_ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(d) => {
-                            d.id.as_ref().map(|id| (id.name.as_str(), id.span, TYPE | VALUE))
-                        }
-                        oxc_ast::ast::ExportDefaultDeclarationKind::TSInterfaceDeclaration(d) => {
-                            Some((d.id.name.as_str(), d.id.span, TYPE))
-                        }
-                        _ => None,
-                    };
-                    if let Some((name, span, spaces)) = entry {
-                        declarations.push((name, span, Visibility::Default, spaces));
-                    }
-                    continue;
-                }
-                other => (other.as_declaration(), Visibility::Local),
-            };
-            let entry = match declaration {
-                Some(D::TSInterfaceDeclaration(d)) => Some((d.id.name.as_str(), d.id.span, TYPE)),
-                Some(D::ClassDeclaration(d)) => d.id.as_ref().map(|id| (id.name.as_str(), id.span, TYPE | VALUE)),
-                Some(D::TSEnumDeclaration(d)) => Some((d.id.name.as_str(), d.id.span, TYPE | VALUE)),
-                Some(D::TSModuleDeclaration(d)) => match &d.id {
-                    oxc_ast::ast::TSModuleDeclarationName::Identifier(id) => {
-                        let spaces = if module_is_instantiated(d) { NAMESPACE | VALUE } else { NAMESPACE };
-                        Some((id.name.as_str(), id.span, spaces))
-                    }
-                    _ => None,
-                },
-                _ => None,
-            };
-            if let Some((name, span, spaces)) = entry {
-                declarations.push((name, span, visibility, spaces));
-            }
-        }
-        for (name, span, _, spaces) in &declarations {
-            let (mut exported_spaces, mut local_spaces, mut default_spaces) = (0u8, 0u8, 0u8);
-            for (other, _, visibility, other_spaces) in &declarations {
-                if other == name {
-                    match visibility {
-                        Visibility::Local => local_spaces |= other_spaces,
-                        Visibility::Exported => exported_spaces |= other_spaces,
-                        Visibility::Default => default_spaces |= other_spaces,
-                    }
-                }
-            }
-            if spaces & default_spaces & (exported_spaces | local_spaces) != 0 {
-                self.push(2652, *span, &[name]);
-            } else if spaces & exported_spaces & local_spaces != 0 {
-                self.push(2395, *span, &[name]);
             }
         }
     }
@@ -3658,7 +3619,6 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_enum_merges(&block.body);
                 self.check_self_referencing_annotations(&block.body);
                 self.check_type_parameter_lists_identical(&block.body);
-                self.check_merged_export_visibility(&block.body);
                 self.check_merged_declarations(&block.body);
             }
             AstKind::BlockStatement(block) => {
@@ -3672,7 +3632,6 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_self_referencing_annotations(&program.body);
                 self.check_type_parameter_lists_identical(&program.body);
                 if self.external_module {
-                    self.check_merged_export_visibility(&program.body);
                     self.check_export_assignment_conflicts(program);
                 }
                 self.check_top_level_names(program);

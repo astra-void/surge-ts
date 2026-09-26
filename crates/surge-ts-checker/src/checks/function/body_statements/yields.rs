@@ -5,6 +5,70 @@ use surge_ts_syntax::{
     ParsedCallArgument, ParsedExpression, ParsedFunctionBodyStatement, ParsedLogicalOperator,
     ParsedUnaryOperator,
 };
+use surge_ts_types::Type;
+
+thread_local! {
+    /// What the generator bodies being checked yield, innermost last. A body
+    /// whose yields type nothing (an annotated generator) holds `None`, so a
+    /// generator nested in it does not report into an outer one.
+    static GENERATOR_YIELDS: std::cell::RefCell<Vec<Option<GeneratorYields>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The `yield`s of one generator body, as tsc's
+/// `checkAndAggregateYieldOperandTypes` aggregates them.
+#[derive(Default)]
+pub(crate) struct GeneratorYields {
+    pub(crate) yielded: Vec<Type>,
+    /// The types a `yield*` delegate is resumed with.
+    pub(crate) sent: Vec<Type>,
+    /// Some yield surge could not type, so any aggregate would be a guess.
+    pub(crate) unmodelled: bool,
+}
+
+/// Runs `check` over a generator body, collecting its yields when `collect`.
+pub(crate) fn collecting_generator_yields<R>(
+    collect: bool,
+    check: impl FnOnce() -> R,
+) -> (R, Option<GeneratorYields>) {
+    struct Frame(usize);
+    impl Drop for Frame {
+        fn drop(&mut self) {
+            GENERATOR_YIELDS.with(|frames| frames.borrow_mut().truncate(self.0));
+        }
+    }
+    let depth = GENERATOR_YIELDS.with(|frames| {
+        let mut frames = frames.borrow_mut();
+        frames.push(collect.then(GeneratorYields::default));
+        frames.len() - 1
+    });
+    let _frame = Frame(depth);
+    let result = check();
+    let yields = GENERATOR_YIELDS.with(|frames| frames.borrow_mut().get_mut(depth).and_then(Option::take));
+    (result, yields)
+}
+
+/// Records a `yield` of the innermost generator body: what it yields (`None`
+/// when surge could not type it) and, for a `yield*`, what its delegate is
+/// resumed with.
+pub(crate) fn record_generator_yield(yielded: Option<Type>, sent: Option<Type>) {
+    GENERATOR_YIELDS.with(|frames| {
+        let mut frames = frames.borrow_mut();
+        let Some(Some(yields)) = frames.last_mut() else {
+            return;
+        };
+        match yielded {
+            Some(ty) if !yields.yielded.contains(&ty) => yields.yielded.push(ty),
+            Some(_) => {}
+            None => yields.unmodelled = true,
+        }
+        if let Some(sent) = sent
+            && !yields.sent.contains(&sent)
+        {
+            yields.sent.push(sent);
+        }
+    });
+}
 
 /// tsc's `checkYieldExpression` reports a `yield` of a generator with neither
 /// a return type annotation nor a contextual signature when its value is used
@@ -250,6 +314,92 @@ fn collect_arguments(arguments: &[ParsedCallArgument], out: &mut Vec<usize>) {
 /// (`reportErrorsFromWidening`); any other yielded type absorbs those under
 /// subtype reduction. A class in the body is not looked into, so it answers
 /// `false`.
+/// Every `yield` of a generator body with its operand and whether it
+/// delegates, in source order; the yields of nested functions are theirs.
+/// `None` when a class in the body could hide one.
+pub(crate) fn yield_operands(body: &[ParsedFunctionBodyStatement]) -> Option<Vec<(Option<&ParsedExpression>, bool)>> {
+    type Found<'a> = Option<Vec<(Option<&'a ParsedExpression>, bool)>>;
+    fn walk_statements<'a>(statements: &'a [ParsedFunctionBodyStatement], out: &mut Found<'a>) {
+        for child in statements {
+            walk_statement(child, out);
+        }
+    }
+    fn walk_statement<'a>(node: &'a ParsedFunctionBodyStatement, out: &mut Found<'a>) {
+        match node {
+            ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
+                if let Some(initializer) = &variable.initializer {
+                    walk_expression(initializer, out);
+                }
+            }
+            ParsedFunctionBodyStatement::Return(returned) => {
+                if let Some(value) = &returned.expression {
+                    walk_expression(value, out);
+                }
+            }
+            ParsedFunctionBodyStatement::Throw(thrown) => walk_expression(&thrown.expression, out),
+            ParsedFunctionBodyStatement::Assignment(assignment) => walk_expression(&assignment.value, out),
+            ParsedFunctionBodyStatement::ThisPropertyAssignment(assignment) => {
+                walk_expression(&assignment.value, out);
+            }
+            ParsedFunctionBodyStatement::MemberAssignment(assignment) => {
+                walk_expression(&assignment.target, out);
+                walk_expression(&assignment.value, out);
+            }
+            ParsedFunctionBodyStatement::Expression(value) => walk_expression(value, out),
+            ParsedFunctionBodyStatement::Block(statements) => walk_statements(statements, out),
+            ParsedFunctionBodyStatement::If(branch) => {
+                walk_expression(&branch.condition, out);
+                walk_statements(&branch.then_body, out);
+                walk_statements(&branch.else_body, out);
+            }
+            ParsedFunctionBodyStatement::While(looped) => {
+                walk_expression(&looped.condition, out);
+                walk_statements(&looped.body, out);
+            }
+            ParsedFunctionBodyStatement::ForOf(looped) => {
+                walk_expression(&looped.iterable, out);
+                if let Some((target, _)) = &looped.head_target {
+                    walk_expression(target, out);
+                }
+                walk_statements(&looped.body, out);
+            }
+            ParsedFunctionBodyStatement::Switch(switch) => {
+                walk_expression(&switch.discriminant, out);
+                for case in &switch.cases {
+                    if let Some(test) = &case.test {
+                        walk_expression(test, out);
+                    }
+                    walk_statements(&case.consequent, out);
+                }
+            }
+            ParsedFunctionBodyStatement::Try(attempt) => {
+                walk_statements(&attempt.block, out);
+                if let Some(handler) = &attempt.handler {
+                    walk_statements(&handler.body, out);
+                }
+                walk_statements(&attempt.finalizer, out);
+            }
+            ParsedFunctionBodyStatement::Class(_) => *out = None,
+            _ => {}
+        }
+    }
+    fn walk_expression<'a>(expression: &'a ParsedExpression, out: &mut Found<'a>) {
+        match expression {
+            ParsedExpression::Yield { operand, delegate, .. } => {
+                if let Some(found) = out.as_mut() {
+                    found.push((operand.as_deref(), *delegate));
+                }
+            }
+            ParsedExpression::ClassExpression(_) => *out = None,
+            _ => {}
+        }
+        expression.for_each_child(&mut |child| walk_expression(child, out));
+    }
+    let mut out = Some(Vec::new());
+    walk_statements(body, &mut out);
+    out
+}
+
 pub(crate) fn yields_only_widening_nullish(body: &[ParsedFunctionBodyStatement]) -> bool {
     let mut census = YieldCensus::default();
     census.statements(body);

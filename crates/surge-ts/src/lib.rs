@@ -894,6 +894,7 @@ impl PreparedFinish<'_> {
                 result.diagnostics,
                 loaded.compiler_options.no_lib,
                 !loaded.compiler_options.type_roots.is_empty(),
+                &result.no_lib_missing_global_types,
                 options.diagnostic_profile,
             );
             for missing in &reference_type_resolution.missing {
@@ -1111,10 +1112,11 @@ fn reference_path_diagnostic(
 
 /// `TS5102`/`TS5108` for every compiler option TypeScript 7 removed, spanned
 /// inside the config file the way tsc spans them (the value node for the
-/// `name=value` form, the key node otherwise).
+/// `name=value` form, the key node otherwise), and TS6046 for an enum option
+/// whose value is none of its keys.
 pub fn removed_option_diagnostics(loaded: &LoadedTsConfig) -> Vec<Diagnostic> {
     let file_name = loaded.config_path.display().to_string();
-    loaded
+    let mut diagnostics: Vec<Diagnostic> = loaded
         .removed_options
         .iter()
         .map(|option| {
@@ -1127,7 +1129,14 @@ pub fn removed_option_diagnostics(loaded: &LoadedTsConfig) -> Vec<Diagnostic> {
                 end: option.end,
             })
         })
-        .collect()
+        .collect();
+    diagnostics.extend(surge_ts_config::invalid_enum_options(&loaded.config_path).into_iter().map(|option| {
+        Diagnostic::ts6046(format!("--{}", option.name), option.keys, file_name.clone()).with_span(TextSpan {
+            start: option.start,
+            end: option.end,
+        })
+    }));
+    diagnostics
 }
 
 /// tsc's `verifyCompilerOptions` checks of the JSX factory options' values:
@@ -1225,6 +1234,7 @@ fn apply_project_no_lib_compatibility_diagnostics(
     diagnostics: Vec<Diagnostic>,
     no_lib: bool,
     provides_global_lib: bool,
+    missing_global_types: &[&str],
     diagnostic_profile: DiagnosticProfile,
 ) -> Vec<Diagnostic> {
     if !no_lib || diagnostic_profile != DiagnosticProfile::Tsc {
@@ -1236,42 +1246,29 @@ fn apply_project_no_lib_compatibility_diagnostics(
         .filter(|diagnostic| !matches!(diagnostic.code, DiagnosticCode::TypeScript(2304)))
         .collect::<Vec<_>>();
 
-    // tsc emits "Cannot find global type 'Array'/..." only when the program
-    // supplies no replacement for the libraries `noLib` removed. A project with
-    // explicit `typeRoots` (e.g. roblox-ts's `@rbxts/types`) provides those
-    // globals itself, so tsc reports none — we must not fabricate them. surge
-    // does not model those replacement declarations, so the globals are treated
-    // as present rather than checked individually.
+    // tsc emits "Cannot find global type 'Array'/..." for each global type
+    // its checker requires that the program does not declare itself (the
+    // checker's `missing_global_types`). A project with explicit `typeRoots`
+    // (e.g. roblox-ts's `@rbxts/types`) provides those globals itself, so tsc
+    // reports none; surge treats them as present there rather than checking
+    // each.
     if !provides_global_lib {
-        filtered.extend(project_no_lib_missing_global_type_diagnostics());
+        filtered.extend(project_no_lib_missing_global_type_diagnostics(missing_global_types));
     }
     filtered
 }
 
-fn project_no_lib_missing_global_type_diagnostics() -> Vec<Diagnostic> {
-    let file_name = String::new();
-
-    [
-        "Array",
-        "Boolean",
-        "CallableFunction",
-        "Function",
-        "IArguments",
-        "NewableFunction",
-        "Number",
-        "Object",
-        "RegExp",
-        "String",
-    ]
-    .into_iter()
-    .map(|global_type| {
-        Diagnostic::new(
-            DiagnosticCode::TypeScript(2318),
-            format!("Cannot find global type '{global_type}'."),
-            file_name.clone(),
-        )
-    })
-    .collect()
+fn project_no_lib_missing_global_type_diagnostics(missing_global_types: &[&str]) -> Vec<Diagnostic> {
+    missing_global_types
+        .iter()
+        .map(|global_type| {
+            Diagnostic::new(
+                DiagnosticCode::TypeScript(2318),
+                format!("Cannot find global type '{global_type}'."),
+                String::new(),
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1296,12 +1293,26 @@ mod tests {
             .collect()
     }
 
+    const ALL_MISSING: [&str; 10] = [
+        "Array",
+        "Boolean",
+        "CallableFunction",
+        "Function",
+        "IArguments",
+        "NewableFunction",
+        "Number",
+        "Object",
+        "RegExp",
+        "String",
+    ];
+
     #[test]
     fn no_lib_without_global_lib_drops_2304_and_fabricates_2318() {
         let out = apply_project_no_lib_compatibility_diagnostics(
             vec![ts(2304), ts(2304), ts(2339)],
             true,
             false,
+            &ALL_MISSING,
             DiagnosticProfile::Tsc,
         );
         let out = codes(&out);
@@ -1319,6 +1330,7 @@ mod tests {
             vec![ts(2304), ts(2339)],
             true,
             true,
+            &ALL_MISSING,
             DiagnosticProfile::Tsc,
         );
         let out = codes(&out);
@@ -1333,6 +1345,7 @@ mod tests {
             vec![ts(2304), ts(2339)],
             false,
             false,
+            &[],
             DiagnosticProfile::Tsc,
         );
         assert_eq!(codes(&out), vec![2304, 2339]);

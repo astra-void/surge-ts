@@ -328,31 +328,45 @@ fn parser_error_descriptor(
 }
 
 /// The arguments that fill `template`'s `{n}` placeholders to produce
-/// `message`, tolerating a missing final period.
+/// `message`, tolerating a missing final period. A placeholder written twice
+/// (`'{0}' … 'export default {0}'`) must be filled the same both times and is
+/// one argument.
 fn match_message_template(template: &str, message: &str) -> Option<Vec<String>> {
     let template = template.strip_suffix('.').unwrap_or(template);
     let message = message.strip_suffix('.').unwrap_or(message);
     let mut pieces = Vec::new();
+    let mut indices = Vec::new();
     let mut rest = template;
     while let Some(open) = rest.find('{') {
         let close = rest[open..].find('}')? + open;
         pieces.push(&rest[..open]);
+        indices.push(rest[open + 1..close].parse::<usize>().ok()?);
         rest = &rest[close + 1..];
     }
     let (first, literals) = pieces.split_first().map_or((rest, &[][..]), |(f, l)| (*f, l));
     let mut remaining = message.strip_prefix(first)?;
-    let mut args = Vec::new();
+    let mut filled = Vec::new();
     for literal in literals.iter().copied().chain(std::iter::once(rest)) {
         if literal.is_empty() {
-            args.push(remaining.to_string());
+            filled.push(remaining.to_string());
             remaining = "";
             continue;
         }
         let at = remaining.find(literal)?;
-        args.push(remaining[..at].to_string());
+        filled.push(remaining[..at].to_string());
         remaining = &remaining[at + literal.len()..];
     }
-    (remaining.is_empty() && !pieces.is_empty()).then_some(args)
+    if !remaining.is_empty() || pieces.is_empty() {
+        return None;
+    }
+    let mut args: Vec<Option<String>> = vec![None; indices.iter().max().map_or(0, |max| max + 1)];
+    for (index, value) in indices.into_iter().zip(filled) {
+        match &args[index] {
+            Some(existing) if *existing != value => return None,
+            _ => args[index] = Some(value),
+        }
+    }
+    args.into_iter().collect()
 }
 
 pub(super) fn emit_parser_diagnostics(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {

@@ -793,6 +793,8 @@ fn canonical_types_equal(left: &Type, right: &Type) -> bool {
             left.alias_name == right.alias_name
                 && left.alias_id == right.alias_id
                 && Arc::ptr_eq(&left.properties, &right.properties)
+                && left.string_index_readonly == right.string_index_readonly
+                && left.number_index_readonly == right.number_index_readonly
                 && match (
                     left.string_index_type.as_deref(),
                     right.string_index_type.as_deref(),

@@ -777,6 +777,8 @@ fn plain_object(entries: Vec<(&str, Type)>) -> Type {
         property_map_id: None,
         string_index_type: None,
         number_index_type: None,
+        string_index_readonly: false,
+        number_index_readonly: false,
         alias_name: None,
         alias_id: None,
         construct_signature: None,

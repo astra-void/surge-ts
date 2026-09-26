@@ -1884,6 +1884,89 @@ pub(crate) fn widen_unit_return_type(
     crate::checks::expr::widen_type(&body_type)
 }
 
+/// tsc's `getReturnTypeFromBody` for a generator: `Generator<Y, R, N>` from
+/// what the body yields, returns and is resumed with. `None` when a yield or
+/// a returned value could not be typed, or the returns were not collected.
+pub(crate) fn inferred_generator_type(
+    yields: Option<&GeneratorYields>,
+    returned: Option<&[Type]>,
+    body_flow: &crate::flow::FunctionBodyFlow,
+    contextual_return: Option<&Type>,
+    is_async: bool,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let yields = yields.filter(|yields| !yields.unmodelled)?;
+    let return_type = if body_flow.contains_return_with_value {
+        let returned = returned.filter(|returned| !returned.is_empty())?;
+        if returned.iter().any(|ty| ty.is_unmodelled()) {
+            return None;
+        }
+        let mut members: Vec<Type> = returned
+            .iter()
+            .map(|ty| if is_async { crate::checks::call::awaited_type(ty) } else { ty.clone() })
+            .collect();
+        if surge_ts_types::strict_null_checks() && !body_flow.guarantees_exit {
+            members.push(Type::Undefined);
+        }
+        let contextual_return_value = contextual_return.and_then(|ty| contextual_iteration_type(ty, 1));
+        match members.as_slice() {
+            [single] => widen_unit_return_type(single.clone(), contextual_return_value.as_ref()),
+            _ => surge_ts_types::union_type(members),
+        }
+    } else if body_flow.guarantees_exit && !body_flow.contains_return {
+        // `checkAndAggregateReturnExpressionTypes`: a bare `return;` is a return
+        // of `void`; only a body that never completes at all returns `never`.
+        Type::Never
+    } else {
+        Type::Void
+    };
+    let contextual_yield = contextual_return.and_then(|ty| contextual_iteration_type(ty, 0));
+    let yield_type = match yields.yielded.as_slice() {
+        [] => Type::Never,
+        [single] => widen_unit_return_type(single.clone(), contextual_yield.as_ref()),
+        many => surge_ts_types::union_type(many.to_vec()),
+    };
+    // `getWidenedType`: without `strictNullChecks` a yielded `null` or
+    // `undefined` widens to `any`, which absorbs the union.
+    let widens_to_any = !surge_ts_types::strict_null_checks()
+        && match yield_type.peeled() {
+            Type::Undefined | Type::Null => true,
+            Type::Union(union) => union.types().iter().any(|member| matches!(member, Type::Undefined | Type::Null)),
+            _ => false,
+        };
+    let yield_type = if widens_to_any { Type::Any } else { yield_type };
+    let resumed: Vec<&Type> = yields.sent.iter().filter(|ty| !matches!(ty, Type::GenuineUnknown)).collect();
+    let next_type = match resumed.as_slice() {
+        [] if !yields.sent.is_empty() => Type::GenuineUnknown,
+        [] => contextual_return
+            .and_then(|ty| contextual_iteration_type(ty, 2))
+            .unwrap_or(Type::GenuineUnknown),
+        [single] => (*single).clone(),
+        _ => return None,
+    };
+    generator_type_of(&yield_type, &return_type, &next_type, is_async, ctx)
+}
+
+/// tsc's `getIterationTypeOfGeneratorFunctionReturnType` over a contextual
+/// return type: a union's members each describe the generator, so its
+/// iteration type is the union of theirs (yield, return, next by `index`).
+fn contextual_iteration_type(contextual: &Type, index: usize) -> Option<Type> {
+    let argument = |ty: &Type| match index {
+        0 => generator_yield_type_argument(ty),
+        1 => generator_return_type_argument(ty),
+        _ => generator_next_type_argument(ty),
+    };
+    match contextual {
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .map(argument)
+            .collect::<Option<Vec<_>>>()
+            .map(surge_ts_types::union_type),
+        _ => argument(contextual),
+    }
+}
+
 fn is_literal_of_contextual_type(candidate: &Type, contextual: &Type) -> bool {
     // An enum member is the number or string literal it stands for.
     if let Type::Reference(reference) = candidate
@@ -2057,6 +2140,8 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 Diagnostic::ts2505(ctx.file_name.clone()),
                 return_type_span,
             ));
+        } else if is_generator && has_explicit_return_type {
+            check_generator_instantiation(&return_type, is_async, return_type_span, ctx);
         }
 
         if let Some(expected_type) = expected_type {
@@ -2386,6 +2471,9 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     .flatten();
                 let tail_call = crate::checks::expr::tail_call_key(&statements);
                 let return_type_for_body = match &return_type {
+                    // An unannotated generator's returns make its `TReturn`;
+                    // the contextual type describes the generator object.
+                    _ if is_generator && !has_explicit_return_type => None,
                     // An annotation naming the arrow's own type variable is a type
                     // its returns are related to, as a declaration's are
                     // (`checkReturnExpression`).
@@ -2413,6 +2501,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     ctx.activate_next_body_frame();
                 }
                 ctx.open_contextual_return_frame();
+                let _constructor_body = body_statements::ConstructorBody::enter(false);
                 // tsc relates a generator's returns to its `TReturn` only under a
                 // return type annotation (`getReturnTypeFromAnnotation`); a
                 // contextually typed one is related by its whole signature.
@@ -2454,13 +2543,16 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 let outer_generator_function = std::mem::replace(&mut ctx.in_generator_function, is_generator);
                 let outer_async_generator =
                     std::mem::replace(&mut ctx.in_async_generator, is_generator && is_async);
-                check_function_body(
-                    statements,
-                    return_type_for_body,
-                    &mut scopes,
-                    &mut flow_state,
-                    ctx,
-                );
+                let ((), generator_yields) =
+                    collecting_generator_yields(is_generator && !has_explicit_return_type, || {
+                        check_function_body(
+                            statements,
+                            return_type_for_body,
+                            &mut scopes,
+                            &mut flow_state,
+                            ctx,
+                        )
+                    });
                 ctx.in_async_body = outer_async_body;
                 ctx.in_generator_body = outer_generator_body;
                 ctx.generator_yield_type = outer_yield_type;
@@ -2536,6 +2628,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 });
                 if infer_block_body_return_types()
                     && !has_explicit_return_type
+                    && !is_generator
                     && contextual_return_is_open
                 {
                     let returned = ctx.body_return_types().to_vec();
@@ -2562,6 +2655,20 @@ pub(crate) fn check_arrow_function_expression_anchored(
                             return_type = crate::checks::call::promise_of(&return_type, ctx);
                         }
                     }
+                }
+                let returned = ctx.body_return_types().to_vec();
+                if is_generator
+                    && !has_explicit_return_type
+                    && let Some(generator) = inferred_generator_type(
+                        generator_yields.as_ref(),
+                        Some(&returned),
+                        &body_flow,
+                        expected_type.map(|expected| expected.return_type()),
+                        is_async,
+                        ctx,
+                    )
+                {
+                    return_type = generator;
                 }
                 let returned_void_like = ctx.close_contextual_return_frame();
 

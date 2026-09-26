@@ -64,6 +64,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS6046",
+    "category": "Error",
+    "message": "Argument for '{0}' option must be: {1}.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
     "code": "TS1360",
     "category": "Error",
     "message": "Type '{0}' does not satisfy the expected type '{1}'.",
@@ -3824,6 +3832,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2409",
+    "category": "Error",
+    "message": "Return type of constructor signature must be assignable to the instance type of the class.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS18041",
     "category": "Error",
     "message": "A 'return' statement cannot be used inside a class static block.",
@@ -4309,7 +4325,7 @@
     "message": "This expression is not callable because it is a 'get' accessor. Did you mean to use it without '()'?",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS2690",

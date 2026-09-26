@@ -87,15 +87,16 @@ pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression
     let (lowered, span) = parse_expression_unannotated(expression);
     // A JSDoc-typed assignment declaration's value is checked against its
     // type, which is what the declared member then has.
+    // Its mismatch is reported at the value, so the assertion names no pattern.
     if super::spans::lowering_javascript()
-        && let Some((ty, type_span)) = super::jsdoc::assignment_type_at(expression.span().start, expression.span().end)
+        && let Some((ty, _)) = super::jsdoc::assignment_type_at(expression.span().start, expression.span().end)
     {
         return (
             ParsedExpression::TypeAssertion {
                 expression: Box::new(lowered),
                 expression_span: Some(text_span_from_oxc_span(span)),
                 ty,
-                type_span: Some(type_span),
+                type_span: None,
                 annotation: true,
             },
             span,

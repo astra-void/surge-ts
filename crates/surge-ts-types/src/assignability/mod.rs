@@ -131,10 +131,10 @@ fn relation_key(ty: &Type) -> Option<RelationKey> {
                     .map_or(0, |index| Arc::as_ptr(index) as usize),
                 object
                     .call_signature()
-                    .map_or(0, |signature| signature.payload_address()),
+                    .map_or(0, |signature| signature.payload_address() ^ written_shape_address(signature)),
                 object
                     .construct_signature()
-                    .map_or(0, |signature| signature.payload_address()),
+                    .map_or(0, |signature| signature.payload_address() ^ written_shape_address(signature)),
                 object
                     .alias_id
                     .as_ref()
@@ -147,10 +147,18 @@ fn relation_key(ty: &Type) -> Option<RelationKey> {
         }),
         Type::Function(function) => Some(RelationKey {
             tag: 3,
-            parts: [function.payload_address(), 0, 0, 0, 0, 0],
+            parts: [function.payload_address(), written_shape_address(function), 0, 0, 0, 0],
         }),
         _ => None,
     }
+}
+
+/// A signature with a written shape relates through it, and every signature
+/// erased to the same payload has a shape of its own, or none.
+fn written_shape_address(function: &FunctionType) -> usize {
+    function
+        .generic_shape()
+        .map_or(0, |shape| shape as *const crate::GenericSignatureShape as usize)
 }
 
 fn record_assignability_assumption() {
@@ -1092,6 +1100,29 @@ fn is_empty_object_type(ty: &Type) -> bool {
                 && !object.is_intersection))
 }
 
+/// relater.go `typeArgumentsRelatedTo` for a parameter whose variance the
+/// declaration states. An `Unmeasurable` one relates only identical
+/// arguments (`compareTypesIdentical`).
+fn declared_argument_related(variance: crate::DeclaredVariance, source: &Type, target: &Type) -> bool {
+    match variance {
+        crate::DeclaredVariance::Covariant => is_assignable_to(source, target),
+        crate::DeclaredVariance::Contravariant => is_assignable_to(target, source),
+        crate::DeclaredVariance::Invariant => {
+            is_assignable_to(source, target) && is_assignable_to(target, source)
+        }
+        crate::DeclaredVariance::Unmeasurable => crate::is_type_identical_to(source, target),
+    }
+}
+
+/// relater.go `hasCovariantVoidArgument`: a `void` target argument for a
+/// covariant parameter lets a failed variance check retry structurally.
+fn has_covariant_void_argument(target_arguments: &[Type], variances: u32) -> bool {
+    target_arguments.iter().enumerate().any(|(index, argument)| {
+        matches!(argument, Type::Void)
+            && crate::declared_variance(variances, index) == Some(crate::DeclaredVariance::Covariant)
+    })
+}
+
 fn assignability_arms(from: &Type, to: &Type) -> bool {
     // relater.go `isRelatedTo`: the comparable relation skips the weak type
     // check (`isPerformingCommonPropertyChecks`) except for a unit source,
@@ -1194,21 +1225,47 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
     // spuriously diverge.
     if let (Type::Reference(from_ref), Type::Reference(to_ref)) = (from, to) {
         if from_ref.id == to_ref.id && from_ref.arguments.len() == to_ref.arguments.len() {
+            let variances = from_ref.declared_variances | to_ref.declared_variances;
             let arguments_compatible =
                 from_ref
                     .arguments
                     .iter()
                     .zip(to_ref.arguments.iter())
-                    .all(|(from_arg, to_arg)| {
+                    .enumerate()
+                    .all(|(index, (from_arg, to_arg))| match crate::declared_variance(variances, index) {
+                        Some(variance) => declared_argument_related(variance, from_arg, to_arg),
                         // A type variable of the body being checked is a type,
                         // not a gap: `Foo<U>` is no `Foo<T>` unless `U` is a `T`.
-                        matches!(from_arg, Type::Any | Type::Unknown | Type::ErrorType | Type::GenuineUnknown)
-                            || (matches!(from_arg, Type::TypeParameter(_)) && !from_arg.is_type_variable())
-                            || matches!(to_arg, Type::Any)
-                            || is_assignable_to(from_arg, to_arg)
+                        None => {
+                            matches!(from_arg, Type::Any | Type::Unknown | Type::ErrorType | Type::GenuineUnknown)
+                                || (matches!(from_arg, Type::TypeParameter(_)) && !from_arg.is_type_variable())
+                                || matches!(to_arg, Type::Any)
+                                || is_assignable_to(from_arg, to_arg)
+                        }
                     });
             if arguments_compatible {
                 return true;
+            }
+            // relater.go `getVariancesWorker` takes an annotated parameter's
+            // variance as written, and `relateVariances` makes a failed check
+            // final unless a covariant argument's target is `void`
+            // (`hasCovariantVoidArgument`). A parameter it measures may allow
+            // the structural retry, so only a declaration annotated throughout
+            // is decided here.
+            if variances != 0
+                && (0..to_ref.arguments.len()).all(|index| {
+                    matches!(
+                        crate::declared_variance(variances, index),
+                        Some(
+                            crate::DeclaredVariance::Covariant
+                                | crate::DeclaredVariance::Contravariant
+                                | crate::DeclaredVariance::Invariant
+                        )
+                    )
+                })
+                && !has_covariant_void_argument(&to_ref.arguments, variances)
+            {
+                return false;
             }
             // tsc relates two instantiations of one alias by the measured
             // variance of its parameters, and `Record<K, T>`'s `K` — a mapped
@@ -1934,6 +1991,9 @@ fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bo
     if source.overloads().is_some() || target.overloads().is_some() {
         return is_signature_assignable_to(source, target, false);
     }
+    if source.generic_shape().is_some() || target.generic_shape().is_some() {
+        return written_generic_signatures_related(source, target);
+    }
     // `compareSignaturesRelated`: a generic target keeps its own type
     // parameters (`getCanonicalSignature`), and a generic source is
     // instantiated in the context of that canonical signature.
@@ -1945,6 +2005,92 @@ fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bo
         return is_signature_assignable_to(&instantiated, target, false);
     }
     is_signature_assignable_to(source, target, false)
+}
+
+/// `compareSignaturesRelated` (relater.go:1485) where a side was written with
+/// a constrained type parameter. The target keeps its own type parameters
+/// (`getCanonicalSignature`, checker.go:19314): each is a type variable
+/// related through its constraint, and nothing but itself is assignable to
+/// it. A generic source is then instantiated in the target's context
+/// (`instantiateSignatureInContextOf`, checker.go:19371). A constrained target
+/// without a written shape keeps the erased comparison.
+fn written_generic_signatures_related(source: &FunctionType, target: &FunctionType) -> bool {
+    let canonical = target.generic_shape().map(|shape| canonical_signature(target, shape));
+    let canonical_target = match &canonical {
+        Some((_, canonical_target)) => canonical_target.clone(),
+        None if target.type_parameter_head().is_some() => match opaque_generic_target(target) {
+            Some(opaque) => opaque,
+            None => return is_signature_assignable_to(source, target, false),
+        },
+        None => target.clone(),
+    };
+    let instantiated_source = match source.generic_shape() {
+        Some(shape) => shape_in_context_of(source, shape, &canonical_target),
+        None => generic_source_in_context_of(source, &canonical_target).unwrap_or_else(|| source.clone()),
+    };
+    let related = is_signature_assignable_to(&instantiated_source, &canonical_target, false);
+    // Their payloads key the relation memo until the outermost query ends.
+    SYNTHESIZED_TARGETS.with(|targets| {
+        let mut targets = targets.borrow_mut();
+        targets.push(Type::Function(canonical_target));
+        targets.push(Type::Function(instantiated_source));
+    });
+    related
+}
+
+/// `getCanonicalSignature` over a written shape: the signature's own type
+/// parameters bound as the variables of a fresh scope, each with its
+/// constraint, for as long as the scope is held.
+fn canonical_signature(
+    function: &FunctionType,
+    shape: &crate::GenericSignatureShape,
+) -> (crate::type_variable::TypeVariableScope, FunctionType) {
+    let variables = crate::type_variable::TypeVariableScope::enter(
+        shape
+            .type_parameters
+            .iter()
+            .map(|(name, _)| (name.clone(), (Arc::<str>::from(""), 0u32))),
+    );
+    let names: Vec<String> = shape.type_parameters.iter().map(|(name, _)| name.to_string()).collect();
+    let variable = |name: &str| variables.variable(name);
+    let mut changed = false;
+    for (name, constraint) in &shape.type_parameters {
+        if let Some(constraint) = constraint {
+            variables.set_constraint(name, substitute_type_parameters(constraint, &names, &variable, &mut changed));
+        }
+    }
+    let parameters = shape
+        .parameters
+        .iter()
+        .map(|parameter| substitute_type_parameters(parameter, &names, &variable, &mut changed))
+        .collect();
+    let return_type = substitute_type_parameters(&shape.return_type, &names, &variable, &mut changed);
+    let canonical = FunctionType::new(
+        parameters,
+        return_type,
+        function.is_variadic(),
+        function.required_parameter_count(),
+    );
+    (variables, canonical)
+}
+
+/// `instantiateSignatureInContextOf` for a source written with a constrained
+/// type parameter: the inference runs over its written shape.
+fn shape_in_context_of(
+    source: &FunctionType,
+    shape: &crate::GenericSignatureShape,
+    target: &FunctionType,
+) -> FunctionType {
+    let written = FunctionType::new(
+        shape.parameters.clone(),
+        shape.return_type.clone(),
+        source.is_variadic(),
+        source.required_parameter_count(),
+    );
+    let names: Vec<String> = shape.type_parameters.iter().map(|(name, _)| name.to_string()).collect();
+    let constraints: Vec<Option<Type>> =
+        shape.type_parameters.iter().map(|(_, constraint)| constraint.clone()).collect();
+    instantiate_in_context_of(&written, &names, &constraints, target).unwrap_or(written)
 }
 
 /// tsc's `instantiateSignatureInContextOf`: a generic source compared with a
@@ -1968,14 +2114,34 @@ pub fn generic_source_in_context_of(source: &FunctionType, target: &FunctionType
     if names.is_empty() {
         return None;
     }
-    let mut candidates: Vec<InferenceCandidates> = names
-        .iter()
-        .map(|name| InferenceCandidates {
-            name: name.clone(),
-            covariant: Vec::new(),
-            contravariant: Vec::new(),
-        })
-        .collect();
+    instantiate_in_context_of(source, &names, &vec![None; names.len()], target)
+}
+
+/// [`generic_source_in_context_of`] over `names`, each with its constraint.
+/// `getInferredType` (inference.go:1283) keeps an inference that satisfies
+/// the constraint instantiated with the other inferences; a pure return type
+/// inference keeps the union members that do; failing that the other
+/// variance's inference stands if it satisfies it, and failing that the
+/// constraint itself. A constrained parameter the parameters infer nothing for
+/// is inferred from the return type (`applyToReturnTypes`, at the lower
+/// `InferencePriorityReturnType`).
+fn instantiate_in_context_of(
+    source: &FunctionType,
+    names: &[String],
+    constraints: &[Option<Type>],
+    target: &FunctionType,
+) -> Option<FunctionType> {
+    let empty_candidates = || -> Vec<InferenceCandidates> {
+        names
+            .iter()
+            .map(|name| InferenceCandidates {
+                name: name.clone(),
+                covariant: Vec::new(),
+                contravariant: Vec::new(),
+            })
+            .collect()
+    };
+    let mut candidates = empty_candidates();
     // `getTypeAtPosition` reads an optional parameter with its `undefined`.
     let with_optionality = |function: &FunctionType, index: usize, ty: Type| {
         if crate::strict_null_checks()
@@ -1999,56 +2165,71 @@ pub fn generic_source_in_context_of(source: &FunctionType, target: &FunctionType
         let target_parameter = with_optionality(target, index, target_parameter);
         infer_to_type_parameters(&source_parameter, &target_parameter, &mut candidates, false, 0);
     }
-    let inferred = |name: &str| -> Type {
-        let Some(inference) = candidates.iter().find(|inference| inference.name == name) else {
-            return Type::type_parameter(name);
+    let constrained = constraints.iter().any(Option::is_some);
+    let mut return_candidates = empty_candidates();
+    if constrained {
+        infer_to_type_parameters(source.return_type(), target.return_type(), &mut return_candidates, false, 0);
+    }
+    // Per name: the inference `getInferredType` prefers, the other variance's
+    // as its fallback, and whether the return type alone supplied it.
+    let inferences: Vec<Option<(Type, Option<Type>, bool)>> = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let constraint = constraints.get(index).and_then(Option::as_ref);
+            preferred_inference(&candidates[index], source, name, constraint)
+                .map(|(inferred, fallback)| (inferred, fallback, false))
+                .or_else(|| {
+                    preferred_inference(&return_candidates[index], source, name, Some(constraint?))
+                        .map(|(inferred, fallback)| (inferred, fallback, true))
+                })
+        })
+        .collect();
+    let mut inferred: Vec<Type> = names
+        .iter()
+        .zip(&inferences)
+        .map(|(name, inference)| match inference {
+            Some((inferred, _, _)) => inferred.clone(),
+            None => Type::type_parameter(name),
+        })
+        .collect();
+    for index in 0..names.len() {
+        let Some(constraint) = constraints.get(index).and_then(Option::as_ref) else {
+            continue;
         };
-        // `getCovariantInference` widens literal candidates of a parameter the
-        // return type does not expose at its top level.
-        let widened: Vec<Type>;
-        let covariant = if type_parameter_at_top_level(source.return_type(), name) {
-            inference.covariant.as_slice()
-        } else {
-            widened = inference.covariant.iter().map(widen_literal_candidate).collect();
-            widened.as_slice()
+        let instantiated_constraint = {
+            let current = |name: &str| match names.iter().position(|own| own == name) {
+                Some(position) => inferred[position].clone(),
+                None => Type::type_parameter(name),
+            };
+            substitute_type_parameters(constraint, names, &current, &mut false)
         };
-        // The leftmost candidate every other one is assignable to, as
-        // `getCommonSupertype` picks; with none, the first stands and the
-        // comparison reports the disagreement.
-        let supertype = covariant
-            .iter()
-            .find(|candidate| covariant.iter().all(|other| is_assignable_to(other, candidate)))
-            .or_else(|| covariant.first());
-        // `getCommonSubtype`: the leftmost candidate no later one is a subtype of.
-        let subtype = inference.contravariant.iter().fold(None::<&Type>, |subtype, candidate| match subtype {
-            Some(subtype) if !is_assignable_to(candidate, subtype) => Some(subtype),
-            _ => Some(candidate),
-        });
-        // `getInferredType` keeps the covariant inference only when it fits
-        // some contravariant candidate.
-        let prefer_covariant = |supertype: &Type| {
-            !matches!(supertype, Type::Never | Type::Any)
-                && inference
-                    .contravariant
-                    .iter()
-                    .any(|candidate| is_assignable_to(supertype, candidate))
+        let satisfies = |ty: &Type| is_assignable_to(ty, &instantiated_constraint);
+        let chosen = match &inferences[index] {
+            Some((candidate, _, _)) if satisfies(candidate) => candidate.clone(),
+            Some((Type::Union(union), _, true)) if union.types().iter().any(|member| satisfies(member)) => {
+                crate::union_type(union.types().iter().filter(|&member| satisfies(member)).cloned().collect())
+            }
+            Some((_, Some(fallback), _)) if satisfies(fallback) => fallback.clone(),
+            _ => instantiated_constraint.clone(),
         };
-        match (supertype, subtype) {
-            (Some(supertype), Some(subtype)) if !prefer_covariant(supertype) => subtype.clone(),
-            (Some(inferred), _) | (None, Some(inferred)) => inferred.clone(),
-            (None, None) => Type::type_parameter(name),
-        }
+        inferred[index] = chosen;
+    }
+    let resolved = |name: &str| match names.iter().position(|own| own == name) {
+        Some(position) => inferred[position].clone(),
+        None => Type::type_parameter(name),
     };
     let mut changed = false;
     let parameters: Vec<Type> = source
         .parameters()
         .iter()
-        .map(|parameter| substitute_type_parameters(parameter, &names, &inferred, &mut changed))
+        .map(|parameter| substitute_type_parameters(parameter, names, &resolved, &mut changed))
         .collect();
-    let return_type = substitute_type_parameters(source.return_type(), &names, &inferred, &mut changed);
-    let resolved_any = candidates
-        .iter()
-        .any(|inference| !inference.covariant.is_empty() || !inference.contravariant.is_empty());
+    let return_type = substitute_type_parameters(source.return_type(), names, &resolved, &mut changed);
+    let resolved_any = constrained
+        || candidates
+            .iter()
+            .any(|inference| !inference.covariant.is_empty() || !inference.contravariant.is_empty());
     (changed && resolved_any).then(|| {
         FunctionType::new(
             parameters,
@@ -2057,6 +2238,99 @@ pub fn generic_source_in_context_of(source: &FunctionType, target: &FunctionType
             source.required_parameter_count(),
         )
     })
+}
+
+/// `getInferredType` before its constraint check: the covariant inference
+/// when it fits some contravariant candidate, else the contravariant one,
+/// with the other as the fallback. `None` without a candidate.
+fn preferred_inference(
+    inference: &InferenceCandidates,
+    source: &FunctionType,
+    name: &str,
+    constraint: Option<&Type>,
+) -> Option<(Type, Option<Type>)> {
+    // `getCovariantInference` widens literal candidates of a parameter the
+    // return type does not expose at its top level, unless its constraint
+    // admits primitives.
+    let widened: Vec<Type>;
+    let covariant = if type_parameter_at_top_level(source.return_type(), name)
+        || constraint.is_some_and(has_primitive_constraint)
+    {
+        inference.covariant.as_slice()
+    } else {
+        widened = inference.covariant.iter().map(widen_literal_candidate).collect();
+        widened.as_slice()
+    };
+    // `getCommonSupertype`: literals of one primitive combine into their
+    // union (`literalTypesWithSameBaseType`); otherwise the leftmost candidate
+    // every other one is assignable to, and with none the first stands and the
+    // comparison reports the disagreement.
+    let literal_union = constraint.and_then(|_| literal_candidates_union(covariant));
+    let supertype = literal_union.or_else(|| {
+        covariant
+            .iter()
+            .find(|candidate| covariant.iter().all(|other| is_assignable_to(other, candidate)))
+            .or_else(|| covariant.first())
+            .cloned()
+    });
+    // `getCommonSubtype`: the leftmost candidate no later one is a subtype of.
+    let subtype = inference.contravariant.iter().fold(None::<&Type>, |subtype, candidate| match subtype {
+        Some(subtype) if !is_assignable_to(candidate, subtype) => Some(subtype),
+        _ => Some(candidate),
+    });
+    match (supertype, subtype) {
+        (Some(supertype), Some(subtype)) => {
+            let prefer_covariant = !matches!(supertype, Type::Never | Type::Any)
+                && inference
+                    .contravariant
+                    .iter()
+                    .any(|candidate| is_assignable_to(&supertype, candidate));
+            Some(if prefer_covariant {
+                (supertype, Some(subtype.clone()))
+            } else {
+                (subtype.clone(), Some(supertype))
+            })
+        }
+        (Some(inferred), None) => Some((inferred, None)),
+        (None, Some(inferred)) => Some((inferred.clone(), None)),
+        (None, None) => None,
+    }
+}
+
+/// `literalTypesWithSameBaseType`: every candidate a literal of one primitive.
+fn literal_candidates_union(candidates: &[Type]) -> Option<Type> {
+    let base = |ty: &Type| match ty {
+        Type::StringLiteral(_) => Some(Type::String),
+        Type::NumberLiteral(_) => Some(Type::Number),
+        Type::BooleanLiteral(_) => Some(Type::Boolean),
+        _ => None,
+    };
+    let first = base(candidates.first()?)?;
+    (candidates.len() > 1 && candidates.iter().all(|candidate| base(candidate).as_ref() == Some(&first)))
+        .then(|| crate::union_type(candidates.to_vec()))
+}
+
+/// `hasPrimitiveConstraint`: the constraint admits a primitive or literal type,
+/// so a literal inference for it is kept as it is. One surge could not model
+/// keeps it too.
+fn has_primitive_constraint(constraint: &Type) -> bool {
+    match constraint {
+        Type::Union(union) => union.types().iter().any(has_primitive_constraint),
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::Null
+        | Type::Undefined
+        | Type::Void
+        | Type::Unknown
+        | Type::ErrorType => true,
+        other => other.base_primitive().is_some(),
+    }
 }
 
 /// `isTypeParameterAtTopLevel`: the type is the parameter or a union with it
@@ -2816,6 +3090,8 @@ fn array_like_apparent_object(element: &Type, tuple: Option<(&[Type], usize)>, r
         property_map_id: None,
         string_index_type: None,
         number_index_type: Some(Arc::new(element.clone())),
+        string_index_readonly: false,
+        number_index_readonly: false,
         alias_name: None,
         alias_id: None,
         construct_signature: None,
@@ -2969,10 +3245,17 @@ fn signatures_of_kind_related(source: Option<&FunctionType>, target: Option<&Fun
     };
     let sources = overloads(source);
     let targets = overloads(target);
-    // A member surge could not type says nothing about the group.
+    // A member surge could not type says nothing about the group. A single
+    // pair relates through written shapes, which hold the constrained type
+    // parameters their signatures erased.
+    let single_pair = sources.len() == 1 && targets.len() == 1;
     let unmodelled = |signature: &FunctionType| {
-        signature.parameters().iter().any(|parameter| matches!(parameter, Type::Unknown))
-            || matches!(signature.return_type(), Type::Unknown)
+        let (parameters, return_type) = match signature.generic_shape().filter(|_| single_pair) {
+            Some(shape) => (shape.parameters.as_slice(), &shape.return_type),
+            None => (signature.parameters(), signature.return_type()),
+        };
+        parameters.iter().any(|parameter| matches!(parameter, Type::Unknown))
+            || matches!(return_type, Type::Unknown)
     };
     if sources.iter().any(unmodelled) || targets.iter().any(unmodelled) {
         return true;

@@ -45,6 +45,8 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                 properties: Vec::new(),
                 string_index_type: None,
                 number_index_type: None,
+                string_index_readonly: false,
+                number_index_readonly: false,
                 call_signature: None,
                 call_signature_overloads: Vec::new(),
                 construct_signature: None,
@@ -85,6 +87,8 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                     properties: Vec::new(),
                     string_index_type: None,
                     number_index_type: None,
+                    string_index_readonly: false,
+                    number_index_readonly: false,
                     call_signature: None,
                     call_signature_overloads: Vec::new(),
                     construct_signature: Some(Box::new(function)),
@@ -792,6 +796,8 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     let mut properties = Vec::new();
     let mut string_index_type: Option<Box<ParsedType>> = None;
     let mut number_index_type: Option<Box<ParsedType>> = None;
+    let mut string_index_readonly = false;
+    let mut number_index_readonly = false;
     let mut call_signature: Option<Box<ParsedFunctionType>> = None;
     let mut call_signature_overloads: Vec<ParsedFunctionType> = Vec::new();
     let mut construct_signature: Option<Box<ParsedFunctionType>> = None;
@@ -853,9 +859,11 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
                 {
                     if fills_number {
                         number_index_type = Some(Box::new(value_type.clone()));
+                        number_index_readonly = index_signature.readonly;
                     }
                     if fills_string {
                         string_index_type = Some(Box::new(value_type));
+                        string_index_readonly = index_signature.readonly;
                     }
                 }
                 continue;
@@ -879,6 +887,8 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
         properties,
         string_index_type,
         number_index_type,
+        string_index_readonly,
+        number_index_readonly,
         call_signature,
         // One signature is already the whole story; the fold is lossless there.
         call_signature_overloads: if call_signature_overloads.len() > 1 {
@@ -1280,6 +1290,8 @@ fn parse_type_parameter(type_parameter: &TSTypeParameter<'_>) -> ParsedTypeParam
         default_type: type_parameter.default.as_ref().and_then(parse_type),
         span: Some(text_span_from_oxc_span(type_parameter.span)),
         is_const: type_parameter.r#const,
+        is_in: type_parameter.r#in,
+        is_out: type_parameter.out,
     }
 }
 

@@ -377,6 +377,9 @@ pub(crate) struct CheckerContext {
     /// does not also report there: a renamed binding in a bodyless signature
     /// (TS2842) is not an implicit `any` (TS7031).
     pub(crate) grammar_answered_spans: Vec<(DiagnosticTextSpan, &'static [u32])>,
+    /// The file's unreachable statement runs, as the binder marks them (the
+    /// TS7027 findings, reported or not).
+    pub(crate) unreachable_statement_runs: Vec<SyntaxTextSpan>,
     /// Grammar findings held until the file's type declarations are installed
     /// (`emit_deferred_grammar_diagnostics`).
     pub(crate) deferred_grammar_findings: Vec<surge_ts_syntax::ParsedGrammarDiagnostic>,
@@ -626,6 +629,11 @@ pub(crate) struct CheckerContext {
     /// tsc's `isConstantReference` reads: an element key named by one is not a
     /// reference its guards narrow.
     pub(crate) container_assigned_bindings: Arc<std::collections::HashSet<Arc<str>>>,
+    /// The expando writes of the container being checked, by the annotated
+    /// declaration whose function they declare members on (see
+    /// [`crate::checks::var::install_expando_initializer_members`]).
+    pub(crate) expando_initializer_members:
+        Arc<HashMap<usize, Vec<crate::checks::var::ExpandoInitializerMember>>>,
     /// The never-initialized bindings typed by a type parameter whose
     /// constraint carries `undefined`: a read of one where tsc substitutes the
     /// constraint is not reported (see `FunctionFlowState::constraint_exempt`).
@@ -834,6 +842,10 @@ pub(crate) struct CheckerContext {
     /// (see [`surge_ts_syntax::ParsedSource::global_this_starts`]); empty for
     /// a module. Per-file: cleared by `begin_file_check`.
     pub(crate) global_this_starts: Arc<[u32]>,
+    /// Where each `this` the current module file's top level owns starts, which
+    /// `tryGetThisTypeAtEx` types as `undefined`; empty for a script. Per-file:
+    /// cleared by `begin_file_check`.
+    pub(crate) module_this_starts: Arc<[u32]>,
     /// The file's object-literal members whose `this` is the literal itself
     /// (see [`surge_ts_syntax::ParsedSource::literal_this_members`]).
     /// Per-file: cleared by `begin_file_check`.
@@ -998,6 +1010,7 @@ impl CheckerContext {
             type_parameter_scopes: Vec::new(),
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
+            expando_initializer_members: Arc::default(),
             namespace_member_resolution_depth: 0,
             instantiation_work: 0,
             instantiation_depth: 0,
@@ -1043,6 +1056,7 @@ impl CheckerContext {
             nested_function_scope: None,
             parenthesized_expressions: Arc::from([]),
             global_this_starts: Arc::from([]),
+            module_this_starts: Arc::from([]),
             literal_this_members: Arc::from([]),
             next_arrow_this: None,
             expando_object_literal: None,
@@ -1057,6 +1071,7 @@ impl CheckerContext {
             type_literal_member_frames: Vec::new(),
             file_kinds: Arc::new(file_kinds),
             module_value_fallback: None,
+            unreachable_statement_runs: Vec::new(),
         }
     }
 
@@ -1202,6 +1217,7 @@ impl CheckerContext {
             type_parameter_scopes: data.type_parameter_scopes.clone(),
             type_parameter_constraint_scopes: data.type_parameter_constraint_scopes.clone(),
             timings: data.timings.clone(),
+            expando_initializer_members: Arc::default(),
             namespace_member_resolution_depth: 0,
             instantiation_work: 0,
             instantiation_depth: 0,
@@ -1247,6 +1263,7 @@ impl CheckerContext {
             nested_function_scope: None,
             parenthesized_expressions: Arc::from([]),
             global_this_starts: Arc::from([]),
+            module_this_starts: Arc::from([]),
             literal_this_members: Arc::from([]),
             next_arrow_this: None,
             expando_object_literal: None,
@@ -1261,6 +1278,7 @@ impl CheckerContext {
             type_literal_member_frames: Vec::new(),
             file_kinds: data.file_kinds.clone(),
             module_value_fallback: data.module_value_fallback.clone(),
+            unreachable_statement_runs: Vec::new(),
         }
     }
 
@@ -1865,10 +1883,12 @@ impl CheckerContext {
         self.file_type_only_import_names_owner = None;
         self.checked_function_declaration_names.clear();
         self.grammar_answered_spans.clear();
+        self.unreachable_statement_runs.clear();
         self.deferred_grammar_findings.clear();
         self.definite_writes = Arc::default();
         self.inherited_never_initialized.clear();
         self.container_assigned_bindings = Arc::default();
+        self.expando_initializer_members = Arc::default();
         self.never_initialized_constraint_exempt.clear();
         self.non_exhaustive_switches.clear();
         self.exhaustive_switches.clear();
@@ -1890,6 +1910,7 @@ impl CheckerContext {
         self.nested_function_scope = None;
         self.parenthesized_expressions = Default::default();
         self.global_this_starts = Default::default();
+        self.module_this_starts = Default::default();
         self.literal_this_members = Default::default();
         self.next_arrow_this = None;
         self.expando_object_literal = None;

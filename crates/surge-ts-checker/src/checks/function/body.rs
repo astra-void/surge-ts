@@ -449,6 +449,8 @@ pub(crate) fn check_function_body(
     hoist_nested_functions(&nested_functions, scopes, ctx);
     crate::modules::exports::apply_body_expando_members(&body, scopes, ctx);
     let saved_expando_objects = extend_javascript_expando_objects(&body, ctx);
+    let saved_expando_initializer_members =
+        crate::checks::var::install_expando_initializer_members(&body, ctx);
 
 
     // A body-local type declaration's own body may name a body-local *value*
@@ -488,6 +490,9 @@ pub(crate) fn check_function_body(
 
     if let Some(saved) = saved_expando_objects {
         ctx.javascript_expando_objects = saved;
+    }
+    if let Some(saved) = saved_expando_initializer_members {
+        ctx.expando_initializer_members = saved;
     }
 
     // A nested `function` is hoisted: it may read a binding declared after it
@@ -839,7 +844,8 @@ fn collect_body_local_type_declarations(
                     interface.call_signature_overloads.clone(),
                     interface.construct_signatures.clone(),
                     None,
-                );
+                )
+                .with_readonly_indexes(interface.string_index_readonly, interface.number_index_readonly);
                 (interface.name.clone(), TypeDeclarationInfo::Interface(info))
             }
             ParsedFunctionBodyStatement::Class(class) => {

@@ -789,7 +789,8 @@ fn readonly_shape(source: &Type) -> Type {
                 );
             }
             Type::Object(carry_open_marker(
-                alloc_object_type(properties, object_type.string_index_type.as_deref().cloned()),
+                alloc_object_type(properties, object_type.string_index_type.as_deref().cloned())
+                    .with_readonly_indexes(true, false),
                 &object_type,
             ))
         }

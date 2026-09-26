@@ -101,6 +101,10 @@ pub struct TypeReference {
     /// `getBaseTypeOfEnumLikeType`), when the member was resolved where its
     /// enum could be. Provenance like `enum_owner`, outside `nominal_eq`.
     pub enum_base: Option<Arc<Type>>,
+    /// The variances the declaration states for its type parameters, packed
+    /// by [`declared_variances`]. A pure function of the declaration, so it
+    /// stays out of `nominal_eq` and canonical identity like `numeric_enum`.
+    pub declared_variances: u32,
     resolver: Arc<dyn ResolveReference>,
 }
 
@@ -157,6 +161,7 @@ impl TypeReference {
             numeric_enum: false,
             enum_owner: None,
             enum_base: None,
+            declared_variances: 0,
             resolver,
         }
     }
@@ -183,6 +188,12 @@ impl TypeReference {
     /// Records the `enum` this member type widens to.
     pub fn with_enum_base(mut self, base: Type) -> Self {
         self.enum_base = Some(Arc::new(base));
+        self
+    }
+
+    /// Records the variances the declaration states.
+    pub fn with_declared_variances(mut self, variances: u32) -> Self {
+        self.declared_variances = variances;
         self
     }
 
@@ -232,6 +243,69 @@ impl TypeReference {
         // never short-circuits early, so the pointer check is the whole win.
         let same_id = Arc::ptr_eq(&self.id, &other.id) || self.id == other.id;
         same_id && self.arguments == other.arguments
+    }
+}
+
+/// What a declaration states about a type parameter's variance, which the
+/// relation then need not measure (`getVariancesWorker`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclaredVariance {
+    /// `out`.
+    Covariant,
+    /// `in`.
+    Contravariant,
+    /// `in out`.
+    Invariant,
+    /// Unannotated, but measuring it reports `Unmeasurable`: only identical
+    /// arguments relate without a structural comparison.
+    Unmeasurable,
+}
+
+impl DeclaredVariance {
+    /// The variance `in`/`out` modifiers annotate.
+    pub fn annotated(is_in: bool, is_out: bool) -> Option<Self> {
+        match (is_in, is_out) {
+            (true, true) => Some(Self::Invariant),
+            (false, true) => Some(Self::Covariant),
+            (true, false) => Some(Self::Contravariant),
+            (false, false) => None,
+        }
+    }
+}
+
+/// Parameters past this many read as stating nothing.
+const DECLARED_VARIANCE_LIMIT: usize = 10;
+const DECLARED_VARIANCE_BITS: usize = 3;
+
+/// Packs each type parameter's declared variance, in declaration order.
+pub fn declared_variances(variances: impl IntoIterator<Item = Option<DeclaredVariance>>) -> u32 {
+    variances
+        .into_iter()
+        .take(DECLARED_VARIANCE_LIMIT)
+        .enumerate()
+        .fold(0, |packed, (index, variance)| {
+            let code: u32 = match variance {
+                None => 0,
+                Some(DeclaredVariance::Covariant) => 1,
+                Some(DeclaredVariance::Contravariant) => 2,
+                Some(DeclaredVariance::Invariant) => 3,
+                Some(DeclaredVariance::Unmeasurable) => 4,
+            };
+            packed | (code << (index * DECLARED_VARIANCE_BITS))
+        })
+}
+
+/// The variance `packed` declares for the parameter at `index`.
+pub fn declared_variance(packed: u32, index: usize) -> Option<DeclaredVariance> {
+    if index >= DECLARED_VARIANCE_LIMIT {
+        return None;
+    }
+    match (packed >> (index * DECLARED_VARIANCE_BITS)) & 0b111 {
+        1 => Some(DeclaredVariance::Covariant),
+        2 => Some(DeclaredVariance::Contravariant),
+        3 => Some(DeclaredVariance::Invariant),
+        4 => Some(DeclaredVariance::Unmeasurable),
+        _ => None,
     }
 }
 

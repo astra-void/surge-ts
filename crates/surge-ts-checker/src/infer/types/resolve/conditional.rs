@@ -2081,11 +2081,12 @@ fn try_function_infer_match(
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
 ) -> Option<TypeParameterSubstitution> {
-    if callable_signature(&crate::program::with_dts_expansion_reason(
+    let peeled_check = crate::program::with_dts_expansion_reason(
         crate::program::DtsExpansionReason::ConditionalType,
         || check.peeled(),
-    ))
-    .is_none()
+    );
+    if callable_signature(&peeled_check).is_none()
+        || lacks_required_pattern_property(extends, &peeled_check)
     {
         return None;
     }
@@ -2104,6 +2105,24 @@ fn try_function_infer_match(
     } else {
         None
     }
+}
+
+/// `propertiesRelatedTo`: an object lacking a property the pattern requires —
+/// one its apparent `Function`/`Object` members do not supply either — is not
+/// assignable to it whatever the captures bind, so the fallback above must not
+/// take the true branch for it: `typeof C extends { defaultProps: infer D;
+/// propTypes: infer P }` matched a class declaring only `propTypes` because `P`
+/// bound. An object surge left open, and a computed key, decide nothing here.
+fn lacks_required_pattern_property(extends: &ParsedType, check: &Type) -> bool {
+    let (ParsedType::Object(pattern), Type::Object(object)) = (extends, check) else {
+        return false;
+    };
+    !object.synthetic_open_index
+        && pattern.properties.iter().any(|property| {
+            !property.optional
+                && !property.name.starts_with('[')
+                && check.get_property_access_type(&property.name).is_none()
+        })
 }
 
 /// Inference from a *union* of signatures into one written signature. tsc infers
@@ -2611,6 +2630,8 @@ fn interface_members_pattern(
         properties,
         string_index_type: body.string_index_type.as_ref().map(|ty| Box::new(substitute(ty))),
         number_index_type: body.number_index_type.as_ref().map(|ty| Box::new(substitute(ty))),
+        string_index_readonly: body.string_index_readonly,
+        number_index_readonly: body.number_index_readonly,
         call_signature: body
             .call_signature
             .as_ref()

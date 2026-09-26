@@ -505,6 +505,18 @@ pub(crate) fn check_auto_array_read(
         ctx.evolving_array_operation_target = None;
         return Some(any_array);
     }
+    // Unreachable code has no flow type: tsc reads the declared type made
+    // `any` there (`getTypeAtFlowNode`'s default case), which is no implicit
+    // `any` to report. A nested function has a flow of its own.
+    if !from_enclosing_function
+        && span.is_some_and(|span| {
+            ctx.unreachable_statement_runs
+                .iter()
+                .any(|run| run.start <= span.start && span.end <= run.end)
+        })
+    {
+        return Some(if binding.declared_array { any_array } else { Type::Any });
+    }
     let position = span.map_or(0, |span| span.start);
     // A top-level function or class declaration never continues the module's flow.
     let declared_only = binding.module_level && ctx.module_declared_only_depth > 0;

@@ -170,6 +170,7 @@ pub(crate) fn bind<'a>(file: &'a ParsedFile, text: &'a str) -> Binder<'a> {
     };
     binder.bind(Some(file.root));
     binder.check_external_module_exports();
+    binder.check_exports_on_merged_declarations();
     binder
 }
 
@@ -1741,6 +1742,136 @@ impl<'a> Binder<'a> {
                 }
             }
         }
+    }
+
+    /// The checker's `checkExportsOnMergedDeclarations`, which its checks of a
+    /// class, interface, enum, namespace, variable and type alias declaration
+    /// run over the declaration's local symbol: where the symbol's exported
+    /// and local declarations share a declaration space, each declaration in
+    /// it is TS2395, and where a default export shares one with any other
+    /// declaration, each declaration in that space is TS2652.
+    fn check_exports_on_merged_declarations(&mut self) {
+        let mut symbols: Vec<SymbolId> = self
+            .tables
+            .iter()
+            .filter(|(table, _)| matches!(table, Table::Locals(_)))
+            .flat_map(|(_, entries)| entries.values().copied())
+            .filter(|&symbol| self.symbols[symbol].export_symbol.is_some())
+            .collect();
+        symbols.sort_unstable();
+        for symbol in symbols {
+            let declarations = self.symbols[symbol].declarations.clone();
+            if !declarations.iter().any(|&declaration| self.checks_merged_exports(declaration)) {
+                continue;
+            }
+            let Some(spaces) =
+                declarations.iter().map(|&declaration| self.declaration_spaces(declaration)).collect::<Option<Vec<u8>>>()
+            else {
+                continue;
+            };
+            let (mut exported, mut local, mut default_exported) = (0u8, 0u8, 0u8);
+            for (&declaration, &declaration_spaces) in declarations.iter().zip(&spaces) {
+                match self.effective_export_flags(declaration) {
+                    (true, true) => default_exported |= declaration_spaces,
+                    (true, false) => exported |= declaration_spaces,
+                    (false, _) => local |= declaration_spaces,
+                }
+            }
+            let exported_and_local = exported & local;
+            let default_and_other = default_exported & (exported | local);
+            if exported_and_local == 0 && default_and_other == 0 {
+                continue;
+            }
+            for (&declaration, &declaration_spaces) in declarations.iter().zip(&spaces) {
+                let message = if declaration_spaces & default_and_other != 0 {
+                    diagnostics::Merged_declaration_0_cannot_include_a_default_export_declaration_Consider_adding_a_separate_export_default_0_declaration_instead
+                } else if declaration_spaces & exported_and_local != 0 {
+                    diagnostics::Individual_declarations_in_merged_declaration_0_must_be_all_exported_or_all_local
+                } else {
+                    continue;
+                };
+                let name = self.name_of_declaration(declaration);
+                let display = self.declaration_name_to_string(name);
+                self.error_on_node(name.unwrap_or(declaration), message, vec![display]);
+            }
+        }
+    }
+
+    /// The declarations whose check runs `checkExportsOnMergedDeclarations`.
+    fn checks_merged_exports(&self, declaration: NodeId) -> bool {
+        matches!(
+            self.kind(declaration),
+            Kind::ClassDeclaration
+                | Kind::InterfaceDeclaration
+                | Kind::EnumDeclaration
+                | Kind::ModuleDeclaration
+                | Kind::VariableDeclaration
+                | Kind::BindingElement
+                | Kind::TypeAliasDeclaration
+        )
+    }
+
+    /// The checker's `getDeclarationSpaces` (value 1, type 2, namespace 4) of
+    /// a declaration a local symbol holds. An import takes the spaces of what
+    /// it resolves to, which another file decides; it counts for none here, so
+    /// the spaces two sides share only shrink and what is reported is some of
+    /// what tsc reports, under the same code.
+    fn declaration_spaces(&self, declaration: NodeId) -> Option<u8> {
+        const VALUE: u8 = 1;
+        const TYPE: u8 = 2;
+        const NAMESPACE: u8 = 4;
+        match self.kind(declaration) {
+            Kind::InterfaceDeclaration | Kind::TypeAliasDeclaration => Some(TYPE),
+            Kind::ModuleDeclaration => Some(
+                if self.is_ambient_module(declaration)
+                    || self.module_instance_state(declaration) != ModuleInstanceState::NonInstantiated
+                {
+                    NAMESPACE | VALUE
+                } else {
+                    NAMESPACE
+                },
+            ),
+            Kind::ClassDeclaration | Kind::EnumDeclaration | Kind::EnumMember => Some(TYPE | VALUE),
+            Kind::VariableDeclaration | Kind::BindingElement | Kind::FunctionDeclaration | Kind::ImportSpecifier => {
+                Some(VALUE)
+            }
+            Kind::ImportEqualsDeclaration | Kind::NamespaceImport | Kind::ImportClause => Some(0),
+            _ => None,
+        }
+    }
+
+    /// The checker's `getEffectiveDeclarationFlags` for `export` and `default`:
+    /// an ambient declaration written without `declare` in an export context
+    /// is exported, unless it is in a `declare global` block.
+    fn effective_export_flags(&self, declaration: NodeId) -> (bool, bool) {
+        let mut exported = self.combined_has_modifier(declaration, Kind::ExportKeyword);
+        let parent = self.parent(declaration);
+        let is_member = parent.is_some_and(|parent| {
+            matches!(self.kind(parent), Kind::InterfaceDeclaration | Kind::ClassDeclaration | Kind::ClassExpression)
+        });
+        if !exported && !is_member && self.flags(declaration).has(NodeFlags::Ambient) {
+            let in_global_augmentation = parent.is_some_and(|parent| {
+                self.kind(parent) == Kind::ModuleBlock
+                    && self.parent(parent).is_some_and(|module| self.is_global_scope_augmentation(module))
+            });
+            exported = self.enclosing_container(declaration).is_some_and(|container| self.export_context.contains(&container))
+                && !self.combined_has_modifier(declaration, Kind::DeclareKeyword)
+                && !in_global_augmentation;
+        }
+        (exported, exported && self.combined_has_modifier(declaration, Kind::DefaultKeyword))
+    }
+
+    /// The checker's `getEnclosingContainer`: the nearest ancestor that is a
+    /// container.
+    fn enclosing_container(&self, node: NodeId) -> Option<NodeId> {
+        let mut current = self.parent(node);
+        while let Some(candidate) = current {
+            if self.container_flags(candidate) & cf::IsContainer != 0 {
+                return Some(candidate);
+            }
+            current = self.parent(candidate);
+        }
+        None
     }
 
     /// `isNotOverload`: anything but a function or method declared without a

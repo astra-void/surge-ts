@@ -10,17 +10,24 @@ pub(crate) fn check_computed_property_keys(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
-    for property in properties {
+    let mut typed_names: Vec<(usize, Option<String>)> = Vec::new();
+    for (index, property) in properties.iter().enumerate() {
         if let Some(key) = property.member_key.as_deref() {
             let key_span = property.name_span.or(property.span).or(fallback_span);
             let key_result = evaluate_expression(key, key_span, symbols, ctx);
             report_invalid_computed_key(&key_result, key_span, ctx);
+            if !is_literal_key(key) {
+                typed_names.push((index, typed_property_name(key, &key_result)));
+            }
         }
         let mut key_type = None;
         if let Some(key) = property.computed_key.as_deref() {
             let key_span = property.name_span.or(property.span).or(fallback_span);
             let key_result = evaluate_expression(key, key_span, symbols, ctx);
             report_invalid_computed_key(&key_result, key_span, ctx);
+            if !is_literal_key(key) {
+                typed_names.push((index, typed_property_name(key, &key_result)));
+            }
             if let InferredExpression::Known(ty) = key_result {
                 key_type = Some(ty);
             }
@@ -45,6 +52,106 @@ pub(crate) fn check_computed_property_keys(
                 None => evaluate_expression(value, span, symbols, ctx),
             };
         }
+    }
+    if !typed_names.is_empty() {
+        report_duplicate_typed_names(properties, &typed_names, ctx);
+    }
+}
+
+/// A key written as a string or number literal names its property as the
+/// literal does; the grammar walk reads those names.
+fn is_literal_key(key: &ParsedExpression) -> bool {
+    matches!(key, ParsedExpression::StringLiteral(_) | ParsedExpression::NumberLiteral(_))
+}
+
+/// tsc's `getEffectivePropertyNameForPropertyNameNode` for a computed key that
+/// is no literal: the name its type gives (`tryGetNameFromType`). surge types
+/// a well-known symbol (`Symbol.iterator`) as `symbol`, where the lib declares
+/// each as a unique symbol of its own.
+fn typed_property_name(key: &ParsedExpression, key_result: &InferredExpression) -> Option<String> {
+    if let ParsedExpression::PropertyAccess { object, property_name, .. } = key
+        && matches!(object.as_ref(), ParsedExpression::Identifier { name, .. } if name == "Symbol")
+        && crate::program::WELL_KNOWN_SYMBOLS.contains(&property_name.as_str())
+    {
+        return Some(format!("__@Symbol.{property_name}"));
+    }
+    let InferredExpression::Known(ty) = key_result else {
+        return None;
+    };
+    name_of_key_type(ty)
+}
+
+/// tsc's `tryGetNameFromType`: a unique symbol's own name, or a string or
+/// number literal's value (an enum member's included).
+fn name_of_key_type(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Reference(reference) if reference.is_unique_symbol() => Some(format!("__@{}", reference.id)),
+        Type::Reference(reference) => name_of_key_type(&reference.resolve()),
+        Type::StringLiteral(value) => Some(value.clone()),
+        Type::NumberLiteral(literal) => Some(literal.value.clone()),
+        _ => None,
+    }
+}
+
+/// tsc's `checkGrammarObjectLiteralExpression` duplicate-name rule, for the
+/// pairs a typed name takes part in: a second property assignment of a name is
+/// TS1117. A method or accessor meeting a property of its name ends the check,
+/// as the error tsc reports there does; those errors, and every pair of names
+/// written as such, are the grammar walk's.
+fn report_duplicate_typed_names(
+    properties: &[surge_ts_syntax::ParsedObjectProperty],
+    typed_names: &[(usize, Option<String>)],
+    ctx: &mut CheckerContext,
+) {
+    const PROPERTY: u8 = 1;
+    const METHOD: u8 = 1 << 1;
+    const GET: u8 = 1 << 2;
+    const SET: u8 = 1 << 3;
+    // A computed method or accessor the parser could not name keeps no kind.
+    const UNKNOWN: u8 = 1 << 4;
+    let mut typed = typed_names.iter().peekable();
+    let mut seen: std::collections::HashMap<&str, (u8, bool)> = std::collections::HashMap::new();
+    for (index, property) in properties.iter().enumerate() {
+        let typed_name = typed.next_if(|(key_index, _)| *key_index == index).map(|(_, name)| name);
+        let (name, is_typed) = match typed_name {
+            Some(Some(name)) => (name.as_str(), true),
+            Some(None) => continue,
+            None if property.is_spread => continue,
+            None => (property.name.as_str(), false),
+        };
+        let kind = if property.is_accessor {
+            if property.is_getter { GET } else { SET }
+        } else if property.is_method {
+            METHOD
+        } else if property.is_spread && property.unnamed_key_value.is_none() {
+            UNKNOWN
+        } else {
+            PROPERTY
+        };
+        let Some(&(existing, first_typed)) = seen.get(name) else {
+            seen.insert(name, (kind, is_typed));
+            continue;
+        };
+        if kind == UNKNOWN || existing == UNKNOWN {
+            return;
+        }
+        if kind == METHOD && existing & METHOD != 0 {
+            continue;
+        }
+        if kind == PROPERTY && existing & PROPERTY != 0 {
+            if (is_typed || first_typed)
+                && let Some(span) = property.span
+            {
+                let diagnostic = Diagnostic::ts1117(ctx.file_name.clone());
+                ctx.push(diagnostic.with_span(crate::context::convert_span(span)));
+            }
+            continue;
+        }
+        if kind & (GET | SET) != 0 && existing & (GET | SET) != 0 && existing != GET | SET && kind != existing {
+            seen.insert(name, (existing | kind, first_typed));
+            continue;
+        }
+        return;
     }
 }
 
@@ -750,23 +857,40 @@ fn evaluate_expression_unsettled(
             expression: asserted_expression,
             expression_span,
             ty,
-            type_span: _,
+            type_span: pattern_span,
             annotation: true,
         } => {
             // A destructuring declaration's annotation: the initializer is
-            // checked against it like any declared type, and the elements read
-            // the declared type itself.
+            // checked against it like any declared type, at the pattern, and
+            // the elements read the declared type itself.
             let declared = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
                 crate::infer::map_parsed_type(ty.clone(), ctx)
             });
-            let _ = crate::checks::expected::evaluate_expression_with_expected_type(
+            // A JSDoc-typed or `require` value names no pattern and is
+            // reported at itself.
+            let Some(pattern_span) = *pattern_span else {
+                let _ = crate::checks::expected::evaluate_expression_with_expected_type(
+                    asserted_expression,
+                    expression_span.or(fallback_span),
+                    Some(&declared),
+                    crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+                    symbols,
+                    ctx,
+                );
+                return InferredExpression::Known(declared);
+            };
+            let checked = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
                 asserted_expression,
                 expression_span.or(fallback_span),
+                Some(pattern_span),
                 Some(&declared),
                 crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
                 symbols,
                 ctx,
             );
+            if let InferredExpression::Known(initializer_type) = &checked {
+                crate::checks::var::report_initializer_mismatch(initializer_type, &declared, Some(pattern_span), ctx);
+            }
             InferredExpression::Known(declared)
         }
         ParsedExpression::TypeAssertion {
@@ -890,6 +1014,19 @@ fn evaluate_expression_unsettled(
             index,
             index_span,
         } => {
+            // `checkElementAccessExpression` checks the key against whatever the
+            // receiver is; `this` answers from the binding a method body has.
+            if matches!(object.as_ref(), ParsedExpression::This { .. }) && symbols.get("this").is_some() {
+                return evaluate_index_access(
+                    "this",
+                    *object_span,
+                    index,
+                    *index_span,
+                    fallback_span,
+                    symbols,
+                    ctx,
+                );
+            }
             // A write target's receiver is read.
             let _ = super::diagnostics::take_element_write_target();
             let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
@@ -1470,6 +1607,7 @@ fn evaluate_yield_expression(
             let diagnostic = Diagnostic::ts2322("undefined", yield_type.name(), ctx.file_name.clone());
             ctx.push(diagnostic_with_syntax_span(diagnostic, span));
         }
+        crate::checks::function::record_generator_yield(Some(Type::Undefined), None);
         return InferredExpression::Known(next_type);
     };
     let evaluated = crate::checks::expected::evaluate_expression_with_expected_type(
@@ -1503,6 +1641,7 @@ fn evaluate_yield_expression(
             );
         }
     }
+    record_yielded_type(operand, &evaluated, delegate, ctx);
     // A `yield*` evaluates to what its operand's iterator returns
     // (`getIterationTypeOfIterable(Return)`), annotated generator or not.
     let delegated_return = match &evaluated {
@@ -1524,6 +1663,36 @@ fn evaluate_yield_expression(
         return InferredExpression::Known(delegated_return.unwrap_or(Type::Any));
     }
     InferredExpression::Known(next_type)
+}
+
+/// tsc's `getYieldedTypeOfYieldExpression` for the generator body collecting
+/// its yields: a `yield*` yields its operand's elements, and an async
+/// generator yields awaited values. A fresh object or array literal widens
+/// as the aggregate's `getWidenedType` widens it.
+fn record_yielded_type(
+    operand: &ParsedExpression,
+    evaluated: &InferredExpression,
+    delegate: bool,
+    ctx: &CheckerContext,
+) {
+    let InferredExpression::Known(operand_type) = evaluated else {
+        crate::checks::function::record_generator_yield(None, None);
+        return;
+    };
+    let yielded = if delegate {
+        iterated_element_type(operand_type)
+    } else if matches!(operand, ParsedExpression::ObjectLiteral { .. } | ParsedExpression::ArrayLiteral { .. }) {
+        Some(super::widen_type(operand_type))
+    } else {
+        Some(operand_type.clone())
+    };
+    let yielded = yielded
+        .map(|ty| if ctx.in_async_generator { crate::checks::call::awaited_type(&ty) } else { ty })
+        .filter(|ty| !ty.is_unmodelled());
+    let sent = delegate.then(|| {
+        crate::checks::function::generator_next_type_argument(operand_type).unwrap_or(Type::GenuineUnknown)
+    });
+    crate::checks::function::record_generator_yield(yielded, sent);
 }
 
 /// An iteration type argument surge can hand on as a value's type: not the
@@ -1586,7 +1755,7 @@ fn evaluate_import_call(
 
 /// The element type a `yield*` operand iterates: an array's or tuple's
 /// elements, or the yield type argument of a lib iterable or generator.
-fn iterated_element_type(iterable: &Type) -> Option<Type> {
+pub(crate) fn iterated_element_type(iterable: &Type) -> Option<Type> {
     match iterable {
         Type::Array(element) => Some((**element).clone()),
         Type::Tuple(elements) => Some(union_type(elements.clone())),

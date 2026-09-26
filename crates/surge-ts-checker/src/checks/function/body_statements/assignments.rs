@@ -353,10 +353,30 @@ fn object_property_is_readonly(receiver: &Type, property_name: &str) -> bool {
             .properties
             .get(property_name)
             .is_some_and(|property| property.readonly),
-        Type::Union(union) => union
-            .types()
-            .iter()
-            .all(|member| object_property_is_readonly(member, property_name)),
+        // tsc's `createUnionOrIntersectionProperty`: a union has the member
+        // when some constituent declares it and every other answers the name,
+        // and it is read-only when any constituent's is — an index signature
+        // standing in for it included.
+        Type::Union(union) => {
+            let members: Vec<&Type> = union
+                .types()
+                .iter()
+                .filter(|member| !matches!(member, Type::Undefined | Type::Null))
+                .collect();
+            members.iter().any(|member| {
+                matches!(member.peeled(), Type::Object(object)
+                    if object.get_property(property_name).is_some_and(|property| !property.index_slot))
+            }) && members
+                .iter()
+                .all(|member| member.get_property_access_type(property_name).is_some())
+                && members.iter().any(|member| {
+                    object_property_is_readonly(member, property_name)
+                        || member.writes_readonly_index(
+                            Some(property_name),
+                            surge_ts_types::is_numeric_key(property_name),
+                        )
+                })
+        }
         _ => false,
     }
 }
@@ -634,9 +654,29 @@ fn check_element_assignment(
         return;
     }
 
+    // `errorIfWritingToReadonlyIndex` reads the index signature off the
+    // receiver as flow left it. A key of any other kind (`symbol`) falls back
+    // to the string index only to be reported as unusable (TS2538).
+    let literal_key = literal_index_key(&index_type);
+    let key_is_numeric = literal_key
+        .as_deref()
+        .map_or_else(|| is_assignable_to(&index_type, &Type::Number), surge_ts_types::is_numeric_key);
+    let string_or_number_key =
+        key_is_numeric || literal_key.is_some() || is_assignable_to(&index_type, &Type::String);
+    let readonly_index_owner = (string_or_number_key
+        && object_type.writes_readonly_index(literal_key.as_deref(), key_is_numeric))
+        .then(|| object_type.name());
+
     // A write is checked against the *declared* element type, not whatever the
     // enclosing branch narrowed the receiver to.
-    let receiver_type = declared_reference_type(object, &visible_symbols).unwrap_or(object_type);
+    let declared_receiver = declared_reference_type(object, &visible_symbols);
+    // A union's member is read-only when any constituent's is, so the
+    // constituents flow left decide it.
+    let readonly_receiver = match &declared_receiver {
+        Some(declared) if !matches!(declared.peeled(), Type::Union(_)) => declared.clone(),
+        _ => object_type.clone(),
+    };
+    let receiver_type = declared_receiver.unwrap_or(object_type);
 
     let property_span = index_span.or(assignment.target_span);
 
@@ -697,9 +737,20 @@ fn check_element_assignment(
         return;
     }
     if let Some(key) = literal_index_key(&index_type)
-        && report_readonly_property_write(&receiver_type, &key, property_span, ctx)
+        && report_readonly_property_write(&readonly_receiver, &key, property_span, ctx)
     {
         return;
+    }
+
+    // The write is still checked against the index signature's value type.
+    if let Some(owner) = readonly_index_owner
+        && crate::infer::expression::deferred_element_access(&receiver_type, &index_type).is_none()
+    {
+        let diagnostic = Diagnostic::ts2542(owner, ctx.file_name.clone());
+        ctx.push(match assignment.target_span.or(property_span) {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        });
     }
 
     // A literal index outside a tuple's fixed length is an error in its own
@@ -1286,14 +1337,34 @@ fn check_member_assignment_itself(
         .as_ref()
         .unwrap_or(&object_type)
         .clone();
+    // A union's member is read-only when any constituent's is, so the
+    // constituents flow left decide it.
+    let readonly_receiver = if matches!(receiver_for_declaration.peeled(), Type::Union(_)) {
+        &object_type
+    } else {
+        &receiver_for_declaration
+    };
     if report_readonly_property_write(
-        &receiver_for_declaration,
+        readonly_receiver,
         property_name,
         property_span.or(assignment.target_span),
         ctx,
     ) {
         check_value_without_target(&assignment, None, &visible_symbols, ctx);
         return;
+    }
+    // `checkPropertyAccessExpressionOrQualifiedName`: a name no member answers
+    // is read through the receiver's index signature, and a `readonly` one
+    // refuses the write. The write is still checked against its value type.
+    if object_type.writes_readonly_index(
+        Some(property_name.as_str()),
+        surge_ts_types::is_numeric_key(property_name),
+    ) {
+        let diagnostic = Diagnostic::ts2542(object_type.name(), ctx.file_name.clone());
+        ctx.push(match assignment.target_span {
+            Some(span) => diagnostic.with_span(convert_span(span)),
+            None => diagnostic,
+        });
     }
     let accessor_write_type = accessor_write_type(&receiver_for_declaration, property_name, ctx)
         .or_else(|| union_accessor_write_type(&receiver_for_declaration, property_name, ctx));

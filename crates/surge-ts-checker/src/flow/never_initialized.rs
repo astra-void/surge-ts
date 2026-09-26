@@ -232,7 +232,7 @@ fn body_local_types(body: &[ParsedFunctionBodyStatement]) -> Vec<(String, Option
     types
 }
 
-fn collect_declared_names(body: &[ParsedFunctionBodyStatement], names: &mut HashSet<String>) {
+pub(crate) fn collect_declared_names(body: &[ParsedFunctionBodyStatement], names: &mut HashSet<String>) {
     for_each_declaration(body, &mut |variable| {
         names.insert(variable.name.clone());
     });

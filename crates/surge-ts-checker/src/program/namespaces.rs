@@ -404,54 +404,37 @@ fn declares_name(statement: &ParsedStatement, name: &str) -> bool {
 }
 
 /// tsc's `checkModuleDeclaration` merge placement across global scripts: a
-/// non-ambient instantiated namespace whose global symbol's first non-ambient
+/// non-ambient instantiated namespace whose merged symbol's first non-ambient
 /// class or implemented function lives in another file is TS2433 at its name.
-/// Declarations merge in program file order. The same-file case (TS2434) is
-/// the parser's, and gives way here when the first such declaration is in an
-/// earlier file.
+/// A namespace body's exported members merge across its blocks, and so across
+/// files: `namespace A { export namespace P {} }` meets `namespace A { export
+/// class P {} }` written elsewhere. Declarations merge in program file order.
+/// The same-file case (TS2434) is the parser's, and gives way here when the
+/// first such declaration is in an earlier file.
 pub(crate) fn report_cross_file_namespace_merges(parsed_files: &mut [ParsedProgramFile]) {
     let is_global_script =
         |file: &ParsedProgramFile| !file.is_module && !file.file_kind.is_declaration();
-    let mut first_class_or_function: FxHashMap<&str, usize> = FxHashMap::default();
+    let mut first_class_or_function: FxHashMap<String, usize> = FxHashMap::default();
     for (index, file) in parsed_files.iter().enumerate() {
-        if !is_global_script(file) {
-            continue;
-        }
-        for statement in &file.statements {
-            let name = match statement {
-                ParsedStatement::ClassDeclaration(class) if !class.is_declare => class.name.as_str(),
-                ParsedStatement::FunctionDeclaration(function)
-                    if function.has_body && !function.is_declare =>
-                {
-                    function.name.as_str()
-                }
-                _ => continue,
-            };
-            first_class_or_function.entry(name).or_insert(index);
+        if is_global_script(file) {
+            collect_merged_classes_and_functions(
+                &file.statements,
+                None,
+                index,
+                &mut first_class_or_function,
+            );
         }
     }
     let mut reports: Vec<(usize, surge_ts_syntax::TextSpan)> = Vec::new();
     for (index, file) in parsed_files.iter().enumerate() {
-        if !is_global_script(file) {
-            continue;
-        }
-        for statement in &file.statements {
-            let ParsedStatement::NamespaceDeclaration(namespace) = statement else {
-                continue;
-            };
-            if namespace.is_declare || namespace.name.contains('.') {
-                continue;
-            }
-            let Some(span) = namespace.name_span else {
-                continue;
-            };
-            if first_class_or_function
-                .get(namespace.name.as_str())
-                .is_some_and(|first| *first != index)
-                && is_instantiated_namespace(namespace)
-            {
-                reports.push((index, span));
-            }
+        if is_global_script(file) {
+            collect_cross_file_namespace_merges(
+                &file.statements,
+                None,
+                index,
+                &first_class_or_function,
+                &mut reports,
+            );
         }
     }
     for (index, span) in reports {
@@ -464,5 +447,108 @@ pub(crate) fn report_cross_file_namespace_merges(parsed_files: &mut [ParsedProgr
             span,
             name: None,
         });
+    }
+}
+
+/// The declaration `statement` adds to a merged symbol table: any statement of
+/// a global script, and in a namespace body an exported one — the inner block
+/// of a dotted `namespace A.B` among them. A body's other declarations are
+/// locals of their own block.
+fn merged_member_declaration(statement: &ParsedStatement, in_namespace: bool) -> Option<&ParsedStatement> {
+    if !in_namespace {
+        return Some(statement);
+    }
+    match statement {
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => Some(declaration.as_ref()),
+            _ => None,
+        },
+        ParsedStatement::NamespaceDeclaration(namespace) if namespace.name.contains('.') => {
+            Some(statement)
+        }
+        _ => None,
+    }
+}
+
+fn qualified_member_name(prefix: Option<&str>, name: &str) -> String {
+    match prefix {
+        Some(prefix) => format!("{prefix}.{name}"),
+        None => name.to_string(),
+    }
+}
+
+/// The file each non-ambient class or implemented function of the merged
+/// tables is first declared in, by qualified name. Everything in an ambient
+/// namespace is ambient.
+fn collect_merged_classes_and_functions(
+    statements: &[ParsedStatement],
+    prefix: Option<&str>,
+    index: usize,
+    out: &mut FxHashMap<String, usize>,
+) {
+    for statement in statements {
+        let Some(declaration) = merged_member_declaration(statement, prefix.is_some()) else {
+            continue;
+        };
+        let name = match declaration {
+            ParsedStatement::ClassDeclaration(class) if !class.is_declare => class.name.as_str(),
+            ParsedStatement::FunctionDeclaration(function)
+                if function.has_body && !function.is_declare =>
+            {
+                function.name.as_str()
+            }
+            ParsedStatement::NamespaceDeclaration(namespace) if !namespace.is_declare => {
+                let qualified = qualified_member_name(prefix, namespace.member_name());
+                collect_merged_classes_and_functions(
+                    &namespace.statements,
+                    Some(qualified.as_str()),
+                    index,
+                    out,
+                );
+                continue;
+            }
+            _ => continue,
+        };
+        out.entry(qualified_member_name(prefix, name)).or_insert(index);
+    }
+}
+
+/// The name spans of the instantiated non-ambient namespaces in `statements`,
+/// nested ones included, whose merged symbol's first class or implemented
+/// function is declared in another file.
+fn collect_cross_file_namespace_merges(
+    statements: &[ParsedStatement],
+    prefix: Option<&str>,
+    index: usize,
+    first_class_or_function: &FxHashMap<String, usize>,
+    reports: &mut Vec<(usize, surge_ts_syntax::TextSpan)>,
+) {
+    for statement in statements {
+        let Some(ParsedStatement::NamespaceDeclaration(namespace)) =
+            merged_member_declaration(statement, prefix.is_some())
+        else {
+            continue;
+        };
+        if namespace.is_declare {
+            continue;
+        }
+        let qualified = qualified_member_name(prefix, namespace.member_name());
+        // The inner block of a dotted name carries its outermost segment's span.
+        if !namespace.name.contains('.')
+            && let Some(span) = namespace.name_span
+            && first_class_or_function
+                .get(qualified.as_str())
+                .is_some_and(|first| *first != index)
+            && is_instantiated_namespace(namespace)
+        {
+            reports.push((index, span));
+        }
+        collect_cross_file_namespace_merges(
+            &namespace.statements,
+            Some(qualified.as_str()),
+            index,
+            first_class_or_function,
+            reports,
+        );
     }
 }

@@ -28,8 +28,8 @@ pub(crate) use module_scope::{
     check_class_member_flow, check_module_definite_assignment, walk_class,
 };
 pub(crate) use never_initialized::{
-    begin_file as begin_never_initialized_file, enter_container, excludes_undefined,
-    expression_container_flow, is_plainly_defined,
+    begin_file as begin_never_initialized_file, collect_declared_names, enter_container,
+    excludes_undefined, expression_container_flow, is_plainly_defined,
 };
 pub(crate) use unassigned_reads::is_unassigned_read;
 use unassigned_reads::record_unassigned_read;

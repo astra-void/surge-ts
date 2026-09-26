@@ -320,18 +320,23 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                 (
                     BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_),
                     Some(ty),
-                    Some(annotation_span),
+                    Some(_),
                 ) => ParsedExpression::TypeAssertion {
                     expression: Box::new(initializer),
                     expression_span: initializer_span,
                     ty,
-                    type_span: Some(annotation_span),
+                    type_span: Some(text_span_from_oxc_span(oxc_span::GetSpan::span(&declarator.id))),
                     annotation: true,
                 },
                 _ if annotation_span.is_none() => {
                     with_pattern_context(&declarator.id, initializer)
                 }
                 _ => initializer,
+            };
+            let excess_properties = if annotation_span.is_none() {
+                pattern_excess_properties(&declarator.id, &initializer)
+            } else {
+                Vec::new()
             };
             let annotated_pattern = match (&declarator.id, &declared_type) {
                 (BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_), Some(ty))
@@ -359,6 +364,13 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                     .find(|statement| matches!(statement, ParsedStatement::VariableDeclaration(_)))
             {
                 first.annotated_pattern = Some(annotated_pattern);
+            }
+            if !excess_properties.is_empty()
+                && let Some(ParsedStatement::VariableDeclaration(first)) = declarations
+                    .iter_mut()
+                    .find(|statement| matches!(statement, ParsedStatement::VariableDeclaration(_)))
+            {
+                first.pattern_excess_properties = excess_properties;
             }
             declarations
         })
@@ -426,6 +438,7 @@ fn annotated_pattern_declarations(
                     initializer_span: None,
                     declaration_list: None,
                     annotated_pattern: None,
+                    pattern_excess_properties: Vec::new(),
                 },
             )));
         }
@@ -707,7 +720,7 @@ pub(crate) fn parse_destructuring_assignment(expression: &Expression<'_>) -> Vec
     let (source, source_span) = parse_expression(&assignment.right);
     let source_span = Some(text_span_from_oxc_span(source_span));
     let mut assignments = Vec::new();
-    lower_assignment_pattern(&assignment.left, &source, source_span, &mut assignments);
+    lower_assignment_pattern(&assignment.left, &source, source_span, false, &mut assignments);
     assignments
 }
 
@@ -715,6 +728,7 @@ fn lower_assignment_pattern(
     pattern: &AssignmentTarget<'_>,
     source: &ParsedExpression,
     source_span: Option<crate::TextSpan>,
+    split_defaults: bool,
     assignments: &mut Vec<ParsedAssignment>,
 ) {
     use oxc_ast::ast::{AssignmentTargetMaybeDefault, AssignmentTargetProperty, IdentifierReference};
@@ -730,6 +744,21 @@ fn lower_assignment_pattern(
             }
         }
         None => read,
+    };
+    // `checkDestructuringAssignment` checks a default as an assignment of its
+    // own (`checkBinaryExpression`) and then the source less `undefined`;
+    // `split_defaults` lowers them apart, as values the target is only checked
+    // against.
+    let values = |read: ParsedExpression, default: Option<&Expression<'_>>| match default {
+        Some(default) if split_defaults => vec![
+            parse_expression(default).0,
+            ParsedExpression::NonNullAssertion {
+                expression: Box::new(read),
+                span: source_span,
+                in_optional_chain: false,
+            },
+        ],
+        default => vec![with_default(read, default)],
     };
     let assign_identifier =
         |identifier: &IdentifierReference<'_>, value, assignments: &mut Vec<ParsedAssignment>| {
@@ -748,7 +777,7 @@ fn lower_assignment_pattern(
             }
             AssignmentTarget::ArrayAssignmentTarget(_)
             | AssignmentTarget::ObjectAssignmentTarget(_) => {
-                lower_assignment_pattern(target, &value, source_span, assignments);
+                lower_assignment_pattern(target, &value, source_span, split_defaults, assignments);
             }
             _ => {}
         }
@@ -793,7 +822,9 @@ fn lower_assignment_pattern(
                         index_span: span,
                     },
                 };
-                assign(target, with_default(read, default), assignments);
+                for value in values(read, default) {
+                    assign(target, value, assignments);
+                }
             }
             if let Some(rest) = &pattern.rest {
                 assign(&rest.target, ParsedExpression::Unknown, assignments);
@@ -828,8 +859,9 @@ fn lower_assignment_pattern(
                         let identifier = &shorthand.binding;
                         let span = Some(text_span_from_oxc_span(identifier.span));
                         let read = property_read(&identifier.name, span, shorthand.init.is_some());
-                        let value = with_default(read, shorthand.init.as_ref());
-                        assign_identifier(identifier, value, assignments);
+                        for value in values(read, shorthand.init.as_ref()) {
+                            assign_identifier(identifier, value, assignments);
+                        }
                     }
                     AssignmentTargetProperty::AssignmentTargetPropertyProperty(property) => {
                         let Some((target, default)) = split_default(&property.binding) else {
@@ -850,8 +882,9 @@ fn lower_assignment_pattern(
                                 None => continue,
                             },
                         };
-                        let value = with_default(read, default);
-                        assign(target, value, assignments);
+                        for value in values(read, default) {
+                            assign(target, value, assignments);
+                        }
                     }
                 }
             }
@@ -933,6 +966,7 @@ fn parse_binding_pattern_declarations_with_definite(
                     initializer_span,
                     declaration_list: None,
                     annotated_pattern: None,
+                    pattern_excess_properties: Vec::new(),
                 },
             ))]
         }
@@ -1464,6 +1498,88 @@ fn with_element_context(element: &BindingPattern<'_>, value: ParsedExpression) -
             }
         }
         pattern => with_pattern_context(pattern, value),
+    }
+}
+
+/// tsc's excess-property check against the type a binding pattern implies
+/// (`checkObjectLiteral`, contextually typed by
+/// `getContextualTypeForInitializerExpression`): the members of the
+/// initializer's literals the pattern does not name. A pattern without
+/// elements gives its initializer no contextual type.
+fn pattern_excess_properties(
+    pattern: &BindingPattern<'_>,
+    initializer: &ParsedExpression,
+) -> Vec<crate::ParsedPatternExcessProperty> {
+    let has_elements = match pattern {
+        BindingPattern::ObjectPattern(object) => !object.properties.is_empty() || object.rest.is_some(),
+        BindingPattern::ArrayPattern(array) => !array.elements.is_empty() || array.rest.is_some(),
+        _ => false,
+    };
+    let mut excess = Vec::new();
+    if has_elements
+        && matches!(
+            initializer,
+            ParsedExpression::ObjectLiteral { .. } | ParsedExpression::ArrayLiteral { .. }
+        )
+    {
+        collect_pattern_excess_properties(&functions::parse_binding_name(pattern), initializer, &mut excess);
+    }
+    excess
+}
+
+/// A literal answers to the pattern it initializes. An object pattern with a
+/// rest element implies a string index, and one with a computed key leaves its
+/// members open (`ObjectLiteralPatternWithComputedProperties`): neither has an
+/// excess member. A nested literal answers to the nested pattern unless the
+/// element has a default, whose own type is then the context; a spread literal
+/// shares the context of the literal it spreads into.
+fn collect_pattern_excess_properties(
+    pattern: &crate::ParsedBindingName,
+    literal: &ParsedExpression,
+    excess: &mut Vec<crate::ParsedPatternExcessProperty>,
+) {
+    match (pattern, literal) {
+        (crate::ParsedBindingName::ObjectPattern(object), ParsedExpression::ObjectLiteral { properties, .. }) => {
+            let closed = object.rest.is_none()
+                && !object
+                    .elements
+                    .iter()
+                    .any(|element| matches!(element.binding_name, crate::ParsedBindingName::Unsupported { .. }));
+            for property in properties {
+                if property.is_spread {
+                    collect_pattern_excess_properties(pattern, &property.value, excess);
+                    continue;
+                }
+                if property.is_accessor || property.computed_key.is_some() {
+                    continue;
+                }
+                match object.elements.iter().find(|element| element.property_name == property.name) {
+                    Some(element) if !element.has_default => {
+                        collect_pattern_excess_properties(&element.binding_name, &property.value, excess);
+                    }
+                    Some(_) => {}
+                    None if closed => excess.push(crate::ParsedPatternExcessProperty {
+                        pattern: pattern.clone(),
+                        name: property.name.clone(),
+                        name_span: property.name_span.or(property.span),
+                    }),
+                    None => {}
+                }
+            }
+        }
+        (crate::ParsedBindingName::ArrayPattern(array), ParsedExpression::ArrayLiteral { elements, .. }) => {
+            for (index, element) in elements.iter().enumerate() {
+                if element.spread {
+                    break;
+                }
+                if let Some(Some(nested)) = array.elements.get(index)
+                    && !array.defaults.get(index).copied().unwrap_or(false)
+                {
+                    collect_pattern_excess_properties(nested, &element.expression, excess);
+                }
+            }
+        }
+        _ => {}
     }
 }
 

@@ -506,9 +506,20 @@ pub(crate) struct WrittenCallSignature {
 /// (see `resolve_function_type`). `outer_type_arguments` are the bindings the
 /// body was resolved under — the enclosing interface's own parameters — so a
 /// signature that names them (`filter<S extends N>`) still resolves at the call.
+/// `generic_shape` is the signature's written shape, when it has a
+/// constrained type parameter (see `generic_signature_shape`).
 pub(crate) struct DeclaredMemberSignature {
     pub(crate) signature: std::sync::Arc<crate::symbols::FunctionSignatureInfo>,
     pub(crate) outer_type_arguments: Vec<(String, Type)>,
+    pub(crate) generic_shape: Option<std::sync::Arc<surge_ts_types::GenericSignatureShape>>,
+}
+
+/// The written shape a [`DeclaredMemberSignature`] carries, installed as the
+/// relation's lookup (`surge_ts_types::install_generic_signature_shape_lookup`).
+pub(crate) fn declared_generic_signature_shape(
+    declaration: &(dyn std::any::Any + Send + Sync),
+) -> Option<&surge_ts_types::GenericSignatureShape> {
+    declaration.downcast_ref::<DeclaredMemberSignature>()?.generic_shape.as_deref()
 }
 
 impl DeclaredMemberSignature {
@@ -573,6 +584,7 @@ impl DeclaredMemberSignature {
         Some(Self {
             signature: std::sync::Arc::new(signature),
             outer_type_arguments,
+            generic_shape: None,
         })
     }
 }
@@ -4446,6 +4458,13 @@ pub(crate) fn is_open_instantiation(ty: &Type) -> bool {
             .iter()
             .any(|argument| !argument.is_type_variable() && argument_is_open(argument));
     }
+    // A generator's `TNext` is `unknown` by tsc's own default
+    // (`getReturnTypeFromBody`), not an argument an inference left open.
+    if reference.arguments.len() == 3
+        && matches!(reference.display.split('<').next(), Some("Generator" | "AsyncGenerator"))
+    {
+        return reference.arguments[..2].iter().any(argument_is_open);
+    }
     reference.arguments.iter().any(argument_is_open)
 }
 
@@ -4578,10 +4597,22 @@ fn is_unnarrowable_literal(expression: &ParsedExpression) -> bool {
 /// tsc's `resolveCallExpression` for a callee with no call signature: one that
 /// can only be constructed is TS2348, which names it and suggests `new`.
 pub(crate) fn not_callable_diagnostic(callee: &Type, ctx: &CheckerContext) -> Diagnostic {
+    not_callable_member_diagnostic(callee, false, ctx)
+}
+
+/// [`not_callable_diagnostic`] for a call through a member read:
+/// `invocationErrorDetails` heads the report with TS6234 when the call passes
+/// no arguments and the member is a `get` accessor.
+pub(crate) fn not_callable_member_diagnostic(
+    callee: &Type,
+    get_accessor_call: bool,
+    ctx: &CheckerContext,
+) -> Diagnostic {
     match callee {
         Type::Object(object) if object.construct_signature().is_some() && object.call_signature().is_none() => {
             Diagnostic::ts2348(callee.name(), ctx.file_name.clone())
         }
+        _ if get_accessor_call => Diagnostic::ts6234(ctx.file_name.clone()),
         _ => Diagnostic::ts2349(ctx.file_name.clone()),
     }
 }

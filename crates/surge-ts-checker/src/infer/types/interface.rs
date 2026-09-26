@@ -278,6 +278,55 @@ fn class_base_arguments_select_constructors(base: &ParsedNamedType, ctx: &Checke
             || base.type_arguments.len() > type_parameters.len())
 }
 
+/// Whether a resolved type argument is free of the degradation sentinel as far
+/// as its structure shows without peeling a reference. Past the budget it is
+/// not.
+fn argument_free_of_sentinel(ty: &Type, depth: usize, budget: &mut usize) -> bool {
+    if depth >= 16 || *budget == 0 {
+        return false;
+    }
+    *budget -= 1;
+    match ty {
+        Type::Unknown => false,
+        Type::Array(element) => argument_free_of_sentinel(element, depth + 1, budget),
+        Type::Tuple(elements) => elements
+            .iter()
+            .all(|element| argument_free_of_sentinel(element, depth + 1, budget)),
+        Type::OpenTuple(tuple) => tuple
+            .leading
+            .iter()
+            .chain(std::iter::once(tuple.rest.as_ref()))
+            .chain(tuple.trailing.iter())
+            .all(|element| argument_free_of_sentinel(element, depth + 1, budget)),
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .all(|member| argument_free_of_sentinel(member, depth + 1, budget)),
+        Type::Function(function) => {
+            function
+                .parameters()
+                .iter()
+                .all(|parameter| argument_free_of_sentinel(parameter, depth + 1, budget))
+                && argument_free_of_sentinel(function.return_type(), depth + 1, budget)
+        }
+        Type::Object(object) => {
+            object
+                .properties
+                .values()
+                .all(|property| argument_free_of_sentinel(&property.ty, depth + 1, budget))
+                && object
+                    .string_index_type
+                    .as_deref()
+                    .is_none_or(|index| argument_free_of_sentinel(index, depth + 1, budget))
+        }
+        Type::Reference(reference) => reference
+            .arguments
+            .iter()
+            .all(|argument| argument_free_of_sentinel(argument, depth + 1, budget)),
+        _ => true,
+    }
+}
+
 fn generic_interface_display_name(interface: &InterfaceInfo) -> String {
     let name = interface.declared_name.as_deref().unwrap_or(&interface.name);
     let parameters = &interface.body.type_parameters;
@@ -306,16 +355,19 @@ pub(crate) fn resolve_interface(
     let declaration_key = super::cache::interface_resolution_key(interface);
     if let Some(index) = resolving.iter().position(|name| name == &declaration_key) {
         // A recursive interface (`interface Node { next: Node }`) is always valid in
-        // tsc. For a *non-generic* interface resolve the self-edge to a lazy nominal
-        // reference to the same declaration so a member/assignability check through it
-        // peels back to the real shape instead of silently passing on `unknown`; the
-        // lazy peel stack bounds re-expansion.
+        // tsc: a reference to it is `createTypeReference(target, typeArguments)`,
+        // whose members are instantiated only when read
+        // (`resolveTypeReferenceMembers`). The self-edge resolves to a lazy nominal
+        // reference to the same declaration, so a member/assignability check through
+        // it peels back to the real shape instead of silently passing on `unknown`;
+        // the lazy peel stack bounds re-expansion.
         //
-        // A *generic* interface is left as `unknown` with a (suppressed) note: its
-        // lazy peel is bounded mid-instantiation, so forcing the deeply
-        // self-instantiating generic builder/library clusters would expose an
-        // incomplete shape and over-report. Keeping `unknown` preserves the previous
-        // sound-but-under-reporting behaviour for those.
+        // A generic self-edge carries the arguments the caller resolved under this
+        // frame's substitution (`next: List<T>` inside `List<number>` is
+        // `List<number>`, `then(): IPromise<any>` is `IPromise<any>`). Arguments
+        // that did not resolve, or that hold the degradation sentinel, give the
+        // reference no identity, so that back-edge stays `unknown` with a
+        // (suppressed) note.
         ctx.note_resolution_cycle(index);
         if interface.body.type_parameters.is_empty() {
             return ResolvedType {
@@ -326,6 +378,33 @@ pub(crate) fn resolve_interface(
                     declaration_key,
                     type_arguments,
                     pre_resolved_arguments,
+                    substitution,
+                ),
+                had_error: false,
+            };
+        }
+        let mut budget = 96usize;
+        if index + 1 == resolving.len()
+            && let Some(arguments) = pre_resolved_arguments.filter(|arguments| {
+            arguments
+                .iter()
+                .all(|argument| argument_free_of_sentinel(argument, 0, &mut budget))
+        }) {
+            let name = interface.declared_name.as_deref().unwrap_or(&interface.name);
+            let display = if arguments.is_empty() {
+                name.to_string()
+            } else {
+                let arguments = arguments.iter().map(Type::name).collect::<Vec<_>>().join(", ");
+                format!("{name}<{arguments}>")
+            };
+            return ResolvedType {
+                ty: make_recursive_cycle_reference(
+                    ctx,
+                    &display,
+                    handle,
+                    declaration_key,
+                    type_arguments,
+                    Some(arguments),
                     substitution,
                 ),
                 had_error: false,
@@ -702,6 +781,8 @@ pub(crate) fn resolve_interface(
                     &interface.body.members,
                     interface.body.string_index_type.as_ref(),
                     interface.body.number_index_type.as_ref(),
+                    interface.body.string_index_readonly,
+                    interface.body.number_index_readonly,
                     interface.body.call_signature.as_ref(),
                     &interface.body.call_signature_overloads,
                     &interface.body.construct_signatures,
@@ -900,6 +981,8 @@ pub(crate) fn resolve_interface_declaration(
     members: &[ParsedInterfaceMember],
     string_index_type: Option<&ParsedType>,
     number_index_type: Option<&ParsedType>,
+    string_index_readonly: bool,
+    number_index_readonly: bool,
     call_signature: Option<&ParsedFunctionType>,
     call_signature_overloads: &[ParsedFunctionType],
     construct_signatures: &[ParsedFunctionType],
@@ -935,6 +1018,8 @@ pub(crate) fn resolve_interface_declaration(
     let mut had_error = false;
     let mut inherited_index_type: Option<Type> = None;
     let mut inherited_number_index_type: Option<Type> = None;
+    let mut inherited_index_readonly = false;
+    let mut inherited_number_index_readonly = false;
     let mut inherited_call_signature: Option<FunctionType> = None;
     let mut inherited_construct_signature: Option<FunctionType> = None;
     // A base that resolves to `any` (e.g. a mixin) leaves the derived member set
@@ -1040,11 +1125,13 @@ pub(crate) fn resolve_interface_declaration(
                     && let Some(index_type) = &object_type.string_index_type
                 {
                     inherited_index_type = Some(index_type.as_ref().clone());
+                    inherited_index_readonly = object_type.string_index_readonly;
                 }
                 if inherited_number_index_type.is_none()
                     && let Some(index_type) = &object_type.number_index_type
                 {
                     inherited_number_index_type = Some(index_type.as_ref().clone());
+                    inherited_number_index_readonly = object_type.number_index_readonly;
                 }
                 // Call/construct signatures are inherited like members: React's
                 // `ForwardRefExoticComponent extends ExoticComponent` carries its
@@ -1075,6 +1162,11 @@ pub(crate) fn resolve_interface_declaration(
             Type::Array(element) => {
                 if inherited_number_index_type.is_none() {
                     inherited_number_index_type = Some(element.as_ref().clone());
+                    // `ReadonlyArray<T>` declares `readonly [n: number]: T`.
+                    inherited_number_index_readonly = matches!(&resolved_base.ty,
+                        Type::Reference(reference) if reference.is_readonly_array()
+                            || reference.arguments.len() == 1
+                                && reference.id.split('\u{0}').next_back() == Some("ReadonlyArray"));
                 }
                 for name in surge_ts_types::array_property_names() {
                     if properties.contains_key(*name) {
@@ -1524,8 +1616,19 @@ pub(crate) fn resolve_interface_declaration(
         })
         .or(inherited_number_index_type);
 
+    let resolved_index_readonly = if string_index_type.is_some() {
+        string_index_readonly
+    } else {
+        inherited_index_readonly
+    };
+    let resolved_number_index_readonly = if number_index_type.is_some() {
+        number_index_readonly
+    } else {
+        inherited_number_index_readonly
+    };
     let mut object_type = alloc_object_type(properties, resolved_index_type)
         .with_number_index_type(resolved_number_index_type)
+        .with_readonly_indexes(resolved_index_readonly, resolved_number_index_readonly)
         .with_nominal_declaration_marker();
     if openness_is_synthetic {
         object_type = object_type.with_open_index_marker();

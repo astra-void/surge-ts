@@ -140,6 +140,18 @@ fn report_initializer_mismatch_of(
     {
         return;
     }
+    report_assignability_failure(inferred_initializer_type, declared_type, target_span, ctx);
+}
+
+/// The TS2322 family for a source known not to be assignable to `declared_type`,
+/// rendered as an initializer mismatch is. For a source the checker built
+/// itself, which the inference-gap guards above would misjudge.
+pub(crate) fn report_assignability_failure(
+    inferred_initializer_type: &Type,
+    declared_type: &Type,
+    target_span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) {
     let declared_type = &crate::checks::expr::reported_relation_target(
         inferred_initializer_type,
         declared_type,
@@ -165,6 +177,256 @@ fn report_initializer_mismatch_of(
         Some(span) => diagnostic.with_span(convert_span(span)),
         None => diagnostic,
     });
+}
+
+/// A write `f.x = …` tsc's binder declares on the function an annotated
+/// `const f: T = () => …` initializes (`bindDeferredExpandoAssignment`,
+/// `getInitializerSymbol`): the target, and the JSDoc type written on it.
+#[derive(Debug, Clone)]
+pub(crate) struct ExpandoInitializerMember {
+    target: ParsedExpression,
+    declared_type: Option<surge_ts_syntax::ParsedType>,
+}
+
+/// [`install_expando_initializer_members`] for a module's statements.
+pub(crate) fn module_expando_initializer_members(
+    statements: &[surge_ts_syntax::ParsedStatement],
+    javascript: bool,
+) -> std::collections::HashMap<usize, Vec<ExpandoInitializerMember>> {
+    use surge_ts_syntax::{ParsedExportDeclaration, ParsedStatement};
+    let declarations: Vec<&ParsedVariableDeclaration> = statements
+        .iter()
+        .filter_map(|statement| match statement {
+            ParsedStatement::VariableDeclaration(variable) => Some(variable.as_ref()),
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => match declaration.as_ref() {
+                    ParsedStatement::VariableDeclaration(variable) => Some(variable.as_ref()),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        })
+        .filter(|variable| is_annotated_expando_initializer(variable, javascript))
+        .collect();
+    if declarations.is_empty() {
+        return std::collections::HashMap::new();
+    }
+    let mut writes: Vec<&surge_ts_syntax::ParsedMemberAssignment> = Vec::new();
+    for statement in statements {
+        match statement {
+            ParsedStatement::MemberAssignment(assignment) => push_member_writes(assignment, &mut writes),
+            ParsedStatement::If(if_statement) => {
+                crate::modules::exports::collect_nested_member_assignments(&if_statement.then_body, &[], &mut writes);
+                crate::modules::exports::collect_nested_member_assignments(&if_statement.else_body, &[], &mut writes);
+            }
+            ParsedStatement::Block(body) => {
+                crate::modules::exports::collect_nested_member_assignments(body, &[], &mut writes)
+            }
+            _ => {}
+        }
+    }
+    expando_members_by_declaration(&declarations, &writes)
+}
+
+/// The writes `body` makes to the annotated expando declarations it declares,
+/// installed for its statements; returns the set to restore after them. tsc
+/// looks a write's receiver up in the write's block and then its container
+/// (`lookupEntity`), so writes in nested blocks count unless the block
+/// declares the name itself.
+pub(crate) fn install_expando_initializer_members(
+    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+    ctx: &mut CheckerContext,
+) -> Option<Arc<std::collections::HashMap<usize, Vec<ExpandoInitializerMember>>>> {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+    let javascript = surge_ts_syntax::is_javascript_file_name(&ctx.file_name);
+    let declarations: Vec<&ParsedVariableDeclaration> = body
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::VariableDeclaration(variable) => Some(variable.as_ref()),
+            _ => None,
+        })
+        .filter(|variable| is_annotated_expando_initializer(variable, javascript))
+        .collect();
+    if declarations.is_empty() {
+        return None;
+    }
+    let mut writes: Vec<&surge_ts_syntax::ParsedMemberAssignment> = Vec::new();
+    for statement in body {
+        match statement {
+            Statement::MemberAssignment(assignment) => push_member_writes(assignment, &mut writes),
+            Statement::If(if_statement) => {
+                crate::modules::exports::collect_nested_member_assignments(&if_statement.then_body, &[], &mut writes);
+                crate::modules::exports::collect_nested_member_assignments(&if_statement.else_body, &[], &mut writes);
+            }
+            Statement::Block(block) => {
+                crate::modules::exports::collect_nested_member_assignments(block, &[], &mut writes)
+            }
+            _ => {}
+        }
+    }
+    let members = expando_members_by_declaration(&declarations, &writes);
+    if members.is_empty() {
+        return None;
+    }
+    Some(std::mem::replace(&mut ctx.expando_initializer_members, Arc::new(members)))
+}
+
+/// `getInitializerSymbol`: a `const` (any variable in JavaScript) initialized
+/// with a function expression or an arrow (`IsExpandoInitializer`). An
+/// unannotated one is typed by its initializer, which the expando collection
+/// already extends; an annotated one needs its writes where it is checked.
+fn is_annotated_expando_initializer(variable: &ParsedVariableDeclaration, javascript: bool) -> bool {
+    variable.declared_type.is_some()
+        && variable.name_span.is_some()
+        && !variable.from_binding_pattern
+        && (javascript || matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const))
+        && matches!(variable.initializer, Some(ParsedExpression::ArrowFunction(_)))
+}
+
+/// `F.a = F.b = v` writes both members.
+fn push_member_writes<'a>(
+    assignment: &'a surge_ts_syntax::ParsedMemberAssignment,
+    writes: &mut Vec<&'a surge_ts_syntax::ParsedMemberAssignment>,
+) {
+    let mut chained = Some(assignment);
+    while let Some(assignment) = chained {
+        writes.push(assignment);
+        chained = match &assignment.value {
+            ParsedExpression::MemberAssignment(inner) => Some(inner.as_ref()),
+            _ => None,
+        };
+    }
+}
+
+fn expando_members_by_declaration(
+    declarations: &[&ParsedVariableDeclaration],
+    writes: &[&surge_ts_syntax::ParsedMemberAssignment],
+) -> std::collections::HashMap<usize, Vec<ExpandoInitializerMember>> {
+    let mut members = std::collections::HashMap::new();
+    for declaration in declarations {
+        let Some(name_span) = declaration.name_span else {
+            continue;
+        };
+        let declared: Vec<ExpandoInitializerMember> = writes
+            .iter()
+            .filter(|write| {
+                expando_write_receiver(write) == Some(declaration.name.as_str()) && !is_compound_write(write)
+            })
+            .map(|write| ExpandoInitializerMember {
+                target: write.target.clone(),
+                declared_type: match &write.value {
+                    ParsedExpression::TypeAssertion {
+                        ty,
+                        annotation: true,
+                        ..
+                    } => Some(ty.clone()),
+                    _ => None,
+                },
+            })
+            .collect();
+        if !declared.is_empty() {
+            members.insert(name_span.start, declared);
+        }
+    }
+    members
+}
+
+fn expando_write_receiver(write: &surge_ts_syntax::ParsedMemberAssignment) -> Option<&str> {
+    match &write.target {
+        ParsedExpression::PropertyAccess { object, .. } => match object.as_ref() {
+            ParsedExpression::Identifier { name, .. } => Some(name.as_str()),
+            _ => None,
+        },
+        ParsedExpression::IndexAccess { object_name, .. } => Some(object_name.as_str()),
+        _ => None,
+    }
+}
+
+/// `f.x op= v`: tsc binds only `=`. The parser folds the operator into the
+/// value, whose left operand is then the target itself.
+fn is_compound_write(write: &surge_ts_syntax::ParsedMemberAssignment) -> bool {
+    let left_span = match &write.value {
+        ParsedExpression::Logical { left_span, .. }
+        | ParsedExpression::NullishCoalescing { left_span, .. }
+        | ParsedExpression::Binary { left_span, .. } => *left_span,
+        _ => return false,
+    };
+    left_span.is_some() && left_span == write.target_span
+}
+
+/// The type tsc gives the function an annotated expando declaration
+/// initializes: `getTypeOfFuncClassEnumModule` resolves the function's
+/// exports, the members its writes declare, beside its signature, and that is
+/// what relates to the annotation. A member is typed by the JSDoc `@type` of
+/// the first write that has one (`getWidenedTypeForAssignmentDeclaration`);
+/// otherwise by its value, checked with the annotation's member as contextual
+/// type (`getContextualTypeForAssignmentExpression`), which relates to that
+/// member wherever the write itself does, so the member's type stands for it.
+/// A member the annotation lacks is left out.
+fn annotated_expando_initializer_type(
+    name_start: usize,
+    initializer_type: &Type,
+    declared_type: &Type,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let Type::Function(function) = initializer_type else {
+        return None;
+    };
+    let writes = ctx.expando_initializer_members.get(&name_start)?.clone();
+    let mut named: Vec<(String, Option<&surge_ts_syntax::ParsedType>)> = Vec::new();
+    for write in &writes {
+        let name = match &write.target {
+            ParsedExpression::PropertyAccess { property_name, .. } => property_name.clone(),
+            ParsedExpression::IndexAccess { index, .. } => {
+                match crate::modules::exports::element_access_member_name(index, symbols, ctx) {
+                    Some(name) => name,
+                    None => continue,
+                }
+            }
+            _ => continue,
+        };
+        match named.iter_mut().find(|(existing, _)| *existing == name) {
+            Some((_, written)) => {
+                if written.is_none() {
+                    *written = write.declared_type.as_ref();
+                }
+            }
+            None => named.push((name, write.declared_type.as_ref())),
+        }
+    }
+    let mut properties = surge_ts_types::PropertyMap::default();
+    for (name, written) in named {
+        let member_type = match written {
+            Some(written) => {
+                let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+                let resolved = map_parsed_type(written.clone(), ctx);
+                ctx.symbols = saved_symbols;
+                resolved
+            }
+            None => match declared_member_type(declared_type, &name) {
+                Some(member_type) => member_type,
+                None => continue,
+            },
+        };
+        properties.insert(name.as_str().into(), surge_ts_types::ObjectProperty::required(member_type));
+    }
+    if properties.is_empty() {
+        return None;
+    }
+    Some(Type::Object(
+        crate::metrics::alloc_object_type(properties, None).with_call_signature(function.clone()),
+    ))
+}
+
+/// The type `ty` declares its property `name` with, optionality aside.
+fn declared_member_type(ty: &Type, name: &str) -> Option<Type> {
+    match ty {
+        Type::Object(object) => object.get_property_type(name).cloned(),
+        Type::Reference(reference) => declared_member_type(&reference.resolve(), name),
+        _ => None,
+    }
 }
 
 pub(crate) fn check_variable_declaration_against_symbols(
@@ -225,6 +487,11 @@ pub(crate) fn check_variable_declaration_against_symbols(
             symbols,
             ctx,
         );
+    }
+    if options.check_initializer {
+        for excess in &variable.pattern_excess_properties {
+            crate::checks::function::report_pattern_excess_property(excess, ctx);
+        }
     }
 
     let symbol_kind = map_symbol_kind(variable.kind);
@@ -304,6 +571,19 @@ pub(crate) fn check_variable_declaration_against_symbols(
                 true
             });
 
+    let iterated_pattern_element = (options.check_initializer && !non_iterable_pattern_source)
+        .then(|| {
+            iterated_array_pattern_element(
+                variable.array_pattern_span.is_some(),
+                variable.array_rest_start.is_some(),
+                variable.initializer.as_ref(),
+                variable.initializer_span,
+                symbols,
+                ctx,
+            )
+        })
+        .flatten();
+
     let outer_allow_missing = ctx.allow_missing_tuple_element;
     ctx.allow_missing_tuple_element = variable.from_binding_pattern
         && matches!(
@@ -325,6 +605,8 @@ pub(crate) fn check_variable_declaration_against_symbols(
     });
     let inferred_initializer = if non_iterable_pattern_source {
         InferredExpression::Known(Type::Any)
+    } else if let Some(element) = iterated_pattern_element {
+        InferredExpression::Known(element)
     } else if options.check_initializer {
         variable
             .initializer
@@ -365,8 +647,17 @@ pub(crate) fn check_variable_declaration_against_symbols(
                         ctx,
                     );
                 } else {
+                    let expando_initializer_type = variable.name_span.and_then(|name_span| {
+                        annotated_expando_initializer_type(
+                            name_span.start,
+                            inferred_initializer_type,
+                            declared_type,
+                            symbols,
+                            ctx,
+                        )
+                    });
                     report_initializer_mismatch(
-                        inferred_initializer_type,
+                        expando_initializer_type.as_ref().unwrap_or(inferred_initializer_type),
                         declared_type,
                         variable.name_span.or(variable.initializer_span),
                         ctx,
@@ -1138,6 +1429,50 @@ fn type_contains_unknown(ty: &Type) -> bool {
 /// The source an array-pattern element reads from: the object of the
 /// `source[index]` access the pattern lowers each element to, beneath a
 /// default's `??`.
+/// tsc's `getBindingElementTypeFromParentType` for an array pattern over a
+/// source that is not array-like: an element binds the source's iterated type
+/// (`checkIteratedTypeOrElementType`), a rest element an array of it, where
+/// the lowered indexed read would find no index signature. Only a lib
+/// collection or iterator reference is known to be such a source.
+fn iterated_array_pattern_element(
+    in_array_pattern: bool,
+    is_rest: bool,
+    initializer: Option<&ParsedExpression>,
+    initializer_span: Option<surge_ts_syntax::TextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let initializer = initializer.filter(|_| in_array_pattern)?;
+    let (source, default) = match initializer {
+        _ if is_rest => (initializer.clone(), None),
+        ParsedExpression::NullishCoalescing { left, right, right_span, .. } => {
+            (array_pattern_source(left)?, Some((right.as_ref(), *right_span)))
+        }
+        _ => (array_pattern_source(initializer)?, None),
+    };
+    let InferredExpression::Known(Type::Reference(reference)) = crate::infer::infer_expression(&source, symbols, ctx)
+    else {
+        return None;
+    };
+    let element = crate::checks::function::iterable_reference_element_type(&reference)?;
+    if element.is_unmodelled() {
+        return None;
+    }
+    let _ = evaluate_expression(&source, initializer_span, symbols, ctx);
+    if is_rest {
+        return Some(Type::Array(Box::new(element)));
+    }
+    let Some((default, default_span)) = default else {
+        return Some(element);
+    };
+    match evaluate_expression(default, default_span.or(initializer_span), symbols, ctx) {
+        InferredExpression::Known(default_type) if !default_type.is_unmodelled() => Some(
+            surge_ts_types::union_type(vec![surge_ts_types::remove_undefined(&element), default_type]),
+        ),
+        _ => None,
+    }
+}
+
 fn array_pattern_source(initializer: &ParsedExpression) -> Option<ParsedExpression> {
     match initializer {
         ParsedExpression::NullishCoalescing { left, .. } => array_pattern_source(left),

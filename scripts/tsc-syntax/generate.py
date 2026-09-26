@@ -45,6 +45,10 @@ used |= {'Trailing_comma_not_allowed', 'Variable_declaration_list_cannot_be_empt
          'A_mapped_type_may_not_declare_properties_or_methods'}
 # The checker's duplicate-export check of a module (checkExternalModuleExports).
 used |= {'Cannot_redeclare_exported_variable_0'}
+# The checker's check of exported and local declarations that merge
+# (checkExportsOnMergedDeclarations).
+used |= {'Individual_declarations_in_merged_declaration_0_must_be_all_exported_or_all_local',
+         'Merged_declaration_0_cannot_include_a_default_export_declaration_Consider_adding_a_separate_export_default_0_declaration_instead'}
 # The checker's alias resolution the global merge reads (resolveAlias).
 used |= {'Circular_definition_of_import_alias_0'}
 diag = (root / 'diagnostics/diagnostics_generated.go').read_text()

@@ -1,4 +1,5 @@
 
+use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
     ParsedExpression, ParsedReturnStatement,
 };
@@ -56,6 +57,28 @@ pub(super) fn returns_any(inferred: &InferredExpression) -> bool {
     }
 }
 
+thread_local! {
+    static IN_CONSTRUCTOR_BODY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks the function body being checked as a class constructor's, or not,
+/// until dropped. Every function body enters one, so a nested function never
+/// inherits its enclosing constructor's.
+pub(crate) struct ConstructorBody(bool);
+
+impl ConstructorBody {
+    pub(crate) fn enter(is_constructor: bool) -> Self {
+        Self(IN_CONSTRUCTOR_BODY.with(|current| current.replace(is_constructor)))
+    }
+}
+
+impl Drop for ConstructorBody {
+    fn drop(&mut self) {
+        let outer = self.0;
+        IN_CONSTRUCTOR_BODY.with(|current| current.set(outer));
+    }
+}
+
 pub(crate) fn check_function_return_statement(
     return_statement: ParsedReturnStatement,
     statement_index: usize,
@@ -64,8 +87,14 @@ pub(crate) fn check_function_return_statement(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
+    // tsc's `checkReturnStatement` relates a constructor's `return` value to
+    // the instance type and reports TS2409 beside the mismatch; a bare
+    // `return` there relates nothing.
+    let in_constructor = IN_CONSTRUCTOR_BODY.with(std::cell::Cell::get);
     let Some(expression) = return_statement.expression.as_ref() else {
-        check_bare_return(return_statement.span, return_type, ctx);
+        if !in_constructor {
+            check_bare_return(return_statement.span, return_type, ctx);
+        }
         return;
     };
 
@@ -167,14 +196,29 @@ pub(crate) fn check_function_return_statement(
     // unrelated and must survive.
     let was_in_return_check = ctx.in_contextual_return_check;
     ctx.in_contextual_return_check = ctx.in_contextual_return_body();
-    let inferred_expression = evaluate_return_expression_with_expected_type(
-        expression,
-        return_statement.expression_span,
-        return_statement.span,
-        return_type,
-        symbols,
-        ctx,
-    );
+    let checkpoint = ctx.diagnostics().len();
+    // A constructor relates the whole value (`checkTypeAssignableToAndOptionallyElaborate`):
+    // a returned conditional is not split into its branches.
+    let inferred_expression = if in_constructor {
+        crate::checks::expected::evaluate_expression_with_expected_type_anchored(
+            expression,
+            return_statement.expression_span,
+            return_statement.span,
+            Some(return_type),
+            crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+            symbols,
+            ctx,
+        )
+    } else {
+        evaluate_return_expression_with_expected_type(
+            expression,
+            return_statement.expression_span,
+            return_statement.span,
+            return_type,
+            symbols,
+            ctx,
+        )
+    };
     ctx.in_contextual_return_check = was_in_return_check;
 
     // An `any` return is what collapses tsc's inferred union, so the frame drops
@@ -257,6 +301,9 @@ pub(crate) fn check_function_return_statement(
                 ctx.in_contextual_return_check = ctx.in_contextual_return_body();
                 ctx.push(diagnostic);
                 ctx.in_contextual_return_check = was_in_return_check;
+                if in_constructor {
+                    push_constructor_return_error(return_statement.span, ctx);
+                }
             }
         }
         // The expected-type evaluation collapses to the sentinel once it has
@@ -270,6 +317,15 @@ pub(crate) fn check_function_return_statement(
             ctx.note_contextual_return_type(&failed.flowing_type().unwrap_or(Type::Unknown), Some(expression), symbols);
         }
         InferredExpression::Unknown => {
+            // The contextual evaluation yields the sentinel once it has
+            // reported a mismatch inside the value, which the whole value
+            // then fails too.
+            if in_constructor
+                && ctx.diagnostics().len() > checkpoint
+                && constructor_return_mismatch(expression, return_type, symbols, ctx)
+            {
+                push_constructor_return_error(return_statement.span, ctx);
+            }
             let mut noted = false;
             if ctx.in_contextual_return_body()
                 && let InferredExpression::Known(source_type) =
@@ -283,6 +339,39 @@ pub(crate) fn check_function_return_statement(
             }
         }
     }
+}
+
+/// Whether a constructor's returned value, typed on its own, is not assignable
+/// to the class instance type — with nothing unmodelled on either side.
+fn constructor_return_mismatch(
+    expression: &ParsedExpression,
+    instance_type: &Type,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let reported = ctx.diagnostics().len();
+    let inferred = crate::infer::infer_expression(expression, symbols, ctx);
+    ctx.truncate_diagnostics(reported);
+    let InferredExpression::Known(source_type) = inferred else {
+        return false;
+    };
+    !source_type.is_unmodelled()
+        && !crate::checks::call::as_source(|| {
+            crate::checks::function::type_contains_degradation(&source_type)
+        })
+        && !crate::checks::function::type_contains_degradation(instance_type)
+        && !is_assignable_to(&source_type, instance_type)
+}
+
+fn push_constructor_return_error(
+    span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    let diagnostic = Diagnostic::ts2409(ctx.file_name.clone());
+    ctx.push(match span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
 }
 
 /// tsc's `checkReturnStatement` on a `return;`: the value is `undefined`,
@@ -372,4 +461,66 @@ fn generator_type_argument(declared: &Type, index: usize) -> Option<Type> {
             | "AsyncIteratorObject"
     )
     .then(|| reference.arguments.get(index).cloned().unwrap_or(Type::Any))
+}
+
+/// tsc's `createGeneratorType`: the lib's `Generator<Y, R, N>`, or
+/// `AsyncGenerator<Y, R, N>` for an async generator. `None` when the lib does
+/// not declare it.
+pub(crate) fn generator_type_of(
+    yield_type: &Type,
+    return_type: &Type,
+    next_type: &Type,
+    is_async: bool,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let name = if is_async { "AsyncGenerator" } else { "Generator" };
+    let arguments = [yield_type, return_type, next_type];
+    // Each slot is named after its argument, as `promise_of` names its own:
+    // the instantiation renders its written arguments.
+    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    for argument in arguments {
+        substitution.insert(argument.name(), argument.clone());
+    }
+    let named = |name: String, type_arguments| {
+        surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            name,
+            span: None,
+            type_arguments,
+        }))
+    };
+    let written = named(
+        name.to_string(),
+        arguments.iter().map(|argument| named(argument.name(), Vec::new())).collect(),
+    );
+    let reported = ctx.diagnostics().len();
+    let generator = crate::infer::map_parsed_type_with_substitution(written, ctx, &substitution);
+    ctx.truncate_diagnostics(reported);
+    matches!(generator, Type::Reference(_)).then_some(generator)
+}
+
+/// tsc's `checkSignatureDeclaration` for a generator's annotation: the
+/// generator object built from the annotation's own iteration types must be
+/// assignable to it, which rejects an annotation no generator can be
+/// (`number`, an interface with members a generator lacks).
+pub(crate) fn check_generator_instantiation(
+    declared: &Type,
+    is_async: bool,
+    span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    if matches!(declared, Type::Any | Type::Void)
+        || declared.is_unmodelled()
+        || crate::checks::assign::type_contains_unknown(declared)
+    {
+        return;
+    }
+    let yield_type = generator_type_argument(declared, 0).unwrap_or(Type::Any);
+    let return_type = generator_type_argument(declared, 1).unwrap_or_else(|| yield_type.clone());
+    let next_type = generator_type_argument(declared, 2).unwrap_or(Type::GenuineUnknown);
+    let Some(generator) = generator_type_of(&yield_type, &return_type, &next_type, is_async, ctx) else {
+        return;
+    };
+    if !is_assignable_to(&generator, declared) {
+        crate::checks::var::report_assignability_failure(&generator, declared, span, ctx);
+    }
 }

@@ -559,6 +559,7 @@ fn apply_merging_namespace_value_members(
 pub(crate) fn apply_namespace_members_to_declarations(
     statements: &[ParsedStatement],
     symbols: &mut SymbolTable,
+    ctx: &mut CheckerContext,
 ) {
     let merging: Vec<_> = merging_namespace_value_members(statements)
         .into_iter()
@@ -568,8 +569,47 @@ pub(crate) fn apply_namespace_members_to_declarations(
                     .get_own(name)
                     .is_some_and(|symbol| matches!(symbol.ty, Type::Function(_)))
         })
+        .map(|(name, members, declared_by_a_function)| {
+            let members = source_namespace_value_members(statements, &name, ctx).unwrap_or(members);
+            (name, members, declared_by_a_function)
+        })
         .collect();
     apply_merging_namespace_value_members(&merging, symbols);
+}
+
+/// The value members of every block of namespace `name` in `statements`,
+/// resolved as [`namespace_value_object_type_resolved`] resolves one block's:
+/// merged into a function, a member keeps the type of its own declaration
+/// (`export var p = 6` is a `number`, and `F.p = false` does not assign it).
+/// `None` for an ambient namespace, whose permissive members stand.
+pub(crate) fn source_namespace_value_members(
+    statements: &[ParsedStatement],
+    name: &str,
+    ctx: &mut CheckerContext,
+) -> Option<surge_ts_types::PropertyMap> {
+    if surge_ts_syntax::is_declaration_file_name(&ctx.file_name) {
+        return None;
+    }
+    let namespaces: Vec<&ParsedNamespaceDeclaration> = statements
+        .iter()
+        .filter_map(|statement| match peel_exported_statement(statement) {
+            ParsedStatement::NamespaceDeclaration(namespace) if namespace.name == name => {
+                Some(namespace.as_ref())
+            }
+            _ => None,
+        })
+        .collect();
+    if namespaces.is_empty() || namespaces.iter().any(|namespace| namespace.is_declare) {
+        return None;
+    }
+    let checkpoint = ctx.diagnostics().len();
+    let mut properties = surge_ts_types::PropertyMap::default();
+    for namespace in namespaces {
+        fill_namespace_value_properties(namespace, &mut properties);
+        resolve_namespace_value_annotations(namespace, &namespace.name, false, &mut properties, ctx);
+    }
+    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    Some(properties)
 }
 
 /// tsc binds a top-level `fn.x = value` as a declaration of `x` on `fn` when
@@ -581,6 +621,9 @@ pub(crate) fn apply_namespace_members_to_declarations(
 /// In JavaScript any variable holding a function or an empty object literal
 /// is one too, and `Object.defineProperty(o, "x", descriptor)` declares `x`
 /// the same way (`getInitializerSymbol`, `JSDeclarationKindObjectDefinePropertyValue`).
+///
+/// An element write `fn[k] = value` declares a member too, named as
+/// [`element_access_member_name`] says.
 pub(crate) fn apply_expando_members(
     statements: &[ParsedStatement],
     exportable_values: &mut SymbolTable,
@@ -618,24 +661,50 @@ pub(crate) fn apply_expando_members(
             _ => {}
         }
     }
-    let mut members: Vec<(&str, &str, ExpandoValue)> = Vec::new();
+    let mut members: Vec<(&str, std::borrow::Cow<'_, str>, ExpandoValue)> = Vec::new();
     for assignment in assignments {
-        let surge_ts_syntax::ParsedExpression::PropertyAccess {
-            object,
-            property_name,
-            ..
-        } = &assignment.target
-        else {
-            continue;
+        let (name, property_name) = match &assignment.target {
+            surge_ts_syntax::ParsedExpression::PropertyAccess {
+                object,
+                property_name,
+                ..
+            } => {
+                let surge_ts_syntax::ParsedExpression::Identifier { name, .. } = object.as_ref() else {
+                    continue;
+                };
+                (name.as_str(), std::borrow::Cow::Borrowed(property_name.as_str()))
+            }
+            surge_ts_syntax::ParsedExpression::IndexAccess {
+                object_name, index, ..
+            } => {
+                let Some(property_name) = element_access_member_name(index, exportable_values, ctx)
+                    .or_else(|| const_initializer_member_name(index, statements, exportable_values))
+                else {
+                    continue;
+                };
+                (object_name.as_str(), std::borrow::Cow::Owned(property_name))
+            }
+            _ => continue,
         };
-        let surge_ts_syntax::ParsedExpression::Identifier { name, .. } = object.as_ref() else {
-            continue;
-        };
-        members.push((name.as_str(), property_name.as_str(), ExpandoValue::Assigned(&assignment.value)));
+        members.push((name, property_name, ExpandoValue::Assigned(&assignment.value)));
     }
     for (name, property_name, descriptor) in define_properties {
-        members.push((name, property_name, ExpandoValue::Descriptor(descriptor)));
+        members.push((name, std::borrow::Cow::Borrowed(property_name), ExpandoValue::Descriptor(descriptor)));
     }
+
+    // tsc types an expando's value lazily: `X.M = M` gives `X.M` the type of
+    // `M` with every member written on `M` (`getTypeOfSymbol`), so the writes
+    // on a container are applied before a write whose value names it.
+    let containers_written: std::collections::HashSet<&str> =
+        members.iter().map(|member| member.0).collect();
+    members.sort_by_key(|member| match &member.2 {
+        ExpandoValue::Assigned(surge_ts_syntax::ParsedExpression::Identifier { name, .. })
+            if containers_written.contains(name.as_str()) =>
+        {
+            1
+        }
+        _ => 0,
+    });
 
     // Whether a name is an expando is decided by its declaration, before any
     // member is added to it; a JavaScript variable only in its own file, and
@@ -667,6 +736,7 @@ pub(crate) fn apply_expando_members(
     let mut declared_elsewhere: std::collections::HashMap<&str, Vec<String>> =
         std::collections::HashMap::new();
     for (name, property_name, value) in members {
+        let property_name: &str = &property_name;
         let container = *containers.entry(name).or_insert_with(|| {
             let symbol = exportable_values.get_own_shared(name)?;
             expando_container(&symbol, javascript && declared_here.contains(name))
@@ -717,6 +787,84 @@ pub(crate) fn apply_expando_members(
                 function_signature,
             },
         );
+    }
+}
+
+/// A late-bound key naming a `const` of these statements that `symbols` does
+/// not hold yet (module analysis seeds a file's values only when a signature
+/// reads one), typed by its initializer as `checkComputedPropertyName` types
+/// it: a string or number literal, or `Symbol()` for a unique symbol.
+fn const_initializer_member_name(
+    index: &surge_ts_syntax::ParsedExpression,
+    statements: &[ParsedStatement],
+    symbols: &SymbolTable,
+) -> Option<String> {
+    use surge_ts_syntax::ParsedExpression;
+    let ParsedExpression::Identifier { name, .. } = index else {
+        return None;
+    };
+    if symbols.get(name).is_some() {
+        return None;
+    }
+    let initializer = statements.iter().find_map(|statement| match peel_exported_statement(statement) {
+        ParsedStatement::VariableDeclaration(variable)
+            if variable.name == *name
+                && matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const)
+                && variable.declared_type.is_none() =>
+        {
+            variable.initializer.as_ref()
+        }
+        _ => None,
+    })?;
+    match initializer {
+        ParsedExpression::StringLiteral(value) | ParsedExpression::NumberLiteral(value) => Some(value.clone()),
+        ParsedExpression::Call { callee_name, .. } if callee_name == "Symbol" => Some(format!("[{name}]")),
+        _ => None,
+    }
+}
+
+/// The member an element write `f[k] = …` declares on an expando `f`
+/// (`JSDeclarationKindProperty`): a string or numeric literal key names it as
+/// written; an entity-name key (`isLateBindableAST`) names it by its type when
+/// that is usable as a property name (`lateBindMember`) — a string or number
+/// literal, or a unique symbol, which is keyed by the symbol's declared name in
+/// brackets as a member written `[k]` is.
+pub(crate) fn element_access_member_name(
+    index: &surge_ts_syntax::ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<String> {
+    use surge_ts_syntax::ParsedExpression;
+    fn is_entity_name(expression: &ParsedExpression) -> bool {
+        match expression {
+            ParsedExpression::Identifier { .. } => true,
+            ParsedExpression::PropertyAccess {
+                object,
+                is_bracketed: false,
+                ..
+            } => is_entity_name(object),
+            _ => false,
+        }
+    }
+    match index {
+        ParsedExpression::StringLiteral(key) | ParsedExpression::NumberLiteral(key) => {
+            return Some(key.clone());
+        }
+        _ if !is_entity_name(index) => return None,
+        _ => {}
+    }
+    let reported = ctx.diagnostics().len();
+    let inferred = crate::infer::infer_expression(index, symbols, ctx);
+    ctx.truncate_diagnostics(reported);
+    match inferred {
+        crate::infer::InferredExpression::Known(Type::StringLiteral(key)) => Some(key),
+        crate::infer::InferredExpression::Known(Type::NumberLiteral(literal)) => Some(literal.value),
+        crate::infer::InferredExpression::Known(Type::Reference(reference))
+            if reference.is_unique_symbol() =>
+        {
+            Some(format!("[{}]", reference.unique_symbol_name()?))
+        }
+        _ => None,
     }
 }
 
@@ -951,7 +1099,7 @@ pub(crate) fn apply_body_expando_members(
 /// sits in its container, not only at the top of it. A block that declares the
 /// receiver's name itself (`const Y = …; Y.test = 42`) writes to its own
 /// binding, which shadows the outer function.
-fn collect_nested_member_assignments<'a>(
+pub(crate) fn collect_nested_member_assignments<'a>(
     body: &'a [surge_ts_syntax::ParsedFunctionBodyStatement],
     shadowed: &[&'a str],
     assignments: &mut Vec<&'a surge_ts_syntax::ParsedMemberAssignment>,
@@ -977,6 +1125,9 @@ fn collect_nested_member_assignments<'a>(
                             }
                             _ => None,
                         }
+                    }
+                    surge_ts_syntax::ParsedExpression::IndexAccess { object_name, .. } => {
+                        Some(object_name.as_str())
                     }
                     _ => None,
                 };
@@ -1216,6 +1367,7 @@ fn hoisted_nested_vars(statements: &[ParsedStatement]) -> Vec<ParsedStatement> {
                                 initializer_span: None,
                                 declaration_list: None,
                                 annotated_pattern: None,
+                                pattern_excess_properties: Vec::new(),
                             },
                         )));
                     }

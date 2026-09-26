@@ -261,11 +261,55 @@ pub(crate) fn resolve_function_type(
     let is_variadic = value_parameters
         .last()
         .is_some_and(|parameter| parameter.rest);
+    let (parameters, return_type, had_error) =
+        resolve_signature_types(&function_type, ctx, resolving, &local_substitution);
+    let mut resolved_function = alloc_function_type(
+        parameters,
+        return_type,
+        is_variadic,
+        required_parameter_count,
+    )
+    .with_parameter_names(written_parameter_names(&value_parameters))
+    .with_type_parameter_head(crate::checks::function::type_parameter_head(
+        &function_type.type_parameters,
+    ));
+    // A generic signature's own type parameters are erased above (`T` maps to
+    // the sentinel), so a call through the resolved handle could not infer
+    // them — every `find<T>(type: Type<T>): Collection<T>` on an interface
+    // returned `unknown`. The written signature rides on the handle, with the
+    // enclosing bindings the body was resolved under, so the call site
+    // re-instantiates it from its arguments.
+    if (!function_type.type_parameters.is_empty()
+        || matches!(*function_type.return_type, ParsedType::Predicate(_)))
+        && let Some(mut declared) =
+            crate::checks::call::DeclaredMemberSignature::capture(&function_type, substitution, ctx)
+    {
+        if declared.outer_type_arguments.is_empty() && !ctx.is_library_scoped_file(&ctx.file_name) {
+            declared.generic_shape = generic_signature_shape(&function_type, substitution, ctx, resolving);
+        }
+        resolved_function = resolved_function.with_declaration(std::sync::Arc::new(declared));
+    }
+    if function_type.type_parameters.is_empty() {
+        resolved_function = crate::checks::call::declared_without_type_parameters(resolved_function);
+    }
+    ResolvedType {
+        ty: Type::Function(resolved_function),
+        had_error,
+    }
+}
+
+/// A signature's parameter and return types under `substitution`, and whether
+/// any failed to resolve. A parameter's name is in scope for the parameters
+/// after it and for the return type: `(x: number) => typeof x`,
+/// `({ a: alias }: T) => typeof alias`.
+fn resolve_signature_types(
+    function_type: &ParsedFunctionType,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    substitution: &TypeParameterSubstitution,
+) -> (Vec<Type>, Type, bool) {
     let mut parameters = Vec::new();
     let mut had_error = false;
-
-    // A parameter's name is in scope for the parameters after it and for the
-    // return type: `(x: number) => typeof x`, `({ a: alias }: T) => typeof alias`.
     let outer_parameter_bindings = ctx.signature_parameter_bindings.clone();
     for parameter in function_type.parameters.iter().cloned() {
         let is_this = parameter.is_this;
@@ -273,7 +317,7 @@ pub(crate) fn resolve_function_type(
         let bound_names = parameter.bound_names.clone();
         let is_rest = parameter.rest;
         let resolved_parameter =
-            resolve_function_type_parameter(parameter, ctx, resolving, &local_substitution);
+            resolve_function_type_parameter(parameter, ctx, resolving, substitution);
         had_error |= resolved_parameter.had_error;
         if !is_this {
             let bound_type = if is_rest {
@@ -301,44 +345,67 @@ pub(crate) fn resolve_function_type(
         parameters.push(resolved_parameter.ty);
     }
 
-    let return_type = resolve_parsed_type(
-        (*function_type.return_type).clone(),
-        ctx,
-        resolving,
-        &local_substitution,
-    );
+    let return_type =
+        resolve_parsed_type((*function_type.return_type).clone(), ctx, resolving, substitution);
     ctx.signature_parameter_bindings = outer_parameter_bindings;
-    had_error |= return_type.had_error;
-    let mut resolved_function = alloc_function_type(
-        parameters,
-        return_type.ty,
-        is_variadic,
-        required_parameter_count,
-    )
-    .with_parameter_names(written_parameter_names(&value_parameters))
-    .with_type_parameter_head(crate::checks::function::type_parameter_head(
-        &function_type.type_parameters,
-    ));
-    // A generic signature's own type parameters are erased above (`T` maps to
-    // the sentinel), so a call through the resolved handle could not infer
-    // them — every `find<T>(type: Type<T>): Collection<T>` on an interface
-    // returned `unknown`. The written signature rides on the handle, with the
-    // enclosing bindings the body was resolved under, so the call site
-    // re-instantiates it from its arguments.
-    if (!function_type.type_parameters.is_empty()
-        || matches!(*function_type.return_type, ParsedType::Predicate(_)))
-        && let Some(declared) =
-            crate::checks::call::DeclaredMemberSignature::capture(&function_type, substitution, ctx)
+    (parameters, return_type.ty, had_error || return_type.had_error)
+}
+
+/// tsc relates a generic signature through its own type parameters
+/// (`compareSignaturesRelated`), which the resolved signature erases to the
+/// degradation sentinel once constrained (see
+/// `extend_substitution_with_type_parameters`). The written shape keeps them as
+/// placeholders, with each constraint resolved over them. It is taken only for
+/// a signature written in the program's own files where no enclosing
+/// instantiation binds anything, so each written signature is resolved for it
+/// once, and not at all when a type parameter has a default or anything in it
+/// fails to resolve.
+fn generic_signature_shape(
+    function_type: &ParsedFunctionType,
+    substitution: &TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+) -> Option<std::sync::Arc<surge_ts_types::GenericSignatureShape>> {
+    let type_parameters = &function_type.type_parameters;
+    if !type_parameters.iter().any(|parameter| parameter.constraint.is_some())
+        || type_parameters.iter().any(|parameter| parameter.default_type.is_some())
     {
-        resolved_function = resolved_function.with_declaration(std::sync::Arc::new(declared));
+        return None;
     }
-    if function_type.type_parameters.is_empty() {
-        resolved_function = crate::checks::call::declared_without_type_parameters(resolved_function);
+    let mut shape_substitution =
+        substitution.clone_with_reason(surge_ts_types::TypeCopyReason::SubstitutionChanged);
+    for parameter in type_parameters {
+        shape_substitution.insert(parameter.name.clone(), Type::type_parameter(&parameter.name));
     }
-    ResolvedType {
-        ty: Type::Function(resolved_function),
-        had_error,
+    let diagnostics_before = ctx.diagnostics().len();
+    let mut had_error = false;
+    let mut constrained = Vec::with_capacity(type_parameters.len());
+    for parameter in type_parameters {
+        let constraint = match parameter.constraint.clone() {
+            Some(constraint) => {
+                let resolved = resolve_parsed_type(constraint, ctx, resolving, &shape_substitution);
+                had_error |= resolved.had_error;
+                Some(resolved.ty)
+            }
+            None => None,
+        };
+        constrained.push((std::sync::Arc::<str>::from(parameter.name.as_str()), constraint));
     }
+    let (parameters, return_type, signature_had_error) =
+        resolve_signature_types(function_type, ctx, resolving, &shape_substitution);
+    // The written signature already reported its diagnostics.
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    if had_error || signature_had_error {
+        return None;
+    }
+    surge_ts_types::install_generic_signature_shape_lookup(
+        crate::checks::call::declared_generic_signature_shape,
+    );
+    Some(std::sync::Arc::new(surge_ts_types::GenericSignatureShape {
+        type_parameters: constrained,
+        parameters,
+        return_type,
+    }))
 }
 
 /// The names as written, so a diagnostic can render `(value: string) => void`
@@ -605,8 +672,9 @@ pub(crate) fn resolve_object_type(
             (!resolved.had_error).then_some(resolved.ty)
         });
 
-    let mut resolved_object =
-        alloc_object_type(properties, string_index_type).with_number_index_type(number_index_type);
+    let mut resolved_object = alloc_object_type(properties, string_index_type)
+        .with_number_index_type(number_index_type)
+        .with_readonly_indexes(object_type.string_index_readonly, object_type.number_index_readonly);
     if object_type.non_primitive {
         resolved_object = resolved_object.with_non_primitive_marker();
     }

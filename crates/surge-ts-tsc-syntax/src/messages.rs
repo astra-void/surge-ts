@@ -293,6 +293,8 @@ pub const Circular_definition_of_import_alias_0: &Message = &Message { code: 230
 #[allow(non_upper_case_globals, dead_code)]
 pub const Cannot_redeclare_exported_variable_0: &Message = &Message { code: 2323, text: "Cannot redeclare exported variable '{0}'." };
 #[allow(non_upper_case_globals, dead_code)]
+pub const Individual_declarations_in_merged_declaration_0_must_be_all_exported_or_all_local: &Message = &Message { code: 2395, text: "Individual declarations in merged declaration '{0}' must be all exported or all local." };
+#[allow(non_upper_case_globals, dead_code)]
 pub const Declaration_name_conflicts_with_built_in_global_identifier_0: &Message = &Message { code: 2397, text: "Declaration name conflicts with built-in global identifier '{0}'." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Interface_name_cannot_be_0: &Message = &Message { code: 2427, text: "Interface name cannot be '{0}'." };
@@ -304,6 +306,8 @@ pub const Type_alias_name_cannot_be_0: &Message = &Message { code: 2457, text: "
 pub const A_module_cannot_have_multiple_default_exports: &Message = &Message { code: 2528, text: "A module cannot have multiple default exports." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const Enum_declarations_can_only_merge_with_namespace_or_other_enum_declarations: &Message = &Message { code: 2567, text: "Enum declarations can only merge with namespace or other enum declarations." };
+#[allow(non_upper_case_globals, dead_code)]
+pub const Merged_declaration_0_cannot_include_a_default_export_declaration_Consider_adding_a_separate_export_default_0_declaration_instead: &Message = &Message { code: 2652, text: "Merged declaration '{0}' cannot include a default export declaration. Consider adding a separate 'export default {0}' declaration instead." };
 #[allow(non_upper_case_globals, dead_code)]
 pub const JSX_expressions_must_have_one_parent_element: &Message = &Message { code: 2657, text: "JSX expressions must have one parent element." };
 #[allow(non_upper_case_globals, dead_code)]

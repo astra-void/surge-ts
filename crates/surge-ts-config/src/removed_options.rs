@@ -118,6 +118,89 @@ fn collect_option_ranges(text: &str) -> Option<ConfigOptionRanges> {
     })
 }
 
+/// A compiler option whose value is none of its enum's keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidEnumOption {
+    pub name: String,
+    /// The keys tsc lists (`formatEnumTypeKeys`): the option's map without
+    /// its deprecated keys, quoted and comma-separated.
+    pub keys: String,
+    /// Byte range of the value inside the root config file.
+    pub start: usize,
+    pub end: usize,
+}
+
+/// The enum options `convertJsonOptionOfEnumType` validates: each map's keys
+/// in tsc's order (`enummaps.go`), and the keys `commandLineOptionDeprecated`
+/// leaves out of the message.
+const ENUM_OPTIONS: &[(&str, &[&str], &[&str])] = &[
+    (
+        "module",
+        &[
+            "commonjs", "amd", "system", "umd", "es6", "es2015", "es2020", "es2022", "esnext", "node16", "node18",
+            "node20", "nodenext", "preserve",
+        ],
+        &["none", "amd", "system", "umd"],
+    ),
+    ("moduleResolution", &["node16", "nodenext", "bundler", "classic", "node", "node10"], &["node", "classic", "node10"]),
+    (
+        "target",
+        &[
+            "es5", "es6", "es2015", "es2016", "es2017", "es2018", "es2019", "es2020", "es2021", "es2022", "es2023",
+            "es2024", "es2025", "esnext",
+        ],
+        &["es5"],
+    ),
+    ("moduleDetection", &["auto", "legacy", "force"], &[]),
+    ("jsx", &["preserve", "react-native", "react-jsx", "react-jsxdev", "react"], &[]),
+    ("newLine", &["crlf", "lf"], &[]),
+];
+
+/// tsc's `convertJsonOptionOfEnumType` over the root config's own
+/// `compilerOptions`: a string value that, lowercased, is none of its
+/// option's keys is TS6046 at the value (`createDiagnosticForInvalidEnumType`).
+/// An empty string sets nothing and is not reported.
+pub fn invalid_enum_options(config_path: &Path) -> Vec<InvalidEnumOption> {
+    let Ok(text) = std::fs::read_to_string(config_path) else {
+        return Vec::new();
+    };
+    let Ok(parsed) = parse_to_ast(&text, &CollectOptions::default(), &ParseOptions::default()) else {
+        return Vec::new();
+    };
+    let Some(AstValue::Object(root)) = parsed.value else {
+        return Vec::new();
+    };
+    let Some(property) = root.properties.iter().find(|property| property.name.as_str() == "compilerOptions") else {
+        return Vec::new();
+    };
+    let AstValue::Object(options) = &property.value else {
+        return Vec::new();
+    };
+    options
+        .properties
+        .iter()
+        .filter_map(|option| {
+            let (_, keys, deprecated) = ENUM_OPTIONS.iter().find(|(name, _, _)| *name == option.name.as_str())?;
+            let AstValue::StringLit(value) = &option.value else {
+                return None;
+            };
+            let written = value.value.to_ascii_lowercase();
+            if written.is_empty() || keys.contains(&written.as_str()) {
+                return None;
+            }
+            let listed: Vec<String> =
+                keys.iter().filter(|key| !deprecated.contains(*key)).map(|key| format!("'{key}'")).collect();
+            let range = option.value.range();
+            Some(InvalidEnumOption {
+                name: option.name.as_str().to_string(),
+                keys: listed.join(", "),
+                start: range.start,
+                end: range.end,
+            })
+        })
+        .collect()
+}
+
 /// Where tsc's `createOptionValueDiagnostic` reports on `name`'s value: the
 /// value in the root config, else its `compilerOptions` key (an option
 /// inherited through `extends`), else nowhere.

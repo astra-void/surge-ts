@@ -174,6 +174,17 @@ pub(crate) fn check_delete_operand(
         return;
     }
 
+    // `errorIfWritingToReadonlyIndex`: a delete target is written, and a key
+    // no member answers goes through the receiver's index signature.
+    if receiver.writes_readonly_index(
+        Some(property_name.as_str()),
+        surge_ts_types::is_numeric_key(&property_name),
+    ) {
+        let file_name = ctx.file_name.clone();
+        ctx.push(Diagnostic::ts2542(receiver.name(), file_name).with_span(convert_span(span)));
+        return;
+    }
+
     // tsc's `checkDeleteExpressionMustBeOptional` runs under `strictNullChecks`
     // only: without it `undefined` is in every type's domain.
     if !ctx.options.strict_null_checks {
@@ -396,6 +407,16 @@ pub(crate) fn check_update_operand(
         }
     } else if report_readonly_member_write(operand, span, symbols, ctx) {
         return;
+    } else if let Some((receiver, property_name)) = write_target(operand, symbols, ctx)
+        && receiver.writes_readonly_index(
+            Some(property_name.as_str()),
+            surge_ts_types::is_numeric_key(&property_name),
+        )
+    {
+        // `errorIfWritingToReadonlyIndex`: the operand is written; the
+        // arithmetic check below still runs on what it reads.
+        let file_name = ctx.file_name.clone();
+        ctx.push(Diagnostic::ts2542(receiver.name(), file_name).with_span(convert_span(span)));
     }
 
     let InferredExpression::Known(operand_type) = operand_result else {

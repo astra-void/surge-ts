@@ -85,6 +85,16 @@ pub const TS5108: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS6046: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS6046",
+    number: Some(6046),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Argument for '{0}' option must be: {1}.",
+    argument_count: 2,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS1360: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS1360",
     number: Some(1360),
@@ -4785,6 +4795,16 @@ pub const TS2408: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2409: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2409",
+    number: Some(2409),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Return type of constructor signature must be assignable to the instance type of the class.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS18041: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS18041",
     number: Some(18041),
@@ -5392,7 +5412,7 @@ pub const TS6234: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "This expression is not callable because it is a 'get' accessor. Did you mean to use it without '()'?",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS2690: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -8024,6 +8044,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS5102,
     TS5097,
     TS5108,
+    TS6046,
     TS1360,
     TS1361,
     TS1362,
@@ -8494,6 +8515,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2781,
     TS2778,
     TS2408,
+    TS2409,
     TS18041,
     TS17005,
     TS1053,
@@ -8917,6 +8939,18 @@ impl Diagnostic {
     pub fn ts5108(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS5108,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts6046(arg0: impl ToString, arg1: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS6046,
             vec![
                 DiagnosticArg::from(arg0.to_string()),
                 DiagnosticArg::from(arg1.to_string()),
@@ -12539,6 +12573,11 @@ impl Diagnostic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn ts2408(file_name: impl Into<String>) -> Self {
         Self::from_descriptor(&TS2408, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2409(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2409, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

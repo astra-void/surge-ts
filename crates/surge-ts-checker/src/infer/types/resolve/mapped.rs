@@ -240,13 +240,16 @@ pub(crate) fn resolve_mapped_type(
         let mut value_substitution =
             substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
         value_substitution.insert(mapped.key_name.clone(), resolved_constraint.ty.clone());
+        // `resolveMappedTypeMembers`: a `readonly` template makes the index
+        // signature it maps to read-only.
+        let readonly_index = matches!(mapped.readonly, MappedOptionality::Add);
         let resolved_value =
             resolve_parsed_type(*mapped.value_type, ctx, resolving, &value_substitution);
         return ResolvedType {
-            ty: Type::Object(alloc_object_type(
-                PropertyMap::default(),
-                Some(resolved_value.ty),
-            )),
+            ty: Type::Object(
+                alloc_object_type(PropertyMap::default(), Some(resolved_value.ty))
+                    .with_readonly_indexes(readonly_index, false),
+            ),
             had_error: resolved_value.had_error,
         };
     }
@@ -416,19 +419,65 @@ pub(crate) fn resolve_mapped_type(
         }
     }
 
-    // Reusing the source's index value type is exact for identity mappings
-    // (`T[k]`) and an approximation for transforming ones; either way it keeps
-    // index-signature reads legal, matching tsc's homomorphic behaviour.
-    let index_type = homomorphic_source
-        .as_ref()
-        .and_then(|object| object.string_index_type.as_deref().cloned());
+    // `resolveMappedTypeMembers`: each index signature of a homomorphic
+    // mapping's source becomes one of its own, valued at the template read with
+    // the signature's key type. The template is instantiated with no access
+    // node, so whatever the read would report is not reported. An `as` clause
+    // and a source the checker left open keep the source's value.
+    let index_type = match homomorphic_source.as_ref() {
+        Some(source)
+            if source.string_index_type.is_some()
+                && !source.synthetic_open_index
+                && mapped.name_type.is_none() =>
+        {
+            if !try_consume_type_expansion_step() {
+                return ResolvedType {
+                    ty: Type::Unknown,
+                    had_error: false,
+                };
+            }
+            let mut index_substitution =
+                substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+            index_substitution.insert(mapped.key_name.clone(), Type::String);
+            let diagnostics_before = ctx.diagnostics().len();
+            let member_frame = resolving.len();
+            ctx.structural_resolution_frames.push(member_frame);
+            ctx.type_literal_member_frames.push(member_frame);
+            let resolved_value = resolve_parsed_type(
+                *mapped.value_type.clone(),
+                ctx,
+                resolving,
+                &index_substitution,
+            );
+            ctx.type_literal_member_frames.pop();
+            ctx.structural_resolution_frames.pop();
+            ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+            Some(if resolved_value.had_error {
+                Type::Unknown
+            } else {
+                resolved_value.ty
+            })
+        }
+        Some(source) => source.string_index_type.as_deref().cloned(),
+        None => None,
+    };
     // A source the checker had to leave open (a spread of a value it could
     // not model) stays open through the mapping: `Partial<{ x, ...degraded }>`
     // still admits the members tsc sees through the spread.
     let source_is_open = homomorphic_source
         .as_ref()
         .is_some_and(|object| object.synthetic_open_index);
-    let mut mapped_object = alloc_object_type(properties, index_type);
+    // `resolveMappedTypeMembers`: the index signature is read-only under a
+    // `readonly` template, or when the source's is and the template keeps it.
+    let index_readonly = match mapped.readonly {
+        MappedOptionality::Keep => homomorphic_source
+            .as_ref()
+            .is_some_and(|object| object.string_index_readonly),
+        MappedOptionality::Add => true,
+        MappedOptionality::Remove => false,
+    };
+    let mut mapped_object =
+        alloc_object_type(properties, index_type).with_readonly_indexes(index_readonly, false);
     if source_is_open {
         mapped_object = mapped_object.with_open_index_marker();
     }

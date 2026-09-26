@@ -24,6 +24,10 @@ pub(crate) fn check_program_file_statements(
 ) {
     let classes = super::forward_references::file_class_declarations(statements);
     ctx.container_assigned_bindings = std::sync::Arc::new(crate::flow::module_assigned_bindings(statements));
+    ctx.expando_initializer_members = std::sync::Arc::new(var::module_expando_initializer_members(
+        statements,
+        surge_ts_syntax::is_javascript_file_name(&ctx.file_name),
+    ));
     check_overload_implementation_compatibility(statements, file_index, function_signatures, ctx);
     for (statement_index, statement) in statements.iter().cloned().enumerate() {
         let statement = expand_module_if_alias(statement, &statements[..statement_index]);

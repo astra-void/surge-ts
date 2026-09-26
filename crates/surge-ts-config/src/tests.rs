@@ -1256,6 +1256,30 @@ fn removed_option_values_use_typescript_spelling() {
 }
 
 #[test]
+fn enum_option_values_no_key_spells_are_invalid() {
+    let root = temp_dir("invalid-enum-options");
+    let source = r#"{ "compilerOptions": { "module": "none", "target": "ES2020", "jsx": "", "newLine": "cr" } }"#;
+    write_file(&root, "tsconfig.json", source);
+
+    let invalid = invalid_enum_options(&root.join("tsconfig.json"));
+    let reported: Vec<(&str, &str, &str)> = invalid
+        .iter()
+        .map(|option| (option.name.as_str(), option.keys.as_str(), &source[option.start..option.end]))
+        .collect();
+    assert_eq!(
+        reported,
+        vec![
+            (
+                "module",
+                "'commonjs', 'es6', 'es2015', 'es2020', 'es2022', 'esnext', 'node16', 'node18', 'node20', 'nodenext', 'preserve'",
+                "\"none\"",
+            ),
+            ("newLine", "'crlf', 'lf'", "\"cr\""),
+        ]
+    );
+}
+
+#[test]
 fn supported_option_values_are_not_reported_as_removed() {
     let root = temp_dir("removed-options-clean");
     write_file(

@@ -404,6 +404,7 @@ pub(crate) fn make_lazy_type_reference(
     crate::program::record_lazy_reference_created(&decl_key);
     let environment = ctx.declaration_environment();
     let creation_scope = ctx.type_declaration_scope.clone();
+    let declared_variances = decl.get().declared_variances();
     Type::Reference(TypeReference::new(
         reference_id.to_string(),
         display.to_string(),
@@ -420,7 +421,8 @@ pub(crate) fn make_lazy_type_reference(
             memo: std::sync::OnceLock::new(),
             degraded_memo: std::sync::OnceLock::new(),
         }),
-    ))
+    )
+    .with_declared_variances(declared_variances))
 }
 
 /// Builds the lazy nominal [`Type::Reference`] a recursive declaration's

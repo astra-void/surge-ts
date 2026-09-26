@@ -81,6 +81,8 @@ fn check_single_source(
     ctx.parenthesized_expressions = parsed.parenthesized_expressions.into();
     if !parsed.is_module && !crate::program::file_is_forced_module(&file_name, parsed.jsx_factory_uses.first_tag.is_some(), &ctx.options) {
         ctx.global_this_starts = parsed.global_this_starts.into();
+    } else {
+        ctx.module_this_starts = parsed.global_this_starts.into();
     }
     ctx.literal_this_members = parsed.literal_this_members.into();
     ctx.let_assignments = parsed.let_assignments.into();
@@ -258,8 +260,8 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
 }
 
 pub(crate) fn collect_type_declarations(statements: &[ParsedStatement], ctx: &mut CheckerContext) {
-    for statement in statements {
-        collect_type_declarations_from_statement(statement, ctx);
+    for (index, statement) in statements.iter().enumerate() {
+        collect_type_declarations_from_statement(statement, &statements[..index], ctx);
     }
 }
 
@@ -1088,20 +1090,26 @@ fn attach_current_type_scope_if_missing(
     }
 }
 
-fn collect_type_declarations_from_statement(statement: &ParsedStatement, ctx: &mut CheckerContext) {
+/// `earlier` holds the statements written before a local `statement`; an
+/// exported declaration is collected without them.
+fn collect_type_declarations_from_statement(
+    statement: &ParsedStatement,
+    earlier: &[ParsedStatement],
+    ctx: &mut CheckerContext,
+) {
     match statement {
         ParsedStatement::TypeAliasDeclaration(alias) => {
-            collect_type_alias(alias, ctx);
+            collect_type_alias(alias, earlier, ctx);
         }
         ParsedStatement::InterfaceDeclaration(interface) => {
-            collect_interface(interface, ctx);
+            collect_interface(interface, earlier, ctx);
         }
         ParsedStatement::ClassDeclaration(class) => {
             crate::program::collect_class(class, ctx);
         }
         ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
             ParsedExportDeclaration::Statement { declaration, .. } => {
-                collect_type_declarations_from_statement(declaration.as_ref(), ctx)
+                collect_type_declarations_from_statement(declaration.as_ref(), &[], ctx)
             }
             ParsedExportDeclaration::Default {
                 declaration: ParsedDefaultExportDeclaration::Class(class),
@@ -1357,7 +1365,8 @@ fn collect_namespace_type_declarations_prefixed(
                         interface.call_signature_overloads.clone(),
                         interface.construct_signatures.clone(),
                         None,
-                    );
+                    )
+                    .with_readonly_indexes(interface.string_index_readonly, interface.number_index_readonly);
                     register_namespace_member_interface(key, info, table, ctx);
                 }
             }
@@ -1856,7 +1865,40 @@ fn classify_file_kind(file_name: &str) -> FileKind {
     FileKind::RootSource
 }
 
-pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut CheckerContext) {
+/// The binder declares an exported declaration's local symbol with none of
+/// the declaration's meanings (`declareModuleMember`), so a local type alias or
+/// interface written after exported declarations of its name merges with them
+/// (TS2395 reports the pair) unless an earlier local declaration already gave
+/// the name a type meaning.
+fn merges_with_exported_declaration(earlier: &[ParsedStatement], name: &str) -> bool {
+    let declares_type = |statement: &ParsedStatement| match statement {
+        ParsedStatement::TypeAliasDeclaration(alias) => alias.name == name,
+        ParsedStatement::InterfaceDeclaration(interface) => interface.name == name,
+        ParsedStatement::ClassDeclaration(class) => class.name == name,
+        _ => false,
+    };
+    let mut exported = false;
+    for statement in earlier {
+        match statement {
+            ParsedStatement::ExportDeclaration(export) => {
+                if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref()
+                    && declares_type(declaration.as_ref())
+                {
+                    exported = true;
+                }
+            }
+            other if declares_type(other) => return false,
+            _ => {}
+        }
+    }
+    exported
+}
+
+pub(crate) fn collect_type_alias(
+    alias: &ParsedTypeAliasDeclaration,
+    earlier: &[ParsedStatement],
+    ctx: &mut CheckerContext,
+) {
     report_duplicate_type_parameters(&alias.type_parameters, ctx);
 
     let info = TypeAliasInfo::new(
@@ -1885,7 +1927,7 @@ pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
             Some(TypeDeclarationInfo::Alias(previous)) if previous.enum_name.is_some()
         );
 
-    if previous.is_some() && !merging_enums {
+    if previous.is_some() && !merging_enums && !merges_with_exported_declaration(earlier, &alias.name) {
         let mut diagnostic = Diagnostic::ts2300(&alias.name, ctx.file_name.clone());
 
         if let Some(span) = alias.name_span {
@@ -1896,7 +1938,11 @@ pub(crate) fn collect_type_alias(alias: &ParsedTypeAliasDeclaration, ctx: &mut C
     }
 }
 
-pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mut CheckerContext) {
+pub(crate) fn collect_interface(
+    interface: &ParsedInterfaceDeclaration,
+    earlier: &[ParsedStatement],
+    ctx: &mut CheckerContext,
+) {
     report_duplicate_type_parameters(&interface.type_parameters, ctx);
 
     let info = InterfaceInfo::new(
@@ -1912,7 +1958,8 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
         interface.call_signature_overloads.clone(),
         interface.construct_signatures.clone(),
         None,
-    );
+    )
+    .with_readonly_indexes(interface.string_index_readonly, interface.number_index_readonly);
 
     enum Existing {
         None,
@@ -1976,6 +2023,7 @@ pub(crate) fn collect_interface(interface: &ParsedInterfaceDeclaration, ctx: &mu
                 TypeDeclarationInfo::Interface(merged),
             );
         }
+        Existing::NonInterface if merges_with_exported_declaration(earlier, &interface.name) => {}
         Existing::NonInterface => {
             let mut diagnostic = Diagnostic::ts2300(&interface.name, ctx.file_name.clone());
 

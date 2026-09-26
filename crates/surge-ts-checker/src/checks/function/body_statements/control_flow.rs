@@ -681,6 +681,32 @@ pub(crate) fn check_function_for_of_statement(
                     Some(*span),
                 ));
             }
+            // A destructuring head is `checkDestructuringAssignment` of each
+            // iterated value, lowered as assignments that read it by name.
+            if !for_of_statement.is_await
+                && !for_of_statement.head_assignments.is_empty()
+                && !crate::checks::function::type_contains_degradation(&element_type)
+            {
+                let mut element_symbols =
+                    visible_symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+                let _ = element_symbols.insert(
+                    surge_ts_syntax::FOR_OF_HEAD_ELEMENT,
+                    crate::symbols::SymbolInfo {
+                        ty: element_type.clone(),
+                        kind: crate::symbols::SymbolKind::Const,
+                        function_signature: None,
+                    },
+                );
+                for assignment in &for_of_statement.head_assignments {
+                    let shadowed_locally = scopes.declares_locally(&assignment.target_name);
+                    let _ = crate::checks::assign::check_assignment_with_symbols(
+                        assignment.clone(),
+                        &element_symbols,
+                        shadowed_locally,
+                        ctx,
+                    );
+                }
+            }
         }
     }
     if head_scoped {
@@ -963,7 +989,7 @@ pub(crate) fn for_of_element_type(iterable_type: &Type) -> Type {
 /// references yield the `[K, V]` entry tuple; `Set`-like and the iterator
 /// wrappers yield their single element argument. Returns `None` for any other
 /// reference so the caller can fall back to structural peeling.
-pub(super) fn iterable_reference_element_type(
+pub(crate) fn iterable_reference_element_type(
     reference: &surge_ts_types::TypeReference,
 ) -> Option<Type> {
     let name = reference.id.rsplit('\u{0}').next().unwrap_or(&reference.id);

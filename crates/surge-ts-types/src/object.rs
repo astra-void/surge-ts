@@ -33,6 +33,12 @@ pub struct ObjectType {
     /// number-only type cannot answer is TS7015 under `noImplicitAny` — so an
     /// object declaring only this one leaves `string_index_type` empty.
     pub number_index_type: Option<Arc<Type>>,
+    /// tsc's `IndexInfo.isReadonly` for the two index signatures above
+    /// (`readonly [key: string]: T`): a write that lands on one is TS2542
+    /// (`errorIfWritingToReadonlyIndex`). Part of equality, like
+    /// `ObjectProperty::readonly`.
+    pub string_index_readonly: bool,
+    pub number_index_readonly: bool,
     /// Name of the interface or type alias this object was resolved from, used
     /// only for diagnostic display (tsc shows `'StrictObj'`, not the structural
     /// expansion). Deliberately excluded from equality so assignability and
@@ -100,6 +106,8 @@ impl PartialEq for ObjectType {
         properties_equal
             && self.string_index_type == other.string_index_type
             && self.number_index_type == other.number_index_type
+            && self.string_index_readonly == other.string_index_readonly
+            && self.number_index_readonly == other.number_index_readonly
             && signatures_equal(&self.construct_signature, &other.construct_signature)
             && signatures_equal(&self.call_signature, &other.call_signature)
             && (!(self.is_memberless_intersection() || other.is_memberless_intersection())
@@ -234,6 +242,8 @@ impl ObjectType {
             property_map_id,
             string_index_type: string_index_type.map(Arc::new),
             number_index_type: None,
+            string_index_readonly: false,
+            number_index_readonly: false,
             alias_name: None,
             alias_id: None,
             construct_signature: None,
@@ -269,6 +279,24 @@ impl ObjectType {
     pub fn with_number_index_type(mut self, number_index_type: Option<Type>) -> Self {
         self.number_index_type = number_index_type.map(Arc::new);
         self
+    }
+
+    /// Marks the string and number index signatures `readonly`; see
+    /// `string_index_readonly`. Set after the index types: a flag for a
+    /// signature the object does not have is dropped.
+    pub fn with_readonly_indexes(mut self, string: bool, number: bool) -> Self {
+        self.string_index_readonly = string && self.string_index_type.is_some();
+        self.number_index_readonly = number && self.number_index_type.is_some();
+        self
+    }
+
+    /// Whether the index signature [`Self::applicable_index_type`] picks is
+    /// `readonly`. A checker-injected openness index declares nothing.
+    pub fn applicable_index_readonly(&self, key_is_numeric: bool) -> bool {
+        if key_is_numeric && self.number_index_type.is_some() {
+            return self.number_index_readonly;
+        }
+        self.string_index_readonly && !self.synthetic_open_index
     }
 
     /// The index signature that answers `key`, following tsc's
@@ -465,6 +493,8 @@ impl Clone for ObjectType {
             property_map_id: self.property_map_id,
             string_index_type: self.string_index_type.clone(),
             number_index_type: self.number_index_type.clone(),
+            string_index_readonly: self.string_index_readonly,
+            number_index_readonly: self.number_index_readonly,
             alias_name: self.alias_name.clone(),
             alias_id: self.alias_id.clone(),
             construct_signature: self.construct_signature.clone(),

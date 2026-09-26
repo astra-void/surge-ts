@@ -539,8 +539,11 @@ fn contains_unknown(ty: &surge_ts_types::Type) -> bool {
         // arm as the `checks::var` and `checks::function::body` walkers. Without
         // it every lib `Promise<T>` target (`then<TResult1, TResult2>`) reads as
         // unmodelled and a `this.p = promise.then(…)` write drops everything its
-        // callback reports.
-        surge_ts_types::Type::Function(function) if function.type_parameter_head().is_some() => {
+        // callback reports. A written shape relates such a signature whether or
+        // not its type-parameter list renders.
+        surge_ts_types::Type::Function(function)
+            if function.type_parameter_head().is_some() || function.generic_shape().is_some() =>
+        {
             false
         }
         surge_ts_types::Type::Function(function) => {

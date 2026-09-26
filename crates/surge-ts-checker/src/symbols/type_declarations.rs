@@ -131,6 +131,9 @@ pub(crate) struct InterfaceBody {
     pub(crate) string_index_type: Option<ParsedType>,
     /// See [`surge_ts_syntax::ParsedObjectType::number_index_type`].
     pub(crate) number_index_type: Option<ParsedType>,
+    /// See [`surge_ts_syntax::ParsedObjectType::string_index_readonly`].
+    pub(crate) string_index_readonly: bool,
+    pub(crate) number_index_readonly: bool,
     pub(crate) call_signature: Option<ParsedFunctionType>,
     /// See [`surge_ts_syntax::ParsedInterfaceDeclaration::call_signature_overloads`].
     pub(crate) call_signature_overloads: Vec<ParsedFunctionType>,
@@ -148,6 +151,21 @@ pub(crate) struct InterfaceBody {
     /// accessibility checks read it — the shape never depends on it — and it
     /// lives in the shared body rather than the often-copied header.
     pub(crate) restricted_members: Vec<surge_ts_syntax::ParsedRestrictedMember>,
+    /// Every member the body of the class this is the instance side of
+    /// writes, static ones included; empty for a plain interface. Like
+    /// `restricted_members`, read only by checks that ask about a member's
+    /// declaration rather than its type.
+    pub(crate) class_members: Vec<ClassMemberSymbol>,
+}
+
+/// A member a class body writes, with the binder's symbol flags for it that
+/// the member's type does not carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClassMemberSymbol {
+    pub(crate) name: String,
+    pub(crate) is_static: bool,
+    /// `SymbolFlagsGetAccessor`: a `get` accessor, alone or paired.
+    pub(crate) is_get_accessor: bool,
 }
 
 impl InterfaceBody {
@@ -186,6 +204,8 @@ impl Clone for InterfaceBody {
             members: self.members.clone(),
             string_index_type: self.string_index_type.clone(),
             number_index_type: self.number_index_type.clone(),
+            string_index_readonly: self.string_index_readonly,
+            number_index_readonly: self.number_index_readonly,
             call_signature: self.call_signature.clone(),
             call_signature_overloads: self.call_signature_overloads.clone(),
             construct_signatures: self.construct_signatures.clone(),
@@ -193,6 +213,7 @@ impl Clone for InterfaceBody {
             member_fragments: self.member_fragments.clone(),
             fragment_scopes: self.fragment_scopes.clone(),
             restricted_members: self.restricted_members.clone(),
+            class_members: self.class_members.clone(),
         }
     }
 }
@@ -287,6 +308,8 @@ impl InterfaceInfo {
                 members,
                 string_index_type,
                 number_index_type,
+                string_index_readonly: false,
+                number_index_readonly: false,
                 call_signature,
                 call_signature_overloads,
                 construct_signatures,
@@ -294,11 +317,23 @@ impl InterfaceInfo {
                 member_fragments,
                 fragment_scopes: Vec::new(),
                 restricted_members: Vec::new(),
+                class_members: Vec::new(),
             }),
             cached_resolution_key: std::sync::OnceLock::new(),
             cached_alias_id: std::sync::OnceLock::new(),
             cached_stable_id: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Marks the declaration's string and number index signatures `readonly`;
+    /// see [`InterfaceBody::string_index_readonly`].
+    pub(crate) fn with_readonly_indexes(mut self, string: bool, number: bool) -> Self {
+        if string || number {
+            let body = Arc::make_mut(&mut self.body);
+            body.string_index_readonly = string;
+            body.number_index_readonly = number;
+        }
+        self
     }
 }
 
@@ -349,6 +384,45 @@ impl TypeDeclarationInfo {
             Self::Alias(info) => info.declared_name.as_deref().unwrap_or(&info.name),
             Self::Interface(info) => info.declared_name.as_deref().unwrap_or(&info.name),
         }
+    }
+
+    /// The variances the declaration states for its type parameters, packed
+    /// for its references: the `in`/`out` modifiers of every declaration
+    /// (`getTypeParameterModifiers`). relater.go reads an alias's variances
+    /// only for an object-typed instantiation, which an object literal,
+    /// function or mapped body gives; a conditional body resolves to a branch
+    /// that carries no alias.
+    ///
+    /// An unannotated parameter a `-?` mapping names in its key constraint
+    /// measures `Unmeasurable`: `mappedTypeRelatedTo` instantiates that
+    /// constraint with `reportUnmeasurableMapper` for such a source.
+    pub(crate) fn declared_variances(&self) -> u32 {
+        let (type_parameters, required_mapping) = match self {
+            Self::Alias(info) => match &info.body.ty {
+                ParsedType::Object(_) | ParsedType::Function(_) => (&info.body.type_parameters, None),
+                ParsedType::Mapped(mapped) => (
+                    &info.body.type_parameters,
+                    matches!(mapped.optional, surge_ts_syntax::MappedOptionality::Remove).then_some(mapped),
+                ),
+                _ => return 0,
+            },
+            Self::Interface(info) => (&info.body.type_parameters, None),
+        };
+        let names_in_key_constraint = |name: &str| {
+            required_mapping.is_some_and(|mapped| {
+                let mut named = false;
+                mapped.constraint.for_each_named_type(&mut |reference| {
+                    named |= reference.name == name && reference.type_arguments.is_empty();
+                });
+                named
+            })
+        };
+        surge_ts_types::declared_variances(type_parameters.iter().map(|parameter| {
+            surge_ts_types::DeclaredVariance::annotated(parameter.is_in, parameter.is_out).or_else(|| {
+                names_in_key_constraint(parameter.name.as_str())
+                    .then_some(surge_ts_types::DeclaredVariance::Unmeasurable)
+            })
+        }))
     }
 }
 
@@ -450,6 +524,20 @@ pub(crate) fn merge_interface_infos(
         .cloned()
         .collect();
     Arc::make_mut(&mut merged_info.body).member_fragments = member_fragments;
+    // Each index signature keeps the modifier of the declaration it came from.
+    {
+        let body = Arc::make_mut(&mut merged_info.body);
+        body.string_index_readonly = if existing.body.string_index_type.is_some() {
+            existing.body.string_index_readonly
+        } else {
+            incoming.body.string_index_readonly
+        };
+        body.number_index_readonly = if existing.body.number_index_type.is_some() {
+            existing.body.number_index_readonly
+        } else {
+            incoming.body.number_index_readonly
+        };
+    }
     // The merged symbol keeps tsc's `SymbolFlagsClass` when either side is one.
     merged_info.is_class_instance = existing.is_class_instance || incoming.is_class_instance;
     // `new` reads the modifiers of the symbol's value declaration, its first
@@ -476,6 +564,15 @@ pub(crate) fn merge_interface_infos(
             .restricted_members
             .iter()
             .chain(incoming.body.restricted_members.iter())
+            .cloned()
+            .collect();
+    }
+    if !existing.body.class_members.is_empty() || !incoming.body.class_members.is_empty() {
+        Arc::make_mut(&mut merged_info.body).class_members = existing
+            .body
+            .class_members
+            .iter()
+            .chain(incoming.body.class_members.iter())
             .cloned()
             .collect();
     }
@@ -508,6 +605,8 @@ fn merge_type_parameters(
             known.default_type = parameter.default_type.clone();
         }
         known.is_const |= parameter.is_const;
+        known.is_in |= parameter.is_in;
+        known.is_out |= parameter.is_out;
     }
 }
 
@@ -730,9 +829,11 @@ fn fold_interface_declaration(
     merge_type_parameters(&mut body.type_parameters, &incoming.body.type_parameters);
     if body.number_index_type.is_none() {
         body.number_index_type = incoming.body.number_index_type.clone();
+        body.number_index_readonly = incoming.body.number_index_readonly;
     }
     if body.string_index_type.is_none() {
         body.string_index_type = incoming.body.string_index_type.clone();
+        body.string_index_readonly = incoming.body.string_index_readonly;
     }
     if body.call_signature.is_none() {
         body.call_signature = incoming.body.call_signature.clone();

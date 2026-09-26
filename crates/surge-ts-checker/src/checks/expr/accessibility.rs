@@ -201,6 +201,41 @@ pub(crate) fn restricted_member_owner(
     None
 }
 
+/// tsc's `typeHasStaticProperty`: `receiver` is an instance of a class whose
+/// constructor type has a property `name` declared `static`, by the class or
+/// by one it extends. A namespace merged with the class adds properties to
+/// that type too, but none of them static, and a private name is never one of
+/// its keys. `None` when the receiver's class or a base of it cannot be looked
+/// up.
+pub(crate) fn class_has_static_member(
+    receiver: &Type,
+    name: &str,
+    ctx: &CheckerContext,
+) -> Option<bool> {
+    if name.starts_with('#') {
+        return Some(false);
+    }
+    let mut current = instance_class(receiver, ctx)?;
+    for _ in 0..MAX_HERITAGE_DEPTH {
+        if !current.is_class_instance {
+            return Some(false);
+        }
+        if current
+            .body
+            .class_members
+            .iter()
+            .any(|member| member.is_static && member.name == name)
+        {
+            return Some(true);
+        }
+        if current.body.extends.is_empty() {
+            return Some(false);
+        }
+        current = base_interface(&current, ctx)?;
+    }
+    None
+}
+
 /// The class a member read goes through, and whether the read is of its static
 /// side. An instance is a reference to the class's declaration; the static side
 /// is the class binding itself, written by name.
@@ -217,6 +252,40 @@ fn receiver_class(
         return Some((class, true));
     }
     instance_class(receiver_type, ctx).map(|class| (class, false))
+}
+
+/// tsc's `SymbolFlagsGetAccessor` on the member a read of `name` through
+/// `object` resolves to, when the receiver is a class instance or a class: the
+/// nearest class up the lineage that declares the name decides.
+pub(crate) fn member_is_get_accessor(
+    object: &ParsedExpression,
+    receiver_type: &Type,
+    name: &str,
+    symbols: &SymbolTable,
+    ctx: &CheckerContext,
+) -> bool {
+    let Some((mut current, is_static)) = receiver_class(object, receiver_type, symbols, ctx) else {
+        return false;
+    };
+    for _ in 0..MAX_HERITAGE_DEPTH {
+        if let Some(member) = current
+            .body
+            .class_members
+            .iter()
+            .find(|member| member.is_static == is_static && member.name == name)
+        {
+            return member.is_get_accessor;
+        }
+        // A parameter property, or a member of an interface merged with the class.
+        if !is_static && current.body.members.iter().any(|member| member.name == name) {
+            return false;
+        }
+        let Some(base) = base_interface(&current, ctx) else {
+            return false;
+        };
+        current = base;
+    }
+    false
 }
 
 /// The class (or interface) whose instance `ty` is.

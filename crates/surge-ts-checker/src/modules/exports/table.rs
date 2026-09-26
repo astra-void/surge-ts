@@ -118,6 +118,7 @@ fn nested_vars(
                             initializer_span: None,
                             declaration_list: None,
                             annotated_pattern: None,
+                            pattern_excess_properties: Vec::new(),
                         },
                     )));
                 }

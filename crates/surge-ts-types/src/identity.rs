@@ -118,9 +118,22 @@ fn objects_identical(left: &ObjectType, right: &ObjectType, depth: usize) -> boo
             property.optional == other.optional
                 && property.readonly == other.readonly
                 && property.restriction == other.restriction
-                && identical(&property.ty, &other.ty, depth - 1)
+                && identical(&member_type(property), &member_type(other), depth - 1)
         })
     })
+}
+
+/// The type `compareProperties` reads off a member, `getNonMissingTypeOfSymbol`:
+/// under `strictNullChecks` an optional one carries the `undefined` its
+/// optionality adds (`addOptionality`), so `a?: number` and `a?: number |
+/// undefined` are one member. Under `exactOptionalPropertyTypes` that is the
+/// missing type, which the read removes again.
+fn member_type(property: &crate::ObjectProperty) -> Type {
+    if property.optional && crate::strict_null_checks() && !crate::exact_optional_property_types() {
+        crate::union_type(vec![property.ty.clone(), Type::Undefined])
+    } else {
+        property.ty.clone()
+    }
 }
 
 /// An object type literal whose only member is one call signature is the

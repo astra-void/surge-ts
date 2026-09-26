@@ -175,23 +175,31 @@ fn resolve_through_unresolved_import(
         return None;
     }
     let (head, _) = named_type.name.split_once('.')?;
-    let error_alias = matches!(
-        ctx.lookup_type_declaration(head),
-        Some(TypeDeclarationInfo::Alias(alias)) if matches!(alias.body.ty, ParsedType::ErrorType)
-    );
+    // The head is looked up the way any type name is: a declaration body's own
+    // scope may hold only its local layer, and the import binding lives in the
+    // file's module scope, which the handle lookup falls back to. Without that,
+    // `React.Component` in a heritage clause or an interface member was surge's
+    // sentinel rather than the error type.
+    let error_alias = ctx.lookup_type_declaration_handle(head).is_some_and(|handle| {
+        matches!(
+            handle.get(),
+            TypeDeclarationInfo::Alias(alias) if matches!(alias.body.ty, ParsedType::ErrorType)
+        )
+    });
     if !error_alias
         || ctx.is_complete_namespace_import_binding(head)
         || declares_qualified_members(head, ctx)
     {
         return None;
     }
-    let mut had_error = false;
+    // The arguments report their own errors; the reference is the error type
+    // whatever they resolve to, so they do not degrade it.
     for argument in &named_type.type_arguments {
-        had_error |= resolve_parsed_type(argument.clone(), ctx, resolving, substitution).had_error;
+        let _ = resolve_parsed_type(argument.clone(), ctx, resolving, substitution);
     }
     Some(ResolvedType {
         ty: Type::ErrorType,
-        had_error,
+        had_error: false,
     })
 }
 
@@ -526,6 +534,7 @@ fn resolve_named_type_inner(
     let library_cache_key = library_scoped.then(|| decl_key.clone());
     crate::program::record_generic_instantiation(&decl_key);
     let reference_id = type_declaration_alias_id(declaration, &decl_key);
+    let declared_variances = declaration.declared_variances();
     // Resolve the type arguments once. The result is reused for the library cache
     // key, the nominal reference identity, AND — via `pre_resolved` below — the
     // authoritative `bind_type_arguments`, so a generic instantiation resolves its
@@ -730,11 +739,14 @@ fn resolve_named_type_inner(
             && matches!(entry.resolved.as_ref(), Type::Object(_))
         {
             return ResolvedType {
-                ty: make_type_reference(
-                    reference_id.clone(),
-                    display.to_string(),
-                    arguments.clone(),
-                    entry.resolved,
+                ty: with_declared_variances(
+                    make_type_reference(
+                        reference_id.clone(),
+                        display.to_string(),
+                        arguments.clone(),
+                        entry.resolved,
+                    ),
+                    declared_variances,
                 ),
                 had_error: false,
             };
@@ -755,6 +767,7 @@ fn resolve_named_type_inner(
                 &reference_id,
                 &decl_key,
                 reference_arguments.clone(),
+                declared_variances,
                 Some(&decl_key),
                 ctx,
             );
@@ -1060,6 +1073,7 @@ fn resolve_named_type_inner(
         &reference_id,
         &decl_key,
         reference_arguments,
+        declared_variances,
         intern_key,
         ctx,
     )
@@ -1123,6 +1137,7 @@ fn tag_generic_object_reference(
     reference_id: &str,
     decl_key: &DeclarationResolutionKey,
     arguments: Option<Vec<Type>>,
+    declared_variances: u32,
     intern_key: Option<&DeclarationResolutionKey>,
     ctx: &CheckerContext,
 ) -> ResolvedType {
@@ -1186,11 +1201,14 @@ fn tag_generic_object_reference(
             } else {
                 std::sync::Arc::new(structural)
             };
-            let reference = make_type_reference(
-                reference_id.to_string(),
-                display.to_string(),
-                arguments,
-                interned,
+            let reference = with_declared_variances(
+                make_type_reference(
+                    reference_id.to_string(),
+                    display.to_string(),
+                    arguments,
+                    interned,
+                ),
+                declared_variances,
             );
             ResolvedType {
                 // The reference — display included — is unchanged, so intern
@@ -1223,6 +1241,17 @@ fn tag_generic_object_reference(
             resolved
         }
         (display_name, _, _) => tag_generic_object_alias(resolved, display_name),
+    }
+}
+
+/// The reference built for a generic declaration carries the variances the
+/// declaration states for its type parameters (`getVariancesWorker`).
+fn with_declared_variances(reference: Type, variances: u32) -> Type {
+    match reference {
+        Type::Reference(reference) if variances != 0 => {
+            Type::Reference(reference.with_declared_variances(variances))
+        }
+        other => other,
     }
 }
 

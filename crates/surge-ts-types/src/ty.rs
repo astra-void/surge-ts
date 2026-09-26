@@ -314,6 +314,46 @@ impl Type {
         }
     }
 
+    /// tsc's `errorIfWritingToReadonlyIndex`: whether a write through `self`
+    /// keyed by `name` (a literal key; `None` for any other) lands on a
+    /// `readonly` index signature. A name the receiver has as a member is a
+    /// property write instead. A union answers through its own index
+    /// signatures (`getUnionIndexInfos`): one per key kind every constituent
+    /// declares, read-only when any constituent's is.
+    pub fn writes_readonly_index(&self, name: Option<&str>, key_is_numeric: bool) -> bool {
+        match self {
+            Type::Object(object) => {
+                name.is_none_or(|name| !object_answers_name(object, name))
+                    && object.applicable_index_readonly(key_is_numeric)
+            }
+            Type::Reference(reference) => {
+                reference.resolve().writes_readonly_index(name, key_is_numeric)
+            }
+            Type::Union(union) => {
+                let mut string = Some(false);
+                let mut number = Some(false);
+                for member in union.types() {
+                    if matches!(member, Type::Undefined | Type::Null) {
+                        continue;
+                    }
+                    let Some((member_string, member_number)) =
+                        union_member_index_readonly(member, name)
+                    else {
+                        return false;
+                    };
+                    string = string.zip(member_string).map(|(any, readonly)| any || readonly);
+                    number = number.zip(member_number).map(|(any, readonly)| any || readonly);
+                }
+                match (number, string) {
+                    (Some(readonly), _) if key_is_numeric => readonly,
+                    (_, Some(readonly)) => readonly,
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
     pub fn get_property_access_type(&self, name: &str) -> Option<Type> {
         let own = self.own_property_access_type(name);
         // A primitive's, array's or function's apparent type is a lib interface
@@ -606,11 +646,13 @@ fn object_structural_name(object: &crate::ObjectType) -> String {
                 let index_position = if crate::tsc_display::active() { 0 } else { parts.len() };
                 let mut index_signatures = Vec::new();
                 if let Some(index_type) = &object.string_index_type {
-                    index_signatures.push(format!("[key: string]: {}", index_type.name()));
+                    let modifier = if object.string_index_readonly { "readonly " } else { "" };
+                    index_signatures.push(format!("{modifier}[key: string]: {}", index_type.name()));
                 }
 
                 if let Some(index_type) = &object.number_index_type {
-                    index_signatures.push(format!("[key: number]: {}", index_type.name()));
+                    let modifier = if object.number_index_readonly { "readonly " } else { "" };
+                    index_signatures.push(format!("{modifier}[key: number]: {}", index_type.name()));
                 }
                 parts.splice(index_position..index_position, index_signatures);
 
@@ -898,6 +940,71 @@ pub fn fixed_tuple_parts(ty: &Type) -> Option<(&[Type], usize)> {
     match ty {
         Type::Tuple(elements) => Some((elements.as_slice(), tuple_min_length(elements))),
         Type::Reference(reference) => reference.written_tuple(),
+        _ => None,
+    }
+}
+
+/// Whether `name` is a member of `object` rather than a key its index
+/// signatures answer: a declared property (not a flow-narrowed index slot), a
+/// private name, a global `Object` member, or — on a callable or constructable
+/// object — a `Function` member. `getPropertyOfType` consults all of them
+/// before any index signature.
+fn object_answers_name(object: &crate::ObjectType, name: &str) -> bool {
+    object.get_property(name).is_some_and(|property| !property.index_slot)
+        || crate::private_name::is_private_name_key(name)
+        || crate::object::object_prototype_member_type(name).is_some()
+        || (object.call_signature().is_some() || object.construct_signature().is_some())
+            && FUNCTION_MEMBER_NAMES.contains(&name)
+}
+
+/// The members of lib.es5.d.ts's `interface Function`, and lib.es2015.core's
+/// `name`.
+const FUNCTION_MEMBER_NAMES: &[&str] = &[
+    "apply", "arguments", "bind", "call", "caller", "length", "name", "prototype", "toString",
+];
+
+/// The index signatures a union constituent contributes to the union's own
+/// (`getUnionIndexInfos` reads each constituent's apparent type): the string
+/// and the number one, `Some(readonly)` where it declares it. `None` when the
+/// constituent has `name` as a member — the write is then to the union's
+/// property — or has a shape whose index signatures surge does not know.
+fn union_member_index_readonly(
+    member: &Type,
+    name: Option<&str>,
+) -> Option<(Option<bool>, Option<bool>)> {
+    match member {
+        Type::Object(object) => {
+            if object.synthetic_open_index || name.is_some_and(|name| object_answers_name(object, name)) {
+                return None;
+            }
+            Some((
+                object.string_index_type.is_some().then_some(object.string_index_readonly),
+                object.number_index_type.is_some().then_some(object.number_index_readonly),
+            ))
+        }
+        // lib.es5.d.ts: `interface String { readonly [index: number]: string; }`.
+        Type::String | Type::StringLiteral(_) => {
+            let has_member = name.is_some_and(|name| {
+                string_property_access_type(name).is_some()
+                    || crate::object::object_prototype_member_type(name).is_some()
+            });
+            (!has_member).then_some((None, Some(true)))
+        }
+        Type::Array(element) => {
+            let has_member = name.is_some_and(|name| {
+                array_property_access_type(name, element).is_some()
+                    || crate::object::object_prototype_member_type(name).is_some()
+            });
+            (!has_member).then_some((None, Some(false)))
+        }
+        // `ReadonlyArray<T>` declares `readonly [n: number]: T`.
+        Type::Reference(reference) if reference.is_readonly_array() => {
+            let has_member = name.is_some_and(|name| {
+                reference.resolve().get_property_access_type(name).is_some()
+            });
+            (!has_member).then_some((None, Some(true)))
+        }
+        Type::Reference(reference) => union_member_index_readonly(&reference.resolve(), name),
         _ => None,
     }
 }

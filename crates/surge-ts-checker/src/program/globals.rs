@@ -91,6 +91,90 @@ pub(crate) fn collect_global_function_signatures(
             global_symbols.remove(&name);
         }
     }
+    merge_cross_file_script_namespaces(parsed_files, global_symbols, ctx);
+}
+
+/// tsc merges every script's globals into one table (`mergeSymbolTable`), so a
+/// function and a namespace of one name written in two scripts are one symbol
+/// (TS2433 aside), whose members are the namespace's and the function's
+/// expandos. A namespace member is a declaration of its own: an expando write
+/// of the same name only assigns it (`SetValueDeclaration` prefers the
+/// declaration that is not an assignment), so the member's type replaces what
+/// the write declared.
+fn merge_cross_file_script_namespaces(
+    parsed_files: &[ParsedProgramFile],
+    global_symbols: &mut SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let mut function_files: HashMap<&str, usize> = HashMap::new();
+    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+        if !is_script_source(parsed_file) {
+            continue;
+        }
+        for statement in &parsed_file.statements {
+            if let Some(function) = declared_function(statement) {
+                function_files.entry(function.name.as_str()).or_insert(file_index);
+            }
+        }
+    }
+    if function_files.is_empty() {
+        return;
+    }
+    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+        if !is_script_source(parsed_file) {
+            continue;
+        }
+        let mut names: Vec<&str> = Vec::new();
+        for statement in &parsed_file.statements {
+            if let ParsedStatement::NamespaceDeclaration(namespace) = statement
+                && function_files
+                    .get(namespace.name.as_str())
+                    .is_some_and(|declaring| *declaring != file_index)
+                && !names.contains(&namespace.name.as_str())
+            {
+                names.push(namespace.name.as_str());
+            }
+        }
+        if names.is_empty() {
+            continue;
+        }
+        ctx.set_file_name(parsed_file.file_name.clone());
+        for name in names {
+            let Some(members) =
+                crate::modules::exports::source_namespace_value_members(&parsed_file.statements, name, ctx)
+            else {
+                continue;
+            };
+            if members.is_empty() {
+                continue;
+            }
+            let Some(symbol) = global_symbols.get_own_shared(name) else {
+                continue;
+            };
+            let (call_signature, mut properties) = match &symbol.ty {
+                surge_ts_types::Type::Function(function) => {
+                    (function.clone(), surge_ts_types::PropertyMap::default())
+                }
+                surge_ts_types::Type::Object(object) => match object.call_signature() {
+                    Some(call_signature) => (call_signature.clone(), (*object.properties).clone()),
+                    None => continue,
+                },
+                _ => continue,
+            };
+            for (member_name, member) in members.iter() {
+                properties.insert(member_name.clone(), member.clone());
+            }
+            let object = crate::metrics::alloc_object_type(properties, None).with_call_signature(call_signature);
+            let _ = global_symbols.insert(
+                name.to_string(),
+                crate::symbols::SymbolInfo {
+                    ty: surge_ts_types::Type::Object(object),
+                    kind: symbol.kind,
+                    function_signature: symbol.function_signature.clone(),
+                },
+            );
+        }
+    }
 }
 
 /// The names [`collect_function_signature_from_statement`] declares across the
@@ -452,9 +536,48 @@ pub(crate) fn collect_function_signatures_from_statements(
     // function declared earlier in the file can already read them. A merged
     // namespace's members come first: they are what a write to the same name
     // assigns rather than declares.
-    crate::modules::exports::apply_namespace_members_to_declarations(statements, symbols);
+    crate::modules::exports::apply_namespace_members_to_declarations(statements, symbols, ctx);
     crate::modules::exports::apply_expando_members(statements, symbols, ctx);
     ctx.collecting_signatures = outer_collecting_signatures;
+}
+
+/// A script's signatures are collected with the program's globals, before any
+/// module is bound, so an import type written in one (`import("./m").T`, or
+/// JSDoc's `{import("./m").T}`) found no module and resolved to nothing. tsc
+/// reads a parameter's type when it is first needed, with every module bound
+/// (`getTypeFromImportTypeNode`, checker.go:24483), so a script that names a
+/// module collects its function signatures again for its own check, as a module
+/// does. They register in a table of their own: `symbols` already declares the
+/// script's functions, and a second implementation there reads as a duplicate.
+pub(crate) fn recollect_script_function_signatures(
+    statements: &[ParsedStatement],
+    file_index: usize,
+    symbols: Arc<SymbolTable>,
+    ctx: &mut CheckerContext,
+) -> HashMap<FunctionDeclarationLocation, FunctionType> {
+    let mut declaration_counts = HashMap::<String, usize>::new();
+    for statement in statements {
+        count_function_declarations(statement, &mut declaration_counts);
+    }
+    let mut scope = SymbolTable::with_parent(symbols);
+    let mut function_signatures = HashMap::new();
+    let outer_collecting_signatures = std::mem::replace(&mut ctx.collecting_signatures, true);
+    for (statement_index, statement) in statements.iter().enumerate() {
+        if declared_function(statement).is_none() {
+            continue;
+        }
+        collect_function_signature_from_statement(
+            statement,
+            file_index,
+            statement_index,
+            &mut scope,
+            &mut function_signatures,
+            ctx,
+            &declaration_counts,
+        );
+    }
+    ctx.collecting_signatures = outer_collecting_signatures;
+    function_signatures
 }
 
 fn declared_function(statement: &ParsedStatement) -> Option<&surge_ts_syntax::ParsedFunctionDeclaration> {

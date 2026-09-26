@@ -353,6 +353,12 @@ oracle = [
   "CLI tests",
 ]
 
+[TS6046]
+status = "emitted"
+fixtures = [
+  "crates/surge-ts-config/src/tests.rs",
+]
+
 [TS5112]
 status = "emitted"
 fixtures = [
@@ -721,9 +727,11 @@ oracle = [
 status = "emitted"
 fixtures = [
   "tests/compat-projects/write-target-types-basic/src/index.ts",
+  "tests/compat-projects/readonly-index-signature-writes/src/main.ts",
 ]
 oracle = [
   "write-target-types-basic",
+  "readonly-index-signature-writes",
 ]
 
 [TS2514]
@@ -3425,6 +3433,12 @@ oracle = [
   "unreachable-code-basic",
 ]
 
+[TS2409]
+status = "emitted"
+oracle = [
+  "constructor-return-basic",
+]
+
 [TS2433]
 status = "emitted"
 oracle = [
@@ -3548,8 +3562,10 @@ status = "catalog-only"
 reason = "Cataloged for future coverage"
 
 [TS6234]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "get-accessor-call-basic",
+]
 
 [TS2487]
 status = "emitted"

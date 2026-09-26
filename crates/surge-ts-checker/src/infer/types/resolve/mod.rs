@@ -137,6 +137,20 @@ fn resolve_import_type_query(
             .map(str::to_string),
         _ => None,
     };
+    // An `export =` module's symbol is the assigned entity, and its first
+    // qualifier is a property of that entity's type (`getTypeFromImportTypeNode`,
+    // checker.go:24517).
+    let assigned_entity = module_path.is_none()
+        && matches!(ty.peeled(), Type::Object(object) if !object.synthetic_open_index)
+        && ctx.import_type_namespaces.lock().ok().is_some_and(|namespaces| {
+            [Arc::from(file_name.as_str()), canonical.clone()]
+                .into_iter()
+                .any(|file| {
+                    namespaces
+                        .get(&(file, specifier.to_string()))
+                        .is_some_and(|target| target.export_assignment)
+                })
+        });
     for (index, member) in members.iter().enumerate() {
         match ty.get_property_access_type(member) {
             Some(member_ty) => ty = member_ty,
@@ -144,16 +158,21 @@ fn resolve_import_type_query(
                 // The module namespace object lists every value export, and a
                 // namespace the module declares lists its own, so a qualifier
                 // either lacks is tsc's TS2694 on it.
-                let reported_namespace = module_path.as_deref().and_then(|path| {
-                    if index == 0 {
-                        return Some(format!("\"{path}\""));
-                    }
-                    let inner = members[..index].join(".");
-                    ctx.namespace_registry
-                        .info_in_module(path, &inner)
-                        .filter(|info| info.complete)
-                        .map(|_| format!("\"{path}\".{inner}"))
-                });
+                let reported_namespace = module_path
+                    .as_deref()
+                    .and_then(|path| {
+                        if index == 0 {
+                            return Some(format!("\"{path}\""));
+                        }
+                        let inner = members[..index].join(".");
+                        ctx.namespace_registry
+                            .info_in_module(path, &inner)
+                            .filter(|info| info.complete)
+                            .map(|_| format!("\"{path}\".{inner}"))
+                    })
+                    .or_else(|| {
+                        (index == 0 && assigned_entity).then(|| format!("\"{specifier}\".export="))
+                    });
                 if let Some(namespace_name) = reported_namespace {
                     let mut diagnostic = Diagnostic::ts2694(
                         namespace_name,

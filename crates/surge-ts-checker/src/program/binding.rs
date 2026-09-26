@@ -455,13 +455,16 @@ fn analyze_module(
                 let _ = import_seed.insert_shared(name.clone(), symbol.clone());
             }
         }
-        // Signature collection reads a value symbol in exactly two places: a
-        // `typeof x` annotation and a class whose heritage names a value
-        // (`class D extends mixin()`). A file with neither gets the imports
-        // alone; inferring every initializer for it would only be redone by
+        // Signature collection reads a value symbol in exactly three places: a
+        // `typeof x` annotation, a class whose heritage names a value
+        // (`class D extends mixin()`), and the key of an element write on a
+        // declared function (`fn[key] = v`), whose type names the member it
+        // declares. A file with none of them gets the imports alone; inferring
+        // every initializer for it would only be redone by
         // `build_module_export_table` a moment later.
         let seed_needed = parsed_file.contains_typeof
-            || statements_declare_class_with_heritage(&parsed_file.statements);
+            || statements_declare_class_with_heritage(&parsed_file.statements)
+            || statements_write_computed_function_members(&parsed_file.statements);
         let value_env = if seed_needed {
             let split_start = analyze_split_enabled().then(Instant::now);
             ctx.thin_superseded_value_collection = thin_value_collection;
@@ -2335,6 +2338,60 @@ pub(crate) fn merge_module_import_bindings(
             Some(merged_bindings)
         })
         .collect()
+}
+
+/// An element write with a non-literal key on a function the statements
+/// declare (`fn[key] = v`): the expando member it declares is named by the
+/// key's type (`lateBindMember`).
+fn statements_write_computed_function_members(statements: &[ParsedStatement]) -> bool {
+    let functions: Vec<&str> = statements
+        .iter()
+        .filter_map(|statement| match statement {
+            ParsedStatement::FunctionDeclaration(function) => Some(function.name.as_str()),
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => match declaration.as_ref() {
+                    ParsedStatement::FunctionDeclaration(function) => Some(function.name.as_str()),
+                    _ => None,
+                },
+                ParsedExportDeclaration::Default {
+                    declaration: surge_ts_syntax::ParsedDefaultExportDeclaration::Function(function),
+                    ..
+                } => Some(function.name.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    if functions.is_empty() {
+        return false;
+    }
+    let computed = |assignment: &surge_ts_syntax::ParsedMemberAssignment| {
+        matches!(
+            &assignment.target,
+            surge_ts_syntax::ParsedExpression::IndexAccess { object_name, index, .. }
+                if functions.contains(&object_name.as_str())
+                    && !matches!(
+                        index.as_ref(),
+                        surge_ts_syntax::ParsedExpression::StringLiteral(_)
+                            | surge_ts_syntax::ParsedExpression::NumberLiteral(_)
+                    )
+        )
+    };
+    statements.iter().any(|statement| {
+        let mut nested = Vec::new();
+        match statement {
+            ParsedStatement::MemberAssignment(assignment) => return computed(&**assignment),
+            ParsedStatement::If(if_statement) => {
+                crate::modules::exports::collect_nested_member_assignments(&if_statement.then_body, &[], &mut nested);
+                crate::modules::exports::collect_nested_member_assignments(&if_statement.else_body, &[], &mut nested);
+            }
+            ParsedStatement::Block(body) => {
+                crate::modules::exports::collect_nested_member_assignments(body, &[], &mut nested)
+            }
+            _ => {}
+        }
+        nested.into_iter().any(|assignment| computed(assignment))
+    })
 }
 
 fn statements_declare_class_with_heritage(statements: &[ParsedStatement]) -> bool {

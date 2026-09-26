@@ -173,13 +173,11 @@ pub(crate) fn missing_property_diagnostic(
     let property_name = surge_ts_types::private_name::display(property_name);
     let file_name = ctx.file_name.clone();
     let object_type_name = object_type.name();
-    if let Some(class_name) =
-        static_member_owner_for_missing_instance_property(property_name, object_type, symbols)
-    {
+    if type_has_static_property(property_name, object_type, symbols, ctx) {
         return Diagnostic::ts2576(
             property_name,
             &object_type_name,
-            format!("{class_name}.{property_name}"),
+            format!("{object_type_name}.{property_name}"),
             file_name,
         );
     }
@@ -538,15 +536,15 @@ pub(crate) fn report_missing_element(
         ));
         return;
     }
-    let static_owner = static_member_owner_for_missing_instance_property(key, object_type, symbols);
-    if static_owner.is_none() && has_number_index_info(object_type) {
+    let has_static_property = type_has_static_property(key, object_type, symbols, ctx);
+    if !has_static_property && has_number_index_info(object_type) {
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts7015(file_name),
             key_span.or(access_span),
         ));
         return;
     }
-    if static_owner.is_none()
+    if !has_static_property
         && let Some(suggestion) = property_spelling_suggestion(key, object_type)
     {
         ctx.push(diagnostic_with_syntax_span(
@@ -555,18 +553,17 @@ pub(crate) fn report_missing_element(
         ));
         return;
     }
-    let diagnostic = match static_owner {
-        Some(class_name) => {
-            let written_key = match key_type {
-                Type::StringLiteral(_) => format!("\"{key}\""),
-                _ => key.to_string(),
-            };
-            Diagnostic::ts2576(key, &object_type_name, format!("{class_name}[{written_key}]"), file_name)
-        }
-        None => match index_signature_method_suggestion(object_type, key_type, site) {
+    let diagnostic = if has_static_property {
+        let written_key = match key_type {
+            Type::StringLiteral(_) => format!("\"{key}\""),
+            _ => key.to_string(),
+        };
+        Diagnostic::ts2576(key, &object_type_name, format!("{object_type_name}[{written_key}]"), file_name)
+    } else {
+        match index_signature_method_suggestion(object_type, key_type, site) {
             Some(suggestion) => Diagnostic::ts7052(&object_type_name, suggestion, file_name),
             None => Diagnostic::ts7053(key_type.name(), &object_type_name, file_name),
-        },
+        }
     };
     ctx.push(diagnostic_with_syntax_span(diagnostic, access_span));
 }
@@ -653,32 +650,33 @@ pub(crate) fn emit_index_signature_access_on(
     }
 }
 
-/// Returns the class name when `object_type` is a class instance (an object
-/// tagged with the class name) and the class's static side declares
-/// `property_name`, so the access should be reported as a static-member mixup.
-fn static_member_owner_for_missing_instance_property(
+/// tsc's `typeHasStaticProperty`, asked of the declarations of the class
+/// `object_type` is an instance of. When that class cannot be looked up, the
+/// class value bound under the instance's name answers instead.
+fn type_has_static_property(
     property_name: &str,
     object_type: &Type,
     symbols: &SymbolTable,
-) -> Option<String> {
-    // A class instance type is a nominal reference; peel it to read the class
-    // name (its object's `alias_name`) and detect the static-member mixup.
+    ctx: &CheckerContext,
+) -> bool {
+    if let Some(found) = class_has_static_member(object_type, property_name, ctx) {
+        return found;
+    }
     let object_type = object_type.peeled();
     let Type::Object(instance) = &object_type else {
-        return None;
+        return false;
     };
-    let class_name = instance.alias_name.as_deref()?;
-    let symbol = symbols.get(class_name)?;
+    let Some(symbol) = instance
+        .alias_name
+        .as_deref()
+        .and_then(|class_name| symbols.get(class_name))
+    else {
+        return false;
+    };
     let Type::Object(static_side) = &symbol.ty else {
-        return None;
+        return false;
     };
-    if static_side.construct_signature().is_some()
-        && static_side.get_property(property_name).is_some()
-    {
-        Some(class_name.to_string())
-    } else {
-        None
-    }
+    static_side.construct_signature().is_some() && static_side.get_property(property_name).is_some()
 }
 
 /// The target a relation failure is reported against. tsc's `isRelatedTo`

@@ -84,17 +84,25 @@ fn parse_class_body(
                         })
                         && super::types::index_signature_is_numeric(index_signature) == numeric =>
                 {
-                    super::types::parse_index_signature_value_type(index_signature)
-                        .map(|value_type| (value_type, text_span_from_oxc_span(index_signature.span)))
+                    super::types::parse_index_signature_value_type(index_signature).map(|value_type| {
+                        (
+                            (value_type, text_span_from_oxc_span(index_signature.span)),
+                            index_signature.readonly,
+                        )
+                    })
                 }
                 _ => None,
             })
             .next_back()
     };
-    let (string_index_type, string_index_span) = index_signature_of(false, false).unzip();
-    let (number_index_type, number_index_span) = index_signature_of(true, false).unzip();
-    let static_string_index_type = index_signature_of(false, true).map(|(ty, _)| ty);
-    let (static_number_index_type, static_number_index_span) = index_signature_of(true, true).unzip();
+    let (string_index, string_index_readonly) = index_signature_of(false, false).unzip();
+    let (string_index_type, string_index_span) = string_index.unzip();
+    let (number_index, number_index_readonly) = index_signature_of(true, false).unzip();
+    let (number_index_type, number_index_span) = number_index.unzip();
+    let (static_string_index, static_string_index_readonly) = index_signature_of(false, true).unzip();
+    let static_string_index_type = static_string_index.map(|(ty, _)| ty);
+    let (static_number_index, static_number_index_readonly) = index_signature_of(true, true).unzip();
+    let (static_number_index_type, static_number_index_span) = static_number_index.unzip();
 
     Some(ParsedClassDeclaration {
         string_index_type,
@@ -104,6 +112,10 @@ fn parse_class_body(
         static_string_index_type,
         static_number_index_type,
         static_number_index_span,
+        string_index_readonly: string_index_readonly.unwrap_or(false),
+        number_index_readonly: number_index_readonly.unwrap_or(false),
+        static_string_index_readonly: static_string_index_readonly.unwrap_or(false),
+        static_number_index_readonly: static_number_index_readonly.unwrap_or(false),
         is_declare: class.declare,
         const_binding: false,
         is_abstract: class.r#abstract,
@@ -812,6 +824,8 @@ fn this_as_object(annotation: &oxc_ast::ast::TSType<'_>) -> Option<crate::Parsed
             properties: Vec::new(),
             string_index_type: None,
             number_index_type: None,
+            string_index_readonly: false,
+            number_index_readonly: false,
             call_signature: None,
             call_signature_overloads: Vec::new(),
             construct_signature: None,

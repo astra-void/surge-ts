@@ -241,6 +241,13 @@ fn infer_expression_unsettled(
                         CopySource::Identifier,
                     ))
                 })
+                .or_else(|| {
+                    // A module's top level owns `this` too, and it is `undefined`.
+                    let start = u32::try_from(span.as_ref()?.start).ok()?;
+                    ctx.module_this_starts
+                        .contains(&start)
+                        .then_some(InferredExpression::Known(Type::Undefined))
+                })
                 // Anywhere else outside a class body `this` has no instance type
                 // here; stay conservative rather than emitting an
                 // unresolved-identifier error.

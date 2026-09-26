@@ -34,7 +34,10 @@ use branch_assignments::*;
 pub(crate) use branch_assignments::branch_assigned_names;
 pub(crate) use control_flow::*;
 pub(crate) use returns::*;
-pub(crate) use yields::{implicit_any_yield_starts, yields_only_widening_nullish};
+pub(crate) use yields::{
+    GeneratorYields, collecting_generator_yields, implicit_any_yield_starts, record_generator_yield,
+    yield_operands, yields_only_widening_nullish,
+};
 
 pub(crate) fn check_function_variable_declaration(
     variable: ParsedVariableDeclaration,

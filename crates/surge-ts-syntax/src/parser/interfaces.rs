@@ -35,14 +35,20 @@ pub(crate) fn parse_interface_declaration(
                 if !(if numeric { slots.number } else { slots.string }) {
                     return None;
                 }
-                parse_index_signature_value_type(index_signature)
-                    .map(|value_type| (value_type, text_span_from_oxc_span(index_signature.span)))
+                parse_index_signature_value_type(index_signature).map(|value_type| {
+                    (
+                        (value_type, text_span_from_oxc_span(index_signature.span)),
+                        index_signature.readonly,
+                    )
+                })
             }
             _ => None,
         })
     };
-    let (string_index_type, string_index_span) = index_signature_of(false).unzip();
-    let (number_index_type, number_index_span) = index_signature_of(true).unzip();
+    let (string_index, string_index_readonly) = index_signature_of(false).unzip();
+    let (string_index_type, string_index_span) = string_index.unzip();
+    let (number_index, number_index_readonly) = index_signature_of(true).unzip();
+    let (number_index_type, number_index_span) = number_index.unzip();
 
     // A bare call signature (`(value?: any): number`) makes the interface
     // callable. Multiple overloads fold into one permissive signature the same
@@ -95,6 +101,8 @@ pub(crate) fn parse_interface_declaration(
         number_index_type,
         string_index_span,
         number_index_span,
+        string_index_readonly: string_index_readonly.unwrap_or(false),
+        number_index_readonly: number_index_readonly.unwrap_or(false),
         call_signature,
         call_signature_overloads: if call_signature_overloads.len() > 1 {
             call_signature_overloads

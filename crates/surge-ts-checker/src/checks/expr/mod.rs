@@ -17,9 +17,10 @@ mod unresolved;
 
 pub(crate) use accessibility::{
     ClassIdentity, ThisParameterClassScope, base_interface, check_member_accessibility,
-    constructor_accessibility_error, enclosing_class_lineage, restricted_member_owner,
-    this_parameter_class,
+    class_has_static_member, constructor_accessibility_error, enclosing_class_lineage,
+    restricted_member_owner, this_parameter_class,
 };
+pub(crate) use accessibility::member_is_get_accessor;
 pub(crate) use diagnostics::*;
 pub(crate) use evaluate::*;
 pub(crate) use guarded_unknown::downgrade_guarded_genuine_unknown;
@@ -227,8 +228,16 @@ fn missing_array_members(source: &Type) -> Option<Vec<String>> {
 fn missing_required_properties(source: &Type, target: &Type) -> Option<Vec<String>> {
     // Two instantiations of one generic relate through their type arguments,
     // so any missing member is reported for an argument pair, beneath the head.
+    // An `Unmeasurable` parameter's differing arguments relate structurally
+    // (`mappedTypeRelatedTo`), so there the missing member is the report.
     if let (Type::Reference(source), Type::Reference(target)) = (source, target)
         && source.id == target.id
+        && !(0..source.arguments.len()).any(|index| {
+            matches!(
+                surge_ts_types::declared_variance(source.declared_variances, index),
+                Some(surge_ts_types::DeclaredVariance::Unmeasurable)
+            ) && source.arguments.get(index) != target.arguments.get(index)
+        })
     {
         return None;
     }

@@ -1874,6 +1874,11 @@ fn evaluate_array_literal_in_context(
     }
     InferredExpression::Known(match expected_type {
         Type::Array(_) => Type::Array(Box::new(surge_ts_types::union_type(element_types))),
+        // Every element of the literal is present, however much `undefined`
+        // its contextual slot admits (`[""]` against `[string | undefined]`).
+        _ if elements.iter().all(|element| !element.spread) => {
+            surge_ts_types::written_tuple_type(element_types, elements.len())
+        }
         _ => Type::Tuple(element_types),
     })
 }
@@ -2491,7 +2496,9 @@ fn evaluate_tuple_literal_with_expected_type(
         return InferredExpression::Unknown;
     }
 
-    InferredExpression::Known(Type::Tuple(expected_elements.to_vec()))
+    // The literal writes each of its elements, so they are all required even
+    // where a slot admits `undefined` (`[""]` against `[string | undefined]`).
+    InferredExpression::Known(surge_ts_types::written_tuple_type(expected_elements.to_vec(), elements.len()))
 }
 
 /// Whether an expected member type stands at surge's degradation sentinel, so a

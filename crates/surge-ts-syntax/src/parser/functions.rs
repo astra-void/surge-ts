@@ -1004,18 +1004,44 @@ fn parse_for_of_statement(for_of_statement: &ForOfStatement<'_>) -> Option<Parse
     let (binding_name, head_target, head_names) = parse_for_head(&for_of_statement.left)?;
 
     let (iterable, iterable_span) = parse_expression(&for_of_statement.right);
+    let iterable_span = Some(text_span_from_oxc_span(iterable_span));
     let body = parse_branch_body(&for_of_statement.body);
+    let mut head_assignments = Vec::new();
+    if !for_of_statement.r#await
+        && let Some(
+            target @ (AssignmentTarget::ArrayAssignmentTarget(_) | AssignmentTarget::ObjectAssignmentTarget(_)),
+        ) = for_of_statement.left.as_assignment_target()
+    {
+        // A lone object literal element is the value iterated, read as the
+        // literal: a defaulted member it lacks reads `undefined`, as tsc's
+        // `AccessFlagsAllowMissing` does on an object literal type.
+        let element = match (target, &iterable) {
+            (AssignmentTarget::ObjectAssignmentTarget(_), ParsedExpression::ArrayLiteral { elements, .. })
+                if elements.len() == 1
+                    && !elements[0].spread
+                    && matches!(elements[0].expression, ParsedExpression::ObjectLiteral { .. }) =>
+            {
+                elements[0].expression.clone()
+            }
+            _ => ParsedExpression::Identifier {
+                name: crate::FOR_OF_HEAD_ELEMENT.to_string(),
+                span: None,
+            },
+        };
+        super::lower_assignment_pattern(target, &element, iterable_span, true, &mut head_assignments);
+    }
 
     Some(ParsedForOfStatement {
         binding_name,
         binding_kind,
         iterable,
-        iterable_span: Some(text_span_from_oxc_span(iterable_span)),
+        iterable_span,
         body,
         keys_only: false,
         is_await: for_of_statement.r#await,
         head_target,
         head_names,
+        head_assignments,
     })
 }
 
@@ -1041,6 +1067,7 @@ fn parse_for_in_statement(
         is_await: false,
         head_target,
         head_names,
+        head_assignments: Vec::new(),
     })
 }
 

@@ -24,7 +24,7 @@ const ACCESSOR: u8 = GET_ACCESSOR | SET_ACCESSOR;
 const VALUE: u8 = PROPERTY | METHOD | ACCESSOR;
 
 /// The symbols `Symbol` names that are unique symbols in the lib.
-const WELL_KNOWN_SYMBOLS: &[&str] = &[
+pub(crate) const WELL_KNOWN_SYMBOLS: &[&str] = &[
     "asyncDispose",
     "asyncIterator",
     "dispose",

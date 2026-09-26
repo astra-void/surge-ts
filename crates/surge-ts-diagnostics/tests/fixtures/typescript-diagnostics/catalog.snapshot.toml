@@ -65,6 +65,14 @@ message = "Option '{0}={1}' has been removed. Please remove it from your configu
 arity = 2
 
 [[diagnostic]]
+code = "TS6046"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Argument for '{0}' option must be: {1}."
+arity = 2
+
+[[diagnostic]]
 code = "TS1360"
 category = "Error"
 source = "typescript"
@@ -3825,6 +3833,14 @@ message = "Setters cannot return a value."
 arity = 0
 
 [[diagnostic]]
+code = "TS2409"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Return type of constructor signature must be assignable to the instance type of the class."
+arity = 0
+
+[[diagnostic]]
 code = "TS18041"
 category = "Error"
 source = "typescript"
@@ -4308,7 +4324,7 @@ arity = 0
 code = "TS6234"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "This expression is not callable because it is a 'get' accessor. Did you mean to use it without '()'?"
 arity = 0
 

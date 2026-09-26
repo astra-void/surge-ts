@@ -211,6 +211,8 @@ impl JsonParser<'_> {
             properties,
             string_index_type: None,
             number_index_type: None,
+            string_index_readonly: false,
+            number_index_readonly: false,
             call_signature: None,
             call_signature_overloads: Vec::new(),
             construct_signature: None,

@@ -879,6 +879,9 @@ pub(crate) fn emit_grammar_diagnostics(
     ctx: &mut CheckerContext,
 ) {
     for finding in findings {
+        if matches!(finding.kind, surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(7027)) {
+            ctx.unreachable_statement_runs.push(finding.span);
+        }
         if matches!(finding.kind, surge_ts_syntax::ParsedGrammarDiagnosticKind::Ts(1294)) && !ctx.options.erasable_syntax_only {
             continue;
         }
@@ -887,6 +890,7 @@ pub(crate) fn emit_grammar_diagnostics(
             finding.kind,
             surge_ts_syntax::ParsedGrammarDiagnosticKind::NamedSignatureParameterWithoutType
                 | surge_ts_syntax::ParsedGrammarDiagnosticKind::ComputedTypeMemberName
+                | surge_ts_syntax::ParsedGrammarDiagnosticKind::IndexSignatureKeyReference
         ) {
             ctx.deferred_grammar_findings.push(finding.clone());
             continue;
@@ -926,6 +930,13 @@ pub(crate) fn emit_deferred_grammar_diagnostics(ctx: &mut CheckerContext) {
             }
             continue;
         }
+        if finding.kind == surge_ts_syntax::ParsedGrammarDiagnosticKind::IndexSignatureKeyReference {
+            if index_signature_key_reference_is_invalid(&finding, ctx) {
+                let diagnostic = Diagnostic::ts1268(ctx.file_name.clone());
+                ctx.push(diagnostic.with_span(crate::context::convert_span(finding.span)));
+            }
+            continue;
+        }
         if !ctx.options.no_implicit_any {
             continue;
         }
@@ -950,10 +961,12 @@ pub(crate) fn emit_deferred_grammar_diagnostics(ctx: &mut CheckerContext) {
     }
 }
 
-/// tsc's `checkAndReportErrorForUsingTypeAsValue` for a computed member name
-/// that resolves only as a type: TS2693, or TS2690 (`K in Keys`) when
+/// tsc's `checkComputedPropertyName` for a computed member name, which it
+/// checks as an expression: a name that resolves only as a type is TS2693
+/// (`checkAndReportErrorForUsingTypeAsValue`), or TS2690 (`K in Keys`) when
 /// `maybeMappedType` holds — the member is a type literal's only property and
-/// the type is a union of string- and number-like types. `None` wherever surge
+/// the type is a union of string- and number-like types; a name that resolves
+/// to nothing is reported as any unresolved value is. `None` wherever surge
 /// cannot tell what the name's declared type is.
 fn computed_type_member_name_diagnostic(
     finding: &surge_ts_syntax::ParsedGrammarDiagnostic,
@@ -970,7 +983,16 @@ fn computed_type_member_name_diagnostic(
     if crate::checks::expr::is_primitive_type_name(name) {
         return Some(Diagnostic::ts2693(name, ctx.file_name.clone()));
     }
-    let is_literal_union = match ctx.lookup_type_declaration(name)? {
+    let Some(declaration) = ctx.lookup_type_declaration(name) else {
+        return Some(crate::checks::expr::failed_value_name_diagnostic(
+            name,
+            crate::checks::expr::UnresolvedNameSite::Reference,
+            None,
+            &ctx.symbols,
+            ctx,
+        ));
+    };
+    let is_literal_union = match declaration {
         crate::symbols::TypeDeclarationInfo::Interface(info) => {
             if info.is_class_instance {
                 return None;
@@ -990,6 +1012,48 @@ fn computed_type_member_name_diagnostic(
     } else {
         Diagnostic::ts2693(name, file_name)
     })
+}
+
+/// tsc's `checkGrammarIndexSignatureParameters` for a key written as a bare
+/// type name: `getTypeFromTypeNode` resolves it, the reference reporting what
+/// it gets wrong, and `isValidIndexKeyType` rejects a class or interface, an
+/// object, array, function or `boolean` type, and a reference that failed
+/// (tsc's `errorType`). Whatever else the name resolves to is left alone.
+fn index_signature_key_reference_is_invalid(
+    finding: &surge_ts_syntax::ParsedGrammarDiagnostic,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let Some([name, start, end]) = finding
+        .name
+        .as_deref()
+        .map(|payload| payload.split('\0').collect::<Vec<_>>())
+        .and_then(|parts| <[&str; 3]>::try_from(parts).ok())
+    else {
+        return false;
+    };
+    let (Ok(start), Ok(end)) = (start.parse::<usize>(), end.parse::<usize>()) else {
+        return false;
+    };
+    let names_interface = matches!(
+        ctx.lookup_type_declaration(name),
+        Some(crate::symbols::TypeDeclarationInfo::Interface(_))
+    );
+    let reference = surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+        name: name.to_string(),
+        span: Some(surge_ts_syntax::TextSpan { start, end }),
+        type_arguments: Vec::new(),
+    }));
+    let key = crate::infer::map_parsed_type(reference, ctx);
+    names_interface
+        || match key.peeled() {
+            surge_ts_types::Type::ErrorType
+            | surge_ts_types::Type::Boolean
+            | surge_ts_types::Type::Array(_)
+            | surge_ts_types::Type::Tuple(_)
+            | surge_ts_types::Type::Function(_) => true,
+            surge_ts_types::Type::Object(object) => !object.is_intersection,
+            _ => false,
+        }
 }
 
 /// Whether an alias written as `body` declares a union every member of which
@@ -1241,7 +1305,9 @@ fn grammar_finding_diagnostic(
         }
         // Answered by `emit_deferred_grammar_diagnostics`, once the file's type
         // declarations are in place.
-        Kind::NamedSignatureParameterWithoutType | Kind::ComputedTypeMemberName => return None,
+        Kind::NamedSignatureParameterWithoutType | Kind::ComputedTypeMemberName | Kind::IndexSignatureKeyReference => {
+            return None;
+        }
         Kind::Ts(1202) if !ctx.options.module_emit.is_ecmascript() => return None,
         Kind::Ts(1203) if !export_assignment_targets_esm(ctx) => return None,
         Kind::Ts(2699)
@@ -1562,6 +1628,8 @@ pub(crate) fn check_program_file(
         )
     {
         ctx.global_this_starts = parsed_file.global_this_starts.clone();
+    } else {
+        ctx.module_this_starts = parsed_file.global_this_starts.clone();
     }
     ctx.literal_this_members = parsed_file.literal_this_members.clone();
     ctx.let_assignments = parsed_file.let_assignments.clone();
@@ -1884,9 +1952,23 @@ pub(crate) fn check_program_file(
             timings.utility_alias_validation += utility_validation_start.elapsed()
         });
 
-        let validation_symbols = std::mem::replace(&mut ctx.symbols, saved_symbols);
+        let validation_symbols =
+            std::sync::Arc::new(std::mem::replace(&mut ctx.symbols, saved_symbols));
 
-        ctx.module_value_fallback = Some(std::sync::Arc::new(validation_symbols));
+        ctx.module_value_fallback = Some(validation_symbols.clone());
+        let recollected_signatures = (!parsed_file.file_kind.is_declaration()
+            && !parsed_file.import_call_specifiers.is_empty())
+        .then(|| {
+            super::recollect_script_function_signatures(
+                &parsed_file.statements,
+                file_index,
+                validation_symbols,
+                ctx,
+            )
+        });
+        let function_signatures = recollected_signatures
+            .as_ref()
+            .unwrap_or(&shared_state.function_signatures);
 
         let statement_check_start = Instant::now();
         crate::flow::begin_never_initialized_file(
@@ -1901,12 +1983,12 @@ pub(crate) fn check_program_file(
             ctx,
             file_index,
             &parsed_file.statements,
-            &shared_state.function_signatures,
+            function_signatures,
         );
         check_program_file_statements(
             &parsed_file.statements,
             file_index,
-            &shared_state.function_signatures,
+            function_signatures,
             ctx,
         );
         ctx.namespace_require_reads = None;

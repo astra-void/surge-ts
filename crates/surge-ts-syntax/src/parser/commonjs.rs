@@ -319,7 +319,7 @@ pub(crate) fn require_call_expression(call: &CallExpression<'_>) -> Option<Parse
         expression: Box::new(expression),
         expression_span,
         ty,
-        type_span: Some(text_span_from_oxc_span(call.span)),
+        type_span: None,
         annotation: true,
     })
 }
@@ -644,6 +644,7 @@ fn declared_export(
                     initializer_span: value_span,
                     declaration_list: None,
                     annotated_pattern: None,
+                    pattern_excess_properties: Vec::new(),
                 })),
                 ParsedStatement::ExportDeclaration(Box::new(ParsedExportDeclaration::Named {
                     is_type_only: false,
@@ -720,6 +721,7 @@ pub(crate) fn module_variables(
                 initializer_span: None,
                 declaration_list: None,
                 annotated_pattern: None,
+                pattern_excess_properties: Vec::new(),
             }))
         })
         .collect();
@@ -753,6 +755,8 @@ fn own_module_variable_type(name: &str, specifier: &str) -> ParsedType {
         }],
         string_index_type: None,
         number_index_type: None,
+        string_index_readonly: false,
+        number_index_readonly: false,
         call_signature: None,
         call_signature_overloads: Vec::new(),
         construct_signature: None,

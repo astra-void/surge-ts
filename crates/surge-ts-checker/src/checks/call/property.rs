@@ -1020,31 +1020,13 @@ fn check_property_call_like_unrecorded(
                     }
                     return Some(Type::Any);
                 }
-                let lib_feature =
-                    crate::checks::expr::lib_feature_of_missing_member(&object_ty, property_name);
-                let diagnostic = match crate::checks::expr::property_spelling_suggestion(
+                // tsc's `reportNonexistentProperty`, as for any member read.
+                let diagnostic = crate::checks::expr::missing_property_diagnostic(
                     property_name,
                     &object_ty,
-                ) {
-                    _ if lib_feature.is_some() => Diagnostic::ts2550(
-                        property_name,
-                        &object_type_name,
-                        lib_feature.unwrap_or_default(),
-                        ctx.file_name.clone(),
-                    ),
-                    Some(suggestion) => Diagnostic::ts2551(
-                        property_name,
-                        &object_type_name,
-                        suggestion,
-                        ctx.file_name.clone(),
-                    ),
-                    None => crate::checks::expr::nonexistent_property_diagnostic(
-                        property_name,
-                        &object_ty,
-                        &object_type_name,
-                        ctx,
-                    ),
-                };
+                    symbols,
+                    ctx,
+                );
                 ctx.push(diagnostic_with_syntax_span(
                     diagnostic,
                     crate::spans::choose_span(property_span, object_span),
@@ -1144,8 +1126,16 @@ fn check_property_call_like_unrecorded(
                     Some(Type::Any)
                 }
                 other => {
+                    let get_accessor_call = arguments.is_empty()
+                        && crate::checks::expr::member_is_get_accessor(
+                            object,
+                            &object_ty,
+                            property_name,
+                            symbols,
+                            ctx,
+                        );
                     ctx.push(diagnostic_with_syntax_span(
-                        super::not_callable_diagnostic(&other, ctx),
+                        super::not_callable_member_diagnostic(&other, get_accessor_call, ctx),
                         crate::spans::choose_span(
                             property_span,
                             crate::spans::choose_span(call_span, object_span),

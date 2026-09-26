@@ -22,7 +22,9 @@ use crate::checks::function::{
 };
 use crate::context::{CheckerContext, convert_span};
 use crate::infer::map_parsed_type;
-use crate::symbols::{InterfaceInfo, SymbolInfo, SymbolKind, SymbolTable, TypeDeclarationInfo};
+use crate::symbols::{
+    ClassMemberSymbol, InterfaceInfo, SymbolInfo, SymbolKind, SymbolTable, TypeDeclarationInfo,
+};
 
 /// Builds the instance-side interface (fields + instance methods) for a class.
 /// Static members and the constructor are excluded; they live on the value side.
@@ -55,7 +57,8 @@ pub(crate) fn class_instance_interface_info(
         Vec::new(),
         Vec::new(),
         None,
-    );
+    )
+    .with_readonly_indexes(class.string_index_readonly, class.number_index_readonly);
     info.is_abstract_class = class.is_abstract;
     if let Some(constructor) = class.members.iter().find_map(|member| match member {
         ParsedClassMember::Constructor(constructor) => Some(constructor),
@@ -67,6 +70,28 @@ pub(crate) fn class_instance_interface_info(
     info.is_class_instance = true;
     if !class.restricted_members.is_empty() {
         Arc::make_mut(&mut info.body).restricted_members = class.restricted_members.clone();
+    }
+    let class_members: Vec<ClassMemberSymbol> = class
+        .members
+        .iter()
+        .filter_map(|member| {
+            let (name, is_static, is_get_accessor) = match member {
+                ParsedClassMember::Property(property) => (&property.name, property.is_static, false),
+                ParsedClassMember::Method(method) => (&method.name, method.is_static, false),
+                ParsedClassMember::Accessor(accessor) => {
+                    (&accessor.name, accessor.is_static, accessor.has_getter)
+                }
+                ParsedClassMember::Constructor(_) | ParsedClassMember::StaticBlock(_) => return None,
+            };
+            Some(ClassMemberSymbol {
+                name: name.clone(),
+                is_static,
+                is_get_accessor,
+            })
+        })
+        .collect();
+    if !class_members.is_empty() {
+        Arc::make_mut(&mut info.body).class_members = class_members;
     }
     info
 }
@@ -714,6 +739,7 @@ pub(crate) fn build_class_value_symbol_with_scope(
         .map(|ty| map_parsed_type(ty, ctx));
     let static_type = ObjectType::new(properties, static_string_index)
         .with_number_index_type(static_number_index)
+        .with_readonly_indexes(class.static_string_index_readonly, class.static_number_index_readonly)
         .with_construct_signature(construct_signature)
         .with_alias_name(format!("typeof {}", class.name));
     // tsc's `getBaseTypeVariableOfClass`: a class extending a value typed by a
@@ -849,6 +875,80 @@ fn inherited_construct_signature(base: &FunctionType, instance_type: &Type) -> F
     }
 }
 
+/// `getDefaultConstructSignatures` over a generic base class, whose value
+/// carries its construct signatures written over its own type parameters
+/// (`generic_class_value_symbol`): each one whose type parameters the `extends`
+/// clause's argument count fits (`getMinTypeArgumentCount`), instantiated with
+/// those arguments and the defaults of the rest (`fillMissingTypeArguments`),
+/// returning the derived class. A JavaScript class, whose missing arguments tsc
+/// fills with `any`, and a base written as an expression keep the permissive
+/// signature.
+fn generic_base_construct_signature(
+    class: &ParsedClassDeclaration,
+    instance_type: &Type,
+    scope: Option<&SymbolTable>,
+    ctx: &mut CheckerContext,
+) -> Option<FunctionType> {
+    if class.heritage_expression.is_some() || surge_ts_syntax::is_javascript_file_name(&ctx.file_name) {
+        return None;
+    }
+    let base_reference = class.extends.first()?;
+    let base_signatures = scope
+        .and_then(|scope| scope.get(&base_reference.name))
+        .or_else(|| ctx.symbols.get(&base_reference.name))
+        .or_else(|| {
+            ctx.module_value_fallback
+                .as_ref()
+                .and_then(|fallback| fallback.get(&base_reference.name))
+        })?
+        .function_signature
+        .as_ref()?
+        .construct_signatures
+        .clone()?;
+    let written = base_reference.type_arguments.len();
+    let mut signatures = Vec::with_capacity(base_signatures.len());
+    for base in base_signatures.iter() {
+        let type_parameters = &base.signature.type_parameters;
+        let minimum = type_parameters
+            .iter()
+            .rposition(|parameter| parameter.default_type.is_none())
+            .map_or(0, |index| index + 1);
+        if written < minimum || written > type_parameters.len() {
+            continue;
+        }
+        // The clause's arguments are reported where the class is checked.
+        let checkpoint = ctx.diagnostics().len();
+        let substitution = crate::checks::call::explicit_type_argument_substitution(
+            &base.signature,
+            &base_reference.type_arguments,
+            ctx,
+        );
+        ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+        let instantiated = crate::checks::call::instantiate_function_type_with_substitution(
+            &base.template,
+            &base.signature,
+            &substitution,
+            ctx,
+        )
+        .into_owned();
+        let names: Vec<Option<Arc<str>>> = base
+            .signature
+            .parameter_names
+            .iter()
+            .map(|name| name.as_deref().map(Arc::from))
+            .collect();
+        signatures.push(inherited_construct_signature(
+            &instantiated.with_parameter_names(names),
+            instance_type,
+        ));
+    }
+    let mut signatures = signatures.into_iter();
+    let first = signatures.next()?;
+    Some(signatures.fold(first, |group, signature| {
+        crate::checks::function::merge_overload_group_signatures(&group, &signature)
+    }))
+}
+
 fn static_property_type(
     class: &ParsedClassDeclaration,
     property: &ParsedClassProperty,
@@ -916,6 +1016,7 @@ fn static_signature_type(
             &ctx.file_name,
         ),
         outer_type_arguments: Vec::new(),
+        generic_shape: None,
     }))
 }
 
@@ -1020,6 +1121,8 @@ fn syntactic_initializer_type(initializer: &surge_ts_syntax::ParsedExpression, k
                 properties: members,
                 string_index_type: None,
                 number_index_type: None,
+                string_index_readonly: false,
+                number_index_readonly: false,
                 call_signature: None,
                 call_signature_overloads: Vec::new(),
                 construct_signature: None,
@@ -1131,16 +1234,19 @@ fn class_construct_signature(
     }
 
     if !class.extends.is_empty() {
+        if let Some(signature) = generic_base_construct_signature(class, &instance_type, scope, ctx) {
+            return signature;
+        }
         if let Some(base_signature) = base_static_side(class, scope, ctx)
             .and_then(|base_static| base_static.construct_signature().cloned())
         {
             return inherited_construct_signature(&base_signature, &instance_type);
         }
-        // A base whose value is not an object here — a generic class, an
-        // expression, one not bound yet — has no signature to inherit. Accept
-        // any argument list rather than report the base's arity as zero:
-        // `new ZodString({ … })` on a derived class was TS2554 "Expected 0
-        // arguments".
+        // A base whose value is not an object here — a generic class with no
+        // signature the clause's arguments fit, an expression, one not bound
+        // yet — has no signature to inherit. Accept any argument list rather
+        // than report the base's arity as zero: `new ZodString({ … })` on a
+        // derived class was TS2554 "Expected 0 arguments".
         return FunctionType::new(vec![Type::Any], instance_type, true, 0);
     }
 
@@ -2454,7 +2560,19 @@ fn check_class_member_bodies(
                 check_class_property_initializer(property, this_type, contextual_type, ctx);
             }
             ParsedClassMember::Accessor(accessor) => {
-                check_class_accessor_body(accessor, &instance_type, &static_type, body_scope, ctx);
+                // A same-named method or property takes the member's symbol, so
+                // the binder declares each accessor apart (TS2300) and the getter
+                // has no setter to take its type from.
+                let shares_symbol = class.members.iter().any(|other| match other {
+                    ParsedClassMember::Method(method) => {
+                        method.name == accessor.name && method.is_static == accessor.is_static
+                    }
+                    ParsedClassMember::Property(property) => {
+                        property.name == accessor.name && property.is_static == accessor.is_static
+                    }
+                    _ => false,
+                });
+                check_class_accessor_body(accessor, !shares_symbol, &instance_type, &static_type, body_scope, ctx);
             }
             ParsedClassMember::StaticBlock(block) => {
                 let function_type = FunctionType::new(Vec::new(), Type::Void, false, 0);
@@ -2492,6 +2610,7 @@ fn check_class_member_bodies(
 /// without a type takes the getter's annotation, as tsc infers it.
 fn check_class_accessor_body(
     accessor: &surge_ts_syntax::ParsedClassAccessor,
+    pairs_with_setter: bool,
     instance_type: &Type,
     static_type: &Type,
     body_scope: Option<Arc<SymbolTable>>,
@@ -2502,7 +2621,10 @@ fn check_class_accessor_body(
             continue;
         }
         let return_type = if declaration.is_getter {
-            accessor.getter_return_type.as_ref()
+            accessor
+                .getter_return_type
+                .as_ref()
+                .or(accessor.setter_param_type.as_ref().filter(|_| pairs_with_setter))
         } else {
             None
         };

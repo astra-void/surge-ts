@@ -87,6 +87,32 @@ impl Clone for FunctionTypePayload {
     }
 }
 
+/// A generic signature with a constrained type parameter, as written. The
+/// resolved signature erases a constrained type parameter to the degradation
+/// sentinel, which leaves a relation nothing to relate; here the signature's
+/// own type parameters stay placeholders, and each constraint is resolved over
+/// them, so a relation can bind them as type variables (`getCanonicalSignature`)
+/// or infer them (`instantiateSignatureInContextOf`).
+#[derive(Debug)]
+pub struct GenericSignatureShape {
+    pub type_parameters: Vec<(Arc<str>, Option<Type>)>,
+    pub parameters: Vec<Type>,
+    pub return_type: Type,
+}
+
+pub type GenericSignatureShapeLookup =
+    fn(&(dyn std::any::Any + Send + Sync)) -> Option<&GenericSignatureShape>;
+
+static GENERIC_SIGNATURE_SHAPE_LOOKUP: std::sync::OnceLock<GenericSignatureShapeLookup> =
+    std::sync::OnceLock::new();
+
+/// Installs how a signature's declaration record answers its
+/// [`GenericSignatureShape`]: the records are the checker's, which this crate
+/// cannot name.
+pub fn install_generic_signature_shape_lookup(lookup: GenericSignatureShapeLookup) {
+    let _ = GENERIC_SIGNATURE_SHAPE_LOOKUP.set(lookup);
+}
+
 #[derive(Debug)]
 pub struct FunctionType {
     pub(crate) payload: Arc<FunctionTypePayload>,
@@ -313,6 +339,13 @@ impl FunctionType {
 
     pub fn declaration(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
         self.declaration.as_deref()
+    }
+
+    /// The written shape of this signature, when its declaration record
+    /// carries one (see [`GenericSignatureShape`]).
+    pub fn generic_shape(&self) -> Option<&GenericSignatureShape> {
+        let lookup = GENERIC_SIGNATURE_SHAPE_LOOKUP.get()?;
+        lookup(self.declaration.as_deref()?)
     }
 
     pub fn payload(&self) -> &FunctionTypePayload {

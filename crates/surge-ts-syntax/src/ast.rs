@@ -69,8 +69,8 @@ pub struct ParsedSource {
     /// 'undefined'`, anchored at the `(`. Collected with `grammar_diagnostics`.
     pub parenthesized_expressions: Vec<ParenthesizedExpressionSpan>,
     /// Where each `this` whose container is the file's top level starts —
-    /// arrow functions looked through, as tsc's `getThisContainer` does — in a
-    /// TypeScript file without an import or export. Collected with
+    /// arrow functions looked through, as tsc's `getThisContainer` does. It is
+    /// `globalThis` in a script and `undefined` in a module. Collected with
     /// `grammar_diagnostics`.
     pub global_this_starts: Vec<u32>,
     /// Where each object-literal member whose `this` is the literal itself
@@ -218,6 +218,14 @@ pub enum ParsedGrammarDiagnosticKind {
     /// is a type literal's only one. `name` holds the identifier and `1` when
     /// the member is a type literal's only property, NUL-separated.
     ComputedTypeMemberName,
+    /// An index signature whose key type is written as a bare type name
+    /// (`[key: Name]`) where the file's top-level scope resolves it. tsc
+    /// resolves the key (`getTypeFromTypeNode`) before it asks whether it is
+    /// a valid index key type; the checker answers it once the file's types
+    /// are installed: TS1268 at the parameter name, beside whatever the
+    /// reference itself reports. `name` holds the type name and the
+    /// reference's start and end offsets, NUL-separated.
+    IndexSignatureKeyReference,
     /// Two members of one class, interface, or object literal declaring the
     /// same name where neither is an overload of the other — TS2300.
     DuplicateMember,
@@ -733,6 +741,10 @@ pub struct ParsedTypeParameter {
     /// `<const T>`: an argument inferred for it keeps its const-context shape
     /// (an array literal is a tuple).
     pub is_const: bool,
+    /// `<in T>`, `<out T>`, `<in out T>`: the variance the relation takes as
+    /// written instead of measuring it (`getVariancesWorker`).
+    pub is_in: bool,
+    pub is_out: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -925,6 +937,9 @@ pub struct ParsedInterfaceDeclaration {
     /// the diagnostics tsc reports on the signature itself.
     pub string_index_span: Option<TextSpan>,
     pub number_index_span: Option<TextSpan>,
+    /// See [`ParsedObjectType::string_index_readonly`].
+    pub string_index_readonly: bool,
+    pub number_index_readonly: bool,
     /// A bare call signature (`(value?: any): number`) on the interface, making
     /// values of this type callable without `new` (e.g. `NumberConstructor`).
     pub call_signature: Option<ParsedFunctionType>,
@@ -1006,6 +1021,12 @@ pub struct ParsedClassDeclaration {
     /// the class value answers every other key with.
     pub static_string_index_type: Option<ParsedType>,
     pub static_number_index_type: Option<ParsedType>,
+    /// See [`ParsedObjectType::string_index_readonly`], for the instance and
+    /// the static side.
+    pub string_index_readonly: bool,
+    pub number_index_readonly: bool,
+    pub static_string_index_readonly: bool,
+    pub static_number_index_readonly: bool,
     /// Where the static number index signature is declared, which a conflict
     /// with the static string index is reported on (TS2413).
     pub static_number_index_span: Option<TextSpan>,
@@ -1418,6 +1439,10 @@ pub struct ParsedObjectType {
     /// prefers it, and a string key a number-only type cannot answer is an
     /// implicit `any` rather than a resolved member.
     pub number_index_type: Option<Box<ParsedType>>,
+    /// Whether the index signatures above are declared `readonly` (tsc's
+    /// `IndexInfo.isReadonly`), which refuses a write through them (TS2542).
+    pub string_index_readonly: bool,
+    pub number_index_readonly: bool,
     /// A bare call signature (`(value?: any): number`) on the object type,
     /// making values of this type callable without `new`.
     pub call_signature: Option<Box<ParsedFunctionType>>,
@@ -1628,7 +1653,8 @@ pub enum ParsedExpression {
         type_span: Option<TextSpan>,
         /// Not written as an assertion: the annotation of a destructuring
         /// declaration (`const { a }: T = init`), whose elements read from `T`.
-        /// `init` must be assignable to it (TS2322), not merely comparable.
+        /// `init` must be assignable to it (TS2322), not merely comparable, and
+        /// is reported at the pattern, which `type_span` then spans.
         annotation: bool,
     },
     SatisfiesExpression {
@@ -2009,6 +2035,10 @@ pub struct ParsedVariableDeclaration {
     /// The annotated destructuring pattern this binding was lowered from, kept
     /// on the pattern's first binding only.
     pub annotated_pattern: Option<std::sync::Arc<ParsedAnnotatedBindingPattern>>,
+    /// The members of the initializer's literals that the unannotated pattern
+    /// this binding was lowered from does not name, kept on the pattern's
+    /// first binding only.
+    pub pattern_excess_properties: Vec<ParsedPatternExcessProperty>,
     /// The member initializers of the `enum` this object was lowered from, one
     /// entry per declaration of it, for the checker to check.
     pub enum_members: Option<std::sync::Arc<Vec<ParsedEnumBody>>>,
@@ -2042,6 +2072,16 @@ pub struct ParsedEnumMemberInitializer {
 pub struct ParsedAnnotatedBindingPattern {
     pub pattern: ParsedBindingName,
     pub declared_type: ParsedType,
+}
+
+/// A member of an object literal that the binding pattern contextually typing
+/// it (tsc's `getContextualTypeForInitializerExpression`) does not name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedPatternExcessProperty {
+    /// The pattern, possibly a nested one, whose implied type types the literal.
+    pub pattern: ParsedBindingName,
+    pub name: String,
+    pub name_span: Option<TextSpan>,
 }
 
 /// One `var`/`let`/`const`/`using` declaration list as written, for the
@@ -2288,7 +2328,14 @@ pub struct ParsedForOfStatement {
     /// The names a destructuring head (`for ([a, b] of pairs)`) writes, which
     /// must resolve like any other reference.
     pub head_names: Vec<(String, Option<TextSpan>)>,
+    /// A destructuring head of a `for…of`, lowered as the assignments it makes
+    /// from each iterated value, which they read as [`FOR_OF_HEAD_ELEMENT`].
+    pub head_assignments: Vec<ParsedAssignment>,
 }
+
+/// The name a lowered `for…of` destructuring head reads the iterated value by;
+/// the checker binds it to the element type.
+pub const FOR_OF_HEAD_ELEMENT: &str = "\0for-of-element";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedFunctionParameter {

@@ -769,6 +769,8 @@ mod physical_interface_cache_tests {
                     default_type: None,
                     span: None,
                     is_const: false,
+                    is_in: false,
+                    is_out: false,
                 })
                 .collect(),
             Vec::new(),

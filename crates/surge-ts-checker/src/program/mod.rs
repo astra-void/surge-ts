@@ -52,6 +52,7 @@ pub(crate) use file_classify::*;
 pub(crate) use forward_references::decorator_is_checked;
 pub(crate) use globals::*;
 pub(crate) use index_constraints::{check_type_literal_index_constraints, is_numeric_literal_name};
+pub(crate) use late_bound_members::WELL_KNOWN_SYMBOLS;
 pub(crate) use namespaces::{
     MEANING_NAMESPACE, MEANING_TYPE, MEANING_VALUE, NamespaceInfo, NamespaceRegistry,
     is_instantiated_namespace,
@@ -151,6 +152,9 @@ pub struct ProgramCheckResult {
     /// `diagnostics` holds only syntactic diagnostics (tsc then reports no
     /// program or semantic diagnostics either).
     pub syntax_errors: bool,
+    /// Under `noLib`, the global types tsc's checker requires that no program
+    /// file declares (see `missing_global_types`); each is TS2318.
+    pub no_lib_missing_global_types: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone)]
@@ -349,6 +353,7 @@ fn check_program_with_stats_and_jobs_inner(
             diagnostics: Vec::new(),
             stats: CompatibilityStats::default(),
             syntax_errors: false,
+            no_lib_missing_global_types: Vec::new(),
         };
         return (result, None);
     }
@@ -444,6 +449,14 @@ fn check_program_with_stats_and_jobs_inner(
         binding,
         globals,
     );
+    let no_lib_missing_global_types = if ctx.options.no_lib {
+        missing_global_types(
+            &shared_state.script_type_declarations,
+            ctx.options.strict_bind_call_apply,
+        )
+    } else {
+        Vec::new()
+    };
     build_module_local_values(
         &parsed_files,
         &shared_state.module_analyses,
@@ -485,6 +498,7 @@ fn check_program_with_stats_and_jobs_inner(
             diagnostics: std::mem::take(&mut ctx.diagnostics),
             stats: std::mem::take(&mut ctx.stats),
             syntax_errors: false,
+            no_lib_missing_global_types,
         };
         set_check_phase(false);
         filter_program_diagnostics(
@@ -526,6 +540,7 @@ fn check_program_with_stats_and_jobs_inner(
         census_external,
         skip_teardown,
     );
+    result.no_lib_missing_global_types = no_lib_missing_global_types;
     filter_program_diagnostics(
         &mut result,
         oxc_aborted_only,
@@ -1680,7 +1695,32 @@ fn finish_program_run(
         diagnostics,
         stats,
         syntax_errors: false,
+        no_lib_missing_global_types: Vec::new(),
     }
+}
+
+/// The global types tsc's `initializeChecker` resolves with errors reported
+/// (`getGlobalType(name, arity, true)`; `CallableFunction` and
+/// `NewableFunction` through `getGlobalStrictFunctionType`, only under
+/// `strictBindCallApply`) that the program's global declarations lack, in
+/// the order tsc sorts the TS2318s it reports for them.
+fn missing_global_types(globals: &TypeDeclarationTable, strict_bind_call_apply: bool) -> Vec<&'static str> {
+    [
+        ("Array", false),
+        ("Boolean", false),
+        ("CallableFunction", true),
+        ("Function", false),
+        ("IArguments", false),
+        ("NewableFunction", true),
+        ("Number", false),
+        ("Object", false),
+        ("RegExp", false),
+        ("String", false),
+    ]
+    .into_iter()
+    .filter(|(name, strict_only)| (strict_bind_call_apply || !strict_only) && globals.get(name).is_none())
+    .map(|(name, _)| name)
+    .collect()
 }
 
 fn inject_generated_default_lib_inputs(files: &mut Vec<SourceFileInput>, no_lib: bool) {

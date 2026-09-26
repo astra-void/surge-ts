@@ -87,13 +87,20 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
     ctx.truncate_diagnostics(diagnostics_before);
 
     // A generator returns a `Generator`/`AsyncGenerator`, not whatever its body
-    // completes with — surge does not model that shape, so the sketch stays at
-    // the sentinel rather than claiming `void` and binding a caller's type
-    // parameter to it (`run(async function* () { yield 'a' })`).
+    // completes with. The sketch stays at the sentinel unless every yield can
+    // be typed from here, rather than claiming a shape a caller's type
+    // parameter would then bind to (`run(async function* () { yield 'a' })`).
     if arrow_function.is_generator && declared_return_type.is_none() {
+        let return_type = match &arrow_function.body {
+            ParsedArrowFunctionBody::Block(body) if arrow_function.type_parameters.is_empty() => {
+                let locals = body_locals(arrow_function, &parameters, symbols);
+                sketched_generator_type(body, locals, contextual_return.as_ref(), arrow_function.is_async, ctx)
+            }
+            _ => None,
+        };
         return alloc_function_type(
             parameters,
-            Type::Unknown,
+            return_type.unwrap_or(Type::Unknown),
             false,
             required_parameter_count(arrow_function.parameters.as_slice()),
         );
@@ -171,6 +178,102 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
     )
 }
 
+/// tsc's `getReturnTypeFromBody` for a generator the sketch cannot check: its
+/// yields' operands inferred in the parameters' scope, every name the body
+/// declares shadowed and its top-level declarations bound in order. `None`
+/// when a yield reads anything that leaves untyped.
+fn sketched_generator_type(
+    body: &[surge_ts_syntax::ParsedFunctionBodyStatement],
+    mut locals: SymbolTable,
+    contextual_return: Option<&Type>,
+    is_async: bool,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    use surge_ts_syntax::ParsedFunctionBodyStatement;
+
+    let operands = crate::checks::function::yield_operands(body)?;
+    let mut declared = std::collections::HashSet::new();
+    crate::flow::collect_declared_names(body, &mut declared);
+    for name in declared {
+        let _ = locals.insert(
+            name,
+            crate::symbols::SymbolInfo {
+                ty: Type::Unknown,
+                kind: crate::symbols::SymbolKind::Let,
+                function_signature: None,
+            },
+        );
+    }
+    for statement in body {
+        let ParsedFunctionBodyStatement::VariableDeclaration(variable) = statement else {
+            continue;
+        };
+        let (Some(initializer), None, false) =
+            (variable.initializer.as_ref(), variable.declared_type.as_ref(), variable.from_binding_pattern)
+        else {
+            continue;
+        };
+        let InferredExpression::Known(ty) = infer_expression(initializer, &locals, ctx) else {
+            continue;
+        };
+        let kind = match variable.kind {
+            surge_ts_syntax::ParsedVariableKind::Var => crate::symbols::SymbolKind::Var,
+            surge_ts_syntax::ParsedVariableKind::Let => crate::symbols::SymbolKind::Let,
+            surge_ts_syntax::ParsedVariableKind::Const => crate::symbols::SymbolKind::Const,
+        };
+        let ty = crate::checks::var::widen_implicit_variable_initializer_type(kind, initializer, &ty, false);
+        let _ = locals.insert(
+            variable.name.clone(),
+            crate::symbols::SymbolInfo {
+                ty,
+                kind,
+                function_signature: None,
+            },
+        );
+    }
+    let mut yields = crate::checks::function::GeneratorYields::default();
+    for (operand, delegate) in operands {
+        let Some(operand) = operand else {
+            if !yields.yielded.contains(&Type::Undefined) {
+                yields.yielded.push(Type::Undefined);
+            }
+            continue;
+        };
+        let InferredExpression::Known(operand_type) = infer_expression(operand, &locals, ctx) else {
+            return None;
+        };
+        if operand_type.is_unmodelled() {
+            return None;
+        }
+        let yielded = if delegate {
+            crate::checks::expr::iterated_element_type(&operand_type)?
+        } else if matches!(
+            operand,
+            surge_ts_syntax::ParsedExpression::ObjectLiteral { .. } | surge_ts_syntax::ParsedExpression::ArrayLiteral { .. }
+        ) {
+            crate::checks::expr::widen_type(&operand_type)
+        } else {
+            operand_type.clone()
+        };
+        let yielded = if is_async { crate::checks::call::awaited_type(&yielded) } else { yielded };
+        if yielded.is_unmodelled() {
+            return None;
+        }
+        if !yields.yielded.contains(&yielded) {
+            yields.yielded.push(yielded);
+        }
+        if delegate {
+            let sent = crate::checks::function::generator_next_type_argument(&operand_type)
+                .unwrap_or(Type::GenuineUnknown);
+            if !yields.sent.contains(&sent) {
+                yields.sent.push(sent);
+            }
+        }
+    }
+    let body_flow = crate::flow::analyze_function_body_flow(body);
+    crate::checks::function::inferred_generator_type(Some(&yields), None, &body_flow, contextual_return, is_async, ctx)
+}
+
 /// A function expression — an object-literal method among them — whose
 /// written return type is a type predicate keeps its written signature on
 /// the handle, as a declared member does (`DeclaredMemberSignature`), so a
@@ -193,6 +296,7 @@ pub(crate) fn with_written_predicate(
             &ctx.file_name,
         ),
         outer_type_arguments: Vec::new(),
+        generic_shape: None,
     }))
 }
 

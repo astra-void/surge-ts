@@ -167,6 +167,8 @@ fn lower_enum_declaration(
             declared_type: Some(ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
                 properties,
                 string_index_type: None,
+                string_index_readonly: false,
+                number_index_readonly: number_index_type.is_some(),
                 number_index_type,
                 call_signature: None,
             call_signature_overloads: Vec::new(),
@@ -179,6 +181,7 @@ fn lower_enum_declaration(
             initializer_span: None,
             declaration_list: None,
             annotated_pattern: None,
+            pattern_excess_properties: Vec::new(),
             enum_members: (!checked_members.is_empty()).then(|| {
                 std::sync::Arc::new(vec![ParsedEnumBody {
                     is_const: declaration.r#const,
