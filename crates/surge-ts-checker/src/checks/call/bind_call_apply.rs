@@ -1,0 +1,297 @@
+//! `call`, `apply` and `bind` on a value with call or construct signatures,
+//! which under `strictBindCallApply` are the lib's `CallableFunction` /
+//! `NewableFunction` members (tsgo's `getPropertyOfTypeEx`). Their
+//! `this: (this: T, ...args: A) => R` parameter is inferred from the receiver
+//! (`inferTypeArguments` infers from the `this` argument first), so `A` is the
+//! receiver's own parameter list and the remaining arguments are checked
+//! against it.
+
+use std::sync::Arc;
+
+use surge_ts_syntax::{ParsedCallArgument, ParsedType, TextSpan as SyntaxTextSpan};
+use surge_ts_types::{
+    FunctionType, ObjectType, OpenTupleType, PropertyMap, Type, union_type, written_tuple_type,
+};
+
+use crate::context::CheckerContext;
+use crate::symbols::SymbolTable;
+
+#[derive(Clone, Copy)]
+enum FunctionInterface {
+    Callable,
+    Newable,
+}
+
+struct BoundCall {
+    signature: FunctionType,
+    result: Type,
+}
+
+/// Checks `f.call(…)`, `f.apply(…)` or `f.bind(…)` against the signature the
+/// lib member instantiates to. `None` when the member is not the lib's (or
+/// surge cannot relate the receiver's parameters position by position), so
+/// the caller resolves the call as before.
+pub(crate) fn check_bind_call_apply(
+    receiver: &Type,
+    property_name: &str,
+    property_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Option<Type>> {
+    let bound = bound_call(receiver, property_name, type_arguments, arguments, ctx)?;
+    Some(
+        super::check_function_type_call(
+            &bound.signature,
+            property_span,
+            call_span,
+            &[],
+            arguments,
+            None,
+            symbols,
+            ctx,
+        )
+        .map(|_| bound.result),
+    )
+}
+
+/// The type [`check_bind_call_apply`] gives the call, for the inference path.
+pub(crate) fn bind_call_apply_result(
+    receiver: &Type,
+    property_name: &str,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    ctx: &CheckerContext,
+) -> Option<Type> {
+    bound_call(receiver, property_name, type_arguments, arguments, ctx).map(|bound| bound.result)
+}
+
+fn bound_call(
+    receiver: &Type,
+    property_name: &str,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    ctx: &CheckerContext,
+) -> Option<BoundCall> {
+    if !ctx.options.strict_bind_call_apply
+        || !type_arguments.is_empty()
+        || !matches!(property_name, "call" | "apply" | "bind")
+    {
+        return None;
+    }
+    let (interface, target) = receiver_signature(receiver, property_name)?;
+    let global_interface = match interface {
+        FunctionInterface::Callable => "globalThis.CallableFunction",
+        FunctionInterface::Newable => "globalThis.NewableFunction",
+    };
+    ctx.lookup_type_declaration(global_interface)?;
+    let invoked = match interface {
+        FunctionInterface::Callable => target.return_type().clone(),
+        FunctionInterface::Newable => Type::Void,
+    };
+    let has_spread = arguments.iter().any(|argument| argument.spread);
+    match property_name {
+        "call" if arguments.is_empty() => Some(BoundCall {
+            signature: arity_only_signature(invoked.clone(), true),
+            result: invoked,
+        }),
+        "call" => Some(BoundCall {
+            signature: with_this_argument(
+                &target,
+                target.parameters().len(),
+                target.is_variadic(),
+                invoked.clone(),
+            ),
+            result: invoked,
+        }),
+        "apply" if has_spread => None,
+        "apply" => {
+            // With `thisArg` alone only `apply<T, R>(this: (this: T) => R,
+            // thisArg: T)` fits; its `this` check (TS2684) is not modelled.
+            let signature = match arguments.len() {
+                1 => FunctionType::new(vec![Type::Any], invoked.clone(), false, 1),
+                2 => FunctionType::new(
+                    vec![Type::Any, apply_arguments_type(&target)?],
+                    invoked.clone(),
+                    false,
+                    2,
+                ),
+                _ => arity_only_signature(invoked.clone(), false),
+            };
+            Some(BoundCall {
+                signature,
+                result: invoked,
+            })
+        }
+        _ if has_spread => None,
+        _ => Some(bind_call(interface, &target, receiver, arguments.len())),
+    }
+}
+
+/// The signature tsgo's `inferFromSignatures` infers `A` and `R` from: the
+/// receiver's last, paired with the member's one `this` signature.
+fn receiver_signature(
+    receiver: &Type,
+    property_name: &str,
+) -> Option<(FunctionInterface, FunctionType)> {
+    let (interface, signature) = match receiver.peeled() {
+        Type::Function(function) => (FunctionInterface::Callable, function),
+        Type::Object(object) => {
+            // A member of its own (or one an index signature answers) is not
+            // the lib's.
+            if object.is_intersection
+                || object.string_index_type.is_some()
+                || object.properties.contains_key(property_name)
+            {
+                return None;
+            }
+            match (object.call_signature(), object.construct_signature()) {
+                (Some(call), _) => (FunctionInterface::Callable, call.clone()),
+                (None, Some(construct)) => (FunctionInterface::Newable, construct.clone()),
+                (None, None) => return None,
+            }
+        }
+        _ => return None,
+    };
+    let last_overload = signature.overloads().map(|overloads| overloads.last().cloned());
+    let signature = match last_overload {
+        Some(last) => last?,
+        None => signature,
+    };
+    // A generic receiver infers from its base signature (`getBaseSignature`),
+    // which surge does not build.
+    let modelled = signature.overloads().is_none()
+        && super::own_type_parameter_names(&signature).is_empty()
+        && !signature.parameters().iter().any(super::type_contains_degradation)
+        && (!signature.is_variadic()
+            || matches!(signature.parameters().last().map(Type::peeled), Some(Type::Array(_))));
+    modelled.then_some((interface, signature))
+}
+
+/// The members' shapes before anything is inferred, which is what an arity
+/// error is reported against: `thisArg` and a rest (`call`, `bind`), or
+/// `thisArg` and an optional argument list (`apply`'s two overloads).
+fn arity_only_signature(result: Type, rest: bool) -> FunctionType {
+    if rest {
+        FunctionType::new(vec![Type::Any, Type::Array(Box::new(Type::Any))], result, true, 1)
+    } else {
+        FunctionType::new(vec![Type::Any, Type::Any], result, false, 1)
+    }
+}
+
+/// `(thisArg: T, ...args: A)` with `A` the receiver's first `count`
+/// parameters, the tuple rest expanded into positions as `getParameterCount`
+/// counts them. `T` is inferred from `thisArg` itself unless the receiver
+/// declares a `this`, which surge's signatures do not keep, so it is `any`.
+fn with_this_argument(
+    target: &FunctionType,
+    count: usize,
+    is_variadic: bool,
+    result: Type,
+) -> FunctionType {
+    let mut parameters = Vec::with_capacity(count + 1);
+    parameters.push(Type::Any);
+    parameters.extend(target.parameters()[..count].iter().cloned());
+    let mut names: Vec<Option<Arc<str>>> = Vec::with_capacity(count + 1);
+    names.push(Some(Arc::from("thisArg")));
+    match target.parameter_names() {
+        Some(written) => names.extend(written[..count].iter().cloned()),
+        None => names.extend(std::iter::repeat_n(None, count)),
+    }
+    let required = target.required_parameter_count().min(count) + 1;
+    FunctionType::new(parameters, result, is_variadic, required).with_parameter_names(names)
+}
+
+/// tsgo's `getRestTypeAtPosition(signature, 0)`: the receiver's parameters as
+/// the tuple `apply` takes, an optional parameter as an optional element.
+fn apply_arguments_type(target: &FunctionType) -> Option<Type> {
+    let parameters = target.parameters();
+    let required = target.required_parameter_count();
+    if !target.is_variadic() {
+        let elements = parameters
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| {
+                if index < required {
+                    parameter.clone()
+                } else {
+                    union_type(vec![parameter.clone(), Type::Undefined])
+                }
+            })
+            .collect();
+        return Some(written_tuple_type(elements, required));
+    }
+    let (rest, fixed) = parameters.split_last()?;
+    if fixed.is_empty() {
+        return Some(rest.clone());
+    }
+    // An open tuple has no optional leading element.
+    if required < fixed.len() {
+        return None;
+    }
+    let Type::Array(element) = rest.peeled() else {
+        return None;
+    };
+    Some(Type::OpenTuple(OpenTupleType {
+        leading: fixed.to_vec(),
+        rest: element,
+        trailing: Vec::new(),
+    }))
+}
+
+/// `bind`'s two overloads. With `thisArg` alone the first,
+/// `bind<T>(this: T, thisArg: ThisParameterType<T>): OmitThisParameter<T>`,
+/// hands the receiver back. With bound arguments only the second fits: its
+/// `this: (this: T, ...args: [...A, ...B]) => R` splits the receiver's
+/// parameters at `A`'s implied arity (the argument count,
+/// `inferFromObjectTypes`), `A` checks the arguments and `B` is left for the
+/// bound function (`new (...args: B) => R` for `NewableFunction`).
+fn bind_call(
+    interface: FunctionInterface,
+    target: &FunctionType,
+    receiver: &Type,
+    argument_count: usize,
+) -> BoundCall {
+    let bound = match argument_count {
+        0 => {
+            return BoundCall {
+                signature: arity_only_signature(receiver.clone(), true),
+                result: receiver.clone(),
+            };
+        }
+        1 => {
+            return BoundCall {
+                signature: FunctionType::new(vec![Type::Any], receiver.clone(), false, 1),
+                result: receiver.clone(),
+            };
+        }
+        count => count - 1,
+    };
+    let parameters = target.parameters();
+    let variadic = target.is_variadic();
+    let fixed = parameters.len() - usize::from(variadic);
+    let signature = if bound <= fixed {
+        with_this_argument(target, bound, false, Type::Any)
+    } else {
+        with_this_argument(target, parameters.len(), variadic, Type::Any)
+    };
+    let rest_start = bound.min(fixed);
+    let mut bound_function = FunctionType::new(
+        parameters[rest_start..].to_vec(),
+        target.return_type().clone(),
+        variadic,
+        target.required_parameter_count().saturating_sub(rest_start),
+    );
+    if let Some(names) = target.parameter_names() {
+        bound_function = bound_function.with_parameter_names(names[rest_start..].to_vec());
+    }
+    let result = match interface {
+        FunctionInterface::Callable => Type::Function(bound_function),
+        FunctionInterface::Newable => Type::Object(
+            ObjectType::new(PropertyMap::default(), None).with_construct_signature(bound_function),
+        ),
+    };
+    BoundCall { signature, result }
+}

@@ -11,6 +11,11 @@ pub(crate) fn check_computed_property_keys(
     ctx: &mut CheckerContext,
 ) {
     for property in properties {
+        if let Some(key) = property.member_key.as_deref() {
+            let key_span = property.name_span.or(property.span).or(fallback_span);
+            let key_result = evaluate_expression(key, key_span, symbols, ctx);
+            report_invalid_computed_key(&key_result, key_span, ctx);
+        }
         let mut key_type = None;
         if let Some(key) = property.computed_key.as_deref() {
             let key_span = property.name_span.or(property.span).or(fallback_span);
@@ -292,6 +297,14 @@ fn evaluate_expression_unsettled(
                 );
                 if element.spread {
                     super::check_iterable_operand(&element_result, element.span, true, ctx);
+                    super::check_iteration_next_type(
+                        &element_result,
+                        element.span,
+                        &Type::Undefined,
+                        super::IterationSend::Spread,
+                        false,
+                        ctx,
+                    );
                 }
             }
 
@@ -790,6 +803,19 @@ fn evaluate_expression_unsettled(
         ParsedExpression::ClassExpression(class_expression) => InferredExpression::Known(
             crate::program::check_class_expression(class_expression, None, symbols, ctx),
         ),
+        ParsedExpression::Instantiation {
+            expression: instantiated,
+            expression_span,
+            type_arguments,
+            type_arguments_span,
+        } => crate::checks::call::evaluate_instantiation_expression(
+            instantiated,
+            expression_span.or(fallback_span),
+            type_arguments,
+            *type_arguments_span,
+            symbols,
+            ctx,
+        ),
         ParsedExpression::NonNullAssertion {
             expression: asserted_expression,
             span: expression_span,
@@ -882,13 +908,18 @@ fn evaluate_expression_unsettled(
                 );
                 return InferredExpression::Known(Type::Undefined);
             }
-            if let InferredExpression::Known(index_type) = infer_expression(index, symbols, ctx)
-                && super::index_access::report_unusable_index_type(
-                    &index_type,
-                    index_span.or(*object_span).or(fallback_span),
-                    ctx,
-                )
-            {
+            // tsc checks the index whatever the receiver turned out to be
+            // (`checkElementAccessExpression`).
+            if let InferredExpression::Known(index_type) = evaluate_expression(
+                index,
+                index_span.or(*object_span).or(fallback_span),
+                symbols,
+                ctx,
+            ) && super::index_access::report_unusable_index_type(
+                &index_type,
+                index_span.or(*object_span).or(fallback_span),
+                ctx,
+            ) {
                 return InferredExpression::Unknown;
             }
             let inferred_expression = infer_expression(expression, symbols, ctx);
@@ -918,13 +949,31 @@ fn evaluate_expression_unsettled(
                 value_span: *value_span,
             };
             let shadowed_locally = symbols.get_own(target_name).is_some();
-            let _ = crate::checks::assign::check_assignment_with_symbols(
+            if !crate::checks::assign::check_assignment_with_symbols(
                 assignment,
                 symbols,
                 shadowed_locally,
                 ctx,
-            );
+            ) {
+                // tsc checks the value whatever the target turned out to be
+                // (`checkBinaryLikeExpression`); a rejected target lends it no
+                // contextual type.
+                return evaluate_expression(value, *value_span, symbols, ctx);
+            }
             infer_expression(value, symbols, ctx)
+        }
+        // A member write used as a value is checked as the statement form is,
+        // in a scope of its own: what the write narrows is not seen after it.
+        ParsedExpression::MemberAssignment(assignment) => {
+            let mut scopes = crate::symbols::ScopeStack::from_root(
+                symbols.clone_with_reason(TypeCopyReason::ScopeOrContext),
+            );
+            crate::checks::function::check_member_assignment(
+                assignment.as_ref().clone(),
+                &mut scopes,
+                ctx,
+            );
+            infer_expression(&assignment.value, symbols, ctx)
         }
         _ => {
             if let ParsedExpression::Identifier { name, span } = expression
@@ -1348,6 +1397,7 @@ pub(crate) fn literal_shape(expression: &ParsedExpression) -> surge_ts_types::Li
         | ParsedExpression::NonNullAssertion { expression, .. }
         | ParsedExpression::Await { operand: expression, .. }
         | ParsedExpression::Assignment { value: expression, .. } => literal_shape(expression),
+        ParsedExpression::MemberAssignment(assignment) => literal_shape(&assignment.value),
         ParsedExpression::Sequence { expressions } => expressions
             .last()
             .map_or(LiteralShape::Regular, |(expression, _)| literal_shape(expression)),
@@ -1376,7 +1426,8 @@ pub(crate) fn literal_shape(expression: &ParsedExpression) -> surge_ts_types::Li
 /// type and must be assignable to it (an async generator's once awaited; a
 /// bare `yield` yields `undefined`, a `yield*` what its operand iterates).
 /// Outside a generator the operand is not checked. What the expression
-/// produces is the declared next type, which surge leaves `any`.
+/// produces is the declared next type (`any` without an annotation), and for a
+/// `yield*` what its operand's iterator returns.
 fn evaluate_yield_expression(
     operand: Option<&ParsedExpression>,
     operand_span: Option<SyntaxTextSpan>,
@@ -1387,6 +1438,11 @@ fn evaluate_yield_expression(
 ) -> InferredExpression {
     if !ctx.in_generator_function {
         return InferredExpression::Known(Type::Any);
+    }
+    if let Some(span) = span
+        && ctx.implicit_any_yields.contains(&span.start)
+    {
+        ctx.push(diagnostic_with_syntax_span(Diagnostic::ts7057(ctx.file_name.clone()), Some(span)));
     }
     let yield_type = ctx
         .generator_yield_type
@@ -1399,6 +1455,13 @@ fn evaluate_yield_expression(
         Some(yield_type) if !delegate && !ctx.in_async_body => yield_type.clone(),
         _ => Type::Unknown,
     };
+    // A `yield` evaluates to the annotated generator's next type
+    // (`getIterationTypeOfGeneratorFunctionReturnType(Next)`), `any` without one.
+    let next_type = ctx
+        .generator_next_type
+        .clone()
+        .filter(is_modelled_iteration_type)
+        .unwrap_or(Type::Any);
     let Some(operand) = operand else {
         if let Some(yield_type) = yield_type
             && surge_ts_types::strict_null_checks()
@@ -1407,7 +1470,7 @@ fn evaluate_yield_expression(
             let diagnostic = Diagnostic::ts2322("undefined", yield_type.name(), ctx.file_name.clone());
             ctx.push(diagnostic_with_syntax_span(diagnostic, span));
         }
-        return InferredExpression::Known(Type::Any);
+        return InferredExpression::Known(next_type);
     };
     let evaluated = crate::checks::expected::evaluate_expression_with_expected_type(
         operand,
@@ -1417,6 +1480,39 @@ fn evaluate_yield_expression(
         symbols,
         ctx,
     );
+    // `getYieldedTypeOfYieldExpression` iterates a `yield*` operand whether or
+    // not the generator is annotated; an async generator's may be async or
+    // sync iterable.
+    if delegate {
+        if ctx.in_async_generator {
+            super::check_async_iterable_operand(&evaluated, operand_span, false, ctx);
+        } else if ctx.ambient_global_type_declarations.get("Iterable").is_some() {
+            super::check_iterable_operand(&evaluated, operand_span, true, ctx);
+        }
+        // What the delegate is resumed with is what this generator is; with
+        // no annotation that is `any`, which every `next` accepts.
+        if let Some(sent) = ctx.generator_next_type.clone().filter(is_modelled_iteration_type) {
+            let allow_async = ctx.in_async_generator;
+            super::check_iteration_next_type(
+                &evaluated,
+                operand_span,
+                &sent,
+                super::IterationSend::YieldStar,
+                allow_async,
+                ctx,
+            );
+        }
+    }
+    // A `yield*` evaluates to what its operand's iterator returns
+    // (`getIterationTypeOfIterable(Return)`), annotated generator or not.
+    let delegated_return = match &evaluated {
+        InferredExpression::Known(operand_type) if delegate => {
+            crate::checks::function::generator_return_type_argument(operand_type)
+                .filter(is_modelled_iteration_type)
+                .map(|ty| if ctx.in_async_body { crate::checks::call::awaited_type(&ty) } else { ty })
+        }
+        _ => None,
+    };
     if let (Some(yield_type), InferredExpression::Known(operand_type)) = (yield_type, evaluated) {
         let yielded = if delegate { iterated_element_type(&operand_type) } else { Some(operand_type) };
         if let Some(yielded) = yielded {
@@ -1424,7 +1520,17 @@ fn evaluate_yield_expression(
             crate::checks::var::report_initializer_mismatch(&yielded, &yield_type, operand_span, ctx);
         }
     }
-    InferredExpression::Known(Type::Any)
+    if delegate {
+        return InferredExpression::Known(delegated_return.unwrap_or(Type::Any));
+    }
+    InferredExpression::Known(next_type)
+}
+
+/// An iteration type argument surge can hand on as a value's type: not the
+/// degradation sentinel, an error, or a type parameter. A written `unknown`
+/// is kept.
+fn is_modelled_iteration_type(ty: &Type) -> bool {
+    !matches!(ty, Type::Unknown | Type::ErrorType | Type::TypeParameter(_))
 }
 
 /// tsc's `checkImportCallExpression`: the specifier must be a `string` — a
@@ -1788,21 +1894,34 @@ fn evaluate_type_assertion(
                     ctx,
                 )
             };
-            // TS2352 between object types is withheld: the comparable relation
-            // is only as good as surge's structural expansion of a library's
-            // generic types, and on real code (zod's
-            // `issue as errors.$ZodStringFormatIssues`) that produced 54 false
-            // positives against a project that was otherwise diagnostic-exact.
-            // Between primitives and their literals no expansion is involved.
-            // A `null` or `undefined` operand has no structure to expand, so
-            // any fully modelled target is judged.
-            if let InferredExpression::Known(source_type) = &source
+            // tsc relates every assertion. surge judges the pairs it models:
+            // primitives and their literals, a `null` or `undefined` operand
+            // against a modelled target, and any two types free of degradation
+            // and of the body's type variables. An array literal is inferred
+            // here as the array tsc's contextual typing would have made a
+            // tuple, so it is only judged as a primitive pair.
+            let asserted_source = match asserted_expression.as_ref() {
+                ParsedExpression::ObjectLiteral { .. } => {
+                    super::assertion::object_literal_own_type(asserted_expression, symbols, ctx)
+                }
+                ParsedExpression::Identifier { name, .. } => match &source {
+                    InferredExpression::Known(narrowed) => symbols
+                        .declared_type(name)
+                        .and_then(|declared| super::assertion::member_narrowing_undone(narrowed, declared))
+                        .map_or(source, InferredExpression::Known),
+                    _ => source,
+                },
+                _ => source,
+            };
+            if let InferredExpression::Known(source_type) = &asserted_source
                 && ((is_primitive_assertion_side(source_type) && is_primitive_assertion_side(&resolved_type))
                     || (surge_ts_types::strict_null_checks()
                         && matches!(source_type, Type::Null | Type::Undefined)
-                        && !crate::checks::function::type_contains_degradation(&resolved_type)))
+                        && !crate::checks::function::type_contains_degradation(&resolved_type))
+                    || (!matches!(asserted_expression.as_ref(), ParsedExpression::ArrayLiteral { .. })
+                        && super::assertion::assertion_sides_modelled(source_type, &resolved_type)))
             {
-                super::assertion::check_assertion_overlap(&source, &resolved_type, fallback_span, ctx);
+                super::assertion::check_assertion_overlap(&asserted_source, &resolved_type, fallback_span, ctx);
             }
         }
     }

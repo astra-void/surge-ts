@@ -332,6 +332,9 @@ pub(crate) fn resolve_function_type(
     {
         resolved_function = resolved_function.with_declaration(std::sync::Arc::new(declared));
     }
+    if function_type.type_parameters.is_empty() {
+        resolved_function = crate::checks::call::declared_without_type_parameters(resolved_function);
+    }
     ResolvedType {
         ty: Type::Function(resolved_function),
         had_error,
@@ -436,13 +439,13 @@ pub(crate) fn resolve_function_type_lazy_components(
         &local_substitution,
     );
     had_error |= return_type.had_error;
+    let mut resolved_function =
+        alloc_function_type(parameters, return_type.ty, is_variadic, required_parameter_count);
+    if function_type.type_parameters.is_empty() {
+        resolved_function = crate::checks::call::declared_without_type_parameters(resolved_function);
+    }
     ResolvedType {
-        ty: Type::Function(alloc_function_type(
-            parameters,
-            return_type.ty,
-            is_variadic,
-            required_parameter_count,
-        )),
+        ty: Type::Function(resolved_function),
         had_error,
     }
 }
@@ -502,6 +505,30 @@ pub(crate) fn resolve_function_type_parameter(
 /// payload is `Arc`-backed, so cloning a member annotation is a refcount bump
 /// while unwrapping the shared object literal would deep-copy its whole
 /// property list on each of the hundreds of thousands of resolutions.
+/// A fold of same-named type-literal members is whichever overload it equals,
+/// handle and all, and carries no member list: one marked as taking no type
+/// arguments must not answer for a group whose members differ in that.
+fn without_mixed_arity_marker(
+    merged: surge_ts_types::FunctionType,
+    left: &surge_ts_types::FunctionType,
+    right: &surge_ts_types::FunctionType,
+) -> surge_ts_types::FunctionType {
+    let takes_none = |function: &surge_ts_types::FunctionType| {
+        function.declaration().is_some_and(|declaration| {
+            declaration.is::<crate::checks::call::DeclaredWithoutTypeParameters>()
+        })
+    };
+    if !takes_none(&merged) || (takes_none(left) && takes_none(right)) {
+        return merged;
+    }
+    alloc_function_type(
+        merged.parameters().to_vec(),
+        merged.return_type().clone(),
+        merged.is_variadic(),
+        merged.required_parameter_count(),
+    )
+}
+
 pub(crate) fn resolve_object_type(
     object_type: &ParsedObjectType,
     ctx: &mut CheckerContext,
@@ -530,8 +557,11 @@ pub(crate) fn resolve_object_type(
             && let Type::Function(existing_fn) = &existing.ty
             && let Type::Function(incoming) = &property_type.ty
         {
-            let merged =
-                crate::infer::types::interface::merge_overload_signatures(existing_fn, incoming);
+            let merged = without_mixed_arity_marker(
+                crate::infer::types::interface::merge_overload_signatures(existing_fn, incoming),
+                existing_fn,
+                incoming,
+            );
             let optional = existing.optional && property.optional;
             let method = existing.method || property.is_method;
             properties.insert(

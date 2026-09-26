@@ -281,14 +281,43 @@ pub(super) fn resolve_indexed_access_type(
         };
     }
 
+    // tsc defers an indexed access type whose object is a type variable
+    // (`shouldDeferIndexedAccessType`): `T[K]` in a generic body is a type of
+    // its own, related through its constraint rather than resolved here. An
+    // instantiation re-resolves the node with the variables substituted, which
+    // is no longer the body's own access.
+    let deferred_access = || {
+        (!instantiating)
+            .then(|| {
+                surge_ts_types::type_variable::indexed_access_variable(&resolved_object.ty, &resolved_index.ty)
+            })
+            .flatten()
+    };
     if (object_placeholder_name.is_some() && index_is_valid_generic_key)
         || involves_constrained_type_parameter
     {
+        if let Some(deferred) = deferred_access() {
+            if generic_indexed_access {
+                record_generic_indexed_access_success();
+            }
+            return ResolvedType {
+                ty: deferred,
+                had_error: false,
+            };
+        }
         if generic_indexed_access {
             record_generic_indexed_access_unknown_fallback();
         }
         return ResolvedType {
             ty: Type::Unknown,
+            had_error: false,
+        };
+    }
+    if object_placeholder_name.is_none()
+        && let Some(deferred) = deferred_access()
+    {
+        return ResolvedType {
+            ty: deferred,
             had_error: false,
         };
     }

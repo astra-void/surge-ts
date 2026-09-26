@@ -20,12 +20,16 @@ use crate::spans::diagnostic_with_syntax_span;
 use crate::symbols::{FunctionSignatureInfo, SymbolTable};
 
 mod builtins;
+mod bind_call_apply;
 pub(crate) mod construct;
 mod instantiate;
+mod instantiation_expression;
 pub(crate) mod property;
 
 pub(crate) use builtins::*;
+pub(crate) use bind_call_apply::{bind_call_apply_result, check_bind_call_apply};
 pub(crate) use instantiate::*;
+pub(crate) use instantiation_expression::*;
 pub(crate) use property::*;
 pub(crate) fn check_call(call: ParsedCall, ctx: &mut CheckerContext) {
     let symbols = ctx
@@ -1304,6 +1308,18 @@ fn check_new_like_unrecorded(
                 Type::Object(object) => object.construct_signature().cloned(),
                 _ => None,
             });
+            // `resolveCall` reports written type arguments no construct
+            // signature takes (TS2558), and relates no argument to them.
+            let type_arity_reported = !type_arguments.is_empty()
+                && construct_signature.as_ref().is_some_and(|signature| {
+                    report_type_argument_arity(
+                        &Type::Function(signature.clone()),
+                        type_arguments,
+                        type_arguments_start(callee_span),
+                        false,
+                        ctx,
+                    )
+                });
 
             // Resolve the constructor's type arguments: explicit `new Promise<void>()`
             // first, else infer from a contextual expected type that is a reference
@@ -1340,6 +1356,15 @@ fn check_new_like_unrecorded(
                     .as_ref()
                     .map(|(_, arguments)| arguments.clone())
             });
+
+            if type_arity_reported {
+                ctx.degraded_expected_type_depth += 1;
+                for argument in arguments {
+                    let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+                }
+                ctx.degraded_expected_type_depth -= 1;
+                return None;
+            }
 
             // Check the arguments against the construct signature so callback
             // parameters get contextual types instead of collapsing to implicit
@@ -1482,6 +1507,22 @@ fn check_new_like_unrecorded(
                 .construct_signature()
                 .expect("construct signature present")
                 .clone();
+            if !type_arguments.is_empty()
+                && report_type_argument_arity(
+                    &Type::Function(construct_signature.clone()),
+                    type_arguments,
+                    type_arguments_start(callee_span),
+                    false,
+                    ctx,
+                )
+            {
+                ctx.degraded_expected_type_depth += 1;
+                for argument in arguments {
+                    let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+                }
+                ctx.degraded_expected_type_depth -= 1;
+                return None;
+            }
             check_function_type_call(
                 &construct_signature,
                 callee_span,
@@ -2802,6 +2843,29 @@ fn report_type_argument_arities(
     true
 }
 
+/// The declaration record of a signature written with no type parameters of
+/// its own (`f(x: number)` in a class, interface or type literal). tsgo's
+/// signature knows it takes no type arguments wherever it is reached; the
+/// resolved handle otherwise carries neither a declaration nor a rendered
+/// list to say so, and `c.f<string>(1)` went unchecked (TS2558).
+pub(crate) struct DeclaredWithoutTypeParameters;
+
+/// `function`, resolved from a written signature that declares no type
+/// parameters, marked as taking no type arguments. A handle that already
+/// records its declaration keeps it.
+pub(crate) fn declared_without_type_parameters(function: FunctionType) -> FunctionType {
+    static DECLARED: std::sync::LazyLock<std::sync::Arc<dyn std::any::Any + Send + Sync>> =
+        std::sync::LazyLock::new(|| {
+            let declared: std::sync::Arc<dyn std::any::Any + Send + Sync> =
+                std::sync::Arc::new(DeclaredWithoutTypeParameters);
+            declared
+        });
+    if function.declaration().is_some() || function.type_parameter_head().is_some() {
+        return function;
+    }
+    function.with_declaration(std::sync::Arc::clone(&*DECLARED))
+}
+
 /// How many type arguments a signature takes, (without defaults, all): from
 /// its declaration when the handle carries one, else from its rendered
 /// type-parameter list. A signature with neither is generic only if its
@@ -2814,6 +2878,8 @@ fn signature_type_argument_arity(function: &FunctionType, shape_decides: bool) -
             &member.signature.type_parameters
         } else if let Some(signature) = declaration.downcast_ref::<crate::symbols::FunctionSignatureInfo>() {
             &signature.type_parameters
+        } else if declaration.is::<DeclaredWithoutTypeParameters>() {
+            return Some((0, 0));
         } else {
             return None;
         };
@@ -4197,7 +4263,22 @@ pub(crate) fn is_open_instantiation(ty: &Type) -> bool {
             _ => false,
         }
     }
-    matches!(ty, Type::Reference(reference) if reference.arguments.iter().any(argument_is_open))
+    let Type::Reference(reference) = ty else {
+        return false;
+    };
+    // The lib promise is related through its one argument, covariantly, so a
+    // type variable of the body being checked settles it: `Promise<T>` inside
+    // `f<T>` is as checkable as the `T` it resolves to.
+    if reference.arguments.len() == 1
+        && matches!(reference.display.split('<').next(), Some("Promise" | "PromiseLike"))
+        && promise_nominal_enabled()
+    {
+        return reference
+            .arguments
+            .iter()
+            .any(|argument| !argument.is_type_variable() && argument_is_open(argument));
+    }
+    reference.arguments.iter().any(argument_is_open)
 }
 
 /// Whether `function` declares type parameters of its own. Such a signature is

@@ -508,6 +508,21 @@ pub(crate) fn report_missing_element(
         ));
         return;
     }
+    // `getPropertyTypeForIndexType` skips the implicit-`any` reports for a
+    // const enum's object (`isConstEnumObjectType`): a literal key it lacks is
+    // TS2339 on the index, whatever the options.
+    if let Some(receiver) = site.receiver_text.as_deref()
+        && crate::infer::expression::is_const_enum_object(receiver, object_type, ctx)
+    {
+        if matches!(key_type, Type::StringLiteral(_) | Type::NumberLiteral(_)) {
+            let file_name = ctx.file_name.clone();
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2339(key, object_type.name(), file_name),
+                key_span.or(access_span),
+            ));
+        }
+        return;
+    }
     if !ctx.options.no_implicit_any {
         return;
     }

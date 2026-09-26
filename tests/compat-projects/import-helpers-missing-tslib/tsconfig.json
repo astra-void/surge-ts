@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "target": "es2015",
+    "module": "commonjs",
+    "importHelpers": true,
+    "experimentalDecorators": true,
+    "strict": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}

@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use surge_ts_syntax::ParsedExpression;
 use surge_ts_types::{
-    NumberLiteralType, ObjectProperty, ObjectType, PropertyMap, Type, union_type,
+    NumberLiteralType, ObjectProperty, ObjectType, PropertyMap, Type, TypeCopyReason, union_type,
 };
 
 use crate::context::CheckerContext;
@@ -365,6 +365,9 @@ fn infer_expression_unsettled(
             ctx,
         ),
         ParsedExpression::Assignment { value, .. } => infer_expression(value, symbols, ctx),
+        ParsedExpression::MemberAssignment(assignment) => {
+            infer_expression(&assignment.value, symbols, ctx)
+        }
         ParsedExpression::NullishCoalescing { left, right, .. } => {
             let left_type = infer_expression(left, symbols, ctx);
             let right_type = match &left_type {
@@ -422,9 +425,17 @@ fn infer_expression_unsettled(
         ParsedExpression::ArrowFunction(arrow_function) => InferredExpression::Known(
             Type::Function(infer_arrow_function(arrow_function.as_ref(), symbols, ctx)),
         ),
+        // Resolved where it is written, as the checking pass resolves it, so a
+        // `typeof` query in it sees the enclosing locals (`k as keyof typeof o`).
         ParsedExpression::TypeAssertion {
             expression: _, ty, ..
-        } => InferredExpression::Known(map_parsed_type(ty.clone(), ctx)),
+        } => {
+            let local_symbols = symbols.clone_with_reason(TypeCopyReason::ExpressionInference);
+            let saved_symbols = std::mem::replace(&mut ctx.symbols, local_symbols);
+            let resolved = map_parsed_type(ty.clone(), ctx);
+            ctx.symbols = saved_symbols;
+            InferredExpression::Known(resolved)
+        }
         ParsedExpression::Call {
             callee_name,
             callee_span,
@@ -656,6 +667,7 @@ fn infer_expression_unsettled(
         ParsedExpression::ClassExpression(class_expression) => InferredExpression::Known(
             crate::program::class_expression_type(class_expression, symbols, ctx),
         ),
+        ParsedExpression::Instantiation { expression, .. } => infer_expression(expression, symbols, ctx),
         ParsedExpression::ImportCall { .. } | ParsedExpression::Unknown => InferredExpression::Unknown,
     };
     record_program_timing(ctx.timings.as_ref(), |timings| {

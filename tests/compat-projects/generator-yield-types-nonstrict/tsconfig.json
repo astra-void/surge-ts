@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "strictNullChecks": false,
+    "noImplicitAny": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*"]
+}

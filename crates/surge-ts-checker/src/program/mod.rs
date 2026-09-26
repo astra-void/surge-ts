@@ -24,10 +24,12 @@ mod classes;
 mod forward_references;
 mod heritage;
 mod index_constraints;
+mod late_bound_members;
 mod namespaces;
 mod override_modifiers;
 mod property_initialization;
 pub(crate) mod diagnostics;
+mod emit_helpers;
 mod file_classify;
 mod globals;
 mod parse;
@@ -136,6 +138,9 @@ pub(crate) struct ParsedProgramFile {
     pub(crate) json_module_type: Option<surge_ts_syntax::ParsedType>,
     /// See [`surge_ts_syntax::ParsedSource::jsx_factory_uses`].
     pub(crate) jsx_factory_uses: surge_ts_syntax::JsxFactoryUses,
+    /// What the file asks `tslib` for under `importHelpers`, in the order
+    /// tsc's checker asks (see [`emit_helpers::file_emit_helper_requests`]).
+    pub(crate) emit_helper_requests: Vec<surge_ts_syntax::EmitHelperRequest>,
 }
 
 #[derive(Debug, Clone)]
@@ -165,6 +170,9 @@ pub(crate) struct ProgramCheckSharedState {
     pub(crate) module_analyses: Vec<Option<ModuleAnalysis>>,
     module_import_bindings: Vec<Option<ModuleImportBindings>>,
     pub(crate) module_resolution_scopes: Vec<Option<Arc<TypeDeclarationScope>>>,
+    /// Each file's `importHelpers` diagnostics, by file index; see
+    /// [`emit_helpers::collect_emit_helper_diagnostics`].
+    emit_helper_diagnostics: Vec<Vec<Diagnostic>>,
 }
 
 #[derive(Debug)]
@@ -260,6 +268,7 @@ pub fn check_program_with_prescanned_sources(
     crate::semantic::claim_thread_caches(crate::semantic::next_program_id());
     let store = ProgramTypeStore::new();
     store.set_strict_null_checks(options.strict_null_checks);
+    store.set_exact_optional_property_types(options.exact_optional_property_types);
     with_program_type_store(store.clone(), || {
         check_program_with_stats_and_jobs_inner(files, prescanned, options, jobs, store, false).0
     })
@@ -1235,6 +1244,12 @@ fn finalize_module_bindings(
         &module_resolution_scopes,
         ctx,
     ));
+    let emit_helper_diagnostics = emit_helpers::collect_emit_helper_diagnostics(
+        &parsed_files,
+        &module_export_tables,
+        &module_resolution_scopes,
+        ctx,
+    );
     // The resolved (re-export-expanded) export tables were only consumed by
     // import binding and the JSX namespace modules; the check phase reads the
     // analyses' local export tables through `shared_state`.
@@ -1284,6 +1299,7 @@ fn finalize_module_bindings(
         module_analyses,
         module_import_bindings: merged_module_import_bindings,
         module_resolution_scopes,
+        emit_helper_diagnostics,
     };
     record_rss_stage(
         timings.as_ref(),

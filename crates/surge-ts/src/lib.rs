@@ -319,6 +319,13 @@ impl Project {
                 ),
                 development: loaded.compiler_options.jsx == Some(surge_ts_config::JsxMode::ReactJsxDev),
                 import_source: loaded.compiler_options.jsx_import_source.clone(),
+            })
+            .with_import_helpers(specifier_scan::ImportHelpersScan {
+                enabled: loaded.compiler_options.import_helpers,
+                isolated_modules: loaded.compiler_options.isolated_modules
+                    || loaded.compiler_options.verbatim_module_syntax,
+                force_module_detection: loaded.compiler_options.module_detection
+                    == surge_ts_config::ModuleDetectionKind::Force,
             });
         let mut import_graph_state = import_graph::ImportGraphState::default();
         let mut javascript_modules = Vec::new();
@@ -674,6 +681,7 @@ impl Project {
             node_module_resolution,
             esm_module_files,
             strict_null_checks: loaded.compiler_options.strict_null_checks,
+            strict_bind_call_apply: loaded.compiler_options.strict_bind_call_apply,
             strict_property_initialization: loaded
                 .compiler_options
                 .strict_property_initialization,
@@ -685,11 +693,14 @@ impl Project {
                 .compiler_options
                 .no_property_access_from_index_signature,
             no_unchecked_indexed_access: loaded.compiler_options.no_unchecked_indexed_access,
+            exact_optional_property_types: loaded.compiler_options.exact_optional_property_types,
             // tsc's `GetAllowImportingTsExtensions`.
             allow_importing_ts_extensions: loaded.compiler_options.allow_importing_ts_extensions
                 || loaded.compiler_options.rewrite_relative_import_extensions,
             allow_arbitrary_extensions: loaded.compiler_options.allow_arbitrary_extensions,
             experimental_decorators: loaded.compiler_options.experimental_decorators,
+            import_helpers: loaded.compiler_options.import_helpers,
+            emit_decorator_metadata: loaded.compiler_options.emit_decorator_metadata,
             no_unused_locals: loaded.compiler_options.no_unused_locals,
             no_unused_parameters: loaded.compiler_options.no_unused_parameters,
             allow_unreachable_code: loaded.compiler_options.allow_unreachable_code,

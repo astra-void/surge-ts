@@ -53,9 +53,8 @@ pub(crate) fn infer_index_access(
     match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::ErrorType => InferredExpression::Known(Type::ErrorType),
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
-            InferredExpression::Unknown
-        }
+        Type::TypeParameter(_) => deferred_element_read(&receiver_type, index, symbols, ctx),
+        Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
         // Lowered to its element array above.
         Type::OpenTuple(_) => InferredExpression::Unknown,
         Type::Union(union_type) => {
@@ -162,6 +161,33 @@ pub(crate) fn infer_index_access(
     }
 }
 
+/// tsc's `getIndexedAccessType` for an element access with a generic key
+/// (`shouldDeferIndexedAccessType`): `obj[key]` with `obj: T` and `key: K` is
+/// the deferred `T[K]`, related through its constraint. `None` for a key that
+/// is not generic, which tsc resolves eagerly through the apparent type.
+pub(crate) fn deferred_element_access(receiver: &Type, index: &Type) -> Option<Type> {
+    let generic_index = match index {
+        Type::Union(union) => union.types().iter().any(Type::is_type_variable),
+        other => other.is_type_variable(),
+    };
+    if !receiver.is_type_variable() || !generic_index {
+        return None;
+    }
+    surge_ts_types::type_variable::indexed_access_variable(receiver, index)
+}
+
+fn deferred_element_read(
+    receiver_type: &Type,
+    index: &ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let InferredExpression::Known(index_type) = infer_expression(index, symbols, ctx) else {
+        return InferredExpression::Unknown;
+    };
+    deferred_element_access(receiver_type, &index_type).map_or(InferredExpression::Unknown, InferredExpression::Known)
+}
+
 fn infer_object_element_read(
     receiver_type: &Type,
     index: &ParsedExpression,
@@ -231,12 +257,10 @@ pub(crate) fn infer_tuple_index_access(
         | InferredExpression::Unknown => return InferredExpression::Unknown,
     };
 
+    // `getTupleElementTypeOutOfStartCount`: past a fixed tuple's end the read
+    // is `undefined` (the check reports TS2493).
     if let Some(index_value) = tuple_index_value(&index_type) {
-        return elements
-            .get(index_value)
-            .cloned()
-            .map(InferredExpression::Known)
-            .unwrap_or(InferredExpression::Unknown);
+        return InferredExpression::Known(elements.get(index_value).cloned().unwrap_or(Type::Undefined));
     }
 
     if is_assignable_to(&index_type, &Type::Number) {
@@ -261,15 +285,16 @@ pub(crate) fn indexes_const_enum_object(
         ParsedExpression::TemplateLiteral { expressions, .. } => expressions.is_empty(),
         _ => false,
     };
-    if string_literal_like {
-        return false;
-    }
-    let Some(crate::symbols::TypeDeclarationInfo::Alias(alias)) =
-        ctx.lookup_type_declaration(object_name)
-    else {
+    !string_literal_like && is_const_enum_object(object_name, object_type, ctx)
+}
+
+/// tsc's `isConstEnumObjectType` for a binding: `object_name` names a const
+/// enum and `object_type` is its object, not a value of the same name that
+/// shadows it.
+pub(crate) fn is_const_enum_object(object_name: &str, object_type: &Type, ctx: &CheckerContext) -> bool {
+    let Some(crate::symbols::TypeDeclarationInfo::Alias(alias)) = ctx.lookup_type_declaration(object_name) else {
         return false;
     };
-    // A value of the same name that is not the enum's object shadows it.
     alias.enum_is_const
         && alias.enum_name.as_deref() == Some(object_name)
         && matches!(object_type, Type::Object(object)
@@ -719,6 +744,19 @@ pub(crate) fn infer_property_call(
         return InferredExpression::Known(chained);
     }
 
+    if let Some(result) = crate::checks::call::bind_call_apply_result(
+        &object_type,
+        property_name,
+        type_arguments,
+        arguments,
+        ctx,
+    ) {
+        record_program_timing(ctx.timings.as_ref(), |timings| {
+            timings.property_access_checking += property_call_start.elapsed()
+        });
+        return InferredExpression::Known(result);
+    }
+
     let result = match &object_type {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::ErrorType => InferredExpression::Known(Type::ErrorType),
@@ -1015,6 +1053,7 @@ pub(crate) fn infer_element_access(
         Type::Object(_) | Type::Reference(_) => {
             infer_object_element_read(&object_type, index, symbols, ctx)
         }
+        Type::TypeParameter(_) => deferred_element_read(&object_type, index, symbols, ctx),
         _ => InferredExpression::Unknown,
     }
 }

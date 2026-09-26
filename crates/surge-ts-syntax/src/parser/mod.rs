@@ -12,7 +12,9 @@ use crate::{
 
 mod classes;
 mod commonjs;
+mod emit_helpers;
 mod entry;
+mod enum_values;
 mod enums;
 mod exports;
 mod expressions;
@@ -60,6 +62,7 @@ pub use self::reference_directives::{
 };
 use self::spans::text_span_from_oxc_span;
 use self::types::{parse_type_alias_declaration, parse_type_annotation};
+pub use emit_helpers::{EmitHelperOptions, EmitHelperRequest, emit_helper_requests, external_emit_helpers};
 pub use entry::{ParserWorker, is_declaration_file_name, is_javascript_file_name, parse_source};
 pub use isolated_declarations::{IsolatedDeclarationDiagnostic, isolated_declaration_diagnostics};
 pub use json::{is_json_file_name, parse_json_module_type};
@@ -189,6 +192,16 @@ fn parse_declaration(declaration: &Declaration<'_>) -> Option<Vec<ParsedStatemen
     }
 }
 
+/// The unique symbol a `const` declares: tsc's `TypeFlagsUniqueESSymbol` type
+/// is its declaration's, so the name carries the declaration's offset after a
+/// NUL — `s` and a namespace's `N.s` in one file are different symbols.
+fn unique_symbol_declaration(identifier: &oxc_ast::ast::BindingIdentifier<'_>) -> crate::ParsedType {
+    crate::ParsedType::UniqueSymbol(std::sync::Arc::from(format!(
+        "{}\u{0}{}",
+        identifier.name, identifier.span.start
+    )))
+}
+
 fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<ParsedStatement> {
     let list = std::sync::Arc::new(declaration_list_shape(declaration));
     let kind = match declaration.kind {
@@ -212,9 +225,7 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                             if operator.operator == oxc_ast::ast::TSTypeOperatorOperator::Unique
                     ) =>
                 {
-                    Some(crate::ParsedType::UniqueSymbol(std::sync::Arc::from(
-                        identifier.name.as_str(),
-                    )))
+                    Some(unique_symbol_declaration(identifier))
                 }
                 (_, annotation) => {
                     annotation.and_then(|annotation| parse_type_annotation(annotation))
@@ -238,8 +249,7 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                 else {
                     return None;
                 };
-                is_symbol_constructor_call(init.without_parentheses())
-                    .then(|| crate::ParsedType::UniqueSymbol(std::sync::Arc::from(identifier.name.as_str())))
+                is_symbol_constructor_call(init.without_parentheses()).then(|| unique_symbol_declaration(identifier))
             });
             let Some(init) = declarator.init.as_ref() else {
                 // A destructuring declaration with no initializer — an ambient
@@ -402,6 +412,7 @@ fn annotated_pattern_declarations(
             declarations.push(ParsedStatement::VariableDeclaration(Box::new(
                 ParsedVariableDeclaration {
                     is_enum_object: false,
+                    enum_members: None,
                     array_rest_start: None,
                     is_declare,
                     kind,
@@ -908,6 +919,7 @@ fn parse_binding_pattern_declarations_with_definite(
             vec![ParsedStatement::VariableDeclaration(Box::new(
                 ParsedVariableDeclaration {
                     is_enum_object: false,
+                    enum_members: None,
                     array_rest_start: None,
                     is_declare,
                     kind,

@@ -303,6 +303,7 @@ pub(crate) fn require_call_expression(call: &CallExpression<'_>) -> Option<Parse
             import_specifier: Some(specifier.to_string()),
             member_spans: Vec::new(),
             type_arguments: Vec::new(),
+            type_arguments_span: None,
         })),
         None => ParsedType::Any,
     };
@@ -634,6 +635,7 @@ fn declared_export(
                     has_definite_assertion: false,
                     array_pattern_span: None,
                     is_enum_object: false,
+                    enum_members: None,
                     array_rest_start: None,
                     name: local_name.clone(),
                     name_span,
@@ -709,6 +711,7 @@ pub(crate) fn module_variables(
                 has_definite_assertion: false,
                 array_pattern_span: None,
                 is_enum_object: false,
+                enum_members: None,
                 array_rest_start: None,
                 name: name.to_string(),
                 name_span: None,
@@ -733,6 +736,7 @@ fn own_module_variable_type(name: &str, specifier: &str) -> ParsedType {
         import_specifier: Some(specifier.to_string()),
         member_spans: Vec::new(),
         type_arguments: Vec::new(),
+        type_arguments_span: None,
     }));
     if name == "exports" {
         return module;

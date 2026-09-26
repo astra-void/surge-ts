@@ -53,6 +53,10 @@ pub(crate) fn report_unresolved_value_name(
     {
         return;
     }
+    // Where a type-only import is a valid use, it resolves and is not reported.
+    if ctx.type_only_alias_use_valid && ctx.type_only_value_reference(name).is_some() {
+        return;
+    }
     let site = if site == UnresolvedNameSite::Reference && ctx.shorthand_property_depth > 0 {
         UnresolvedNameSite::ShorthandProperty
     } else {

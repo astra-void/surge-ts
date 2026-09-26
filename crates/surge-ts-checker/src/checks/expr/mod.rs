@@ -25,11 +25,12 @@ pub(crate) use evaluate::*;
 pub(crate) use guarded_unknown::downgrade_guarded_genuine_unknown;
 use guarded_unknown::downgrade_predicate_guarded_genuine_unknown;
 use index_access::*;
-pub(crate) use index_access::{object_element_read, report_unusable_index_type};
+pub(crate) use index_access::{object_element_read, report_invalid_deferred_index, report_unusable_index_type};
 pub(crate) use inferred::*;
 pub(crate) use lib_features::{lib_feature_of_missing_member, suggested_lib_for_nonexistent_name};
 pub(crate) use operand_types::{
-    check_instanceof_left_operand, check_instanceof_right_operand, check_iterable_operand,
+    IterationSend, check_async_iterable_operand, check_instanceof_left_operand,
+    check_instanceof_right_operand, check_iterable_operand, check_iteration_next_type,
     check_object_spread_type,
     is_definitely_not_iterable,
 };
@@ -119,8 +120,9 @@ pub(crate) fn assignability_mismatch_diagnostic(
 }
 
 /// TS2345, or the report that replaces its head: TS4104 (see
-/// [`readonly_to_mutable_mismatch`]) or a missing-property report (see
-/// [`missing_properties_report`]).
+/// [`readonly_to_mutable_mismatch`]), a missing-property report (see
+/// [`missing_properties_report`]) or TS2379 (see
+/// [`has_exact_optional_unassignable_property`]).
 pub(crate) fn argument_not_assignable_diagnostic(
     source: &Type,
     target: &Type,
@@ -137,7 +139,11 @@ pub(crate) fn argument_not_assignable_diagnostic(
     }
     missing_properties_report(source, target, source_name, target_name, &file_name)
         .unwrap_or_else(|| {
-            surge_ts_diagnostics::Diagnostic::ts2345(source_name, target_name, file_name)
+            if has_exact_optional_unassignable_property(source, target) {
+                surge_ts_diagnostics::Diagnostic::ts2379(source_name, target_name, file_name)
+            } else {
+                surge_ts_diagnostics::Diagnostic::ts2345(source_name, target_name, file_name)
+            }
         })
 }
 
@@ -390,6 +396,9 @@ pub(crate) fn type_not_assignable_diagnostic(
     {
         return diagnostic;
     }
+    if has_exact_optional_unassignable_property(source, target) {
+        return surge_ts_diagnostics::Diagnostic::ts2375(source_name, target_name, file_name);
+    }
     match suggested_string_literal_member(source, target) {
         Some(suggestion) => surge_ts_diagnostics::Diagnostic::ts2820(
             source_name,
@@ -399,6 +408,73 @@ pub(crate) fn type_not_assignable_diagnostic(
         ),
         None => surge_ts_diagnostics::Diagnostic::ts2322(source_name, target_name, file_name),
     }
+}
+
+/// tsc's `getExactOptionalUnassignableProperties` is not empty: under
+/// `exactOptionalPropertyTypes` some optional property of `target` declared
+/// without `undefined` would read a `source` value that may be `undefined`
+/// (`isExactOptionalPropertyMismatch`). Two tuples never qualify.
+pub(crate) fn has_exact_optional_unassignable_property(source: &Type, target: &Type) -> bool {
+    if !surge_ts_types::exact_optional_property_types() {
+        return false;
+    }
+    let target = target.peeled();
+    let is_tuple = |ty: &Type| matches!(ty, Type::Tuple(_) | Type::OpenTuple(_));
+    if is_tuple(&target) && is_tuple(&source.peeled()) {
+        return false;
+    }
+    let Type::Object(target_object) = target else {
+        return false;
+    };
+    target_object.properties.iter().any(|(name, property)| {
+        is_exact_optional_slot(&property.ty, property.is_optional())
+            && source
+                .get_property_access_type(name)
+                .is_some_and(|read| may_be_undefined(&read))
+    })
+}
+
+/// Whether an optional property declared `ty` reads `ty` plus tsc's missing
+/// type under `exactOptionalPropertyTypes` (`containsMissingType`): its
+/// declared type holds no `undefined` of its own and does not absorb one.
+pub(crate) fn is_exact_optional_slot(ty: &Type, optional: bool) -> bool {
+    optional
+        && surge_ts_types::exact_optional_property_types()
+        && !matches!(
+            ty,
+            Type::Any | Type::Unknown | Type::GenuineUnknown | Type::ErrorType | Type::TypeParameter(_)
+        )
+        && !may_be_undefined(ty)
+}
+
+/// tsc's `maybeTypeOfKind(t, TypeFlagsUndefined)`, through a few alias links.
+pub(crate) fn may_be_undefined(ty: &Type) -> bool {
+    fn walk(ty: &Type, depth: usize) -> bool {
+        match ty {
+            Type::Undefined => true,
+            Type::Union(union) => union.types().iter().any(|member| walk(member, depth)),
+            Type::Reference(reference) if depth < 4 && reference.enum_owner.is_none() => {
+                walk(&ty.peeled(), depth + 1)
+            }
+            _ => false,
+        }
+    }
+    walk(ty, 0)
+}
+
+/// `getWriteTypeOfSymbol` for an optional property under
+/// `exactOptionalPropertyTypes`: its declared type, without the `undefined` a
+/// read of it adds. `None` for any other member, whose write type is its read
+/// type.
+pub(crate) fn exact_optional_write_type(receiver: &Type, property_name: &str) -> Option<Type> {
+    if !surge_ts_types::exact_optional_property_types() {
+        return None;
+    }
+    let Type::Object(object) = receiver.peeled() else {
+        return None;
+    };
+    let property = object.properties.get(property_name)?;
+    is_exact_optional_slot(&property.ty, property.is_optional()).then(|| property.ty.clone())
 }
 
 /// tsc's `getSuggestedTypeForNonexistentStringLiteralType`.

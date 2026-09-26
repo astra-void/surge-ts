@@ -591,7 +591,18 @@ pub(crate) fn apply_expando_members(
     let mut define_properties = Vec::new();
     for statement in statements {
         match statement {
-            ParsedStatement::MemberAssignment(assignment) => assignments.push(assignment.as_ref()),
+            // `F.a = F.b = v` declares both members (tsc binds every
+            // `F.x = …` wherever it sits in the container).
+            ParsedStatement::MemberAssignment(assignment) => {
+                let mut chained = Some(assignment.as_ref());
+                while let Some(assignment) = chained {
+                    assignments.push(assignment);
+                    chained = match &assignment.value {
+                        surge_ts_syntax::ParsedExpression::MemberAssignment(inner) => Some(inner.as_ref()),
+                        _ => None,
+                    };
+                }
+            }
             ParsedStatement::If(if_statement) => {
                 collect_nested_member_assignments(&if_statement.then_body, &[], &mut assignments);
                 collect_nested_member_assignments(&if_statement.else_body, &[], &mut assignments);
@@ -1181,6 +1192,7 @@ fn hoisted_nested_vars(statements: &[ParsedStatement]) -> Vec<ParsedStatement> {
                                 has_definite_assertion: false,
                                 array_pattern_span: None,
                                 is_enum_object: false,
+                                enum_members: None,
                                 array_rest_start: None,
                                 name: name.clone(),
                                 name_span: *span,

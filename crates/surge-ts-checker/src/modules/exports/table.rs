@@ -105,6 +105,7 @@ fn nested_vars(
                             has_definite_assertion: false,
                             array_pattern_span: None,
                             is_enum_object: false,
+                            enum_members: None,
                             array_rest_start: None,
                             name: name.clone(),
                             name_span: *span,
@@ -1328,6 +1329,24 @@ pub(crate) fn resolve_module_export_table(
         };
 
         ctx.set_file_name(parsed_file.file_name.clone());
+
+        // `checkExportDeclaration`: a module whose exports are its `export =`
+        // has no named exports to re-export.
+        if target_export_table.export_assignment_symbol.is_some()
+            || target_export_table
+                .type_declarations
+                .iter()
+                .any(|(name, _)| crate::modules::is_export_assignment_key(name))
+        {
+            let diagnostic = Diagnostic::ts2498(
+                format!("\"{module_specifier}\""),
+                ctx.file_name.clone(),
+            );
+            ctx.push(match module_specifier_span {
+                Some(span) => diagnostic.with_span(crate::context::convert_span(*span)),
+                None => diagnostic,
+            });
+        }
 
         let resolved_type_declarations =
             Arc::make_mut(&mut resolved_export_table.type_declarations);

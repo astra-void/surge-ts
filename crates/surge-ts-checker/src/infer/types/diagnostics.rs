@@ -442,12 +442,17 @@ fn suggested_type_name(name: &str, ctx: &CheckerContext) -> Option<String> {
     if name.contains('.') {
         return None;
     }
+    // `resolveNameHelper` walks the enclosing namespaces' locals too; surge
+    // keys their members `ns.Member`.
+    let prefixes = &ctx.namespace_member_prefix_stack;
     let mut candidates: Vec<&str> = ctx
         .type_declarations
         .iter()
         .chain(ctx.ambient_global_type_declarations.iter())
         .map(|(candidate, _)| candidate.as_ref())
-        .filter(|candidate| !candidate.contains(['.', '\0']))
+        .filter_map(|candidate| {
+            if candidate.contains(['.', '\0']) { namespace_member(candidate, prefixes) } else { Some(candidate) }
+        })
         .chain(
             ctx.type_parameter_scopes
                 .iter()
@@ -457,6 +462,15 @@ fn suggested_type_name(name: &str, ctx: &CheckerContext) -> Option<String> {
     candidates.sort_unstable();
     candidates.dedup();
     crate::checks::expr::spelling_suggestion(name, candidates, 0).map(str::to_string)
+}
+
+fn namespace_member<'a>(candidate: &'a str, prefixes: &[String]) -> Option<&'a str> {
+    prefixes.iter().find_map(|prefix| {
+        candidate
+            .strip_prefix(prefix.as_str())?
+            .strip_prefix('.')
+            .filter(|member| !member.contains(['.', '\0']))
+    })
 }
 
 pub(crate) fn emit_type_is_not_generic(

@@ -244,7 +244,10 @@ pub(crate) fn check_type_literal_index_constraints(
         if crate::checks::function::type_contains_degradation(&property.ty) {
             continue;
         }
-        let property_type = if property.optional && surge_ts_types::strict_null_checks() {
+        let property_type = if property.optional
+            && surge_ts_types::strict_null_checks()
+            && !surge_ts_types::exact_optional_property_types()
+        {
             union_type(vec![property.ty.clone(), Type::Undefined])
         } else {
             property.ty.clone()
@@ -313,7 +316,10 @@ fn check_index_constraints_in_scope(declaration: &IndexConstraintDeclaration<'_>
             .iter()
             .find(|(member, _)| **member == **name)
             .map(|(_, span)| *span);
-        let property_type = if property.optional && surge_ts_types::strict_null_checks() {
+        let property_type = if property.optional
+            && surge_ts_types::strict_null_checks()
+            && !surge_ts_types::exact_optional_property_types()
+        {
             union_type(vec![property.ty.clone(), Type::Undefined])
         } else {
             property.ty.clone()

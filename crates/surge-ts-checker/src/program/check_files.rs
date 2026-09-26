@@ -19,7 +19,7 @@ use super::{
     apply_comment_directives, emit_unsupported_declaration_diagnostics,
     extend_diagnostics_dedup, module_scope_declared_names,
 };
-use crate::context::{CheckerContext, CompatibilityStats};
+use crate::context::{CheckerContext, CompatibilityStats, FileKind};
 use crate::driver::validate_direct_utility_aliases;
 use crate::driver::validate_local_type_declarations;
 use crate::symbols::{TypeDeclarationScope, clone_symbol_info_handle};
@@ -1226,7 +1226,12 @@ fn grammar_finding_diagnostic(
         Kind::NamedSignatureParameterWithoutType | Kind::ComputedTypeMemberName => return None,
         Kind::Ts(1202) if !ctx.options.module_emit.is_ecmascript() => return None,
         Kind::Ts(1203) if !export_assignment_targets_esm(ctx) => return None,
-        Kind::Ts(2699) if ctx.options.use_define_for_class_fields => return None,
+        Kind::Ts(2699)
+            if ctx.options.use_define_for_class_fields
+                && !finding.name.as_deref().is_some_and(|name| name.starts_with("prototype\0")) =>
+        {
+            return None;
+        }
         Kind::Ts(2301 | 2376 | 2401) if ctx.options.emit_standard_class_fields() => return None,
         // `errorSkippedOnNoEmit`: the CommonJS wrapper's names only collide
         // when the file is emitted.
@@ -1484,7 +1489,10 @@ pub(crate) fn check_program_file(
         };
     }
 
-    if parsed_file.file_kind.is_declaration() {
+    // tsc's `checkSourceFile` checks a declaration file like any other unless
+    // `skipLibCheck` skips it. A package's, a generated one's and a default
+    // library's report only what binding them does.
+    if parsed_file.file_kind.is_declaration() && parsed_file.file_kind != FileKind::RootDeclaration {
         emit_bind_diagnostics(parsed_file, ctx);
         emit_grammar_diagnostics(&parsed_file.grammar_diagnostics, ctx);
         emit_unsupported_declaration_diagnostics(&parsed_file.statements, ctx);
@@ -1497,6 +1505,16 @@ pub(crate) fn check_program_file(
             stats,
         };
     }
+
+    let ambient_file;
+    let parsed_file = if parsed_file.file_kind == FileKind::RootDeclaration {
+        let mut file = parsed_file.clone();
+        super::make_declaration_file_ambient(&mut file.statements);
+        ambient_file = file;
+        &ambient_file
+    } else {
+        parsed_file
+    };
 
     emit_bind_diagnostics(parsed_file, ctx);
     emit_grammar_diagnostics(&parsed_file.grammar_diagnostics, ctx);
@@ -1517,6 +1535,9 @@ pub(crate) fn check_program_file(
     ctx.let_assignments = parsed_file.let_assignments.clone();
     ctx.jsx_factory_uses = parsed_file.jsx_factory_uses.clone();
     crate::checks::jsx::check_jsx_runtime_import(ctx);
+    for diagnostic in shared_state.emit_helper_diagnostics.get(file_index).into_iter().flatten() {
+        ctx.push(diagnostic.clone());
+    }
 
     if parsed_file.is_module {
         let Some(module_analysis) = shared_state.module_analyses[file_index].as_ref() else {
@@ -1609,6 +1630,11 @@ pub(crate) fn check_program_file(
                 .flat_map(|bindings| bindings.type_only_aliases.iter().cloned())
                 .filter(|(name, _)| !module_declared.contains(name.as_ref())),
         );
+        ctx.file_type_only_import_handles = imported_bindings
+            .into_iter()
+            .flat_map(|bindings| bindings.symbols.iter_shared())
+            .filter_map(|(name, _)| Some((name.clone(), ctx.symbols.get_own_handle(name)?)))
+            .collect();
         ctx.set_file_complete_namespace_import_names(
             imported_bindings
                 .into_iter()

@@ -358,7 +358,14 @@ pub(crate) fn check_module_assignment(
     let value = assignment.value.clone();
     let value_span = assignment.value_span;
     let compound = crate::flow::is_compound_assignment(&target_name, assignment.target_span, &value);
-    assign::check_assignment(assignment, ctx);
+    if !assign::check_assignment(assignment, ctx) {
+        // tsc checks the value whatever the target turned out to be
+        // (`checkBinaryLikeExpression`); a rejected target lends it no
+        // contextual type, and nothing is narrowed by the write.
+        let symbols = assign::rejected_write_symbols(&ctx.symbols, &target_name, compound);
+        let _ = expr::evaluate_expression(&value, value_span, &symbols, ctx);
+        return;
+    }
 
     let Some(original) = ctx.symbols.get(&target_name) else {
         return;
@@ -777,7 +784,17 @@ fn check_program_statement_itself(
         ParsedStatement::VariableDeclaration(variable) => {
             let start = Instant::now();
             let auto_binding = module_auto_binding(&variable, ctx);
+            let enum_members = variable
+                .enum_members
+                .clone()
+                .map(|bodies| (variable.name.clone(), bodies));
             var::check_variable_declaration(*variable, ctx);
+            if let Some((name, bodies)) = enum_members {
+                let symbols = ctx
+                    .symbols
+                    .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+                crate::checks::enum_members::check_enum_members(&name, &bodies, symbols, ctx);
+            }
             if let Some((name, binding, initial)) = auto_binding {
                 ctx.auto_arrays_declared = true;
                 if let Some(initial) = initial
@@ -1206,24 +1223,52 @@ pub(crate) fn namespace_require_reads(
 fn ambient_namespace(
     namespace: &surge_ts_syntax::ParsedNamespaceDeclaration,
 ) -> surge_ts_syntax::ParsedNamespaceDeclaration {
-    fn ambient_statement(statement: &mut ParsedStatement) {
-        match statement {
-            ParsedStatement::ClassDeclaration(class) => class.is_declare = true,
-            ParsedStatement::NamespaceDeclaration(inner) => {
-                inner.is_declare = true;
-                inner.statements.iter_mut().for_each(ambient_statement);
-            }
-            ParsedStatement::ExportDeclaration(export) => {
-                if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_mut() {
-                    ambient_statement(declaration);
-                }
-            }
-            _ => {}
-        }
-    }
     let mut ambient = namespace.clone();
     ambient.statements.iter_mut().for_each(ambient_statement);
     ambient
+}
+
+fn ambient_statement(statement: &mut ParsedStatement) {
+    match statement {
+        ParsedStatement::ClassDeclaration(class) => class.is_declare = true,
+        ParsedStatement::NamespaceDeclaration(inner) => {
+            inner.is_declare = true;
+            inner.statements.iter_mut().for_each(ambient_statement);
+        }
+        ParsedStatement::ExportDeclaration(export) => {
+            if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_mut() {
+                ambient_statement(declaration);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Everything a declaration file declares is ambient whether or not it is
+/// written `declare`, so its top-level variables, functions and classes are
+/// checked as `declare` ones are, and its namespaces as `declare namespace`.
+pub(crate) fn make_declaration_file_ambient(statements: &mut [ParsedStatement]) {
+    for statement in statements {
+        match statement {
+            ParsedStatement::VariableDeclaration(variable) => variable.is_declare = true,
+            ParsedStatement::FunctionDeclaration(function) => function.is_declare = true,
+            ParsedStatement::ExportDeclaration(export) => match export.as_mut() {
+                ParsedExportDeclaration::Statement { declaration, .. } => {
+                    make_declaration_file_ambient(std::slice::from_mut(declaration.as_mut()));
+                }
+                ParsedExportDeclaration::Default {
+                    declaration: ParsedDefaultExportDeclaration::Class(class),
+                    ..
+                } => class.is_declare = true,
+                ParsedExportDeclaration::Default {
+                    declaration: ParsedDefaultExportDeclaration::Function(function),
+                    ..
+                } => function.is_declare = true,
+                _ => {}
+            },
+            other => ambient_statement(other),
+        }
+    }
 }
 
 /// tsc's `checkExportAssignment`: an export assignment directly in a namespace

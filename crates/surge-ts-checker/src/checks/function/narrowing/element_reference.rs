@@ -117,6 +117,47 @@ pub(super) fn narrowed_element_references(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Vec<(String, Type, Type)> {
+    // tsc's `narrowTypeByBinaryExpression`: `A || B` holds where A does, or
+    // where A fails and B then holds (`A && B` fails alike), so an access is
+    // the union of the two edges' narrowings; one an edge leaves alone stays.
+    if let ParsedExpression::Logical {
+        left,
+        operator,
+        right,
+        ..
+    } = condition
+        && matches!(
+            (operator, branch_is_true),
+            (ParsedLogicalOperator::Or, true) | (ParsedLogicalOperator::And, false)
+        )
+    {
+        let left_edge = narrowed_element_references(left, branch_is_true, symbols, ctx);
+        if left_edge.is_empty() {
+            return Vec::new();
+        }
+        let left_other = narrowed_element_references(left, !branch_is_true, symbols, ctx);
+        let mut right_base = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+        for (key, narrowed, declared) in left_other {
+            right_base.insert_narrowed(
+                key,
+                SymbolInfo {
+                    ty: narrowed,
+                    kind: crate::symbols::SymbolKind::Var,
+                    function_signature: None,
+                },
+                declared,
+            );
+        }
+        let right_edge = narrowed_element_references(right, branch_is_true, &right_base, ctx);
+        return left_edge
+            .into_iter()
+            .filter_map(|(key, left_type, declared)| {
+                let (_, right_type, _) = right_edge.iter().find(|(right_key, ..)| *right_key == key)?;
+                let joined = surge_ts_types::union_type(vec![left_type, right_type.clone()]);
+                (joined != declared).then_some((key, joined, declared))
+            })
+            .collect();
+    }
     let mut guards = Vec::new();
     collect_element_reference_guards(condition, branch_is_true, &mut guards);
     let mut narrowed = Vec::new();

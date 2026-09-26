@@ -218,10 +218,25 @@ pub(super) fn evaluate_index_access(
 
     match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
-        Type::Unknown
-        | Type::GenuineUnknown
-        | Type::ErrorType
-        | Type::TypeParameter(_) => InferredExpression::Unknown,
+        Type::TypeParameter(_) => {
+            let InferredExpression::Known(index_type) = infer_expression(index, symbols, ctx) else {
+                return InferredExpression::Unknown;
+            };
+            let Some(deferred) = crate::infer::expression::deferred_element_access(&receiver_type, &index_type)
+            else {
+                return InferredExpression::Unknown;
+            };
+            if report_invalid_deferred_index(
+                &receiver_type,
+                &index_type,
+                element_access_span(object_span, index_span).or(fallback_span),
+                ctx,
+            ) {
+                return InferredExpression::Known(Type::ErrorType);
+            }
+            InferredExpression::Known(deferred)
+        }
+        Type::Unknown | Type::GenuineUnknown | Type::ErrorType => InferredExpression::Unknown,
         // Lowered to its element array above.
         Type::OpenTuple(_) => InferredExpression::Unknown,
         Type::Tuple(elements) => {
@@ -464,6 +479,16 @@ pub(super) fn evaluate_index_access(
                         ctx,
                     ));
                 }
+                // `getPropertyTypeForIndexType` skips the implicit-`any` reports
+                // for a const enum's object (`isConstEnumObjectType`): a literal
+                // key it lacks is TS2339 on the index, whatever the options.
+                if crate::infer::expression::is_const_enum_object(object_name, &receiver_type, ctx) {
+                    ctx.push(diagnostic_with_syntax_span(
+                        Diagnostic::ts2339(&key, receiver_type.name(), ctx.file_name.clone()),
+                        choose_span(index_span, choose_span(object_span, fallback_span)),
+                    ));
+                    return InferredExpression::Known(Type::ErrorType);
+                }
                 // A literal key a number-only receiver cannot answer is the same
                 // implicit `any` as a non-literal one.
                 if object_type.number_index_type.is_some() && ctx.options.no_implicit_any {
@@ -499,6 +524,28 @@ pub(super) fn evaluate_index_access(
             InferredExpression::Unknown
         }
     }
+}
+
+/// tsc's `checkIndexedAccessIndexType` for an access deferred over a type
+/// variable: its key has to be assignable to `keyof` the receiver (TS2536),
+/// and the access is the error type when it is not.
+pub(crate) fn report_invalid_deferred_index(
+    receiver: &Type,
+    index: &Type,
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let Some(keys) = surge_ts_types::type_variable::keyof_variable(receiver) else {
+        return false;
+    };
+    if is_assignable_to(index, &keys) {
+        return false;
+    }
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts2536(index.name(), receiver.name(), ctx.file_name.clone()),
+        span,
+    ));
+    true
 }
 
 /// tsc's `isForInVariableForNumericPropertyNames`: the key of a `for…in` over

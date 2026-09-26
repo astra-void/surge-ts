@@ -31,8 +31,11 @@ pub fn check_source_with_options(
 ) -> Vec<Diagnostic> {
     let _lock = crate::semantic::engine_lock();
     crate::semantic::claim_thread_caches(crate::semantic::next_program_id());
+    let exact = options.exact_optional_property_types;
     surge_ts_types::with_strict_null_checks(options.strict_null_checks, || {
-        check_single_source(source_text, file_name, options)
+        surge_ts_types::with_exact_optional_property_types(exact, || {
+            check_single_source(source_text, file_name, options)
+        })
     })
 }
 
@@ -244,6 +247,7 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
                 let_assignments: Default::default(),
                 json_module_type: None,
                 jsx_factory_uses: parsed.jsx_factory_uses,
+                emit_helper_requests: Vec::new(),
             }
         })
         .collect();

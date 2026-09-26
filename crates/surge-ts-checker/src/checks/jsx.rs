@@ -771,6 +771,7 @@ fn resolve_component_props(
         InferredExpression::UnresolvedIdentifier { .. }
         | InferredExpression::MissingProperty { .. } => return PropsResolution::Unchecked,
     };
+    check_class_component_type_arguments(site, span, symbols, ctx);
     let Some((signatures, construct)) = jsx_signatures(&component_type) else {
         if component_is_unmodelled(&component_type) {
             return PropsResolution::Unmodelled;
@@ -943,6 +944,68 @@ fn check_intrinsic_type_arguments(tag: &ParsedJsxTag, ctx: &mut CheckerContext) 
     ));
 }
 
+/// `resolveCall` over a class component's construct signatures, which all
+/// take the class's own type parameters: written type arguments outside their
+/// count are TS2558, and within it the first one outside its constraint is
+/// TS2344. Judged only for a class declared in a source file, as
+/// `new C<…>()` is.
+fn check_class_component_type_arguments(
+    site: &JsxCallSite<'_>,
+    tag_name_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    if site.type_arguments.is_empty() {
+        return;
+    }
+    let ParsedExpression::Identifier { name, .. } = site.tag_expression else {
+        return;
+    };
+    let constructs = symbols.get(name).is_some_and(|symbol| match &symbol.ty {
+        Type::Any => true,
+        Type::Object(object) => object.construct_signature().is_some(),
+        _ => false,
+    });
+    let Some(crate::symbols::TypeDeclarationInfo::Interface(info)) = ctx.lookup_type_declaration(name)
+    else {
+        return;
+    };
+    if !constructs || !info.is_class_instance || crate::modules::is_declaration_file_name(&info.file_name) {
+        return;
+    }
+    let declared_here = *info.file_name == *ctx.file_name;
+    let type_parameters = info.body.type_parameters.clone();
+    let maximum = type_parameters.len();
+    let minimum = type_parameters
+        .iter()
+        .filter(|parameter| parameter.default_type.is_none())
+        .count();
+    let count = site.type_arguments.len();
+    if count < minimum || count > maximum {
+        let expected = if minimum == maximum {
+            maximum.to_string()
+        } else {
+            format!("{minimum}-{maximum}")
+        };
+        let span = site
+            .type_arguments_span
+            .map(|span| SyntaxTextSpan { start: span.start + 1, end: span.end - 1 });
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2558(expected, count, ctx.file_name.clone()),
+            span,
+        ));
+        return;
+    }
+    if declared_here {
+        let _ = crate::checks::call::construct::violates_type_parameter_constraint(
+            &type_parameters,
+            site.type_arguments,
+            tag_name_span,
+            ctx,
+        );
+    }
+}
+
 /// tsc's `inferJsxTypeArguments`: a generic component's type arguments are
 /// inferred from the attributes object, read as the call's one argument, and
 /// explicit type arguments on the tag are taken as written. `None` when the
@@ -1039,6 +1102,7 @@ fn jsx_attributes_argument(site: &JsxCallSite<'_>) -> surge_ts_syntax::ParsedCal
             computed_key: None,
             paired_setter: None,
             unnamed_key_value: None,
+            member_key: None,
         }
     };
     let mut properties = Vec::with_capacity(site.attributes.len() + 1);

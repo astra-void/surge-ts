@@ -39,6 +39,93 @@ pub(crate) fn collect_grammar_diagnostics(
     (collector.diagnostics, parenthesized)
 }
 
+/// The implicit `any`s tsc's checker reports in a declaration file: a member
+/// without a type (TS7008) and a bodyless signature without a return type
+/// (TS7010). Everything there is ambient, so a private member reports neither
+/// (`isPrivateWithinAmbient`).
+pub(crate) fn collect_declaration_file_implicit_any(
+    program: &Program<'_>,
+    out: &mut Vec<ParsedGrammarDiagnostic>,
+) {
+    struct Collector<'o> {
+        out: &'o mut Vec<ParsedGrammarDiagnostic>,
+    }
+
+    impl Collector<'_> {
+        fn push(&mut self, kind: Kind, span: Span, name: &str) {
+            self.out.push(ParsedGrammarDiagnostic {
+                kind,
+                span: text_span_from_oxc_span(span),
+                name: Some(name.to_string()),
+            });
+        }
+    }
+
+    fn is_private(accessibility: Option<oxc_ast::ast::TSAccessibility>, key: &PropertyKey<'_>) -> bool {
+        accessibility == Some(oxc_ast::ast::TSAccessibility::Private) || matches!(key, PropertyKey::PrivateIdentifier(_))
+    }
+
+    impl<'a> Visit<'a> for Collector<'_> {
+        fn visit_function(&mut self, function: &Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
+            if function.body.is_none()
+                && function.return_type.is_none()
+                && let Some(id) = function.id.as_ref()
+            {
+                self.push(Kind::ImplicitAnyReturn, id.span, id.name.as_str());
+            }
+            oxc_ast_visit::walk::walk_function(self, function, flags);
+        }
+
+        fn visit_method_definition(&mut self, method: &oxc_ast::ast::MethodDefinition<'a>) {
+            if method.kind == MethodDefinitionKind::Method
+                && method.value.body.is_none()
+                && method.value.return_type.is_none()
+                && !method.computed
+                && !is_private(method.accessibility, &method.key)
+                && let Some(name) = property_key_name(&method.key)
+            {
+                self.push(Kind::ImplicitAnyReturn, method.key.span(), &name);
+            }
+            oxc_ast_visit::walk::walk_method_definition(self, method);
+        }
+
+        fn visit_property_definition(&mut self, property: &oxc_ast::ast::PropertyDefinition<'a>) {
+            if property.type_annotation.is_none()
+                && property.value.is_none()
+                && !property.computed
+                && !is_private(property.accessibility, &property.key)
+                && let Some(name) = property_key_name(&property.key)
+            {
+                self.push(Kind::ImplicitAnyMember, property.key.span(), &name);
+            }
+            oxc_ast_visit::walk::walk_property_definition(self, property);
+        }
+
+        fn visit_ts_property_signature(&mut self, property: &TSPropertySignature<'a>) {
+            if property.type_annotation.is_none()
+                && !property.computed
+                && let Some(name) = property_key_name(&property.key)
+            {
+                self.push(Kind::ImplicitAnyMember, property.key.span(), &name);
+            }
+            oxc_ast_visit::walk::walk_ts_property_signature(self, property);
+        }
+
+        fn visit_ts_method_signature(&mut self, method: &TSMethodSignature<'a>) {
+            if method.kind == TSMethodSignatureKind::Method
+                && method.return_type.is_none()
+                && !method.computed
+                && let Some(name) = property_key_name(&method.key)
+            {
+                self.push(Kind::ImplicitAnyReturn, method.key.span(), &name);
+            }
+            oxc_ast_visit::walk::walk_ts_method_signature(self, method);
+        }
+    }
+
+    Collector { out }.visit_program(program);
+}
+
 #[derive(Default)]
 struct GrammarCollector {
     diagnostics: Vec<ParsedGrammarDiagnostic>,
@@ -50,14 +137,13 @@ struct GrammarCollector {
     /// a bodyless declaration legal, so the implementation-missing checks stay
     /// quiet inside one.
     ambient_depth: usize,
+    /// `declare class` nesting: its members are ambient as well.
+    declare_class_depth: usize,
     /// The file's text, which modifier-order checks read: the AST keeps which
     /// modifiers a member has, not the order they were written in.
     source_text: String,
-    /// What each module-level binding contributes to an enum initializer that
-    /// names it; see [`EnumConstant`].
-    top_level_constants: std::collections::HashMap<String, EnumConstant>,
-    /// Module-level enum declarations, which alone may consult
-    /// `top_level_constants` (a nested one could see a shadowing binding).
+    /// Module-level enum declarations, whose duplicate members are checked
+    /// across every declaration of the enum at once.
     top_level_enums: std::collections::HashSet<(u32, u32)>,
     /// Starts of the `(0, x.f)` sequences called indirectly; see
     /// [`GrammarCollector::note_indirect_call`].
@@ -110,156 +196,6 @@ fn setter_parameter_annotated(parameters: &FormalParameters<'_>) -> bool {
     }
 }
 
-/// What tsc's enum constant evaluation can say about an initializer without
-/// resolving names it cannot see: an imported binding or another enum's member
-/// may well be constant, so those are `Unknown` and never reported.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum EnumConstant {
-    Number,
-    String,
-    NonConstant,
-    Unknown,
-}
-
-fn enum_constant(
-    expression: &Expression<'_>,
-    members: &std::collections::HashMap<String, EnumConstant>,
-    top_level: Option<&std::collections::HashMap<String, EnumConstant>>,
-) -> EnumConstant {
-    use oxc_syntax::operator::BinaryOperator;
-    match expression {
-        Expression::NumericLiteral(_) => EnumConstant::Number,
-        Expression::StringLiteral(_) => EnumConstant::String,
-        Expression::TemplateLiteral(template) if template.expressions.is_empty() => {
-            EnumConstant::String
-        }
-        Expression::TemplateLiteral(_) => EnumConstant::Unknown,
-        Expression::ParenthesizedExpression(parenthesized) => {
-            enum_constant(&parenthesized.expression, members, top_level)
-        }
-        Expression::UnaryExpression(unary)
-            if matches!(
-                unary.operator,
-                UnaryOperator::UnaryPlus | UnaryOperator::UnaryNegation | UnaryOperator::BitwiseNot
-            ) =>
-        {
-            match enum_constant(&unary.argument, members, top_level) {
-                EnumConstant::Number => EnumConstant::Number,
-                EnumConstant::Unknown => EnumConstant::Unknown,
-                _ => EnumConstant::NonConstant,
-            }
-        }
-        Expression::BinaryExpression(binary)
-            if matches!(
-                binary.operator,
-                BinaryOperator::Addition
-                    | BinaryOperator::Subtraction
-                    | BinaryOperator::Multiplication
-                    | BinaryOperator::Division
-                    | BinaryOperator::Remainder
-                    | BinaryOperator::Exponential
-                    | BinaryOperator::ShiftLeft
-                    | BinaryOperator::ShiftRight
-                    | BinaryOperator::ShiftRightZeroFill
-                    | BinaryOperator::BitwiseOR
-                    | BinaryOperator::BitwiseXOR
-                    | BinaryOperator::BitwiseAnd
-            ) =>
-        {
-            let left = enum_constant(&binary.left, members, top_level);
-            let right = enum_constant(&binary.right, members, top_level);
-            match (left, right) {
-                (EnumConstant::NonConstant, _) | (_, EnumConstant::NonConstant) => {
-                    EnumConstant::NonConstant
-                }
-                (EnumConstant::Unknown, _) | (_, EnumConstant::Unknown) => EnumConstant::Unknown,
-                (EnumConstant::Number, EnumConstant::Number) => EnumConstant::Number,
-                _ if binary.operator == BinaryOperator::Addition => EnumConstant::String,
-                _ => EnumConstant::NonConstant,
-            }
-        }
-        Expression::Identifier(identifier) => members
-            .get(identifier.name.as_str())
-            .or_else(|| top_level.and_then(|constants| constants.get(identifier.name.as_str())))
-            .copied()
-            .unwrap_or(EnumConstant::Unknown),
-        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => {
-            EnumConstant::Unknown
-        }
-        _ => EnumConstant::NonConstant,
-    }
-}
-
-/// The number a constant initializer evaluates to, where tsc's `evaluate`
-/// can be followed without name resolution: literals, arithmetic, and the
-/// numeric members declared before it in the same enum (bare or as
-/// `Enum.Member`). `None` for anything else, which is never reported.
-fn enum_numeric_value(
-    expression: &Expression<'_>,
-    members: &std::collections::HashMap<String, f64>,
-    enum_name: &str,
-) -> Option<f64> {
-    use oxc_syntax::operator::BinaryOperator;
-    match expression {
-        Expression::NumericLiteral(literal) => Some(literal.value),
-        Expression::ParenthesizedExpression(parenthesized) => {
-            enum_numeric_value(&parenthesized.expression, members, enum_name)
-        }
-        Expression::UnaryExpression(unary) => {
-            let value = enum_numeric_value(&unary.argument, members, enum_name)?;
-            match unary.operator {
-                UnaryOperator::UnaryPlus => Some(value),
-                UnaryOperator::UnaryNegation => Some(-value),
-                UnaryOperator::BitwiseNot => Some(f64::from(!to_int32(value))),
-                _ => None,
-            }
-        }
-        Expression::BinaryExpression(binary) => {
-            let left = enum_numeric_value(&binary.left, members, enum_name)?;
-            let right = enum_numeric_value(&binary.right, members, enum_name)?;
-            Some(match binary.operator {
-                BinaryOperator::Addition => left + right,
-                BinaryOperator::Subtraction => left - right,
-                BinaryOperator::Multiplication => left * right,
-                BinaryOperator::Division => left / right,
-                BinaryOperator::Remainder => left % right,
-                BinaryOperator::Exponential => left.powf(right),
-                BinaryOperator::ShiftLeft => f64::from(to_int32(left).wrapping_shl(to_uint32(right) & 31)),
-                BinaryOperator::ShiftRight => f64::from(to_int32(left) >> (to_uint32(right) & 31)),
-                BinaryOperator::ShiftRightZeroFill => {
-                    f64::from(to_uint32(left) >> (to_uint32(right) & 31))
-                }
-                BinaryOperator::BitwiseOR => f64::from(to_int32(left) | to_int32(right)),
-                BinaryOperator::BitwiseXOR => f64::from(to_int32(left) ^ to_int32(right)),
-                BinaryOperator::BitwiseAnd => f64::from(to_int32(left) & to_int32(right)),
-                _ => return None,
-            })
-        }
-        Expression::Identifier(identifier) => members.get(identifier.name.as_str()).copied(),
-        Expression::StaticMemberExpression(member) => match &member.object {
-            Expression::Identifier(object) if object.name == enum_name => {
-                members.get(member.property.name.as_str()).copied()
-            }
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// ECMAScript `ToInt32`/`ToUint32`.
-fn to_uint32(value: f64) -> u32 {
-    if !value.is_finite() {
-        return 0;
-    }
-    let truncated = value.trunc();
-    let modulo = truncated.rem_euclid(4_294_967_296.0);
-    modulo as u32
-}
-
-fn to_int32(value: f64) -> i32 {
-    to_uint32(value) as i32
-}
-
 impl GrammarCollector {
     /// tsc's `isIndirectCall`: `(0, x.f)(…)`, a tagged `(0, x.f)` or
     /// `(0, eval)(…)` discards the `0` to call without a `this`, so the
@@ -286,70 +222,38 @@ impl GrammarCollector {
         }
     }
 
-    /// tsc's `computeEnumMemberValues`: a member without an initializer takes
-    /// the previous numeric value plus one, so it needs one after a string or
-    /// computed member (TS1061), and a `const enum` initializer must be a
-    /// constant expression (TS2474). An ambient enum's members are otherwise
-    /// free to be computed, but a written initializer must still be constant
+    /// tsc's `computeEnumMemberValues` (see `enum_values`): a member without
+    /// an initializer takes the previous numeric value plus one, so it needs
+    /// one after a string or computed member (TS1061); a `const enum`
+    /// initializer must be a constant expression (TS2474) with a finite value
+    /// (TS2477, TS2478), and so must a written initializer in an ambient enum
     /// (TS1066).
     fn check_enum_member_values(&mut self, declaration: &oxc_ast::ast::TSEnumDeclaration<'_>) {
-        let ambient = declaration.declare || self.is_ambient();
-        let top_level_constants = std::mem::take(&mut self.top_level_constants);
-        let top_level = self
-            .top_level_enums
-            .contains(&(declaration.span.start, declaration.span.end))
-            .then_some(&top_level_constants);
-        let mut members = std::collections::HashMap::new();
-        let mut numeric_values: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
-        let mut previous = EnumConstant::Number;
-        let mut next_auto_value = Some(0.0);
-        for member in &declaration.body.members {
-            let mut numeric_value = None;
-            let value = match &member.initializer {
-                Some(initializer) => {
-                    let value = enum_constant(initializer, &members, top_level);
-                    if value == EnumConstant::NonConstant {
-                        if declaration.r#const {
-                            self.push(Kind::ConstEnumInitializerNotConstant, initializer.span(), None);
-                        } else if ambient {
-                            self.push(Kind::AmbientEnumInitializerNotConstant, initializer.span(), None);
-                        }
-                    }
-                    if matches!(value, EnumConstant::Number | EnumConstant::Unknown) {
-                        numeric_value =
-                            enum_numeric_value(initializer, &numeric_values, declaration.id.name.as_str());
-                        if declaration.r#const
-                            && let Some(number) = numeric_value
-                            && !number.is_finite()
-                        {
-                            let code = if number.is_nan() { 2478 } else { 2477 };
-                            self.push(Kind::Ts(code), initializer.span(), None);
-                        }
-                    }
-                    previous = value;
-                    value
-                }
-                None => {
-                    if !ambient && matches!(previous, EnumConstant::String | EnumConstant::NonConstant) {
-                        self.push(Kind::EnumMemberInitializerRequired, member.id.span(), None);
-                    }
-                    numeric_value = next_auto_value;
-                    if previous == EnumConstant::Unknown {
-                        EnumConstant::Unknown
-                    } else {
-                        EnumConstant::Number
-                    }
-                }
+        use super::enum_values::{EnumValue, Evaluated};
+        let evaluation = super::enum_values::enum_evaluation(declaration);
+        for (member, result) in declaration.body.members.iter().zip(&evaluation.members) {
+            if result.needs_initializer {
+                self.push(Kind::EnumMemberInitializerRequired, member.id.span(), None);
+            }
+            let Some(initializer) = &member.initializer else {
+                continue;
             };
-            next_auto_value = numeric_value.map(|number| number + 1.0);
-            if let Some(name) = property_key_name_of_enum_member(&member.id) {
-                members.insert(name.clone(), value);
-                if let Some(number) = numeric_value {
-                    numeric_values.insert(name, number);
+            match &result.value {
+                Evaluated::Computed if declaration.r#const => {
+                    self.push(Kind::ConstEnumInitializerNotConstant, initializer.span(), None);
                 }
+                Evaluated::Computed if evaluation.ambient => {
+                    self.push(Kind::AmbientEnumInitializerNotConstant, initializer.span(), None);
+                }
+                Evaluated::Value(EnumValue::Number(number))
+                    if declaration.r#const && !number.is_finite() =>
+                {
+                    let code = if number.is_nan() { 2478 } else { 2477 };
+                    self.push(Kind::Ts(code), initializer.span(), None);
+                }
+                _ => {}
             }
         }
-        self.top_level_constants = top_level_constants;
     }
 
     /// Every member name declared more than once across the declarations of
@@ -739,53 +643,15 @@ impl GrammarCollector {
         }
     }
 
-    fn collect_top_level_constants(&mut self, statements: &[Statement<'_>]) {
+    fn collect_top_level_enums(&mut self, statements: &[Statement<'_>]) {
         for statement in statements {
             let declaration = match statement {
                 Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
                 other => other.as_declaration(),
             };
-            match declaration {
-                Some(Declaration::VariableDeclaration(variable)) => {
-                    for declarator in &variable.declarations {
-                        let oxc_ast::ast::BindingPattern::BindingIdentifier(identifier) =
-                            &declarator.id
-                        else {
-                            continue;
-                        };
-                        let value = match &declarator.init {
-                            Some(init)
-                                if variable.kind == VariableDeclarationKind::Const
-                                    && !variable.declare =>
-                            {
-                                enum_constant(
-                                    init,
-                                    &std::collections::HashMap::new(),
-                                    Some(&self.top_level_constants),
-                                )
-                            }
-                            _ => EnumConstant::NonConstant,
-                        };
-                        self.top_level_constants.insert(identifier.name.to_string(), value);
-                    }
-                }
-                Some(Declaration::FunctionDeclaration(function)) => {
-                    if let Some(id) = &function.id {
-                        self.top_level_constants
-                            .insert(id.name.to_string(), EnumConstant::NonConstant);
-                    }
-                }
-                Some(Declaration::ClassDeclaration(class)) => {
-                    if let Some(id) = &class.id {
-                        self.top_level_constants
-                            .insert(id.name.to_string(), EnumConstant::NonConstant);
-                    }
-                }
-                Some(Declaration::TSEnumDeclaration(enumeration)) => {
-                    self.top_level_enums
-                        .insert((enumeration.span.start, enumeration.span.end));
-                }
-                _ => {}
+            if let Some(Declaration::TSEnumDeclaration(enumeration)) = declaration {
+                self.top_level_enums
+                    .insert((enumeration.span.start, enumeration.span.end));
             }
         }
     }
@@ -2289,7 +2155,7 @@ fn property_key_name(key: &PropertyKey<'_>) -> Option<String> {
 impl<'a> Visit<'a> for GrammarCollector {
     fn visit_program(&mut self, program: &Program<'a>) {
         self.source_text = program.source_text.to_string();
-        self.collect_top_level_constants(&program.body);
+        self.collect_top_level_enums(&program.body);
         self.check_member_kind_overrides(&program.body);
         self.check_circular_type_aliases(&program.body);
         self.check_top_level_enum_merges(&program.body);
@@ -2432,7 +2298,13 @@ impl<'a> Visit<'a> for GrammarCollector {
 
     fn visit_class(&mut self, class: &Class<'a>) {
         self.check_class_members(class);
+        if class.declare {
+            self.declare_class_depth += 1;
+        }
         oxc_ast_visit::walk::walk_class(self, class);
+        if class.declare {
+            self.declare_class_depth -= 1;
+        }
     }
 
     fn visit_ts_interface_declaration(
@@ -2602,10 +2474,16 @@ impl<'a> Visit<'a> for GrammarCollector {
         if method.kind == MethodDefinitionKind::Set && method.value.return_type.is_some() {
             self.push(Kind::SetAccessorReturnType, method.key.span(), None);
         }
+        // `isPrivateWithinAmbient`: a private method of an ambient class
+        // reports no implicit `any` return.
+        let private_within_ambient = (self.is_ambient() || self.declare_class_depth > 0)
+            && (method.accessibility == Some(oxc_ast::ast::TSAccessibility::Private)
+                || matches!(method.key, PropertyKey::PrivateIdentifier(_)));
         if method.kind == MethodDefinitionKind::Method
             && method.value.body.is_none()
             && method.value.return_type.is_none()
             && !method.computed
+            && !private_within_ambient
             && let Some(name) = property_key_name(&method.key) {
                 self.push(Kind::ImplicitAnyReturn, method.key.span(), Some(&name));
             }

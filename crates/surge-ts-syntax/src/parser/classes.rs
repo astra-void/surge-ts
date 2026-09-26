@@ -138,6 +138,40 @@ fn parse_class_body(
         members,
         restricted_members,
         span: Some(text_span_from_oxc_span(class.span)),
+        non_emitting_computed_keys: class
+            .body
+            .body
+            .iter()
+            .filter_map(|element| {
+                let (key, computed, is_get_or_set, non_emitting) = match element {
+                    ClassElement::MethodDefinition(member) => (
+                        &member.key,
+                        member.computed,
+                        member.kind.is_accessor(),
+                        member.r#type == MethodDefinitionType::TSAbstractMethodDefinition,
+                    ),
+                    ClassElement::PropertyDefinition(member) => (
+                        &member.key,
+                        member.computed,
+                        false,
+                        member.declare
+                            || member.r#type == PropertyDefinitionType::TSAbstractPropertyDefinition,
+                    ),
+                    ClassElement::AccessorProperty(member) => (
+                        &member.key,
+                        member.computed,
+                        false,
+                        member.r#type == oxc_ast::ast::AccessorPropertyType::TSAbstractAccessorProperty,
+                    ),
+                    _ => return None,
+                };
+                let expression = key.as_expression().filter(|_| computed)?;
+                if !is_get_or_set && is_in_expression(expression) {
+                    return None;
+                }
+                Some(non_emitting)
+            })
+            .collect(),
         computed_keys: class
             .body
             .body

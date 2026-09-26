@@ -7,12 +7,15 @@
 //! tsc would require the enum member.
 
 use oxc_ast::ast::{Expression, TSEnumDeclaration, TSEnumMemberName};
+use oxc_span::GetSpan;
 
 use crate::{
-    ParsedFunctionBodyStatement, ParsedObjectType, ParsedObjectTypeProperty, ParsedStatement,
-    ParsedType, ParsedTypeAliasDeclaration, ParsedVariableDeclaration, ParsedVariableKind,
+    ParsedEnumBody, ParsedEnumMemberInitializer, ParsedFunctionBodyStatement, ParsedObjectType,
+    ParsedObjectTypeProperty, ParsedStatement, ParsedType, ParsedTypeAliasDeclaration,
+    ParsedVariableDeclaration, ParsedVariableKind,
 };
 
+use super::enum_values::{EnumValue, Evaluated};
 use super::text_span_from_oxc_span;
 
 pub(crate) fn parse_enum_declaration(
@@ -74,41 +77,48 @@ fn lower_enum_declaration(
     exported: bool,
 ) -> (ParsedTypeAliasDeclaration, ParsedVariableDeclaration) {
     let name_span = Some(text_span_from_oxc_span(declaration.id.span));
-    let mut next_auto_value: f64 = 0.0;
+    let evaluation = super::enum_values::enum_evaluation(declaration);
+    // tsc leaves an ambient enum's members without an initializer computed;
+    // numbering them keeps each a literal of its own, which is how surge tells
+    // the members of such an enum apart.
+    let numbers_ambient_members = evaluation.ambient && !declaration.r#const;
+    let mut next_auto_value = Some(0.0);
     let mut properties = Vec::with_capacity(declaration.body.members.len());
     let mut member_types = Vec::with_capacity(declaration.body.members.len());
+    let mut checked_members = Vec::new();
 
-    for member in &declaration.body.members {
+    for (index, member) in declaration.body.members.iter().enumerate() {
+        let value = evaluation.members.get(index).map(|evaluated| &evaluated.value);
+        if let Some(initializer) = member.initializer.as_ref()
+            && !evaluation.ambient
+            && !is_literal_initializer(initializer)
+        {
+            checked_members.push(ParsedEnumMemberInitializer {
+                initializer: super::expressions::parse_expression(initializer).0,
+                initializer_span: Some(text_span_from_oxc_span(initializer.span())),
+                computed: matches!(value, Some(Evaluated::Computed)),
+            });
+        }
+        // A computed member (`A = f()`) is numeric, and so is one whose value
+        // depends on another file. A non-finite value stays `number` too:
+        // surge's number literal types are not relied on to hold `NaN` or
+        // `Infinity`.
+        let (member_type, number) = match value {
+            Some(Evaluated::Value(EnumValue::Number(number))) if number.is_finite() => {
+                (ParsedType::NumberLiteral(format_auto_value(*number)), Some(*number))
+            }
+            Some(Evaluated::Value(EnumValue::String(text))) => {
+                (ParsedType::StringLiteral(text.clone()), None)
+            }
+            _ if numbers_ambient_members && member.initializer.is_none() => match next_auto_value {
+                Some(number) => (ParsedType::NumberLiteral(format_auto_value(number)), Some(number)),
+                None => (ParsedType::Number, None),
+            },
+            _ => (ParsedType::Number, None),
+        };
+        next_auto_value = number.map(|number| number + 1.0);
         let Some(member_name) = enum_member_name(&member.id) else {
             continue;
-        };
-        let member_type = match member.initializer.as_ref() {
-            Some(initializer) => match constant_member_type(initializer) {
-                Some(ParsedType::NumberLiteral(value)) => {
-                    if let Ok(parsed) = value.parse::<f64>() {
-                        next_auto_value = parsed + 1.0;
-                    }
-                    ParsedType::NumberLiteral(value)
-                }
-                Some(other) => other,
-                // A computed member (`A = f()`, `B = A | C`) is numeric in TS but
-                // its value is not statically known here; widening keeps the
-                // member readable without inventing a wrong literal. Auto values
-                // after it are equally unknown, so they widen too.
-                None => {
-                    next_auto_value = f64::NAN;
-                    ParsedType::Number
-                }
-            },
-            None => {
-                if next_auto_value.is_nan() {
-                    ParsedType::Number
-                } else {
-                    let value = format_auto_value(next_auto_value);
-                    next_auto_value += 1.0;
-                    ParsedType::NumberLiteral(value)
-                }
-            }
         };
 
         properties.push(ParsedObjectTypeProperty {
@@ -169,6 +179,12 @@ fn lower_enum_declaration(
             initializer_span: None,
             declaration_list: None,
             annotated_pattern: None,
+            enum_members: (!checked_members.is_empty()).then(|| {
+                std::sync::Arc::new(vec![ParsedEnumBody {
+                    is_const: declaration.r#const,
+                    members: checked_members,
+                }])
+            }),
         },
     )
 }
@@ -197,25 +213,20 @@ fn enum_member_name(name: &TSEnumMemberName<'_>) -> Option<String> {
     }
 }
 
-fn constant_member_type(initializer: &Expression<'_>) -> Option<ParsedType> {
+/// A literal initializer (`1`, `-1`, `"a"`, `` `a` ``) is constant and reports
+/// nothing when checked, so the checker is not handed one.
+fn is_literal_initializer(initializer: &Expression<'_>) -> bool {
     match initializer {
-        Expression::StringLiteral(literal) => {
-            Some(ParsedType::StringLiteral(literal.value.to_string()))
+        Expression::StringLiteral(_) | Expression::NumericLiteral(_) => true,
+        Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+        Expression::UnaryExpression(unary) => {
+            matches!(
+                unary.operator,
+                oxc_syntax::operator::UnaryOperator::UnaryNegation
+                    | oxc_syntax::operator::UnaryOperator::UnaryPlus
+            ) && matches!(unary.argument, Expression::NumericLiteral(_))
         }
-        Expression::NumericLiteral(literal) => {
-            Some(ParsedType::NumberLiteral(format_auto_value(literal.value)))
-        }
-        Expression::UnaryExpression(unary)
-            if unary.operator == oxc_syntax::operator::UnaryOperator::UnaryNegation =>
-        {
-            match constant_member_type(&unary.argument)? {
-                ParsedType::NumberLiteral(value) => {
-                    Some(ParsedType::NumberLiteral(format!("-{value}")))
-                }
-                _ => None,
-            }
-        }
-        _ => None,
+        _ => false,
     }
 }
 
@@ -261,12 +272,16 @@ pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStateme
         let mut properties: Vec<ParsedObjectTypeProperty> = Vec::new();
         let mut reverse_mapping = None;
         let mut member_types: Vec<ParsedType> = Vec::new();
+        let mut enum_members: Vec<ParsedEnumBody> = Vec::new();
         for index in rest {
             match peel_exported(&statements[*index]) {
                 ParsedStatement::VariableDeclaration(variable) => {
                     if let Some(ParsedType::Object(object)) = variable.declared_type.as_ref() {
                         properties.extend(object.properties.iter().cloned());
                         reverse_mapping = reverse_mapping.or_else(|| object.number_index_type.clone());
+                    }
+                    if let Some(bodies) = variable.enum_members.as_ref() {
+                        enum_members.extend(bodies.iter().cloned());
                     }
                 }
                 ParsedStatement::TypeAliasDeclaration(alias) => {
@@ -293,6 +308,10 @@ pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStateme
                         }
                     }
                     object.number_index_type = reverse_mapping_index_type(&object.properties);
+                }
+                if !enum_members.is_empty() {
+                    let bodies = variable.enum_members.get_or_insert_with(Default::default);
+                    std::sync::Arc::make_mut(bodies).extend(enum_members);
                 }
             }
             ParsedStatement::TypeAliasDeclaration(alias) => {

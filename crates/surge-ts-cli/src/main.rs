@@ -538,17 +538,21 @@ fn run_single_file_mode(
             esm_module_files: Default::default(),
             strict_null_checks: true,
             // The single-file path has no tsconfig: `--noImplicitAny` stands in
-            // for `strict`, which is what both of these derive from.
+            // for `strict`, which is what these derive from.
             strict_property_initialization: no_implicit_any,
             use_unknown_in_catch_variables: no_implicit_any,
+            strict_bind_call_apply: no_implicit_any,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
+            exact_optional_property_types: false,
             allow_importing_ts_extensions: false,
             allow_arbitrary_extensions: false,
             experimental_decorators: false,
+            import_helpers: false,
+            emit_decorator_metadata: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,

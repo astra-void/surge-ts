@@ -409,17 +409,20 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     let comment_directives =
         super::suppressions::collect_comment_directives(source_text, &parsed.program.comments);
 
+    let enum_values = std::rc::Rc::new(super::enum_values::evaluate_program(&parsed.program));
     let collect_statements = || -> Vec<crate::ParsedStatement> {
-        super::private_names::with_file(file_name, || {
-            let mut statements: Vec<crate::ParsedStatement> = parsed
-                .program
-                .body
-                .iter()
-                .filter_map(super::parse_statement)
-                .flatten()
-                .collect();
-            super::enums::merge_lowered_enum_declarations(&mut statements);
-            statements
+        super::enum_values::with_enum_values(enum_values.clone(), || {
+            super::private_names::with_file(file_name, || {
+                let mut statements: Vec<crate::ParsedStatement> = parsed
+                    .program
+                    .body
+                    .iter()
+                    .filter_map(super::parse_statement)
+                    .flatten()
+                    .collect();
+                super::enums::merge_lowered_enum_declarations(&mut statements);
+                statements
+            })
         })
     };
 
@@ -575,7 +578,9 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     // A declaration file gets the grammar findings whose answer is that every
     // node in it is ambient (which `skipLibCheck` then suppresses).
     let (grammar_diagnostics, parenthesized_expressions) = if collects_grammar_diagnostics(file_name) {
-        super::grammar::collect_grammar_diagnostics(&parsed.program)
+        super::enum_values::with_enum_values(enum_values.clone(), || {
+            super::grammar::collect_grammar_diagnostics(&parsed.program)
+        })
     } else if javascript {
         // A JavaScript file's are reported only when it is checked (`checkJs`),
         // its JSDoc's parse errors with them (`JSDocDiagnostics`).
@@ -591,6 +596,15 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     } else if is_declaration_file_name(file_name) {
         let mut diagnostics = Vec::new();
         super::grammar_modifiers::collect_declaration_file_diagnostics(&parsed.program, &mut diagnostics);
+        // surge checks only the declaration files a project writes itself; a
+        // package's and a bundled default library's stay unchecked, as under
+        // `skipLibCheck`.
+        if !file_name
+            .split(['/', '\\'])
+            .any(|segment| segment == "node_modules" || segment == "generated-libs")
+        {
+            super::grammar::collect_declaration_file_implicit_any(&parsed.program, &mut diagnostics);
+        }
         super::grammar_recovered::collect_recovered_grammar_diagnostics(&parsed.program, true, &mut diagnostics);
         (diagnostics, Vec::new())
     } else {

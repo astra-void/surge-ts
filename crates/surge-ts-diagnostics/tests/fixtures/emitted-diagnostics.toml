@@ -1301,16 +1301,20 @@ status = "catalog-only"
 reason = "Cataloged for future coverage"
 
 [TS7055]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "generator-yield-types-nonstrict",
+]
 
 [TS7056]
 status = "catalog-only"
 reason = "Cataloged for future coverage"
 
 [TS7057]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "generator-grammar-and-iteration-checks",
+]
 
 [TS7058]
 status = "catalog-only"
@@ -4836,4 +4840,113 @@ oracle = [
 status = "emitted"
 oracle = [
   "jsx-element-grammar-checks",
+]
+
+[TS2498]
+status = "emitted"
+oracle = [
+  "export-star-and-type-only-namespace",
+]
+
+[TS1222]
+status = "emitted"
+oracle = [
+  "generator-grammar-and-iteration-checks",
+]
+
+[TS1368]
+status = "emitted"
+oracle = [
+  "generator-grammar-and-iteration-checks",
+]
+
+[TS18038]
+status = "emitted"
+oracle = [
+  "generator-grammar-and-iteration-checks",
+]
+
+[TS2504]
+status = "emitted"
+oracle = [
+  "generator-grammar-and-iteration-checks",
+]
+
+[TS2505]
+status = "emitted"
+oracle = [
+  "generator-grammar-and-iteration-checks",
+]
+
+[TS2763]
+status = "emitted"
+oracle = [
+  "generator-grammar-and-iteration-checks",
+]
+
+[TS2764]
+status = "emitted"
+oracle = [
+  "generator-grammar-and-iteration-checks",
+]
+
+[TS2766]
+status = "emitted"
+oracle = [
+  "generator-grammar-and-iteration-checks",
+  "generator-yield-types-nonstrict",
+]
+
+[TS7025]
+status = "emitted"
+oracle = [
+  "generator-yield-types-nonstrict",
+]
+
+[TS2375]
+status = "emitted"
+oracle = [
+  "exact-optional-property-types-basic",
+]
+
+[TS2379]
+status = "emitted"
+oracle = [
+  "exact-optional-property-types-basic",
+]
+
+[TS2412]
+status = "emitted"
+oracle = [
+  "exact-optional-property-types-basic",
+]
+
+[TS2635]
+status = "emitted"
+oracle = [
+  "instantiation-expression-applicability",
+]
+
+[TS18033]
+status = "emitted"
+oracle = [
+  "enum-computed-member-initializers",
+]
+
+[TS2354]
+status = "emitted"
+oracle = [
+  "import-helpers-missing-tslib",
+]
+
+[TS2343]
+status = "emitted"
+oracle = [
+  "import-helpers-incomplete-tslib",
+]
+
+[TS2807]
+status = "emitted"
+oracle = [
+  "import-helpers-incomplete-tslib",
 ]

@@ -432,6 +432,16 @@ pub(crate) fn resolve_module_imports(
             &mut complete_namespace_imports,
             ctx,
         );
+        // A module is a value, so a type-only namespace import used as one is
+        // TS1361 whatever the module exports, resolved or not.
+        if let ParsedImportKind::Namespace {
+            local_name,
+            is_type_only: true,
+            ..
+        } = &import.kind
+        {
+            type_only_aliases.push((Arc::from(local_name.as_str()), TypeOnlyAliasKind::Import));
+        }
     }
 
     register_import_type_namespaces(
@@ -1920,6 +1930,17 @@ fn resolve_namespace_import(
                     },
                 );
             }
+        } else if resolve_relative_module(
+            &ctx.file_name,
+            &import.module_specifier,
+            program_files,
+            &ctx.module_file_index_by_identity,
+        )
+        .is_none()
+        {
+            report_unresolved_module(ctx, import);
+        } else {
+            report_non_module_import(ctx, import, program_files);
         }
 
         let declaration = TypeDeclarationInfo::Alias(TypeAliasInfo::new(

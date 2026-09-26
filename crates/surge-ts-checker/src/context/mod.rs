@@ -546,6 +546,13 @@ pub(crate) struct CheckerContext {
     /// {}`. Per-file: cleared by `begin_file_check`.
     pub(crate) file_const_class_names: FxHashSet<Arc<str>>,
     pub(crate) file_type_only_import_names_owner: Option<String>,
+    /// Set while an expression is checked where a type-only import is a valid
+    /// use (a computed name of an `abstract` or `declare` member, or in an
+    /// ambient class): tsc's `isValidTypeOnlyAliasUseSite`.
+    pub(crate) type_only_alias_use_valid: bool,
+    /// The value bindings the file's imports made, by name: a read that
+    /// resolves to anything else is a local shadowing the import.
+    pub(crate) file_type_only_import_handles: FxHashMap<Arc<str>, crate::symbols::SymbolInfoHandle>,
     /// Function names the authoritative check pass has already registered in the
     /// file under check. The first registration *replaces* the signature the
     /// collection pre-pass installed (the check pass resolves it under the right
@@ -732,13 +739,23 @@ pub(crate) struct CheckerContext {
     /// The body being checked belongs to a generator, whose returns relate to
     /// its declared type's return type argument (tsc's `unwrapReturnType`).
     pub(crate) in_generator_body: bool,
+    /// Where the `yield`s of the unannotated generator declaration being
+    /// checked start whose value is used with no contextual type, each an
+    /// implicit `any` under `noImplicitAny` (TS7057).
+    pub(crate) implicit_any_yields: Vec<usize>,
     /// The yield type of the annotated generator whose body is being checked
     /// (`getIterationTypesOfGeneratorFunctionReturnType`), which each `yield`
     /// operand is contextually typed by and checked against.
     pub(crate) generator_yield_type: Option<Type>,
+    /// The next type of the annotated generator whose body is being checked:
+    /// what each of its `yield`s evaluates to.
+    pub(crate) generator_next_type: Option<Type>,
     /// The body being checked is a generator's, annotated or not: a `yield`
     /// anywhere else is a grammar error whose operand tsc does not check.
     pub(crate) in_generator_function: bool,
+    /// The generator being checked is an `async function*`, whose `yield*`
+    /// operand may be async or sync iterable.
+    pub(crate) in_async_generator: bool,
     /// The arrow about to be checked is a call argument, so a whole-signature
     /// mismatch is an argument error (TS2345). Taken by that arrow's check.
     pub(crate) next_arrow_is_argument: bool,
@@ -965,6 +982,8 @@ impl CheckerContext {
             file_const_class_names: FxHashSet::default(),
             checked_function_declaration_names: FxHashSet::default(),
             file_type_only_import_names_owner: None,
+            type_only_alias_use_valid: false,
+            file_type_only_import_handles: FxHashMap::default(),
             ambient_global_type_declarations: Arc::new(TypeDeclarationTable::new()),
             module_file_index_by_identity: Arc::new(FxHashMap::default()),
             module_scope_by_file: Arc::new(FxHashMap::default()),
@@ -1000,8 +1019,11 @@ impl CheckerContext {
             in_contextual_return_check: false,
             in_async_body: false,
             in_generator_body: false,
+            implicit_any_yields: Vec::new(),
             generator_yield_type: None,
+            generator_next_type: None,
             in_generator_function: false,
+            in_async_generator: false,
             next_arrow_is_argument: false,
             next_arrow_context_only: false,
             namespace_require_reads: None,
@@ -1164,6 +1186,8 @@ impl CheckerContext {
             file_const_class_names: FxHashSet::default(),
             checked_function_declaration_names: FxHashSet::default(),
             file_type_only_import_names_owner: None,
+            type_only_alias_use_valid: false,
+            file_type_only_import_handles: FxHashMap::default(),
             ambient_global_type_declarations: data.ambient_global_type_declarations.clone(),
             module_file_index_by_identity: data.module_file_index_by_identity.clone(),
             module_scope_by_file: data.module_scope_by_file.clone(),
@@ -1199,8 +1223,11 @@ impl CheckerContext {
             in_contextual_return_check: false,
             in_async_body: false,
             in_generator_body: false,
+            implicit_any_yields: Vec::new(),
             generator_yield_type: None,
+            generator_next_type: None,
             in_generator_function: false,
+            in_async_generator: false,
             next_arrow_is_argument: false,
             next_arrow_context_only: false,
             namespace_require_reads: None,
@@ -1777,8 +1804,11 @@ impl CheckerContext {
         self.in_contextual_return_check = false;
         self.in_async_body = false;
         self.in_generator_body = false;
+        self.implicit_any_yields.clear();
         self.generator_yield_type = None;
+        self.generator_next_type = None;
         self.in_generator_function = false;
+        self.in_async_generator = false;
         self.next_arrow_is_argument = false;
         self.next_arrow_context_only = false;
         self.next_body_frame_active = false;
@@ -1831,6 +1861,7 @@ impl CheckerContext {
         self.file_umd_global_names_owner = None;
         self.file_type_only_import_names.clear();
         self.file_type_only_alias_names.clear();
+        self.file_type_only_import_handles.clear();
         self.file_type_only_import_names_owner = None;
         self.checked_function_declaration_names.clear();
         self.grammar_answered_spans.clear();

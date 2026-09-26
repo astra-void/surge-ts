@@ -2582,6 +2582,28 @@ pub(crate) fn check_function_body_with_signature_and_this(
         }
         _ => function_type,
     };
+    // tsc's `checkSignatureDeclaration`: a generator's annotation describes
+    // the generator object, which `void` never does.
+    if is_generator && has_explicit_return_type && matches!(function_type.return_type(), Type::Void) {
+        ctx.push(crate::spans::diagnostic_with_syntax_span(
+            Diagnostic::ts2505(ctx.file_name.clone()),
+            missing_return_span,
+        ));
+    }
+    // tsc's `reportErrorsFromWidening` for an unannotated generator's yield
+    // type; a declaration has no contextual signature to defer to.
+    if is_generator
+        && !has_explicit_return_type
+        && ctx.options.no_implicit_any
+        && !ctx.options.strict_null_checks
+        && let Some(name) = name.as_deref()
+        && super::body_statements::yields_only_widening_nullish(&body)
+    {
+        ctx.push(crate::spans::diagnostic_with_syntax_span(
+            Diagnostic::ts7055(name, "any", ctx.file_name.clone()),
+            missing_return_span,
+        ));
+    }
     let body_flow = analyze_function_body_flow(&body);
     let flow_facts = collect_function_flow_facts(&body);
     // Whether a `default`-less switch covers its discriminant is only known once
@@ -2712,13 +2734,28 @@ pub(crate) fn check_function_body_with_signature_and_this(
         ctx.open_contextual_return_frame();
         let outer_async_body = std::mem::replace(&mut ctx.in_async_body, is_async);
         let outer_generator_body = std::mem::replace(&mut ctx.in_generator_body, is_generator);
+        // A declaration or class member is never contextually typed, so an
+        // unannotated generator's `yield`s have no contextual next type.
+        let implicit_any_yields = if is_generator && !has_explicit_return_type && ctx.options.no_implicit_any {
+            super::body_statements::implicit_any_yield_starts(&body)
+        } else {
+            Vec::new()
+        };
+        let outer_implicit_any_yields = std::mem::replace(&mut ctx.implicit_any_yields, implicit_any_yields);
         let outer_yield_type = std::mem::replace(
             &mut ctx.generator_yield_type,
             (is_generator && has_explicit_return_type)
                 .then(|| super::body_statements::generator_yield_type_argument(function_type.return_type()))
                 .flatten(),
         );
+        let outer_next_type = std::mem::replace(
+            &mut ctx.generator_next_type,
+            (is_generator && has_explicit_return_type)
+                .then(|| super::body_statements::generator_next_type_argument(function_type.return_type()))
+                .flatten(),
+        );
         let outer_generator_function = std::mem::replace(&mut ctx.in_generator_function, is_generator);
+        let outer_async_generator = std::mem::replace(&mut ctx.in_async_generator, is_generator && is_async);
         // Every caller is a declaration or a class member, neither of which is
         // ever contextually typed, so an unannotated one's returns relate to
         // nothing — Go checks a return only against the annotation.
@@ -2734,8 +2771,11 @@ pub(crate) fn check_function_body_with_signature_and_this(
         );
         ctx.in_async_body = outer_async_body;
         ctx.in_generator_body = outer_generator_body;
+        ctx.implicit_any_yields = outer_implicit_any_yields;
         ctx.generator_yield_type = outer_yield_type;
+        ctx.generator_next_type = outer_next_type;
         ctx.in_generator_function = outer_generator_function;
+        ctx.in_async_generator = outer_async_generator;
         BODY_RETURN_CAPTURE.with(|slot| {
             if let Some((depth, captured)) = slot.borrow_mut().as_mut()
                 && *depth == body_depth

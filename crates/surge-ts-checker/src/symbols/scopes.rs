@@ -262,6 +262,21 @@ impl ScopeStack {
         self.update_visible_handle(name, Arc::new(symbol))
     }
 
+    /// [`Self::update_visible`] for a type the binding was narrowed to: when
+    /// nothing recorded its declaration yet, `declared` is kept as that.
+    pub(crate) fn update_visible_narrowed(&mut self, name: &str, symbol: SymbolInfo, declared: Type) -> bool {
+        if self.visible_symbols.declared_type(name).is_none() {
+            let name: Arc<str> = name.into();
+            if let Some(frame) = self.frames.iter_mut().rev().find(|frame| frame.symbols.get(&name).is_some())
+                && frame.symbols.declared_type(&name).is_none()
+            {
+                frame.symbols.set_declared_type(Arc::clone(&name), Some(declared.clone()));
+            }
+            self.visible_symbols.set_declared_type(name, Some(declared));
+        }
+        self.update_visible(name, symbol)
+    }
+
     pub(crate) fn update_visible_handle(&mut self, name: &str, symbol: SymbolInfoHandle) -> bool {
         let name: Arc<str> = name.into();
         for frame in self.frames.iter_mut().rev() {

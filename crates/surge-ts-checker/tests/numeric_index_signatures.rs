@@ -124,6 +124,7 @@ fn an_element_write_narrows_the_element_read() {
         strict_property_initialization: false,
         strict_null_checks: true,
         no_unchecked_indexed_access: true,
+        exact_optional_property_types: false,
         ..CheckerOptions::default()
     };
     let diagnostics = check_source_with_options(

@@ -23,6 +23,7 @@ mod branch_assignments;
 mod control_flow;
 pub(crate) mod evolving_arrays;
 mod returns;
+mod yields;
 
 pub(crate) use alias_conditions::*;
 pub(crate) use branch_assignments::deep_assigned_names;
@@ -33,6 +34,7 @@ use branch_assignments::*;
 pub(crate) use branch_assignments::branch_assigned_names;
 pub(crate) use control_flow::*;
 pub(crate) use returns::*;
+pub(crate) use yields::{implicit_any_yield_starts, yields_only_widening_nullish};
 
 pub(crate) fn check_function_variable_declaration(
     variable: ParsedVariableDeclaration,

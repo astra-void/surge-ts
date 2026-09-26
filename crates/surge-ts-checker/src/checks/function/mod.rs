@@ -163,6 +163,7 @@ impl surge_ts_types::ResolveReference for LazyBodyReturn {
         };
         let resolved =
             checked_body_return(&self.function, &self.parameter_types, scope, body_check_context(&ctx))
+            .map(|returned| promised_if_async(returned, self.function.is_async, &mut ctx))
             .unwrap_or(Type::Unknown);
         // A force during module analysis runs with its scopes still incomplete,
         // so only the check phase's answer is the one every later read may keep.
@@ -294,6 +295,7 @@ fn infer_member_type(
                 body_check_context(ctx),
             )
             .map(|ty| crate::checks::var::widen_nullable_type(&ty))
+            .map(|ty| promised_if_async(ty, method.is_async, ctx))
         }
         surge_ts_syntax::ParsedInferredMemberSource::Initializer(initializer) => {
             let mut shadow = body_inference_shadow_context(ctx);
@@ -594,7 +596,7 @@ pub(crate) fn instantiated_body_return(
     ctx.pop_type_parameter_scope();
     ctx.type_declaration_scope = saved_scope;
     ctx.type_declarations = saved_declarations;
-    inferred
+    inferred.map(|returned| promised_if_async(returned, function.is_async, ctx))
 }
 
 /// The scope a module declaration's body is checked in from outside its own
@@ -770,6 +772,17 @@ fn inferred_declaration_return_type(
         .symbols
         .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
     infer_body_return(function, function_type.parameters(), scope, ctx)
+        .map(|returned| promised_if_async(returned, function.is_async, ctx))
+}
+
+/// tsc's `createPromiseReturnType`: an async function's inferred return is a
+/// promise of what its body's `return`s await to. With the lib promise
+/// collapsed to its value the awaited value is the answer as it is.
+fn promised_if_async(returned: Type, is_async: bool, ctx: &mut CheckerContext) -> Type {
+    if !is_async || !crate::checks::call::promise_nominal_enabled() {
+        return returned;
+    }
+    crate::checks::call::promise_of(&crate::checks::call::awaited_type(&returned), ctx)
 }
 
 /// The body walk behind [`inferred_declaration_return_type`] and
@@ -2037,6 +2050,14 @@ pub(crate) fn check_arrow_function_expression_anchored(
         let mut return_type = with_type_copy_reason(TypeCopyReason::ExpectedType, || {
             function_type.return_type().clone()
         });
+        // tsc's `checkSignatureDeclaration`: a generator's annotation describes
+        // the generator object, which `void` never does.
+        if is_generator && has_explicit_return_type && matches!(return_type, Type::Void) {
+            ctx.push(crate::spans::diagnostic_with_syntax_span(
+                Diagnostic::ts2505(ctx.file_name.clone()),
+                return_type_span,
+            ));
+        }
 
         if let Some(expected_type) = expected_type {
             for (index, parameter_type) in contextual_parameter_types
@@ -2231,6 +2252,10 @@ pub(crate) fn check_arrow_function_expression_anchored(
                         )
                     }
                     Some(return_type_for_body) => {
+                        // The body is the async function's returned value, so
+                        // a conditional's branches are awaited as a `return`'s.
+                        let outer_async_body =
+                            std::mem::replace(&mut ctx.in_async_body, is_async && !is_generator);
                         let inferred =
                             crate::checks::expected::evaluate_return_expression_with_expected_type(
                                 &expression,
@@ -2240,6 +2265,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                                 &visible_symbols,
                                 ctx,
                             );
+                        ctx.in_async_body = outer_async_body;
                         // tsc's `checkReturnExpression` relates an expression body
                         // to the annotation as a whole, at the body — awaited on
                         // both sides for an async one (`unwrapReturnType`).
@@ -2375,6 +2401,22 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 // return type annotation (`getReturnTypeFromAnnotation`); a
                 // contextually typed one is related by its whole signature.
                 let annotated_generator = is_generator && has_explicit_return_type;
+                // tsc's `reportErrorsFromWidening` for the yield type of a
+                // nameless generator with no contextual signature (TS7025).
+                if is_generator
+                    && name.is_none()
+                    && !has_explicit_return_type
+                    && expected_type.is_none()
+                    && ctx.degraded_expected_type_depth == 0
+                    && ctx.options.no_implicit_any
+                    && !ctx.options.strict_null_checks
+                    && yields_only_widening_nullish(&statements)
+                {
+                    ctx.push(crate::spans::diagnostic_with_syntax_span(
+                        Diagnostic::ts7025("any", ctx.file_name.clone()),
+                        arrow_span,
+                    ));
+                }
                 let outer_async_body = std::mem::replace(
                     &mut ctx.in_async_body,
                     is_async && (!is_generator || annotated_generator),
@@ -2387,7 +2429,15 @@ pub(crate) fn check_arrow_function_expression_anchored(
                         .then(|| generator_yield_type_argument(&return_type))
                         .flatten(),
                 );
+                let outer_next_type = std::mem::replace(
+                    &mut ctx.generator_next_type,
+                    annotated_generator
+                        .then(|| generator_next_type_argument(&return_type))
+                        .flatten(),
+                );
                 let outer_generator_function = std::mem::replace(&mut ctx.in_generator_function, is_generator);
+                let outer_async_generator =
+                    std::mem::replace(&mut ctx.in_async_generator, is_generator && is_async);
                 check_function_body(
                     statements,
                     return_type_for_body,
@@ -2398,7 +2448,9 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 ctx.in_async_body = outer_async_body;
                 ctx.in_generator_body = outer_generator_body;
                 ctx.generator_yield_type = outer_yield_type;
+                ctx.generator_next_type = outer_next_type;
                 ctx.in_generator_function = outer_generator_function;
+                ctx.in_async_generator = outer_async_generator;
                 let body_flow = match recheck_body {
                     Some(body)
                         if !ctx.non_exhaustive_switches.is_empty()
@@ -2488,6 +2540,11 @@ pub(crate) fn check_arrow_function_expression_anchored(
                             members.push(Type::Undefined);
                         }
                         return_type = surge_ts_types::union_type(members);
+                        // The returns were recorded awaited; an async body
+                        // returns a promise of them (`createPromiseReturnType`).
+                        if is_async && !is_generator {
+                            return_type = crate::checks::call::promise_of(&return_type, ctx);
+                        }
                     }
                 }
                 let returned_void_like = ctx.close_contextual_return_frame();

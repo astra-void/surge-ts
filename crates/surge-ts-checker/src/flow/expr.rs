@@ -56,6 +56,25 @@ pub(crate) fn check_expression_flow_impl(
                 ctx,
             )
         }
+        // A member write reads its target's receiver, then runs its value, as
+        // the statement form does.
+        ParsedExpression::MemberAssignment(assignment) => {
+            blocked |= check_expression_flow_impl(
+                &assignment.target,
+                assignment.target_span.or(fallback_span),
+                flow_state,
+                statement_index,
+                ctx,
+            )
+            .is_blocked();
+            check_expression_flow_impl(
+                &assignment.value,
+                assignment.value_span.or(fallback_span),
+                flow_state,
+                statement_index,
+                ctx,
+            )
+        }
         ParsedExpression::Identifier { name, span } => report_read_flow(
             name,
             span.or(fallback_span),
@@ -336,6 +355,18 @@ pub(crate) fn check_expression_flow_impl(
                     )
                     .is_blocked();
                 }
+                if let Some(key) = property.member_key.as_deref() {
+                    let outer = flow_state.in_member_key.replace(true);
+                    blocked |= check_expression_flow_impl(
+                        key,
+                        property.name_span.or(property.span).or(fallback_span),
+                        flow_state,
+                        statement_index,
+                        ctx,
+                    )
+                    .is_blocked();
+                    flow_state.in_member_key.set(outer);
+                }
                 let value = property.unnamed_key_value.as_deref().unwrap_or(&property.value);
                 blocked |= check_expression_flow_impl(
                     value,
@@ -407,6 +438,17 @@ pub(crate) fn check_expression_flow_impl(
             )
         }
         ParsedExpression::TypeAssertion {
+            expression,
+            expression_span,
+            ..
+        } => check_expression_flow_impl(
+            expression,
+            expression_span.or(fallback_span),
+            flow_state,
+            statement_index,
+            ctx,
+        ),
+        ParsedExpression::Instantiation {
             expression,
             expression_span,
             ..

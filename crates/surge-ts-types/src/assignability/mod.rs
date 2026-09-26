@@ -512,6 +512,25 @@ fn promise_reference(ty: &Type) -> bool {
         )
 }
 
+/// A lib `Promise<T>` / `PromiseLike<T>` reference: whether it is the
+/// `PromiseLike`, and its value argument.
+fn lib_promise_argument(ty: &Type) -> Option<(bool, &Type)> {
+    let Type::Reference(reference) = ty else {
+        return None;
+    };
+    let [argument] = &*reference.arguments else {
+        return None;
+    };
+    if reference.enum_owner.is_some() {
+        return None;
+    }
+    match reference.display.split('<').next() {
+        Some("Promise") => Some((false, argument)),
+        Some("PromiseLike") => Some((true, argument)),
+        _ => None,
+    }
+}
+
 fn definitely_not_thenable(ty: &Type) -> bool {
     match ty {
         Type::String
@@ -830,8 +849,19 @@ fn type_variable_related(from: &Type, to: &Type) -> Option<bool> {
             return Some(false);
         }
     }
+    // relater.go tries the target's own arms before a variable source is
+    // related through its constraint.
+    let target_deferred = match to {
+        Type::TypeParameter(target) => crate::type_variable::deferred_type(target),
+        _ => None,
+    };
+    if let Some(deferred) = &target_deferred
+        && deferred_target_related(from, deferred)
+    {
+        return Some(true);
+    }
     let source = active_variable(from);
-    let target_is_variable = active_variable(to).is_some();
+    let target_is_variable = active_variable(to).is_some() || target_deferred.is_some();
     if source.is_none() && !target_is_variable {
         return None;
     }
@@ -869,6 +899,47 @@ fn type_variable_related(from: &Type, to: &Type) -> Option<bool> {
         Type::Reference(reference) => is_assignable_to(&reference.resolve_arc(), to),
         _ => false,
     })
+}
+
+/// The target-side arms of `structuredTypeRelatedToWorker` for a deferred
+/// type: `S[K]` relates to `T[J]` when `S` relates to `T` and `K` to `J`, and
+/// anything relates to `T[K]` that relates to its base constraint for
+/// writing; `keyof S` relates to `keyof T` when `T` relates to `S`, and
+/// anything relates to `keyof T` that relates to the keys of `T`'s
+/// constraint. A constraint surge cannot compute admits everything.
+fn deferred_target_related(from: &Type, target: &crate::type_variable::DeferredType) -> bool {
+    use crate::type_variable::{DeferredType, TargetConstraint};
+    let source = match from {
+        Type::TypeParameter(source) => crate::type_variable::deferred_type(source),
+        _ => None,
+    };
+    let constraint = match target {
+        DeferredType::IndexedAccess { object, index } => {
+            if let Some(DeferredType::IndexedAccess {
+                object: source_object,
+                index: source_index,
+            }) = &source
+                && is_assignable_to(source_object, object)
+                && is_assignable_to(source_index, index)
+            {
+                return true;
+            }
+            crate::type_variable::indexed_access_write_constraint(object, index)
+        }
+        DeferredType::Keyof(operand) => {
+            if let Some(DeferredType::Keyof(source_operand)) = &source
+                && is_assignable_to(operand, source_operand)
+            {
+                return true;
+            }
+            crate::type_variable::keyof_constraint_keys(operand)
+        }
+    };
+    match constraint {
+        TargetConstraint::Types(types) => types.iter().all(|ty| is_assignable_to(from, ty)),
+        TargetConstraint::Absent => false,
+        TargetConstraint::Unmodelled => true,
+    }
 }
 
 fn assignability_arms(from: &Type, to: &Type) -> bool {
@@ -917,6 +988,20 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
                 _ => crate::is_type_matched_by_template_literal(other, &texts, &types),
             },
         };
+    }
+
+    // tsc relates two instantiations of the lib promise through `T`'s measured
+    // variance, which is covariant (`then` hands `T` to a callback, an output
+    // position under `compareSignaturesRelated`'s callback rule), and a failed
+    // variance check is final: the structural retry `hasCovariantVoidArgument`
+    // allows for a `void` target argument fails on that same callback. A
+    // `Promise` is a `PromiseLike`; the reverse lacks `catch` and is left to
+    // the structure.
+    if let (Some((source_is_like, source_argument)), Some((target_is_like, target_argument))) =
+        (lib_promise_argument(from), lib_promise_argument(to))
+        && (!source_is_like || target_is_like)
+    {
+        return is_assignable_to(source_argument, target_argument);
     }
 
     // Enum types are nominal (`isEnumTypeRelatedTo`): a member of one enum
@@ -2675,7 +2760,10 @@ fn index_signatures_related(source: &ObjectType, target: &ObjectType) -> bool {
             .properties
             .iter()
             .filter(|(name, _)| !numeric_only || crate::object::is_numeric_key(name.as_ref()))
-            .all(|(_, property)| property.ty.is_unmodelled() || is_assignable_to(&property.ty, value))
+            .all(|(_, property)| {
+                property.ty.is_unmodelled()
+                    || is_assignable_to(&indexed_member_type(property, numeric_only), value)
+            })
     };
     target
         .string_index_type
@@ -2685,6 +2773,21 @@ fn index_signatures_related(source: &ObjectType, target: &ObjectType) -> bool {
             .number_index_type
             .as_deref()
             .is_none_or(|value| related(value, true))
+}
+
+/// The type `membersRelatedToIndexInfo` relates a member as: an optional one
+/// keeps the `undefined` its read adds against a number index signature and
+/// loses every `undefined` against a string one, unless it is only
+/// `undefined`; under `exactOptionalPropertyTypes` it is its declared type.
+fn indexed_member_type(property: &crate::ObjectProperty, numeric_index: bool) -> Type {
+    if !property.is_optional() || !crate::strict_null_checks() || crate::exact_optional_property_types() {
+        return property.ty.clone();
+    }
+    if numeric_index {
+        with_optionality(&property.ty, true)
+    } else {
+        strip_undefined_member(&property.ty).unwrap_or(Type::Undefined)
+    }
 }
 
 /// tsc's `signaturesRelatedTo`, for both kinds: every call (construct)
@@ -2832,10 +2935,15 @@ fn comparable_property_related(source_ty: &Type, source_optional: bool, target: 
     is_assignable_to(&effective_source, &effective_target)
 }
 
-/// An optional member's declared type as `getTypeOfSymbol` reads it: with
-/// `undefined` under `strictNullChecks`.
+/// An optional member's declared type as `getNonMissingTypeOfSymbol` reads it:
+/// with `undefined` under `strictNullChecks`, as declared under
+/// `exactOptionalPropertyTypes`.
 fn with_optionality(ty: &Type, optional: bool) -> Type {
-    if optional && crate::strict_null_checks() && !type_includes_undefined(ty) {
+    if optional
+        && crate::strict_null_checks()
+        && !crate::exact_optional_property_types()
+        && !type_includes_undefined(ty)
+    {
         crate::union_type(vec![ty.clone(), Type::Undefined])
     } else {
         ty.clone()
@@ -2936,9 +3044,10 @@ pub fn object_assignability_failure(
         // Without `exactOptionalPropertyTypes` an optional target property accepts
         // an explicit `undefined`, so a required source property read as
         // `T | undefined` (typically itself an optional property's read type)
-        // satisfies a `p?: T` target.
+        // satisfies a `p?: T` target. With it the target is related as declared
+        // (`getNonMissingTypeOfSymbol`).
         let stripped_source_ty;
-        let comparable_source_ty = if target_property.is_optional() {
+        let comparable_source_ty = if target_property.is_optional() && !crate::exact_optional_property_types() {
             match strip_undefined_member(source_property_ty) {
                 Some(stripped) => {
                     stripped_source_ty = stripped;

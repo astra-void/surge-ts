@@ -140,6 +140,10 @@ pub struct CheckerOptions {
     /// `strictNullChecks`. Off, `null` and `undefined` belong to every type:
     /// they drop out of unions and are assignable anywhere.
     pub strict_null_checks: bool,
+    /// `strictBindCallApply`: `call`, `apply` and `bind` on a value with
+    /// call or construct signatures are the lib's `CallableFunction` /
+    /// `NewableFunction` members, typed by the value's own parameters.
+    pub strict_bind_call_apply: bool,
     /// `strictPropertyInitialization`: an instance property with no initializer
     /// must be definitely assigned in the constructor.
     pub strict_property_initialization: bool,
@@ -149,11 +153,20 @@ pub struct CheckerOptions {
     pub no_implicit_override: bool,
     pub no_property_access_from_index_signature: bool,
     pub no_unchecked_indexed_access: bool,
+    /// `exactOptionalPropertyTypes`: an optional property is written and
+    /// related as declared, without the `undefined` a read of it adds.
+    pub exact_optional_property_types: bool,
     pub allow_importing_ts_extensions: bool,
     pub allow_arbitrary_extensions: bool,
     /// `experimentalDecorators`: which decorator targets tsc accepts
     /// (`nodeCanBeDecorated`'s `useLegacyDecorators`).
     pub experimental_decorators: bool,
+    /// `importHelpers`: tsc resolves `tslib` from a file whose emit calls
+    /// helpers and looks each helper up (`checkExternalEmitHelpers`).
+    pub import_helpers: bool,
+    /// `emitDecoratorMetadata`: a decorated declaration's emit also calls
+    /// `__metadata`.
+    pub emit_decorator_metadata: bool,
     pub no_unused_locals: bool,
     pub no_unused_parameters: bool,
     /// `allowUnreachableCode: true`; unset and `false` both leave it off.
@@ -291,6 +304,7 @@ impl Default for CheckerOptions {
             node_module_resolution: false,
             esm_module_files: Default::default(),
             strict_null_checks: true,
+            strict_bind_call_apply: false,
             strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,
@@ -298,9 +312,12 @@ impl Default for CheckerOptions {
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
+            exact_optional_property_types: false,
             allow_importing_ts_extensions: false,
             allow_arbitrary_extensions: false,
             experimental_decorators: false,
+            import_helpers: false,
+            emit_decorator_metadata: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,

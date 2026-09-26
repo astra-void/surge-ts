@@ -323,7 +323,7 @@ pub(crate) fn check_generic_class_construct(
 /// relates no argument. Only the first type argument's position is known
 /// (types carry no spans), so a later one's violation is not reported. A side
 /// surge cannot resolve decides nothing.
-fn violates_type_parameter_constraint(
+pub(crate) fn violates_type_parameter_constraint(
     type_parameters: &[ParsedTypeParameter],
     type_arguments: &[ParsedType],
     callee_span: Option<SyntaxTextSpan>,

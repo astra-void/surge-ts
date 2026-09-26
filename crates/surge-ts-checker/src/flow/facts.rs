@@ -650,6 +650,9 @@ pub(crate) fn report_read_flow_positioned(
     if !flow_state.enabled || flow_state.tracked_local_count == 0 {
         return FlowCheck::Clear;
     }
+    if flow_state.assumed_initialized_in_member_key(name) {
+        return FlowCheck::Clear;
+    }
 
     match flow_state.read_identifier(name, statement_index) {
         FlowReadOutcome::Unresolved | FlowReadOutcome::Declared(AssignmentState::Assigned) => {

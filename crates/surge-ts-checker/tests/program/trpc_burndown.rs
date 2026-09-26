@@ -133,6 +133,7 @@ fn member_predicate_keeps_the_base_possibly_undefined() {
         )],
         CheckerOptions {
             no_unchecked_indexed_access: true,
+            exact_optional_property_types: false,
             ..CheckerOptions::default()
         },
     );

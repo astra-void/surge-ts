@@ -191,9 +191,33 @@ pub(crate) fn check_delete_operand(
     ) {
         return;
     }
-    if !type_includes_undefined(&property_type) {
+    // `exactOptionalPropertyTypes` asks for the optional modifier itself: a
+    // written `undefined` no longer makes a member deletable.
+    let optional = if surge_ts_types::exact_optional_property_types() {
+        declared_property_optional(&unnarrowed, &property_name)
+    } else {
+        type_includes_undefined(&property_type)
+    };
+    if !optional {
         let file_name = ctx.file_name.clone();
         ctx.push(Diagnostic::ts2790(file_name).with_span(convert_span(span)));
+    }
+}
+
+/// Whether the member the receiver declares is optional; a union's is when
+/// any constituent's is, as tsc's synthetic union property records.
+fn declared_property_optional(receiver: &Type, property_name: &str) -> bool {
+    match receiver.peeled() {
+        Type::Object(object) => object
+            .properties
+            .get(property_name)
+            .is_none_or(|property| property.optional),
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .filter(|member| !matches!(member, Type::Undefined | Type::Null))
+            .any(|member| declared_property_optional(member, property_name)),
+        _ => true,
     }
 }
 

@@ -72,6 +72,11 @@ pub(super) enum ReferenceGuard<'a> {
         literal: &'a Type,
         keep_matching: bool,
     },
+    /// `"p" in o` or `o.hasOwnProperty("p")`, applied to `o.p` under
+    /// `exactOptionalPropertyTypes`: a read typed with tsc's missing type loses
+    /// it, or is left with only it (`narrowTypeByInKeyword`'s
+    /// `containsMissingType` arm).
+    ExactOptionalPresence { keep_present: bool },
 }
 
 impl ReferenceGuard<'_> {
@@ -193,6 +198,16 @@ impl ReferenceGuard<'_> {
                     narrowed => narrowed,
                 };
                 (narrowed != *ty || still_optional != optional).then_some((narrowed, still_optional))
+            }
+            Self::ExactOptionalPresence { keep_present } => {
+                if !crate::checks::expr::is_exact_optional_slot(ty, optional) {
+                    return None;
+                }
+                Some(if *keep_present {
+                    (ty.clone(), false)
+                } else {
+                    (Type::Undefined, false)
+                })
             }
             // An assignment narrows a union-declared slot to the members the
             // assigned value can inhabit, as tsc does. A non-union slot is
@@ -1131,6 +1146,11 @@ pub(super) fn collect_reference_guards<'a>(
 
     if let Some((object, property)) = parse_in_condition(condition) {
         if let Some((base, path)) = reference_path(object) {
+            let member = surge_ts_types::exact_optional_property_types().then(|| {
+                let mut member = path.clone();
+                member.push(property.to_string());
+                (base.clone(), member)
+            });
             guards.push((
                 base,
                 path,
@@ -1139,6 +1159,15 @@ pub(super) fn collect_reference_guards<'a>(
                     keep_present: branch_is_true,
                 },
             ));
+            if let Some((base, member)) = member {
+                guards.push((
+                    base,
+                    member,
+                    ReferenceGuard::ExactOptionalPresence {
+                        keep_present: branch_is_true,
+                    },
+                ));
+            }
         }
         return;
     }

@@ -272,6 +272,110 @@ pub(crate) fn report_incompatible_index_signatures(
     true
 }
 
+/// `propertyRelatedTo`'s modifier rules for a class against a type it
+/// implements, which carries the `private` and `protected` members of every
+/// class that type extends: a private member relates only to its own
+/// declaration, a protected target only to a member declared in a class
+/// derived from the target's declaring class (`isValidOverrideOf`), and a
+/// protected source never to a public target.
+pub(crate) fn implements_unrelated_accessibility(
+    class: &ParsedClassDeclaration,
+    implemented: &ParsedNamedType,
+    ctx: &mut CheckerContext,
+) -> bool {
+    if class.type_parameters.is_empty() {
+        return implements_unrelated_accessibility_in_scope(class, implemented, ctx);
+    }
+    let _type_variables = crate::checks::function::enter_body_type_variables(&class.type_parameters, ctx);
+    crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
+        implements_unrelated_accessibility_in_scope(class, implemented, ctx)
+    })
+}
+
+fn implements_unrelated_accessibility_in_scope(
+    class: &ParsedClassDeclaration,
+    implemented: &ParsedNamedType,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let own_arguments: Vec<ParsedType> =
+        class.type_parameters.iter().map(|parameter| named_type(&parameter.name, None)).collect();
+    let checkpoint = ctx.diagnostics().len();
+    let own_type = map_parsed_type(named_type_with(&class.name, class.name_span, own_arguments), ctx);
+    let implemented_type = crate::program::with_dts_expansion_reason(
+        crate::program::DtsExpansionReason::InterfaceHeritageResolution,
+        || map_parsed_type(named_type_with(&implemented.name, None, implemented.type_arguments.clone()), ctx),
+    );
+    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    let (Type::Object(own), Type::Object(implemented_object)) = (own_type.peeled(), implemented_type.peeled()) else {
+        return false;
+    };
+    let lineage = class_lineage(class, ctx);
+    implemented_object.properties.iter().any(|(name, target_property)| {
+        let Some(own_property) = own.properties.get(&**name) else {
+            return false;
+        };
+        let source = own_property.restriction.as_ref();
+        let target = target_property.restriction.as_ref();
+        if source.is_some_and(|restriction| restriction.private) || target.is_some_and(|restriction| restriction.private) {
+            return source != target;
+        }
+        match (source, target) {
+            (_, Some(target)) => {
+                let declaring = match source {
+                    Some(source) => Some(source.owner.to_string()),
+                    None => public_member_owner(&lineage, name),
+                };
+                declaring.is_some_and(|declaring| !derives_from(&lineage, &declaring, &target.owner))
+            }
+            (Some(_), None) => true,
+            (None, None) => false,
+        }
+    })
+}
+
+/// The class's instance declaration and every class its `extends` chain
+/// reaches, nearest first.
+fn class_lineage(class: &ParsedClassDeclaration, ctx: &CheckerContext) -> Vec<InterfaceInfo> {
+    let mut lineage: Vec<InterfaceInfo> = Vec::new();
+    let mut current = match ctx.lookup_type_declaration(&class.name) {
+        Some(TypeDeclarationInfo::Interface(info)) if info.is_class_instance => Some(info.clone()),
+        _ => None,
+    };
+    while let Some(info) = current.take() {
+        if lineage.len() >= 32 || lineage.iter().any(|seen| owner_mark(seen) == owner_mark(&info)) {
+            break;
+        }
+        current = crate::checks::expr::base_interface(&info, ctx).filter(|base| base.is_class_instance);
+        lineage.push(info);
+    }
+    lineage
+}
+
+/// The declaring-class mark a restricted member of `info`'s instance type
+/// carries (see `attach_member_restrictions`).
+fn owner_mark(info: &InterfaceInfo) -> Option<String> {
+    info.name_span.map(|span| format!("{}\0{}", info.file_name, span.start))
+}
+
+/// The class a public member is declared in: the nearest one on the lineage
+/// that declares it.
+fn public_member_owner(lineage: &[InterfaceInfo], name: &str) -> Option<String> {
+    lineage
+        .iter()
+        .find(|info| info.body.members.iter().any(|member| member.name == name))
+        .and_then(owner_mark)
+}
+
+/// `hasBaseType` between two declaring-class marks, read along the checked
+/// class's lineage. A declaring class off the lineage cannot be placed, and
+/// counts as derived.
+fn derives_from(lineage: &[InterfaceInfo], declaring: &str, base: &str) -> bool {
+    let Some(position) = lineage.iter().position(|info| owner_mark(info).as_deref() == Some(declaring)) else {
+        return true;
+    };
+    lineage[position..].iter().any(|info| owner_mark(info).as_deref() == Some(base))
+}
+
 /// tsc's base-type circularity: a class whose `extends` chain leads back to
 /// itself cannot resolve its base constructor (`getBaseConstructorTypeOfClass`,
 /// TS2506), and an interface's base types cannot resolve at all

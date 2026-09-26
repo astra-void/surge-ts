@@ -1367,6 +1367,7 @@ fn narrow_value_guards_by_guard(
     if narrow_property_presence_in_scope(condition, scopes, branch_is_true) {
         return;
     }
+    narrow_has_own_property_in_scope(condition, scopes, branch_is_true);
     if narrow_predicate_call_in_scope(condition, scopes, branch_is_true, ctx) {
         return;
     }

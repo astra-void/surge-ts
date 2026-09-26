@@ -1205,7 +1205,15 @@
     "message": "'{0}', which lacks return-type annotation, implicitly has an '{1}' yield type.",
     "source": "typescript",
     "arity": 2,
-    "support": "catalog-only"
+    "support": "emitted"
+  },
+  {
+    "code": "TS7025",
+    "category": "Error",
+    "message": "Generator implicitly has yield type '{0}'. Consider supplying a return type annotation.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
   },
   {
     "code": "TS7056",
@@ -1221,7 +1229,7 @@
     "message": "'yield' expression implicitly results in an 'any' type because its containing generator lacks a return-type annotation.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS7058",
@@ -1653,6 +1661,38 @@
     "message": "Type '{0}' must have a '[Symbol.iterator]()' method that returns an iterator.",
     "source": "typescript",
     "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2504",
+    "category": "Error",
+    "message": "Type '{0}' must have a '[Symbol.asyncIterator]()' method that returns an async iterator.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2763",
+    "category": "Error",
+    "message": "Cannot iterate value because the 'next' method of its iterator expects type '{1}', but for-of will always send '{0}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2764",
+    "category": "Error",
+    "message": "Cannot iterate value because the 'next' method of its iterator expects type '{1}', but array spread will always send '{0}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2766",
+    "category": "Error",
+    "message": "Cannot delegate iteration to value because the 'next' method of its iterator expects type '{1}', but the containing generator will always send '{0}'.",
+    "source": "typescript",
+    "arity": 2,
     "support": "emitted"
   },
   {
@@ -4224,6 +4264,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2505",
+    "category": "Error",
+    "message": "A generator cannot have a 'void' type annotation.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS6234",
     "category": "Error",
     "message": "This expression is not callable because it is a 'get' accessor. Did you mean to use it without '()'?",
@@ -4299,6 +4347,30 @@
     "code": "TS1221",
     "category": "Error",
     "message": "Generators are not allowed in an ambient context.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1222",
+    "category": "Error",
+    "message": "An overload signature cannot be declared as a generator.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1368",
+    "category": "Error",
+    "message": "Class constructor may not be a generator.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18038",
+    "category": "Error",
+    "message": "'for await' loops cannot be used inside a class static block.",
     "source": "typescript",
     "arity": 0,
     "support": "emitted"
@@ -6069,6 +6141,78 @@
     "message": "Cannot use 'this' in a static property initializer of a decorated class.",
     "source": "typescript",
     "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2498",
+    "category": "Error",
+    "message": "Module '{0}' uses 'export =' and cannot be used with 'export *'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2375",
+    "category": "Error",
+    "message": "Type '{0}' is not assignable to type '{1}' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2379",
+    "category": "Error",
+    "message": "Argument of type '{0}' is not assignable to parameter of type '{1}' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2412",
+    "category": "Error",
+    "message": "Type '{0}' is not assignable to type '{1}' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2635",
+    "category": "Error",
+    "message": "Type '{0}' has no signatures for which the type argument list is applicable.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18033",
+    "category": "Error",
+    "message": "Type '{0}' is not assignable to type '{1}' as required for computed enum member values.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2354",
+    "category": "Error",
+    "message": "This syntax requires an imported helper but module '{0}' cannot be found.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2343",
+    "category": "Error",
+    "message": "This syntax requires an imported helper named '{1}' which does not exist in '{0}'. Consider upgrading your version of '{0}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2807",
+    "category": "Error",
+    "message": "This syntax requires an imported helper named '{1}' with {2} parameters, which is not compatible with the one in '{0}'. Consider upgrading your version of '{0}'.",
+    "source": "typescript",
+    "arity": 3,
     "support": "emitted"
   }
 ]

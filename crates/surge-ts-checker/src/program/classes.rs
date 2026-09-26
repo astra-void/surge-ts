@@ -1096,14 +1096,33 @@ fn class_construct_signature(
         [overloads @ .., _] if !class.is_declare => overloads,
         _ => &constructors[..],
     };
+    // `declarationBelongsToPrivateAmbientMember`: a private constructor of an
+    // ambient class reports no implicit `any` for its parameters.
+    let ambient = class.is_declare || crate::modules::is_declaration_file_name(&ctx.file_name);
     let mut signatures = overloads.iter().map(|constructor| {
-        map_function_signature(
+        let private_ambient = ambient
+            && matches!(constructor.accessibility, Some(surge_ts_syntax::ParsedMemberAccessibility::Private));
+        let checkpoint = ctx.diagnostics().len();
+        let signature = map_function_signature(
             &constructor.parameters,
             Some(&named_instance),
             &[],
             None,
             ctx,
-        )
+        );
+        if private_ambient {
+            let reported: Vec<Diagnostic> = ctx.diagnostics()[checkpoint..].to_vec();
+            ctx.truncate_diagnostics(checkpoint);
+            for diagnostic in reported {
+                if !matches!(
+                    diagnostic.code,
+                    surge_ts_diagnostics::DiagnosticCode::TypeScript(7006 | 7019 | 7031)
+                ) {
+                    ctx.push(diagnostic);
+                }
+            }
+        }
+        signature
     });
     if let Some(first) = signatures.next() {
         return signatures.fold(first, |group, signature| {
@@ -1283,11 +1302,11 @@ fn implemented_member_name(member: &ParsedClassMember) -> Option<String> {
 /// implements — an `implements` clause contributes nothing to the class, it
 /// only constrains it.
 ///
-/// Only the *missing member* half of tsc's check runs here; a member that is
-/// present but whose type does not match is TS2416, which surge does not report
-/// yet. Interface resolution is conservative in the same way the abstract-member
-/// check is: anything that does not resolve to a source-declared interface
-/// leaves that clause unchecked.
+/// The member-specific TS2416 walk runs first, then the missing members, then
+/// the modifier rules of `propertyRelatedTo`. Interface resolution is
+/// conservative in the same way the abstract-member check is: anything that
+/// does not resolve to a source-declared interface leaves that clause
+/// unchecked.
 fn check_implemented_interfaces(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
     if class.implements.is_empty() || class.is_declare {
         return;
@@ -1322,6 +1341,18 @@ fn check_implemented_interfaces(class: &ParsedClassDeclaration, ctx: &mut Checke
         };
         if required.is_empty() && implements_weak_type_without_common_member(&implemented.name, &declared, ctx) {
             let diagnostic = Diagnostic::ts2559(&class.name, &implemented.name, ctx.file_name.clone());
+            ctx.push(match class.name_span {
+                Some(span) => diagnostic.with_span(convert_span(span)),
+                None => diagnostic,
+            });
+            continue;
+        }
+        if required.is_empty() && super::heritage::implements_unrelated_accessibility(class, implemented, ctx) {
+            let diagnostic = if implements_class {
+                Diagnostic::ts2720(&class.name, &implemented.name, ctx.file_name.clone())
+            } else {
+                Diagnostic::ts2420(&class.name, &implemented.name, ctx.file_name.clone())
+            };
             ctx.push(match class.name_span {
                 Some(span) => diagnostic.with_span(convert_span(span)),
                 None => diagnostic,
@@ -1558,8 +1589,13 @@ pub(crate) fn check_class_head_expressions(
     // binder then rejects the reference as TS2467, which the grammar pass
     // reports), so they resolve here instead of reading as unknown names.
     crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
-        for (key, span) in &class.computed_keys {
+        let ambient = class.is_declare || crate::modules::is_declaration_file_name(&ctx.file_name);
+        for (index, (key, span)) in class.computed_keys.iter().enumerate() {
+            let non_emitting =
+                ambient || class.non_emitting_computed_keys.get(index).copied().unwrap_or(false);
+            let saved = std::mem::replace(&mut ctx.type_only_alias_use_valid, non_emitting);
             let key_type = crate::checks::expr::evaluate_expression(key, *span, symbols, ctx);
+            ctx.type_only_alias_use_valid = saved;
             crate::checks::expr::report_invalid_computed_key(&key_type, *span, ctx);
         }
         // tsc's `checkDecorators`: the expression of every decorator on a
@@ -2061,6 +2097,7 @@ fn check_class_declaration_inside(
     ctx: &mut CheckerContext,
 ) {
     check_heritage_base_resolves(class, ctx);
+    super::late_bound_members::check_late_bound_members(class, ctx);
     check_base_constructor_accessibility(class, ctx);
     check_inherited_abstract_members(class, ctx);
     check_extended_base_class(class, ctx);

@@ -944,27 +944,17 @@ fn parse_new_expression(new_expression: &NewExpression<'_>) -> Option<ParsedExpr
 fn parse_instantiation_expression(
     instantiation_expression: &oxc_ast::ast::TSInstantiationExpression<'_>,
 ) -> Option<ParsedExpression> {
-    parse_type_arguments(&instantiation_expression.type_arguments)?;
-
-    match &instantiation_expression.expression {
-        // `h()<T>` instantiates what the call returns; the call keeps its own
-        // type arguments.
-        Expression::CallExpression(call_expression) => parse_call_expression_expression(call_expression),
-        // `f<T>` / `ns.f<T>` with no argument list is an instantiation
-        // expression, not a call — it denotes the function value with its type
-        // arguments already applied. Lowering it to a zero-argument call
-        // reported `TS2554` against a signature nothing here invokes. The
-        // instantiation is not modelled, so the reference keeps its generic
-        // type and a later call infers from its own arguments.
-        Expression::StaticMemberExpression(member_expression) => {
-            parse_static_member_expression(member_expression)
-        }
-        Expression::Identifier(identifier) => Some(ParsedExpression::Identifier {
-            name: identifier.name.to_string(),
-            span: Some(text_span_from_oxc_span(identifier.span)),
-        }),
-        _ => None,
-    }
+    let type_arguments = parse_type_arguments(&instantiation_expression.type_arguments)?;
+    // `f<T>`, `ns.f<T>` or `h()<T>` with no argument list is an instantiation
+    // expression, not a call: lowering it to a zero-argument call reported
+    // `TS2554` against a signature nothing here invokes.
+    let (expression, expression_span) = parse_expression(&instantiation_expression.expression);
+    Some(ParsedExpression::Instantiation {
+        expression: Box::new(expression),
+        expression_span: Some(text_span_from_oxc_span(expression_span)),
+        type_arguments,
+        type_arguments_span: Some(text_span_from_oxc_span(instantiation_expression.type_arguments.span)),
+    })
 }
 
 fn parse_call_argument(argument: &Argument<'_>) -> ParsedCallArgument {
@@ -1438,6 +1428,7 @@ pub(crate) fn parse_object_properties(
                         computed_key: None,
                         paired_setter: None,
                         unnamed_key_value: None,
+                        member_key: None,
                     });
                 }
             };
@@ -1447,8 +1438,12 @@ pub(crate) fn parse_object_properties(
             // `{}` with the member reported missing, and a computed accessor's
             // body is still checked.
             if property.computed && property.kind != PropertyKind::Init {
-                let name = super::types::computed_key_name(&property.key)?;
-                return parse_object_accessor(name, property.key.span(), property);
+                let Some(name) = super::types::computed_key_name(&property.key) else {
+                    return unnamed_member_key(property);
+                };
+                let mut accessor = parse_object_accessor(name, property.key.span(), property)?;
+                accessor.member_key = computed_member_key(property);
+                return Some(accessor);
             }
 
             // `get value() { … }` / `set value(v) { … }` declare the property
@@ -1488,14 +1483,19 @@ pub(crate) fn parse_object_properties(
 
             if property.method {
                 let (name, key_span) = if property.computed {
-                    (super::types::computed_key_name(&property.key)?, property.key.span())
+                    let Some(name) = super::types::computed_key_name(&property.key) else {
+                        return unnamed_member_key(property);
+                    };
+                    (name, property.key.span())
                 } else {
                     let PropertyKey::StaticIdentifier(key) = &property.key else {
                         return None;
                     };
                     (key.name.to_string(), key.span)
                 };
-                return parse_object_method_shorthand_named(name, key_span, property);
+                let mut method = parse_object_method_shorthand_named(name, key_span, property)?;
+                method.member_key = computed_member_key(property);
+                return Some(method);
             }
 
             // A quoted or numeric key names a property like any other. Dropping
@@ -1536,6 +1536,7 @@ pub(crate) fn parse_object_properties(
                             computed_key: computed_key(),
                             paired_setter: None,
                             unnamed_key_value: Some(Box::new(parse_expression(&property.value).0)),
+                            member_key: None,
                         });
                     }
                 },
@@ -1563,9 +1564,46 @@ pub(crate) fn parse_object_properties(
                 computed_key: computed_key(),
                 paired_setter: None,
                 unnamed_key_value: None,
+                member_key: None,
             })
         })
         .collect()
+}
+
+/// The key of a computed method or accessor name, which tsc checks where the
+/// literal is (`checkObjectLiteral` runs `checkComputedPropertyName` for every
+/// member).
+fn computed_member_key(property: &oxc_ast::ast::ObjectProperty<'_>) -> Option<Box<ParsedExpression>> {
+    property
+        .computed
+        .then(|| property.key.as_expression())
+        .flatten()
+        .map(|key| Box::new(parse_expression(key).0))
+}
+
+/// A computed method or accessor whose key no member name can model
+/// (`{ *[f()]() {} }`): only its key is kept, on an empty spread that adds
+/// nothing to the literal's type.
+fn unnamed_member_key(property: &oxc_ast::ast::ObjectProperty<'_>) -> Option<ParsedObjectProperty> {
+    Some(ParsedObjectProperty {
+        name: String::new(),
+        name_span: Some(text_span_from_oxc_span(property.key.span())),
+        value: ParsedExpression::ObjectLiteral {
+            properties: Vec::new(),
+            span: None,
+        },
+        value_span: None,
+        span: Some(text_span_from_oxc_span(property.span)),
+        is_method: false,
+        is_spread: true,
+        is_accessor: false,
+        is_getter: false,
+        is_shorthand: false,
+        computed_key: None,
+        paired_setter: None,
+        unnamed_key_value: None,
+        member_key: Some(computed_member_key(property)?),
+    })
 }
 
 /// Lowers a `get`/`set` accessor into a property carrying the accessor's arrow.
@@ -1611,6 +1649,7 @@ fn parse_object_method_shorthand_named(
         computed_key: None,
         paired_setter: None,
         unnamed_key_value: None,
+        member_key: None,
     })
 }
 
@@ -2030,7 +2069,7 @@ fn parse_assignment_value(
     }
     let oxc_ast::ast::AssignmentTarget::AssignmentTargetIdentifier(identifier) = &assignment.left
     else {
-        return None;
+        return parse_member_assignment_value(assignment);
     };
     let target_span = Some(text_span_from_oxc_span(identifier.span));
     let (value, value_span) = parse_expression(&assignment.right);
@@ -2047,4 +2086,32 @@ fn parse_assignment_value(
         value: Box::new(value),
         value_span,
     })
+}
+
+/// A member write used as a value (`(o.p = f())`, `a.b = c.d = v`), which tsc
+/// checks as it checks the statement (`checkBinaryLikeExpression`). A write
+/// through `this` or `super` keeps to its statement form's own rules, and so
+/// does any in JavaScript, where the write may declare the member it names
+/// (`bindExpandoPropertyAssignment`, `bindThisPropertyAssignment`) and surge
+/// binds those declarations from statements only.
+fn parse_member_assignment_value(
+    assignment: &oxc_ast::ast::AssignmentExpression<'_>,
+) -> Option<ParsedExpression> {
+    if super::spans::lowering_javascript() {
+        return None;
+    }
+    let object = match &assignment.left {
+        oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) => &member.object,
+        oxc_ast::ast::AssignmentTarget::ComputedMemberExpression(member) => &member.object,
+        oxc_ast::ast::AssignmentTarget::PrivateFieldExpression(member) => &member.object,
+        _ => return None,
+    };
+    if matches!(
+        object.without_parentheses(),
+        Expression::ThisExpression(_) | Expression::Super(_)
+    ) {
+        return None;
+    }
+    super::functions::parse_member_assignment(assignment)
+        .map(|member| ParsedExpression::MemberAssignment(Box::new(member)))
 }

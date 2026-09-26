@@ -143,12 +143,12 @@ test('respells lib names the way bolt-ts deserializes them', () => {
   assert.ok((config.compilerOptions.lib as string[]).includes('dom'));
 });
 
-test('a process past the resident-memory cap is killed and flagged', async () => {
+test('a process past the memory cap is killed and flagged', async () => {
   const hog = 'const keep = []; setInterval(() => keep.push(Buffer.alloc(64 * 1024 * 1024, 1)), 10);';
   const output = await runProcess(process.execPath, ['-e', hog], {
     cwd: process.cwd(),
     timeoutMs: 20_000,
-    maxRssBytes: 256 * 1024 * 1024,
+    maxMemoryBytes: 256 * 1024 * 1024,
   });
   assert.strictEqual(output.memoryExceeded, true);
   assert.strictEqual(output.timedOut, false);

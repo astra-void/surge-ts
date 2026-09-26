@@ -1113,6 +1113,59 @@ fn bind_infer_captures(
                 reference_positional,
             );
         }
+        // tsc's `inferToMultipleTypes`: a union's structured members infer
+        // first, and its one naked `infer X` takes only the sources none of them
+        // matched — `Promise<infer T> | infer T` against a `Promise<R>` captures
+        // `R`, not the promise.
+        ParsedType::Union(members)
+            if members.len() > 1
+                && members
+                    .iter()
+                    .filter(|member| matches!(member, ParsedType::Infer(_)))
+                    .count()
+                    == 1 =>
+        {
+            let mut names = Vec::new();
+            collect_infer_names(extends, &mut names);
+            let bound = |substitution: &TypeParameterSubstitution| -> Vec<Option<Type>> {
+                names.iter().map(|name| substitution.get(name).cloned()).collect()
+            };
+            let sources: Vec<Type> = match check {
+                Type::Union(union) => union.types().to_vec(),
+                other => vec![other.clone()],
+            };
+            let mut unmatched = Vec::new();
+            for source in sources {
+                let before = bound(&*substitution);
+                for member in members.iter().filter(|member| !matches!(member, ParsedType::Infer(_))) {
+                    bind_infer_captures(
+                        member,
+                        &source,
+                        substitution,
+                        ctx,
+                        resolving,
+                        depth,
+                        reference_positional,
+                    );
+                }
+                if bound(&*substitution) == before {
+                    unmatched.push(source);
+                }
+            }
+            if !unmatched.is_empty()
+                && let Some(naked) = members.iter().find(|member| matches!(member, ParsedType::Infer(_)))
+            {
+                bind_infer_captures(
+                    naked,
+                    &union_type(unmatched),
+                    substitution,
+                    ctx,
+                    resolving,
+                    depth,
+                    reference_positional,
+                );
+            }
+        }
         // A union/intersection extends pattern (e.g. the body of
         // `JSXElementConstructor`) binds from whichever member structurally lines
         // up with the check type; members that do not align bind nothing.

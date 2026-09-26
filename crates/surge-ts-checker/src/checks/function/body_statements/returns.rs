@@ -287,8 +287,14 @@ pub(crate) fn check_function_return_statement(
 /// The `TReturn` of a generator's declared `Generator<T, TReturn, TNext>` (or
 /// the iterator and iterable types a generator may be declared as), `any` when
 /// the argument is left to its default.
-fn generator_return_type_argument(declared: &Type) -> Option<Type> {
+pub(crate) fn generator_return_type_argument(declared: &Type) -> Option<Type> {
     generator_type_argument(declared, 1)
+}
+
+/// The next type a generator annotated `declared` is resumed with: the
+/// `TNext` argument of the lib iterator type it names.
+pub(crate) fn generator_next_type_argument(declared: &Type) -> Option<Type> {
+    generator_type_argument(declared, 2)
 }
 
 /// The yield type a generator annotated `declared` yields: the first

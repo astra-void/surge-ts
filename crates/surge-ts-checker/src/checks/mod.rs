@@ -1,5 +1,6 @@
 pub(crate) mod assign;
 pub(crate) mod call;
+pub(crate) mod enum_members;
 pub(crate) mod expected;
 pub(crate) mod expr;
 pub(crate) mod function;
@@ -27,7 +28,7 @@ pub(crate) fn emit_value_position_reference_diagnostic(
     span: Option<TextSpan>,
     ctx: &mut CheckerContext,
 ) -> bool {
-    if let Some(kind) = ctx.type_only_value_reference(name) {
+    if let Some(kind) = ctx.type_only_value_reference(name).filter(|_| !ctx.type_only_alias_use_valid) {
         let mut diagnostic = match kind {
             crate::modules::TypeOnlyAliasKind::Import => {
                 Diagnostic::ts1361(name, ctx.file_name.clone())
@@ -120,7 +121,21 @@ pub(crate) fn check_umd_global_value_reference(
         return;
     };
 
-    if ctx.type_only_value_reference(name).is_none() {
+    // A binding other than the one the import made, or a global the import
+    // itself shadows, is a local that shadows the import.
+    let shadows_type_only_import = symbols.get_handle(name).is_some_and(|handle| {
+        !ctx.file_type_only_import_handles
+            .get(name)
+            .is_some_and(|own| std::sync::Arc::ptr_eq(own, &handle))
+            && !ctx
+                .ambient_global_symbols
+                .get_handle(name)
+                .is_some_and(|global| std::sync::Arc::ptr_eq(&global, &handle))
+    });
+    if ctx.type_only_alias_use_valid
+        || shadows_type_only_import
+        || ctx.type_only_value_reference(name).is_none()
+    {
         // A value binding in scope shadows the UMD global entirely — `const qs =
         // searchParams.toString()` is the local, not `@types/qs`. A type-only
         // import is itself a symbol-table entry, so the shadow test belongs to

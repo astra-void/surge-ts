@@ -175,7 +175,7 @@ pub(super) fn widen_loop_assigned_bindings(
         .filter_map(|(name, entry)| {
             let back_edge = back_edge_types.iter().find(|(other, _)| other == name)?;
             let joined = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-                union_type(vec![entry.clone(), back_edge.1.clone()])
+                join_flow_types(vec![entry.clone(), back_edge.1.clone()])
             });
             (joined != *entry).then(|| (name.clone(), joined))
         })
@@ -258,7 +258,7 @@ pub(super) fn join_branch_assignments(
             continue;
         };
         let joined = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-            union_type(vec![branch_ty.clone(), fallthrough_ty])
+            join_flow_types(vec![branch_ty.clone(), fallthrough_ty])
         });
         let Some(symbol) = scopes.resolve(name) else {
             continue;
@@ -270,8 +270,9 @@ pub(super) fn join_branch_assignments(
         let bound = scopes
             .visible_symbols()
             .declared_type(name)
-            .unwrap_or(&symbol.ty);
-        if joined == symbol.ty || !is_assignable_to(&joined, bound) {
+            .unwrap_or(&symbol.ty)
+            .clone();
+        if joined == symbol.ty || !is_assignable_to(&joined, &bound) {
             continue;
         }
         let joined_symbol = SymbolInfo {
@@ -281,8 +282,9 @@ pub(super) fn join_branch_assignments(
         };
         // Written to the owning frame, not shadowed in the current one: the join
         // describes the binding from the `if` onward, and a block-local shadow
-        // would be dropped before a `break`/loop-exit edge that carries it.
-        let _ = scopes.update_visible(name, joined_symbol);
+        // would be dropped before a `break`/loop-exit edge that carries it. A
+        // later narrowing reads the binding's declaration, not this join.
+        let _ = scopes.update_visible_narrowed(name, joined_symbol, bound);
     }
 }
 
@@ -300,7 +302,7 @@ pub(super) fn join_branch_pair(
             continue;
         };
         let joined = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-            union_type(vec![then_ty.clone(), else_ty.clone()])
+            join_flow_types(vec![then_ty.clone(), else_ty.clone()])
         });
         let Some(symbol) = scopes.resolve(name) else {
             continue;
@@ -316,13 +318,14 @@ pub(super) fn join_branch_pair(
         if joined == current || !is_assignable_to(&joined, &bound) {
             continue;
         }
-        let _ = scopes.update_visible(
+        let _ = scopes.update_visible_narrowed(
             name,
             SymbolInfo {
                 ty: joined,
                 kind,
                 function_signature,
             },
+            bound,
         );
     }
 }
@@ -351,13 +354,14 @@ pub(super) fn adopt_branch_assignments(branch_types: &[(String, Type)], scopes: 
         if !is_assignable_to(branch_ty, &bound) {
             continue;
         }
-        let _ = scopes.update_visible(
+        let _ = scopes.update_visible_narrowed(
             name,
             SymbolInfo {
                 ty: branch_ty.clone(),
                 kind,
                 function_signature,
             },
+            bound,
         );
     }
 }
@@ -379,7 +383,7 @@ pub(super) fn join_branch_edges(edges: &[Vec<(String, Type)>], scopes: &mut Scop
         if types.len() != edges.len() {
             continue;
         }
-        let joined = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || union_type(types));
+        let joined = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || join_flow_types(types));
         let Some(symbol) = scopes.resolve(name) else {
             continue;
         };
@@ -394,10 +398,140 @@ pub(super) fn join_branch_edges(edges: &[Vec<(String, Type)>], scopes: &mut Scop
         if joined == current || !is_assignable_to(&joined, &bound) {
             continue;
         }
-        let _ = scopes.update_visible(
+        let _ = scopes.update_visible_narrowed(
             name,
             SymbolInfo {
                 ty: joined,
+                kind,
+                function_signature,
+            },
+            bound,
+        );
+    }
+}
+
+/// The type a binding holds where edges meet. surge keeps a member narrowing
+/// (`o.p = v`, `if (!o.p)`) on the binding's object, where tsc narrows only the
+/// `o.p` reference, so edges that narrowed members of one object join member
+/// by member — each member reads the union of what the edges left it as —
+/// instead of as a union of objects a later member narrowing cannot see into.
+pub(super) fn join_flow_types(types: Vec<Type>) -> Type {
+    join_member_narrowings(&types, 0).unwrap_or_else(|| union_type(types))
+}
+
+fn join_member_narrowings(types: &[Type], depth: usize) -> Option<Type> {
+    if types.len() < 2 || depth > 8 {
+        return None;
+    }
+    // An edge that left the binding as declared, a nominal reference, absorbs
+    // the edges that only narrowed its members: each member's union is its
+    // declared type again.
+    if let Some(declared) = types.iter().find(|ty| matches!(ty, Type::Reference(_)))
+        && let Type::Object(shape) = declared.peeled()
+        && types.iter().all(|ty| {
+            ty == declared
+                || matches!(ty, Type::Object(object)
+                    if object.alias_name == shape.alias_name
+                        && object.properties.len() == shape.properties.len()
+                        && object.properties.keys().all(|name| shape.properties.contains_key(name)))
+        })
+    {
+        return Some(declared.clone());
+    }
+    let objects: Vec<&surge_ts_types::ObjectType> = types
+        .iter()
+        .map(|ty| match ty {
+            Type::Object(object) => Some(object),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    let first = objects[0];
+    let same_object = objects.iter().all(|object| {
+        object.alias_name == first.alias_name
+            && object.properties.len() == first.properties.len()
+            && object.properties.keys().all(|name| first.properties.contains_key(name))
+            && object.string_index_type == first.string_index_type
+            && object.number_index_type == first.number_index_type
+            && object.call_signature == first.call_signature
+            && object.construct_signature == first.construct_signature
+    });
+    if !same_object || objects.iter().all(|object| *object == first) {
+        return None;
+    }
+    let mut merged = first.clone();
+    let properties = std::sync::Arc::make_mut(&mut merged.properties);
+    for (name, property) in first.properties.iter() {
+        let members: Vec<Type> = objects
+            .iter()
+            .filter_map(|object| object.properties.get(name).map(|member| member.ty.clone()))
+            .collect();
+        let optional = objects
+            .iter()
+            .any(|object| object.properties.get(name).is_some_and(|member| member.optional));
+        let ty = join_member_narrowings(&members, depth + 1).unwrap_or_else(|| union_type(members));
+        properties.insert(
+            name.clone(),
+            surge_ts_types::ObjectProperty {
+                ty,
+                optional,
+                ..property.clone()
+            },
+        );
+    }
+    Some(Type::Object(merged))
+}
+
+/// Every binding a branch may write, however deeply nested: the joins inside
+/// it write to the binding's owning frame, which outlives the branch's own.
+pub(super) fn nested_assigned_names(body: &[ParsedFunctionBodyStatement], names: &mut Vec<String>) {
+    branch_assigned_names(body, names);
+    for statement in body {
+        match statement {
+            ParsedFunctionBodyStatement::Block(block) => nested_assigned_names(block, names),
+            ParsedFunctionBodyStatement::If(if_statement) => {
+                nested_assigned_names(&if_statement.then_body, names);
+                nested_assigned_names(&if_statement.else_body, names);
+            }
+            ParsedFunctionBodyStatement::While(while_statement) => {
+                nested_assigned_names(&while_statement.body, names)
+            }
+            ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
+                nested_assigned_names(&for_of_statement.body, names)
+            }
+            ParsedFunctionBodyStatement::Switch(switch_statement) => {
+                for case in &switch_statement.cases {
+                    nested_assigned_names(&case.consequent, names);
+                }
+            }
+            ParsedFunctionBodyStatement::Try(try_statement) => {
+                nested_assigned_names(&try_statement.block, names);
+                if let Some(handler) = &try_statement.handler {
+                    nested_assigned_names(&handler.body, names);
+                }
+                nested_assigned_names(&try_statement.finalizer, names);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Puts each binding back to what it held where a branch began, for the
+/// sibling branch or join that starts from that point: tsc's flow reaches an
+/// `else` or a later `case` from the branch's entry, never through a sibling.
+pub(super) fn restore_branch_entry(entry_types: &[(String, Type)], scopes: &mut ScopeStack) {
+    for (name, entry_ty) in entry_types {
+        let Some(symbol) = scopes.resolve(name) else {
+            continue;
+        };
+        if symbol.ty == *entry_ty {
+            continue;
+        }
+        let kind = symbol.kind;
+        let function_signature = symbol.function_signature.clone();
+        let _ = scopes.update_visible(
+            name,
+            SymbolInfo {
+                ty: entry_ty.clone(),
                 kind,
                 function_signature,
             },

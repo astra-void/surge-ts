@@ -702,6 +702,19 @@ fn check_property_call_like_unrecorded(
         return result;
     }
 
+    if let Some(result) = check_bind_call_apply(
+        &object_ty,
+        property_name,
+        property_span,
+        call_span,
+        type_arguments,
+        arguments,
+        symbols,
+        ctx,
+    ) {
+        return result;
+    }
+
     match object_ty {
         Type::ErrorType => {
             evaluate_arguments_on_error_type(arguments, symbols, ctx);
@@ -1199,6 +1212,17 @@ pub(crate) fn promise_like_awaited_type(ty: &Type) -> Type {
             return value_type.clone();
         }
     }
+    // An instantiation already resolved to its object: its `then` says what
+    // it resolves to, and nothing lazy is forced reading it.
+    if let Type::Object(object) = ty
+        && object
+            .alias_name
+            .as_deref()
+            .is_some_and(|name| matches!(name.split('<').next(), Some("Promise" | "PromiseLike")))
+        && let Some(value_type) = thenable_awaited_type(ty)
+    {
+        return value_type;
+    }
 
     ty.clone()
 }
@@ -1216,7 +1240,7 @@ pub(crate) fn promise_of(value: &Type, ctx: &mut CheckerContext) -> Type {
     // the names it was written in (`core.output<typeof schema>` inside the
     // arrow whose parameter `schema` is).
     let value = promise_like_awaited_type(value);
-    if value.is_unknown() {
+    if value.is_unknown() && !matches!(value, Type::GenuineUnknown) {
         return value;
     }
     // The slot is named after the value: a reference renders its written
@@ -1250,15 +1274,14 @@ pub(crate) fn promise_of(value: &Type, ctx: &mut CheckerContext) -> Type {
     }
 }
 
-/// `SURGE_PROMISE_NOMINAL=1`: keep the lib's `Promise<T>` / `PromiseLike<T>` as
-/// the interface it is instead of collapsing it to its awaited `T`. The
-/// collapse dates from when `await` was erased at parse time; it makes
-/// `Promise<T> | undefined` read as `T | undefined` and hides every misuse of
-/// a promise as its value. Off until the corpora are clean under it — see
-/// CURRENT_STATUS.md, semantic compatibility gates.
+/// Keep the lib's `Promise<T>` / `PromiseLike<T>` as the interface it is, as
+/// tsc does, instead of collapsing it to its awaited `T`. The collapse dates
+/// from when `await` was erased at parse time; it makes `Promise<T> |
+/// undefined` read as `T | undefined` and hides every misuse of a promise as
+/// its value. On by default; `SURGE_PROMISE_NOMINAL=0` restores the collapse.
 pub(crate) fn promise_nominal_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("SURGE_PROMISE_NOMINAL").is_some())
+    *ENABLED.get_or_init(|| std::env::var("SURGE_PROMISE_NOMINAL").as_deref() != Ok("0"))
 }
 
 /// The type `await ty` produces, following tsc's `getAwaitedTypeNoAlias`:

@@ -256,6 +256,27 @@ pub(super) fn parse_program_file(
             c.generated_default_lib_files += 1;
         }
     });
+    let emit_helper_requests =
+        if file_kind == FileKind::RootSource && parsed.json_module_type.is_none() {
+            // tsgo's `IsEffectiveExternalModule`.
+            let external_module = parsed.is_module
+                || super::file_is_forced_module(
+                    &file_name,
+                    parsed.jsx_factory_uses.first_tag.is_some(),
+                    options,
+                )
+                || (parsed.commonjs_module
+                    && (options.module_emit == crate::context::ModuleEmitKind::CommonJS
+                        || options.module_emit.is_node()));
+            super::emit_helpers::file_emit_helper_requests(
+                &file_name,
+                &input.source_text,
+                external_module,
+                options,
+            )
+        } else {
+            Vec::new()
+        };
     ParsedProgramFile {
         file_name: file_name.clone(),
         has_export_default: source_text_has_export_default(&input.source_text),
@@ -282,5 +303,6 @@ pub(super) fn parse_program_file(
         let_assignments: parsed.let_assignments.into(),
         json_module_type: parsed.json_module_type,
         jsx_factory_uses: parsed.jsx_factory_uses,
+        emit_helper_requests,
     }
 }

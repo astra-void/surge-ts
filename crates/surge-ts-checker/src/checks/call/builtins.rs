@@ -213,7 +213,9 @@ pub(crate) fn is_promise_all_receiver(object_type: &Type) -> bool {
 }
 
 /// `Promise.resolve(value)`: a promise of what `value` awaits to, and
-/// `Promise<void>` with no argument.
+/// `Promise<void>` with no argument. The lib's `Promise<Awaited<T>>` awaits
+/// each member of a union argument (`T | PromiseLike<T>` resolves to a
+/// `Promise<T>`).
 pub(crate) fn check_promise_resolve_call(
     arguments: &[ParsedCallArgument],
     expected_return_type: Option<&Type>,
@@ -253,7 +255,7 @@ pub(crate) fn check_promise_resolve_call(
                     false,
                 )
             };
-            Some(super::promise_of(&value, ctx))
+            Some(super::promise_of(&super::awaited_type(&value), ctx))
         }
         // A value that does not fit the context is the enclosing relation's to
         // report, against the promise — not this argument's against `T`.

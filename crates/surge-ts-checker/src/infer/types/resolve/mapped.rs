@@ -183,6 +183,25 @@ pub(crate) fn resolve_mapped_type(
         };
     };
 
+    // Under `exactOptionalPropertyTypes` the `undefined` a template `X[P]`
+    // reads off an optional member is tsc's `missingType`, which an optional
+    // mapped member sheds again (`getNonMissingTypeOfSymbol`); surge's
+    // optional flag stands for it, so such a member keeps the declared type.
+    let indexed_template_object = match mapped.value_type.as_ref() {
+        ParsedType::IndexedAccess(access)
+            if surge_ts_types::exact_optional_property_types()
+                && matches!(access.index_type.as_ref(), ParsedType::Named(index)
+                    if index.name == mapped.key_name && index.type_arguments.is_empty()) =>
+        {
+            Some(access.object_type.as_ref().clone())
+        }
+        _ => None,
+    };
+    let template_reads_source = matches!(
+        (keyof_operand.as_ref(), indexed_template_object.as_ref()),
+        (Some(ParsedType::Named(operand)), Some(ParsedType::Named(object)))
+            if operand.type_arguments.is_empty() && object.type_arguments.is_empty() && object.name == operand.name
+    );
     let homomorphic_source = keyof_operand.and_then(|operand| {
         let resolved = resolve_parsed_type(operand, ctx, resolving, substitution);
         match crate::program::with_dts_expansion_reason(
@@ -279,9 +298,30 @@ pub(crate) fn resolve_mapped_type(
         // `-?` strips `undefined` from the mapped property as well as clearing
         // the optional flag; that is what makes `Required<{ b?: number }>` a
         // `number` rather than a required `number | undefined`.
+        let optional_member = match mapped.optional {
+            MappedOptionality::Keep => source_optional,
+            MappedOptionality::Add => true,
+            MappedOptionality::Remove => false,
+        };
+        let read_member = match &indexed_template_object {
+            Some(_) if !optional_member || resolved_value.had_error => None,
+            Some(_) if template_reads_source => source_property.cloned(),
+            Some(object) => {
+                let resolved = resolve_parsed_type(object.clone(), ctx, resolving, &new_substitution);
+                match resolved.ty.peeled() {
+                    Type::Object(object) if !resolved.had_error => object.get_property(&key).cloned(),
+                    _ => None,
+                }
+            }
+            None => None,
+        };
+        let template_type = match read_member {
+            Some(member) if member.is_optional() => member.ty,
+            _ => resolved_value.ty.clone(),
+        };
         let (property_type, optional) = match mapped.optional {
-            MappedOptionality::Keep => (resolved_value.ty.clone(), source_optional),
-            MappedOptionality::Add => (resolved_value.ty.clone(), true),
+            MappedOptionality::Keep => (template_type, source_optional),
+            MappedOptionality::Add => (template_type, true),
             MappedOptionality::Remove => {
                 (surge_ts_types::remove_undefined(&resolved_value.ty), false)
             }

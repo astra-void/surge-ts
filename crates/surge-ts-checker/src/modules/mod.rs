@@ -225,6 +225,7 @@ mod tests {
                     let_assignments: parsed.let_assignments.into(),
                     json_module_type: parsed.json_module_type,
                     jsx_factory_uses: parsed.jsx_factory_uses,
+                    emit_helper_requests: Vec::new(),
                 }
             })
             .collect()

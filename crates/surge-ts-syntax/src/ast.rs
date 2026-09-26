@@ -719,6 +719,8 @@ pub struct ParsedTypeOfType {
     /// these left `ReturnType<typeof withTRPC<TRouter, TSSRContext>>` — the one
     /// member that degrades tRPC's exported client — at the sentinel.
     pub type_arguments: Vec<ParsedType>,
+    /// The written argument list, `<` through `>`.
+    pub type_arguments_span: Option<TextSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1012,6 +1014,10 @@ pub struct ParsedClassDeclaration {
     /// each is checked as an expression (tsc's `checkComputedPropertyName`)
     /// whether or not the member it names could be modelled.
     pub computed_keys: Vec<(ParsedExpression, Option<TextSpan>)>,
+    /// Beside each of `computed_keys`: the member is `abstract` or `declare`,
+    /// where a type-only import is a valid use (tsc's
+    /// `isValidTypeOnlyAliasUseSite`).
+    pub non_emitting_computed_keys: Vec<bool>,
     /// The decorators on the class, its members and their parameters, in
     /// source order.
     pub decorators: Vec<ParsedDecorator>,
@@ -1720,6 +1726,10 @@ pub enum ParsedExpression {
         value: Box<ParsedExpression>,
         value_span: Option<TextSpan>,
     },
+    /// A member write used as a value (`(o.p = f())`, `a.b = c.d = v`), in a
+    /// TypeScript file: checked as the statement form is, and the expression's
+    /// own value is `value`'s.
+    MemberAssignment(Box<ParsedMemberAssignment>),
     /// A comma expression (`a, b`): every operand runs in order and the value
     /// is the last one's.
     Sequence {
@@ -1759,6 +1769,16 @@ pub enum ParsedExpression {
     /// `checkClassExpression`). `const C = class {}` is lowered to a class
     /// declaration instead.
     ClassExpression(Box<ParsedClassExpression>),
+    /// `f<T>` / `ns.f<T>` with no argument list: an instantiation expression
+    /// (tsc's `ExpressionWithTypeArguments`), the value of `expression` with
+    /// the type arguments applied to its signatures.
+    Instantiation {
+        expression: Box<ParsedExpression>,
+        expression_span: Option<TextSpan>,
+        type_arguments: Vec<ParsedType>,
+        /// The written list, `<` through `>`.
+        type_arguments_span: Option<TextSpan>,
+    },
     Unknown,
 }
 
@@ -1875,6 +1895,10 @@ pub struct ParsedObjectProperty {
     /// (`{ [f()]: v }`). Such a member is lowered to an empty spread that adds
     /// nothing to the literal's type; the value is kept only to be checked.
     pub unnamed_key_value: Option<Box<ParsedExpression>>,
+    /// The key of a computed method or accessor name (`{ [k]() {} }`), which
+    /// tsc checks where the literal is (`checkComputedPropertyName`) but which
+    /// does not rename the member the way `computed_key` does.
+    pub member_key: Option<Box<ParsedExpression>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1985,6 +2009,30 @@ pub struct ParsedVariableDeclaration {
     /// The annotated destructuring pattern this binding was lowered from, kept
     /// on the pattern's first binding only.
     pub annotated_pattern: Option<std::sync::Arc<ParsedAnnotatedBindingPattern>>,
+    /// The member initializers of the `enum` this object was lowered from, one
+    /// entry per declaration of it, for the checker to check.
+    pub enum_members: Option<std::sync::Arc<Vec<ParsedEnumBody>>>,
+}
+
+/// One `enum` declaration's member initializers. tsc checks each as an
+/// expression (`checkEnumMember`) with the enum's members in scope, and one
+/// that is not a constant expression must be numeric
+/// (`computeConstantEnumMemberValue`, TS18033). A literal initializer, which
+/// can report nothing, is left out, and so is every initializer of an ambient
+/// enum, which may only be constant (TS1066).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedEnumBody {
+    pub is_const: bool,
+    pub members: Vec<ParsedEnumMemberInitializer>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedEnumMemberInitializer {
+    pub initializer: ParsedExpression,
+    pub initializer_span: Option<TextSpan>,
+    /// tsc's evaluator has no value for it (a computed member), as far as the
+    /// file alone can tell.
+    pub computed: bool,
 }
 
 /// `const { a = 1 }: T = …`: tsc types each element of an annotated pattern
@@ -2655,8 +2703,13 @@ impl ParsedExpression {
             ParsedExpression::TypeAssertion { expression, .. }
             | ParsedExpression::SatisfiesExpression { expression, .. }
             | ParsedExpression::NonNullAssertion { expression, .. }
-            | ParsedExpression::ConstAssertion { expression, .. } => visit(expression),
+            | ParsedExpression::ConstAssertion { expression, .. }
+            | ParsedExpression::Instantiation { expression, .. } => visit(expression),
             ParsedExpression::Assignment { value, .. } => visit(value),
+            ParsedExpression::MemberAssignment(assignment) => {
+                visit(&assignment.target);
+                visit(&assignment.value);
+            }
             ParsedExpression::Sequence { expressions } => {
                 for (expression, _) in expressions {
                     visit(expression);

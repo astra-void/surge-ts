@@ -29,20 +29,28 @@ struct RecoveredCollector<'s, 'o> {
 }
 
 impl RecoveredCollector<'_, '_> {
-    /// tsc's `checkGrammarForGenerator`: TS1221 at the `*` of a generator
-    /// declared in an ambient context. oxc keeps no span for the `*`, so it is
-    /// the last one written before the name.
-    fn check_ambient_generator(&mut self, generator: bool, declare: bool, before: Span) {
-        if !generator || !(declare || self.ambient_depth > 0) {
+    /// tsc's `checkGrammarForGenerator`: at the `*` of a generator, TS1221 when
+    /// it is declared in an ambient context, else TS1222 when it has no body
+    /// (an overload signature). oxc keeps no span for the `*`, so it is the
+    /// last one written before the name.
+    fn check_generator(&mut self, generator: bool, declare: bool, has_body: bool, before: Span) {
+        if !generator {
             return;
         }
+        let code = if declare || self.ambient_depth > 0 {
+            1221
+        } else if !has_body {
+            1222
+        } else {
+            return;
+        };
         let Some(head) = self.source_text.get(before.start as usize..before.end as usize) else {
             return;
         };
         if let Some(offset) = head.rfind('*') {
             let start = before.start as usize + offset;
             self.out.push(ParsedGrammarDiagnostic {
-                kind: Kind::Ts(1221),
+                kind: Kind::Ts(code),
                 span: text_span_from_oxc_span(Span::new(start as u32, start as u32 + 1)),
                 name: None,
             });
@@ -81,9 +89,10 @@ impl<'a> Visit<'a> for RecoveredCollector<'_, '_> {
         if matches!(function.r#type, FunctionType::FunctionDeclaration | FunctionType::TSDeclareFunction)
         {
             let name_start = function.id.as_ref().map_or(function.params.span.start, |id| id.span.start);
-            self.check_ambient_generator(
+            self.check_generator(
                 function.generator,
                 function.declare,
+                function.body.is_some(),
                 Span::new(function.span.start, name_start),
             );
         }
@@ -91,9 +100,10 @@ impl<'a> Visit<'a> for RecoveredCollector<'_, '_> {
     }
 
     fn visit_method_definition(&mut self, method: &MethodDefinition<'a>) {
-        self.check_ambient_generator(
+        self.check_generator(
             method.value.generator,
             false,
+            method.value.body.is_some(),
             Span::new(method.span.start, method.key.span().start),
         );
         oxc_ast_visit::walk::walk_method_definition(self, method);

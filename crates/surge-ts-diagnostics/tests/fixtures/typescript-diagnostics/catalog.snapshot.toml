@@ -1204,9 +1204,17 @@ arity = 2
 code = "TS7055"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "'{0}', which lacks return-type annotation, implicitly has an '{1}' yield type."
 arity = 2
+
+[[diagnostic]]
+code = "TS7025"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Generator implicitly has yield type '{0}'. Consider supplying a return type annotation."
+arity = 1
 
 [[diagnostic]]
 code = "TS7056"
@@ -1220,7 +1228,7 @@ arity = 0
 code = "TS7057"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "'yield' expression implicitly results in an 'any' type because its containing generator lacks a return-type annotation."
 arity = 0
 
@@ -1655,6 +1663,38 @@ source = "typescript"
 support = "emitted"
 message = "Type '{0}' must have a '[Symbol.iterator]()' method that returns an iterator."
 arity = 1
+
+[[diagnostic]]
+code = "TS2504"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' must have a '[Symbol.asyncIterator]()' method that returns an async iterator."
+arity = 1
+
+[[diagnostic]]
+code = "TS2763"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot iterate value because the 'next' method of its iterator expects type '{1}', but for-of will always send '{0}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS2764"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot iterate value because the 'next' method of its iterator expects type '{1}', but array spread will always send '{0}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS2766"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot delegate iteration to value because the 'next' method of its iterator expects type '{1}', but the containing generator will always send '{0}'."
+arity = 2
 
 [[diagnostic]]
 code = "TS2698"
@@ -4225,6 +4265,14 @@ message = "Type '{0}' is not an array type or a string type."
 arity = 1
 
 [[diagnostic]]
+code = "TS2505"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A generator cannot have a 'void' type annotation."
+arity = 0
+
+[[diagnostic]]
 code = "TS6234"
 category = "Error"
 source = "typescript"
@@ -4302,6 +4350,30 @@ category = "Error"
 source = "typescript"
 support = "emitted"
 message = "Generators are not allowed in an ambient context."
+arity = 0
+
+[[diagnostic]]
+code = "TS1222"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An overload signature cannot be declared as a generator."
+arity = 0
+
+[[diagnostic]]
+code = "TS1368"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class constructor may not be a generator."
+arity = 0
+
+[[diagnostic]]
+code = "TS18038"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'for await' loops cannot be used inside a class static block."
 arity = 0
 
 [[diagnostic]]
@@ -6071,4 +6143,76 @@ source = "typescript"
 support = "emitted"
 message = "Cannot use 'this' in a static property initializer of a decorated class."
 arity = 0
+
+[[diagnostic]]
+code = "TS2498"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Module '{0}' uses 'export =' and cannot be used with 'export *'."
+arity = 1
+
+[[diagnostic]]
+code = "TS2375"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' is not assignable to type '{1}' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties."
+arity = 2
+
+[[diagnostic]]
+code = "TS2379"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Argument of type '{0}' is not assignable to parameter of type '{1}' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties."
+arity = 2
+
+[[diagnostic]]
+code = "TS2412"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' is not assignable to type '{1}' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target."
+arity = 2
+
+[[diagnostic]]
+code = "TS2635"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' has no signatures for which the type argument list is applicable."
+arity = 1
+
+[[diagnostic]]
+code = "TS18033"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' is not assignable to type '{1}' as required for computed enum member values."
+arity = 2
+
+[[diagnostic]]
+code = "TS2354"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This syntax requires an imported helper but module '{0}' cannot be found."
+arity = 1
+
+[[diagnostic]]
+code = "TS2343"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This syntax requires an imported helper named '{1}' which does not exist in '{0}'. Consider upgrading your version of '{0}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS2807"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This syntax requires an imported helper named '{1}' with {2} parameters, which is not compatible with the one in '{0}'. Consider upgrading your version of '{0}'."
+arity = 3
 

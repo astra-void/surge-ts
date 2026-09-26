@@ -518,6 +518,12 @@ pub(crate) fn resolve_parsed_type(
                     diagnostic = diagnostic.with_span(convert_span(span));
                 }
                 ctx.push(diagnostic);
+                // tsc checks a query's type arguments before its expression
+                // (`checkExpressionWithTypeArguments`), so what they name is
+                // reported whether or not the value resolves.
+                for argument in &type_of.type_arguments {
+                    let _ = resolve_parsed_type(argument.clone(), ctx, resolving, substitution);
+                }
 
                 return ResolvedType {
                     ty: Type::Unknown,
@@ -593,6 +599,33 @@ pub(crate) fn resolve_parsed_type(
                 ty = crate::checks::function::settle_lazy_read(ty);
             }
 
+            // tsc's `checkExpressionWithTypeArguments` on the query: TS2635 when
+            // no signature of the value takes that many type arguments. Judged
+            // where the query is written, not where an instantiation of the
+            // declaration around it re-resolves it.
+            if !type_of.type_arguments.is_empty()
+                && !binding_pass
+                && ctx.cross_file_resolution_depth == 0
+                && type_of.name_span.is_some()
+                && !ctx.is_library_scoped_file(&ctx.file_name)
+                && substitution.iter().all(|(name, _)| substitution.is_placeholder(name))
+                && !(type_of.members.is_empty()
+                    && crate::checks::call::class_value_lost_its_constructor(&type_of.name, &ty, ctx))
+                && let Some(diagnostic) = crate::checks::call::instantiation_expression_diagnostic(
+                    &ty,
+                    type_of
+                        .members
+                        .is_empty()
+                        .then_some(symbol.function_signature.as_deref())
+                        .flatten(),
+                    type_of.type_arguments.len(),
+                    type_of.type_arguments_span,
+                    &ctx.file_name,
+                )
+            {
+                ctx.push_utility_diagnostic_once(diagnostic);
+            }
+
             // `typeof f<A, B>` is an instantiation expression: it binds the
             // generic value's type parameters in type position, the same way a
             // call with explicit type arguments does. Without this the query
@@ -649,6 +682,13 @@ pub(crate) fn resolve_parsed_type(
                 resolving,
                 substitution,
             );
+            // `keyof T` over a type variable stays deferred (`shouldDeferIndexType`).
+            if let Some(keys) = surge_ts_types::type_variable::keyof_variable(&resolved_inner.ty) {
+                return ResolvedType {
+                    ty: keys,
+                    had_error: resolved_inner.had_error,
+                };
+            }
             // `keyof unknown` is `never` (tsc's `getIndexType` over the unknown
             // type), and the *written* keyword is the only `unknown` that means
             // it — surge's `Type::Unknown` doubles as the degradation sentinel.

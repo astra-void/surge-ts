@@ -69,8 +69,15 @@ fn check_container(statements: &[ParsedStatement], types: DeclaredTypes, ctx: &m
 
     let mut flow = FunctionFlowState::new(true);
     flow.shared_statement_index = true;
+    // A global script's own `let`s are not mutable locals to tsc
+    // (`isMutableLocalVariableDeclaration`).
+    flow.script_top_level = matches!(types, DeclaredTypes::ModuleSymbols)
+        && !statements.iter().any(|statement| {
+            matches!(statement, ParsedStatement::ImportDeclaration(_) | ParsedStatement::ExportDeclaration(_))
+        });
     flow.push_scope(future_declarations);
     for name in hoisted {
+        flow.hoisted_vars.insert(Arc::clone(&name));
         flow.declare_current(name, AssignmentState::DeclaredUnassigned);
     }
     for (index, statement) in statements.iter().enumerate() {

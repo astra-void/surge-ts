@@ -274,3 +274,154 @@ pub(crate) fn is_definitely_not_iterable(ty: &Type, nullish_is_error: bool) -> b
         _ => false,
     }
 }
+
+const ASYNC_ITERATION_PROTOCOL_MEMBER: &str = "[Symbol.asyncIterator]";
+
+/// tsc's `getIteratedTypeOrElementType` failure for an operand that may be
+/// async or sync iterable: a `for await…of` operand, or a `yield*` operand in
+/// an async generator. With the global `Iterable` declared it is TS2504;
+/// without it tsc falls back to `isArrayLikeType`, which only `for await`
+/// (which also takes strings) reports here, as TS2495. `for await` runs
+/// `checkNonNullExpression` first, so a nullish operand is not reported here;
+/// `yield*` does not.
+pub(crate) fn check_async_iterable_operand(
+    operand_result: &InferredExpression,
+    operand_span: Option<SyntaxTextSpan>,
+    for_await: bool,
+    ctx: &mut CheckerContext,
+) {
+    let (InferredExpression::Known(ty), Some(span)) = (operand_result, operand_span) else {
+        return;
+    };
+    if !is_definitely_not_async_iterable(ty, !for_await) {
+        return;
+    }
+    let file_name = ctx.file_name.clone();
+    let diagnostic = if ctx.ambient_global_type_declarations.get("Iterable").is_some() {
+        Diagnostic::ts2504(ty.name(), file_name)
+    } else if for_await
+        && !has_string_like_constituent(ty)
+        && !is_es2015_or_later_iterable_name(&ty.name())
+    {
+        Diagnostic::ts2495(ty.name(), file_name)
+    } else {
+        return;
+    };
+    ctx.push(diagnostic.with_span(convert_span(span)));
+}
+
+/// [`is_definitely_not_iterable`] with async iterables allowed
+/// (`getIterationTypesOfIterableWorker`): neither an `[Symbol.asyncIterator]()`
+/// nor an `[Symbol.iterator]()` method is callable without arguments.
+fn is_definitely_not_async_iterable(ty: &Type, nullish_is_error: bool) -> bool {
+    match ty {
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| is_definitely_not_async_iterable(member, nullish_is_error)),
+        Type::Object(object) if !surge_ts_types::type_variable::is_narrowed_type_variable(ty) => {
+            !has_protocol_method(object, ASYNC_ITERATION_PROTOCOL_MEMBER)
+                && !has_protocol_method(object, surge_ts_types::ITERATION_PROTOCOL_MEMBER)
+                && object.call_signature().is_none()
+                && object.construct_signature().is_none()
+                && !(object.synthetic_open_index && object.string_index_type.is_some())
+                && !(object.number_index_type.is_some() && object.get_property("length").is_some())
+        }
+        Type::Reference(reference)
+            if reference
+                .id
+                .split('\u{0}')
+                .next()
+                .is_some_and(|file| !file.is_empty() && !crate::modules::is_declaration_file_name(file)) =>
+        {
+            match ty.peeled() {
+                peeled @ Type::Object(_) => is_definitely_not_async_iterable(&peeled, nullish_is_error),
+                _ => false,
+            }
+        }
+        _ => is_definitely_not_iterable(ty, nullish_is_error),
+    }
+}
+
+/// The iteration that sends a value to an iterator's `next`, which the
+/// message names.
+#[derive(Clone, Copy)]
+pub(crate) enum IterationSend {
+    ForOf,
+    Spread,
+    YieldStar,
+}
+
+/// The `checkAssignability` half of tsc's `getIteratedTypeOrElementType`:
+/// what the iteration sends each step — `undefined`, or for `yield*` the
+/// containing generator's next type — must be assignable to the next type of
+/// the operand's iterator (TS2763, TS2764, TS2766). Only a reference to a lib
+/// iterable or generator interface says what its `next` takes (the
+/// iteration-types fast path); any other operand is left alone.
+pub(crate) fn check_iteration_next_type(
+    operand_result: &InferredExpression,
+    operand_span: Option<SyntaxTextSpan>,
+    sent: &Type,
+    send: IterationSend,
+    allow_async: bool,
+    ctx: &mut CheckerContext,
+) {
+    let (InferredExpression::Known(ty), Some(span)) = (operand_result, operand_span) else {
+        return;
+    };
+    let Some(next) = lib_iterable_next_type(ty, allow_async) else {
+        return;
+    };
+    // The deep degradation walk forces lazy references, so it only runs once
+    // the relation has failed.
+    if matches!(next, Type::Unknown | Type::ErrorType | Type::TypeParameter(_))
+        || surge_ts_types::is_assignable_to(sent, &next)
+        || crate::checks::function::type_contains_degradation(&next)
+        || crate::checks::function::type_contains_degradation(sent)
+    {
+        return;
+    }
+    let (sent_name, next_name, file_name) = (sent.name(), next.name(), ctx.file_name.clone());
+    let diagnostic = match send {
+        IterationSend::ForOf => Diagnostic::ts2763(sent_name, next_name, file_name),
+        IterationSend::Spread => Diagnostic::ts2764(sent_name, next_name, file_name),
+        IterationSend::YieldStar => Diagnostic::ts2766(sent_name, next_name, file_name),
+    };
+    ctx.push(diagnostic.with_span(convert_span(span)));
+}
+
+/// The `TNext` of a reference to a lib iterable or generator interface,
+/// defaulted as its declaration defaults it. The async ones only count where
+/// async iterables are allowed.
+fn lib_iterable_next_type(ty: &Type, allow_async: bool) -> Option<Type> {
+    let Type::Reference(reference) = ty else {
+        return None;
+    };
+    let mut parts = reference.id.split('\u{0}');
+    let file = parts.next()?;
+    let name = parts.next_back()?;
+    if !crate::modules::is_declaration_file_name(file) {
+        return None;
+    }
+    let default = match name {
+        "Iterable" | "IterableIterator" | "Generator" => Type::Any,
+        "IteratorObject" => Type::GenuineUnknown,
+        "AsyncIterable" | "AsyncIterableIterator" | "AsyncGenerator" if allow_async => Type::Any,
+        "AsyncIteratorObject" if allow_async => Type::GenuineUnknown,
+        _ => return None,
+    };
+    Some(reference.arguments.get(2).cloned().unwrap_or(default))
+}
+
+/// Whether `object` has the protocol method `name` with a signature callable
+/// without arguments; `getIterationTypesOfIterableSlow` ignores the others
+/// (`[Symbol.asyncIterator](n: number)` makes nothing iterable).
+fn has_protocol_method(object: &surge_ts_types::ObjectType, name: &str) -> bool {
+    match object.get_property_type(name) {
+        None => false,
+        Some(Type::Function(function)) => {
+            function.overloads().is_some() || function.required_parameter_count() == 0
+        }
+        Some(_) => true,
+    }
+}

@@ -26,6 +26,7 @@ pub(crate) fn normalize_compiler_options(
     let mut explicit_module = None;
     let mut explicit_use_define_for_class_fields = None;
     let mut explicit_strict_null_checks = None;
+    let mut explicit_strict_bind_call_apply = None;
     let mut explicit_strict_property_initialization = None;
     let mut explicit_use_unknown_in_catch_variables = None;
     let mut explicit_resolve_json_module = None;
@@ -49,6 +50,10 @@ pub(crate) fn normalize_compiler_options(
             }
             "strictNullChecks" => {
                 explicit_strict_null_checks = parse_bool_option(key, value, config_dir, diagnostics);
+            }
+            "strictBindCallApply" => {
+                explicit_strict_bind_call_apply =
+                    parse_bool_option(key, value, config_dir, diagnostics);
             }
             "strictPropertyInitialization" => {
                 explicit_strict_property_initialization =
@@ -109,6 +114,11 @@ pub(crate) fn normalize_compiler_options(
                     parse_bool_option(key, value, config_dir, diagnostics)
                         .unwrap_or(normalized.no_unchecked_indexed_access);
             }
+            "exactOptionalPropertyTypes" => {
+                normalized.exact_optional_property_types =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.exact_optional_property_types);
+            }
             "allowImportingTsExtensions" => {
                 normalized.allow_importing_ts_extensions =
                     parse_bool_option(key, value, config_dir, diagnostics)
@@ -128,6 +138,15 @@ pub(crate) fn normalize_compiler_options(
                 normalized.experimental_decorators =
                     parse_bool_option(key, value, config_dir, diagnostics)
                         .unwrap_or(normalized.experimental_decorators);
+            }
+            "importHelpers" => {
+                normalized.import_helpers = parse_bool_option(key, value, config_dir, diagnostics)
+                    .unwrap_or(normalized.import_helpers);
+            }
+            "emitDecoratorMetadata" => {
+                normalized.emit_decorator_metadata =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.emit_decorator_metadata);
             }
             "noUnusedLocals" => {
                 normalized.no_unused_locals =
@@ -312,6 +331,8 @@ pub(crate) fn normalize_compiler_options(
     normalized.use_define_for_class_fields = explicit_use_define_for_class_fields
         .unwrap_or(normalized.target >= ScriptTarget::ES2022);
     normalized.strict_null_checks = explicit_strict_null_checks.unwrap_or(normalized.strict);
+    normalized.strict_bind_call_apply =
+        explicit_strict_bind_call_apply.unwrap_or(normalized.strict);
     normalized.strict_property_initialization =
         explicit_strict_property_initialization.unwrap_or(normalized.strict);
     normalized.use_unknown_in_catch_variables =

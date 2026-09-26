@@ -1033,6 +1033,10 @@ fn check_function_body_statement_itself(
         }
         ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
             let start = Instant::now();
+            let enum_members = variable
+                .enum_members
+                .clone()
+                .map(|bodies| (variable.name.clone(), bodies));
             check_function_variable_declaration(
                 *variable,
                 statement_index,
@@ -1040,6 +1044,11 @@ fn check_function_body_statement_itself(
                 flow_state,
                 ctx,
             );
+            if let Some((name, bodies)) = enum_members {
+                let symbols = visible_symbols(scopes)
+                    .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+                crate::checks::enum_members::check_enum_members(&name, &bodies, symbols, ctx);
+            }
             record_program_timing(ctx.timings.as_ref(), |timings| {
                 timings.variable_declaration_checking += start.elapsed()
             });

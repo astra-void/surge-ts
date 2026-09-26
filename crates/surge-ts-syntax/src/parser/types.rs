@@ -271,6 +271,10 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 import_specifier: None,
                 member_spans: Vec::new(),
                 type_arguments: parse_type_query_arguments(type_query),
+                type_arguments_span: type_query
+                    .type_arguments
+                    .as_ref()
+                    .map(|arguments| text_span_from_oxc_span(arguments.span)),
             })))
         }
         TSTypeQueryExprName::QualifiedName(qualified_name) => {
@@ -283,6 +287,10 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 import_specifier: None,
                 member_spans: Vec::new(),
                 type_arguments: parse_type_query_arguments(type_query),
+                type_arguments_span: type_query
+                    .type_arguments
+                    .as_ref()
+                    .map(|arguments| text_span_from_oxc_span(arguments.span)),
             })))
         }
         // `typeof import("vitest")['assert']` reads the module's namespace value;
@@ -301,6 +309,10 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
                 import_specifier: Some(specifier),
                 member_spans,
                 type_arguments: parse_type_query_arguments(type_query),
+                type_arguments_span: type_query
+                    .type_arguments
+                    .as_ref()
+                    .map(|arguments| text_span_from_oxc_span(arguments.span)),
             })))
         }
         // `typeof this` is not modelled.

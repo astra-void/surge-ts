@@ -27,6 +27,8 @@ pub struct NormalizedCompilerOptions {
     pub no_implicit_this: bool,
     /// `compilerOptions.strictNullChecks`. Defaults to `strict`.
     pub strict_null_checks: bool,
+    /// `compilerOptions.strictBindCallApply`. Defaults to `strict`.
+    pub strict_bind_call_apply: bool,
     /// `compilerOptions.strictPropertyInitialization`. Defaults to `strict`.
     pub strict_property_initialization: bool,
     pub use_unknown_in_catch_variables: bool,
@@ -50,6 +52,8 @@ pub struct NormalizedCompilerOptions {
     pub no_property_access_from_index_signature: bool,
     /// `compilerOptions.noUncheckedIndexedAccess`. Independent of `strict`; defaults off.
     pub no_unchecked_indexed_access: bool,
+    /// `compilerOptions.exactOptionalPropertyTypes`. Independent of `strict`; defaults off.
+    pub exact_optional_property_types: bool,
     /// `compilerOptions.allowImportingTsExtensions`. Defaults off; without it an
     /// import path ending in a TypeScript extension is TS5097.
     pub allow_importing_ts_extensions: bool,
@@ -63,6 +67,11 @@ pub struct NormalizedCompilerOptions {
     /// `compilerOptions.experimentalDecorators`. Defaults off, which checks
     /// decorators as ES decorators.
     pub experimental_decorators: bool,
+    /// `compilerOptions.importHelpers`: emit helpers come from `tslib`,
+    /// which the checker resolves and reads.
+    pub import_helpers: bool,
+    /// `compilerOptions.emitDecoratorMetadata`.
+    pub emit_decorator_metadata: bool,
     /// `compilerOptions.noUnusedLocals`. Independent of `strict`; defaults off.
     pub no_unused_locals: bool,
     /// `compilerOptions.noUnusedParameters`. Independent of `strict`; defaults off.
@@ -150,6 +159,7 @@ impl Default for NormalizedCompilerOptions {
             no_implicit_any: true,
             no_implicit_this: true,
             strict_null_checks: true,
+            strict_bind_call_apply: true,
             strict_property_initialization: true,
             use_unknown_in_catch_variables: true,
             no_implicit_returns: false,
@@ -162,10 +172,13 @@ impl Default for NormalizedCompilerOptions {
             verbatim_module_syntax: false,
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
+            exact_optional_property_types: false,
             allow_importing_ts_extensions: false,
             rewrite_relative_import_extensions: false,
             allow_arbitrary_extensions: false,
             experimental_decorators: false,
+            import_helpers: false,
+            emit_decorator_metadata: false,
             no_unused_locals: false,
             no_unused_parameters: false,
             allow_unreachable_code: false,

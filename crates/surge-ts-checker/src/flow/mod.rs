@@ -261,6 +261,14 @@ pub(crate) struct FunctionFlowState {
     /// (tsc's `isSymbolAssigned`); a parameter or `let` among them is not a
     /// constant reference.
     assigned_bindings: Arc<std::collections::HashSet<Arc<str>>>,
+    /// The container's hoisted `var`s (see [`FunctionFlowState::hoist_vars`]).
+    hoisted_vars: std::collections::HashSet<Arc<str>>,
+    /// The container is a global script's top level, whose bindings are
+    /// never mutable locals.
+    script_top_level: bool,
+    /// Walking a computed method or accessor name, whose flow container is the
+    /// member (see [`FunctionFlowState::assumed_initialized_in_member_key`]).
+    pub(crate) in_member_key: std::cell::Cell<bool>,
 }
 
 /// What [`FunctionFlowState::begin_initializer`] changed, for
@@ -295,6 +303,9 @@ impl Clone for FunctionFlowState {
             enum_objects: self.enum_objects.clone(),
             initializing: self.initializing.clone(),
             assigned_bindings: Arc::clone(&self.assigned_bindings),
+            hoisted_vars: self.hoisted_vars.clone(),
+            script_top_level: self.script_top_level,
+            in_member_key: self.in_member_key.clone(),
         }
     }
 }
@@ -393,6 +404,9 @@ impl FunctionFlowState {
             enum_objects: HashMap::new(),
             initializing: Vec::new(),
             assigned_bindings: Arc::default(),
+            hoisted_vars: std::collections::HashSet::new(),
+            script_top_level: false,
+            in_member_key: std::cell::Cell::new(false),
         }
     }
 
@@ -499,8 +513,23 @@ impl FunctionFlowState {
         self.enabled = true;
         self.push_scope(HashMap::new());
         for name in names {
+            self.hoisted_vars.insert(Arc::clone(&name));
             self.declare_current(name, AssignmentState::DeclaredUnassigned);
         }
+    }
+
+    /// tsc's `checkIdentifier` for a read in a computed method or accessor
+    /// name: the member is its flow container, so an enclosing binding is an
+    /// outer variable, assumed initialized unless the analysis climbs to its
+    /// own container — a `const`, or a `let`/parameter past its last
+    /// assignment — or it is a `let` never assigned at all. A `var` is
+    /// neither, nor is anything a global script declares at its top level; a
+    /// `let` assigned anywhere is taken as assigned after the read.
+    pub(crate) fn assumed_initialized_in_member_key(&self, name: &str) -> bool {
+        self.in_member_key.get()
+            && (self.script_top_level
+                || self.hoisted_vars.contains(name)
+                || self.assigned_bindings.contains(name))
     }
 
     /// The assignment state of every binding in the outermost scope — the

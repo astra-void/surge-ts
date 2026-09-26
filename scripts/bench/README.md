@@ -210,12 +210,17 @@ pnpm run bench:checkers -- --corpora             # provisioned .local-projects c
 pnpm run bench:checkers -- --all --filter react  # substring filter over target names
 ```
 
-Every spawned tool is polled for resident memory (its whole process group) and
-killed past `--maxMemory` (default 2048 MB) or, for corpora, `--corpusMaxMemory`
+Every spawned tool is polled for memory (its whole process group) and killed
+past `--maxMemory` (default 2048 MB) or, for corpora, `--corpusMaxMemory`
 (default 6144 MB); the target reports `memory limit` and is not scored. macOS
 enforces no address-space rlimit, and bolt-ts runs away on some upstream cases
-fast enough to take a 16 GB machine down inside the timeout. `--jobs` is
-lowered so jobs × `--maxMemory` stays within half of physical memory.
+fast enough to take a 16 GB machine down inside the timeout. On macOS the
+measure is physical footprint (`proc_pid_rusage`, read by a `python3` sidecar),
+not resident size: under memory pressure the kernel compresses and swaps a
+runaway's pages out of its resident set, so its RSS stays under the cap while
+its footprint grows past physical memory. Elsewhere, or without `python3`, it
+is `ps` resident size. `--jobs` is lowered so jobs × `--maxMemory` stays within
+half of physical memory.
 
 The tsgo baseline (the `--noEmit` check and `--listFilesOnly`) dominates an
 upstream run's wall time and does not depend on either checker, so for upstream

@@ -198,7 +198,62 @@ pub(super) fn narrow_property_presence_in_scope(
         },
         scopes,
     );
+    if surge_ts_types::exact_optional_property_types() {
+        let mut member = path;
+        member.push(property.to_string());
+        narrow_reference_in_scope(
+            &base,
+            &member,
+            ReferenceGuard::ExactOptionalPresence {
+                keep_present: branch_is_true,
+            },
+            scopes,
+        );
+    }
     true
+}
+
+/// `o.hasOwnProperty("p")` narrows the read of `o.p` as `"p" in o` does under
+/// `exactOptionalPropertyTypes` (`narrowTypeByCallExpression`). It only adds
+/// to what the other guards make of the call.
+pub(super) fn narrow_has_own_property_in_scope(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    branch_is_true: bool,
+) {
+    if !surge_ts_types::exact_optional_property_types() {
+        return;
+    }
+    let ParsedExpression::PropertyCall {
+        object,
+        property_name,
+        arguments,
+        ..
+    } = condition
+    else {
+        return;
+    };
+    let [argument] = arguments.as_slice() else {
+        return;
+    };
+    let ParsedExpression::StringLiteral(property) = &argument.expression else {
+        return;
+    };
+    if property_name != "hasOwnProperty" || argument.spread {
+        return;
+    }
+    let Some((base, mut member)) = reference_path(object) else {
+        return;
+    };
+    member.push(property.clone());
+    narrow_reference_in_scope(
+        &base,
+        &member,
+        ReferenceGuard::ExactOptionalPresence {
+            keep_present: branch_is_true,
+        },
+        scopes,
+    );
 }
 
 /// Applies `x === null` / `x.p === undefined` narrowing in place to a

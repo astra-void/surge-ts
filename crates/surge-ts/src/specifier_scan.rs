@@ -17,17 +17,57 @@ struct ScannedSource {
 }
 
 impl ScannedSource {
-    fn new(parsed: ParsedSource, retain_parse: bool, jsx_runtime: &JsxRuntimeOptions) -> ScannedSource {
-        // tsc's file loader resolves the automatic JSX runtime a file imports
-        // implicitly before the imports it writes.
+    fn new(
+        parsed: ParsedSource,
+        retain_parse: bool,
+        jsx_runtime: &JsxRuntimeOptions,
+        import_helpers: ImportHelpersScan,
+    ) -> ScannedSource {
+        // tsc's file loader resolves the `tslib` a file's emit helpers come
+        // from and the automatic JSX runtime a file imports implicitly, in
+        // that order, before the imports it writes.
         let runtime_import =
             surge_ts_syntax::jsx_runtime_import(&parsed.file_name, &parsed.jsx_factory_uses, jsx_runtime);
+        let implicit_imports: Vec<&str> = import_helpers
+            .helpers_import(&parsed)
+            .into_iter()
+            .chain(runtime_import.as_deref())
+            .collect();
         ScannedSource {
-            specifiers: source_specifiers(&parsed, runtime_import.as_deref()),
-            usages: source_usages(&parsed, runtime_import.as_deref()),
+            specifiers: source_specifiers(&parsed, &implicit_imports),
+            usages: source_usages(&parsed, &implicit_imports),
             augmentation_specifiers: module_augmentation_specifiers(&parsed),
             parsed: retain_parse.then_some(parsed),
         }
+    }
+}
+
+/// tsgo's `needsImportHelpersImportSpecifier`: under `importHelpers`, a
+/// JavaScript file, and a non-declaration file that is a module (any, under
+/// `isolatedModules`), imports `tslib` for the helpers its emit calls.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ImportHelpersScan {
+    pub(crate) enabled: bool,
+    /// tsgo's `GetIsolatedModules`: `isolatedModules` or `verbatimModuleSyntax`.
+    pub(crate) isolated_modules: bool,
+    /// `moduleDetection: force`, which makes every non-declaration file a module.
+    pub(crate) force_module_detection: bool,
+}
+
+impl ImportHelpersScan {
+    fn helpers_import(self, parsed: &ParsedSource) -> Option<&'static str> {
+        let file_name = parsed.file_name.as_str();
+        if !self.enabled || surge_ts_syntax::is_json_file_name(file_name) {
+            return None;
+        }
+        let lower = file_name.to_ascii_lowercase();
+        let module = parsed.is_module
+            || self.force_module_detection
+            || lower.ends_with(".mts")
+            || lower.ends_with(".cts");
+        let needed = surge_ts_syntax::is_javascript_file_name(file_name)
+            || (!surge_ts_syntax::is_declaration_file_name(file_name) && (self.isolated_modules || module));
+        needed.then_some("tslib")
     }
 }
 
@@ -54,6 +94,7 @@ pub(crate) struct ModuleSpecifierScanner {
     scanned: Vec<Option<ScannedSource>>,
     retain_parses: bool,
     jsx_runtime: JsxRuntimeOptions,
+    import_helpers: ImportHelpersScan,
 }
 
 /// `SURGE_PRESCANNED_PARSE_REUSE=0` drops each parse as soon as its specifiers
@@ -71,7 +112,13 @@ impl ModuleSpecifierScanner {
             scanned: Vec::new(),
             retain_parses: parse_reuse_enabled(),
             jsx_runtime,
+            import_helpers: ImportHelpersScan::default(),
         }
+    }
+
+    pub(crate) fn with_import_helpers(mut self, import_helpers: ImportHelpersScan) -> Self {
+        self.import_helpers = import_helpers;
+        self
     }
 
     /// Parse `sources[start..]` on a small worker pool and fill the cache, so
@@ -103,6 +150,7 @@ impl ModuleSpecifierScanner {
         let next = std::sync::atomic::AtomicUsize::new(0);
         let retain_parses = self.retain_parses;
         let jsx_runtime = &self.jsx_runtime;
+        let import_helpers = self.import_helpers;
         let results: Vec<(usize, ScannedSource)> = std::thread::scope(|scope| {
             let pending = &pending;
             let next = &next;
@@ -119,7 +167,7 @@ impl ModuleSpecifierScanner {
                         let index = pending[slot];
                         let (_, file_name, source_text) = &sources[index];
                         let parsed = parser.parse(source_text, file_name);
-                        out.push((index, ScannedSource::new(parsed, retain_parses, jsx_runtime)));
+                        out.push((index, ScannedSource::new(parsed, retain_parses, jsx_runtime, import_helpers)));
                     }
                     out
                 }));
@@ -166,7 +214,7 @@ impl ModuleSpecifierScanner {
         }
         if self.scanned[index].is_none() {
             let parsed = self.parser.parse(source_text, file_name);
-            self.scanned[index] = Some(ScannedSource::new(parsed, self.retain_parses, &self.jsx_runtime));
+            self.scanned[index] = Some(ScannedSource::new(parsed, self.retain_parses, &self.jsx_runtime, self.import_helpers));
         }
         self.scanned[index]
             .as_ref()
@@ -198,9 +246,10 @@ impl ModuleSpecifierScanner {
 /// `Parsed*` tree cannot carry. Both belong to the module graph: a package
 /// reached only through an import type still supplies its
 /// `/// <reference types>` directives and ambient `declare module` blocks.
-fn source_specifiers(parsed: &ParsedSource, runtime_import: Option<&str>) -> Arc<[String]> {
-    runtime_import
-        .into_iter()
+fn source_specifiers(parsed: &ParsedSource, implicit_imports: &[&str]) -> Arc<[String]> {
+    implicit_imports
+        .iter()
+        .copied()
         .chain(parsed.statements.iter().filter_map(statement_module_specifier))
         .chain(parsed.import_call_specifiers.iter().map(String::as_str))
         .map(str::to_owned)
@@ -229,14 +278,14 @@ fn module_augmentation_specifiers(parsed: &ParsedSource) -> Box<[String]> {
 }
 
 /// The usages behind [`source_specifiers`], in the same order.
-fn source_usages(parsed: &ParsedSource, runtime_import: Option<&str>) -> Arc<[ModuleUsage]> {
-    let runtime_usage = runtime_import.map(|specifier| ModuleUsage {
-        specifier: specifier.to_owned(),
-        import_equals: false,
-        resolution_mode: None,
-    });
-    runtime_usage
-        .into_iter()
+fn source_usages(parsed: &ParsedSource, implicit_imports: &[&str]) -> Arc<[ModuleUsage]> {
+    implicit_imports
+        .iter()
+        .map(|specifier| ModuleUsage {
+            specifier: (*specifier).to_owned(),
+            import_equals: false,
+            resolution_mode: None,
+        })
         .chain(parsed.statements.iter().filter_map(|statement| {
             let specifier = statement_module_specifier(statement)?;
             let (import_equals, attribute) = match statement {

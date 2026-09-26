@@ -2606,6 +2606,7 @@ fn evaluate_object_literal_with_expected_type(
     // reports — the `@ts-expect-error` a test wrote over the property then does
     // not cover it. Withhold the missing-property report in that case.
     let mut degraded_property_comparison = false;
+    let mut exact_optional_mismatch = false;
     let mut explicit_properties: Vec<(&str, Option<SyntaxTextSpan>)> = Vec::new();
 
     for property in properties {
@@ -2755,6 +2756,20 @@ fn evaluate_object_literal_with_expected_type(
                 } else {
                     is_assignable_to(&actual_type, &expected_property_type)
                 };
+                // Under `exactOptionalPropertyTypes` a value only its `undefined`
+                // keeps out of the declared type still relates to the property's
+                // read type (`undefined` to tsc's missing type), so tsc does not
+                // elaborate into it: the literal as a whole is reported below.
+                if assignable
+                    && !method_target
+                    && crate::checks::expr::is_exact_optional_slot(
+                        &expected_property.ty,
+                        expected_property.is_optional(),
+                    )
+                    && !is_assignable_to(&actual_type, &expected_property.ty)
+                {
+                    exact_optional_mismatch = true;
+                }
                 if expected_diagnostic != ExpectedTypeDiagnostic::ContextOnly && !assignable {
                     // The comparison target carries the optionality-implied
                     // `undefined`, but tsc's elaboration names the property's
@@ -2921,6 +2936,40 @@ fn evaluate_object_literal_with_expected_type(
             choose_span(target_span, fallback_span),
         ));
         record_object_literal_own_type(properties, &inferred_property_types, expected_object_type, fallback_span, ctx);
+        return InferredExpression::Unknown;
+    }
+
+    // `reportRelationError` heads the literal's report TS2375, or TS2379 for an
+    // argument, when that is what fails; an assertion or `satisfies` keeps its
+    // own head.
+    if exact_optional_mismatch
+        && matches!(
+            expected_diagnostic,
+            ExpectedTypeDiagnostic::TypeNotAssignable | ExpectedTypeDiagnostic::ArgumentNotAssignable
+        )
+    {
+        let displayed_property_types: BTreeMap<String, Type> = inferred_property_types
+            .iter()
+            .map(|(name, ty)| (name.clone(), crate::checks::expr::widen_type(ty)))
+            .collect();
+        let source_type_name =
+            object_literal_source_type_name(properties, &displayed_property_types).name();
+        let target_type_name = match union_target.as_ref() {
+            Some(union) => union.name(),
+            None => Type::Object(with_type_copy_reason(TypeCopyReason::ExpectedType, || {
+                expected_object_type.clone()
+            }))
+            .name(),
+        };
+        let diagnostic = if expected_diagnostic == ExpectedTypeDiagnostic::ArgumentNotAssignable {
+            Diagnostic::ts2379(&source_type_name, &target_type_name, ctx.file_name.clone())
+        } else {
+            Diagnostic::ts2375(&source_type_name, &target_type_name, ctx.file_name.clone())
+        };
+        ctx.push(diagnostic_with_syntax_span(
+            diagnostic,
+            choose_span(target_span, fallback_span),
+        ));
         return InferredExpression::Unknown;
     }
 
@@ -3195,6 +3244,13 @@ fn check_returned_conditional_branch(
     ctx.split_returned_conditional = false;
     match result {
         InferredExpression::Known(branch_type) => {
+            // tsc's `checkReturnExpression` awaits each branch of an async
+            // function's returned conditional before relating it.
+            let branch_type = if ctx.in_async_body {
+                crate::checks::call::awaited_type(&branch_type)
+            } else {
+                branch_type
+            };
             if branch_type.is_unknown() || is_assignable_to(&branch_type, expected_type) {
                 return false;
             }

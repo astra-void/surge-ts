@@ -1223,6 +1223,11 @@ fn array_element_name(element: &Type) -> String {
 /// `| undefined`. `unknown`/`any` already absorb `undefined`, and a union that
 /// already includes it needs no addition.
 fn optional_property_display(ty: &Type) -> String {
+    // tsc prints a member's `getNonMissingTypeOfSymbol`, which keeps the
+    // declared type as it is under `exactOptionalPropertyTypes`.
+    if crate::exact_optional_property_types() {
+        return ty.name();
+    }
     match ty {
         Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Undefined => ty.name(),
         Type::Union(union) if union.types().iter().any(|m| matches!(m, Type::Undefined)) => {

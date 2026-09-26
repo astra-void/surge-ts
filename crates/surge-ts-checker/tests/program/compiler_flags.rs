@@ -586,6 +586,7 @@ fn unchecked_indexed_access_widens_array_reads() {
         "a.ts",
         CheckerOptions {
             no_unchecked_indexed_access: true,
+            exact_optional_property_types: false,
             ..Default::default()
         },
     );

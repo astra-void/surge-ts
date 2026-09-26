@@ -1154,6 +1154,18 @@ impl<'a> ContextCollector<'a, '_> {
         self.push(1183, Span::new(body.span.start, body.span.start + 1), &[]);
     }
 
+    /// tsc's `checkMethodDeclaration`: a generator method whose name is the
+    /// identifier `constructor` (a string-literal name is not checked).
+    fn check_generator_constructor(&mut self, method: &oxc_ast::ast::MethodDefinition<'_>) {
+        if method.value.generator
+            && !method.computed
+            && let oxc_ast::ast::PropertyKey::StaticIdentifier(key) = &method.key
+            && key.name == "constructor"
+        {
+            self.push(1368, key.span, &[]);
+        }
+    }
+
     /// tsc's `checkGrammarAccessor`: a class accessor outside an ambient
     /// context needs a body unless it is abstract — `'{' expected` on the
     /// accessor's last character (its `;` when it has one).
@@ -2494,9 +2506,14 @@ impl<'a> ContextCollector<'a, '_> {
 
     /// tsc's `checkClassForStaticPropertyNameConflicts`: a static member named
     /// like one of `Function`'s own properties — TS2699, which the checker
-    /// keeps only when `useDefineForClassFields` is off.
+    /// keeps only when `useDefineForClassFields` is off — and the static
+    /// `prototype` of `checkObjectTypeForDuplicateDeclarations`, which it
+    /// always keeps. Neither is checked in an ambient context.
     fn check_static_function_property_names(&mut self, body: &oxc_ast::ast::ClassBody<'_>) {
         use oxc_ast::ast::ClassElement;
+        if self.ambient_depth > 0 {
+            return;
+        }
         // tsc names an anonymous class expression by the variable it
         // initializes (`const E = class {}` is `E`).
         let class_name = match self.stack.last() {
@@ -2525,7 +2542,7 @@ impl<'a> ContextCollector<'a, '_> {
             let Some(name) = key.static_name() else {
                 continue;
             };
-            if matches!(name.as_ref(), "name" | "length" | "caller" | "arguments") {
+            if matches!(name.as_ref(), "name" | "length" | "caller" | "arguments" | "prototype") {
                 self.push(2699, key.span(), &[&name, &class_name]);
             }
         }
@@ -2875,17 +2892,41 @@ impl<'a> ContextCollector<'a, '_> {
     }
 
     fn check_yield(&mut self, expression: &oxc_ast::ast::YieldExpression<'_>) {
-        let in_generator = matches!(
-            self.stack.iter().rev().find(|kind| is_function_like(kind)),
-            Some(AstKind::Function(function)) if function.generator
-        );
-        if !in_generator {
+        if !self.in_yield_context(expression.span) {
             let start = expression.span.start;
             self.push(1163, Span::new(start, start + 5), &[]);
         }
         if self.is_in_parameter_initializer(expression.span) {
             self.push(2523, expression.span, &[]);
         }
+    }
+
+    /// tsc's `NodeFlagsYieldContext`: a generator's parameters and body are
+    /// parsed in it, but the parser clears it for a class field's initializer,
+    /// a static block and an enum's members, even inside a generator.
+    fn in_yield_context(&self, node_span: Span) -> bool {
+        let mut child_span = node_span;
+        for kind in self.stack.iter().rev() {
+            match kind {
+                AstKind::Function(function) => return function.generator,
+                AstKind::ArrowFunctionExpression(_) | AstKind::StaticBlock(_) | AstKind::TSEnumMember(_) => {
+                    return false;
+                }
+                AstKind::PropertyDefinition(property)
+                    if property.value.as_ref().is_some_and(|value| value.span() == child_span) =>
+                {
+                    return false;
+                }
+                AstKind::AccessorProperty(property)
+                    if property.value.as_ref().is_some_and(|value| value.span() == child_span) =>
+                {
+                    return false;
+                }
+                _ => {}
+            }
+            child_span = kind.span();
+        }
+        false
     }
 
     fn check_await(&mut self, expression: &oxc_ast::ast::AwaitExpression<'_>) {
@@ -2898,18 +2939,18 @@ impl<'a> ContextCollector<'a, '_> {
     }
 
     fn check_for_await(&mut self, statement: &oxc_ast::ast::ForOfStatement<'_>) {
-        let non_async_function = match self.nearest_function_or_static_block() {
-            Some(AstKind::Function(function)) => !function.r#async,
-            Some(AstKind::ArrowFunctionExpression(arrow)) => !arrow.r#async,
-            _ => false,
+        // A static block's body is parsed in an await context, so the loop is
+        // not TS1103 there; `checkForOfStatement` rejects it as TS18038.
+        let code = match self.nearest_function_or_static_block() {
+            Some(AstKind::StaticBlock(_)) => 18038,
+            Some(AstKind::Function(function)) if !function.r#async => 1103,
+            Some(AstKind::ArrowFunctionExpression(arrow)) if !arrow.r#async => 1103,
+            _ => return,
         };
-        if !non_async_function {
-            return;
-        }
         let from = statement.span.start as usize + 3;
         if let Some(offset) = self.source_text[from..].find("await") {
             let start = (from + offset) as u32;
-            self.push(1103, Span::new(start, start + 5), &[]);
+            self.push(code, Span::new(start, start + 5), &[]);
         }
     }
 
@@ -3378,7 +3419,10 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     }
                 }
             }
-            AstKind::MethodDefinition(method) => self.check_accessor_body(method),
+            AstKind::MethodDefinition(method) => {
+                self.check_accessor_body(method);
+                self.check_generator_constructor(method);
+            }
             AstKind::TSTypeParameterDeclaration(declaration) => {
                 self.check_circular_constraints(declaration);
                 self.check_type_parameter_defaults(declaration);

@@ -926,6 +926,10 @@ thread_local! {
     /// inferences never clear `topLevel`.
     static INFERENCE_ROOT_PARAMETER: std::cell::RefCell<Option<ParsedType>> =
         const { std::cell::RefCell::new(None) };
+    /// Whether the walk infers from the call's contextual return type, whose
+    /// inferences only fill what the arguments left open — tsc's
+    /// `InferencePriority.ReturnType`, below every argument's.
+    static INFERRING_FROM_RETURN_TYPE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn with_inference_root<R>(root: &ParsedType, walk: impl FnOnce() -> R) -> R {
@@ -1738,6 +1742,7 @@ pub(crate) fn infer_type_argument_substitution(
         SOURCE_IS_OBJECT_OR_ARRAY_LITERAL.replace(false),
         INFERENCE_ROOT_PARAMETER.with(|cell| cell.replace(None)),
         SOURCE_IS_FRESH_LITERAL.replace(false),
+        INFERRING_FROM_RETURN_TYPE.replace(false),
     );
     let mut substitution = TypeParameterSubstitution::new();
     for type_parameter in &function_signature.type_parameters {
@@ -1996,6 +2001,7 @@ pub(crate) fn infer_type_argument_substitution(
     SOURCE_IS_OBJECT_OR_ARRAY_LITERAL.set(outer_walk.2);
     INFERENCE_ROOT_PARAMETER.with(|cell| cell.replace(outer_walk.3));
     SOURCE_IS_FRESH_LITERAL.set(outer_walk.4);
+    INFERRING_FROM_RETURN_TYPE.set(outer_walk.5);
     substitution
 }
 
@@ -2718,6 +2724,7 @@ fn infer_type_arguments_from_expected_return_type(
     }
 
     let mut from_return = substitution.clone_with_reason(TypeCopyReason::CallResolution);
+    let outer_from_return = INFERRING_FROM_RETURN_TYPE.replace(true);
     infer_through_generic_reference(
         declared_return_type,
         expected_return_type,
@@ -2726,6 +2733,7 @@ fn infer_type_arguments_from_expected_return_type(
         ctx,
         0,
     );
+    INFERRING_FROM_RETURN_TYPE.set(outer_from_return);
     for name in unresolved {
         if let Some(candidate) = from_return.get(&name)
             && !candidate.is_degraded()
@@ -2899,14 +2907,31 @@ pub(crate) fn collect_inferred_type_argument(
                 && !namespaced_promise
             {
                 let awaited = crate::checks::call::promise_like_awaited_type(argument_type);
+                // A promise kept as the interface it is can reach here as what
+                // names it (`ReturnType<() => Promise<string>>`) or as its
+                // expansion (a resolved member's `Promise<…>` return); tsc infers
+                // from the reference's own argument, which is what `then` hands
+                // its callback. That is the whole inference: the lib
+                // declaration's members name only that argument, and walking them
+                // below would bind their own `T` to whatever the call calls `T`.
+                let promised = (awaited == *argument_type
+                    && crate::checks::call::promise_nominal_enabled())
+                .then(|| crate::checks::call::thenable_awaited_type(argument_type))
+                .flatten();
+                let nominal_promise = promised.is_some()
+                    || (awaited != *argument_type
+                        && crate::checks::call::promise_nominal_enabled());
                 collect_inferred_type_argument(
                     &named_type.type_arguments[0],
-                    &awaited,
+                    promised.as_ref().unwrap_or(&awaited),
                     substitution,
                     widen_literals,
                     ctx,
                     depth,
                 );
+                if nominal_promise {
+                    return;
+                }
             }
 
             // A generic-instantiation parameter (`Wrapper<T>`,
@@ -3262,6 +3287,26 @@ pub(crate) fn collect_inferred_type_argument(
                 .iter()
                 .partition(|member| stands_for_the_rest(member, ctx));
             if structured.is_empty() {
+                // `inferToMultipleTypes` with no structured member infers the
+                // source to every naked type variable, at a priority below any
+                // argument's: `then`'s `Promise<TResult1 | TResult2>` under a
+                // `Promise<string>` context binds the `TResult2` its callback
+                // left open. Only the contextual return type's pass models that
+                // priority (it fills only what the arguments left open).
+                if INFERRING_FROM_RETURN_TYPE.get() {
+                    for target in naked {
+                        if is_naked_type_parameter(target, substitution) {
+                            collect_inferred_type_argument(
+                                target,
+                                argument_type,
+                                substitution,
+                                widen_literals,
+                                ctx,
+                                depth,
+                            );
+                        }
+                    }
+                }
                 return;
             }
             let argument_members: Vec<&Type> = match argument_type {

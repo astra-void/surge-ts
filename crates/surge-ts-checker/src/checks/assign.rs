@@ -40,9 +40,29 @@ pub(crate) fn unwritable_binding_diagnostic(
     }
 }
 
-pub(crate) fn check_assignment(assignment: ParsedAssignment, ctx: &mut CheckerContext) {
+/// The scope a rejected write's value is checked in: tsc's `checkIdentifier`
+/// answers a write it rejects (to a function, a class, an enum, a constant…)
+/// with the error type, so the operator of a compound assignment (`f += 1`)
+/// meets `errorType` rather than the binding's value.
+pub(crate) fn rejected_write_symbols(symbols: &SymbolTable, target_name: &str, compound: bool) -> SymbolTable {
+    let mut table = symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    if compound && let Some(symbol) = symbols.get(target_name) {
+        let kind = symbol.kind;
+        let _ = table.insert(
+            target_name.to_string(),
+            crate::symbols::SymbolInfo {
+                ty: surge_ts_types::Type::ErrorType,
+                kind,
+                function_signature: None,
+            },
+        );
+    }
+    table
+}
+
+pub(crate) fn check_assignment(assignment: ParsedAssignment, ctx: &mut CheckerContext) -> bool {
     let symbols = ctx.symbols.clone();
-    let _ = check_assignment_with_symbols(assignment, &symbols, false, ctx);
+    check_assignment_with_symbols(assignment, &symbols, false, ctx)
 }
 
 pub(crate) fn check_assignment_with_symbols(
@@ -514,6 +534,15 @@ fn contains_unknown(ty: &surge_ts_types::Type) -> bool {
         }
         surge_ts_types::Type::Array(element) => contains_unknown(element),
         surge_ts_types::Type::Tuple(elements) => elements.iter().any(contains_unknown),
+        // A resolved generic member signature carries the sentinel where its
+        // own type parameters were erased: a bound name, not a gap — the same
+        // arm as the `checks::var` and `checks::function::body` walkers. Without
+        // it every lib `Promise<T>` target (`then<TResult1, TResult2>`) reads as
+        // unmodelled and a `this.p = promise.then(…)` write drops everything its
+        // callback reports.
+        surge_ts_types::Type::Function(function) if function.type_parameter_head().is_some() => {
+            false
+        }
         surge_ts_types::Type::Function(function) => {
             !crate::checks::call::is_generic_signature(function)
                 && with_signature_type_parameters(function, || {

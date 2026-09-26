@@ -70,7 +70,12 @@ pub(crate) fn check_function_assignment(
         let checked =
             check_assignment_with_symbols(assignment, &visible_symbols, shadowed_locally, ctx);
         let checkpoint = ctx.diagnostics().len();
-        let inferred_value = evaluate_expression(&value, value_span, &visible_symbols, ctx);
+        let inferred_value = if checked {
+            evaluate_expression(&value, value_span, &visible_symbols, ctx)
+        } else {
+            let rejected = crate::checks::assign::rejected_write_symbols(&visible_symbols, &target_name, compound);
+            evaluate_expression(&value, value_span, &rejected, ctx)
+        };
         if checked {
             ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
         }
@@ -326,7 +331,17 @@ pub(crate) fn property_write_is_readonly(
     ctx: &CheckerContext,
 ) -> bool {
     object_property_is_readonly(receiver, property_name)
+        || readonly_array_length(receiver, property_name)
         || declared_member(receiver, property_name, ctx).is_some_and(|(member, _)| member.readonly)
+}
+
+/// `ReadonlyArray<T>` declares `readonly length`, and a readonly tuple is one.
+fn readonly_array_length(receiver: &Type, property_name: &str) -> bool {
+    property_name == "length"
+        && matches!(receiver, Type::Reference(reference)
+            if reference.is_readonly_array()
+                || reference.arguments.len() == 1
+                    && reference.id.split('\u{0}').next_back() == Some("ReadonlyArray"))
 }
 
 /// Whether the receiver's own object surface declares the member `readonly`.
@@ -576,22 +591,39 @@ fn check_element_assignment(
 ) {
     let visible_symbols = visible_symbols(scopes);
 
-    let InferredExpression::Known(object_type) = evaluate_expression(
+    // tsc checks the index and then the value whatever the receiver or the
+    // index turned out to be (`checkElementAccessExpression`,
+    // `checkBinaryLikeExpression`).
+    let object_type = match evaluate_expression(
         object,
         object_span.or(assignment.target_span),
         &visible_symbols,
         ctx,
-    ) else {
-        return;
+    ) {
+        InferredExpression::Known(ty) => ty,
+        receiver => {
+            let _ = evaluate_expression(
+                index,
+                index_span.or(assignment.target_span),
+                &visible_symbols,
+                ctx,
+            );
+            check_value_without_target(assignment, receiver.flowing_type().as_ref(), &visible_symbols, ctx);
+            return;
+        }
     };
 
-    let InferredExpression::Known(index_type) = evaluate_expression(
+    let index_type = match evaluate_expression(
         index,
         index_span.or(assignment.target_span),
         &visible_symbols,
         ctx,
-    ) else {
-        return;
+    ) {
+        InferredExpression::Known(ty) => ty,
+        index_result => {
+            check_value_without_target(assignment, index_result.flowing_type().as_ref(), &visible_symbols, ctx);
+            return;
+        }
     };
     if crate::checks::expr::report_unusable_index_type(
         &index_type,
@@ -623,6 +655,18 @@ fn check_element_assignment(
             Some(span) => diagnostic.with_span(convert_span(span)),
             None => diagnostic,
         });
+        return;
+    }
+
+    if crate::infer::expression::deferred_element_access(&receiver_type, &index_type).is_some()
+        && crate::checks::expr::report_invalid_deferred_index(
+            &receiver_type,
+            &index_type,
+            crate::checks::expr::element_access_span(object_span, index_span).or(assignment.target_span),
+            ctx,
+        )
+    {
+        check_value_without_target(assignment, None, &visible_symbols, ctx);
         return;
     }
 
@@ -677,6 +721,7 @@ fn check_element_assignment(
     }
 
     let target_type = out_of_bounds_target
+        .or_else(|| crate::infer::expression::deferred_element_access(&receiver_type, &index_type))
         .or_else(|| {
             literal_index_key(&index_type)
                 .and_then(|key| accessor_write_type(&receiver_type, &key, ctx))
@@ -1232,7 +1277,12 @@ fn check_member_assignment_itself(
     }
     let accessor_write_type = accessor_write_type(&receiver_for_declaration, property_name, ctx)
         .or_else(|| union_accessor_write_type(&receiver_for_declaration, property_name, ctx));
-    let Some(target_type) = accessor_write_type.or_else(|| {
+    let exact_optional_write_type = if accessor_write_type.is_none() {
+        crate::checks::expr::exact_optional_write_type(&receiver_for_declaration, property_name)
+    } else {
+        None
+    };
+    let Some(target_type) = accessor_write_type.or_else(|| exact_optional_write_type.clone()).or_else(|| {
         declared_object_type
             .as_ref()
             .and_then(|declared| declared.get_property_access_type(property_name))
@@ -1367,14 +1417,25 @@ fn check_member_assignment_itself(
     if !is_assignable_to(&value_type, &target_type) {
         let reported_target =
             crate::checks::expr::reported_relation_target(&value_type, &target_type);
-        let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
-            &value_type,
-            &reported_target,
-            &crate::checks::expr::source_display_name(&value_type, &reported_target),
-            &reported_target.name(),
-            false,
-            ctx.file_name.clone(),
-        );
+        let source_name = crate::checks::expr::source_display_name(&value_type, &reported_target);
+        // tsc heads a dotted write's report TS2412 when the value may be
+        // `undefined` and the property is optional without it
+        // (`checkAssignmentOperatorWorker`).
+        let diagnostic = if exact_optional_write_type.is_some()
+            && !*is_bracketed
+            && crate::checks::expr::may_be_undefined(&value_type)
+        {
+            Diagnostic::ts2412(&source_name, reported_target.name(), ctx.file_name.clone())
+        } else {
+            crate::checks::expr::assignability_mismatch_diagnostic(
+                &value_type,
+                &reported_target,
+                &source_name,
+                &reported_target.name(),
+                false,
+                ctx.file_name.clone(),
+            )
+        };
         let diagnostic = match assignment.target_span {
             Some(span) => diagnostic.with_span(convert_span(span)),
             None => diagnostic,
@@ -1889,6 +1950,24 @@ fn widen_to_declared(target_name: &str, scopes: &mut ScopeStack) {
     scopes.insert_current_narrowed(target_name, updated, declared);
 }
 
+fn forget_narrowing(target_name: &str, scopes: &mut ScopeStack) {
+    let Some(symbol) = scopes.resolve(target_name) else {
+        return;
+    };
+    let Some(declared) = scopes.visible_symbols().declared_type(target_name).cloned() else {
+        return;
+    };
+    if symbol.ty == declared || symbol.ty.is_unmodelled() {
+        return;
+    }
+    let updated = SymbolInfo {
+        ty: Type::Unknown,
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+    scopes.insert_current_narrowed(target_name, updated, declared);
+}
+
 pub(crate) fn update_assigned_symbol_type(
     target_name: &str,
     inferred_value: InferredExpression,
@@ -1899,11 +1978,15 @@ pub(crate) fn update_assigned_symbol_type(
     };
 
     if value_ty.is_unmodelled() {
-        // Outside a loop pre-pass an unmodelled value keeps the narrowing
-        // rather than guessing; inside it, the back edge must not claim the
-        // binding still holds what it held on entry.
+        // Inside a loop pre-pass the back edge must not claim the binding
+        // still holds what it held on entry. Elsewhere tsc narrows to what
+        // was assigned (`getAssignmentReducedType`), which surge cannot tell:
+        // a binding narrowed before the write (`let p: P | null = null; p ??=
+        // make()`) no longer holds that narrowing, and is left unmodelled.
         if super::branch_assignments::in_loop_prepass() {
             widen_to_declared(target_name, scopes);
+        } else {
+            forget_narrowing(target_name, scopes);
         }
         return;
     }

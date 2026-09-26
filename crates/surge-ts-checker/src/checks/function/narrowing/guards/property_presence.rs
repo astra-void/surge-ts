@@ -33,6 +33,20 @@ pub(super) fn property_presence_of(member: &Type, property: &str) -> PropertyPre
         // No key is present on `null` or `undefined` (`isTypePresencePossible`
         // finds neither a property nor an index signature).
         Type::Null | Type::Undefined | Type::Void => PropertyPresence::Absent,
+        // `isTypePresencePossible` reads a type variable of the body being
+        // checked through its apparent type: its constraint, or `{}`, which
+        // has no keys, without one. `"then" in v` on `T | PromiseLike<T>`
+        // keeps only the promise.
+        Type::TypeParameter(parameter) => {
+            match surge_ts_types::type_variable::active_constraint(parameter) {
+                Some(None) => PropertyPresence::Absent,
+                Some(Some(constraint)) => match constraint.peeled() {
+                    Type::TypeParameter(_) => PropertyPresence::Undecidable,
+                    apparent => property_presence_of(&apparent, property),
+                },
+                None => PropertyPresence::Undecidable,
+            }
+        }
         _ => PropertyPresence::Undecidable,
     }
 }
@@ -156,6 +170,10 @@ fn presence_possible(ty: &Type, property: &str) -> bool {
         member @ Type::Object(_) => !matches!(
             property_presence_of(&member, property),
             PropertyPresence::Absent
+        ),
+        member @ Type::TypeParameter(_) => matches!(
+            property_presence_of(&member, property),
+            PropertyPresence::Required | PropertyPresence::Optional
         ),
         _ => false,
     }

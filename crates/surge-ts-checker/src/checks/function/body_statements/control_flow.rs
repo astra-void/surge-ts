@@ -13,7 +13,8 @@ use super::super::{
 use super::{
     adopt_branch_assignments, apply_condition_true_assignment_types, apply_expression_assignments,
     body_ends_in_never_call, branch_assigned_names, branch_assignment_types, deep_assigned_names,
-    join_branch_assignments, join_branch_edges, join_branch_pair, loop_join_names,
+    join_branch_assignments, join_branch_edges, join_branch_pair, loop_join_names, nested_assigned_names,
+    restore_branch_entry,
     mark_condition_true_assignments, narrow_aliased_guard_after_exit,
     narrow_condition_and_aliases_in_scope, narrow_tuple_destructure_siblings, prime_loop_mutations,
     release_loop_mutations, resolved_alias_condition, rewrite_discriminant_aliases,
@@ -117,14 +118,17 @@ pub(crate) fn check_function_if_statement(
     let mut surviving_narrowings = Vec::new();
     let mut joinable_assignments = Vec::new();
     if !has_else_body && !then_diverts_control {
-        branch_assigned_names(&if_statement.then_body, &mut joinable_assignments);
+        nested_assigned_names(&if_statement.then_body, &mut joinable_assignments);
     } else if has_else_body && !then_diverts_control && !else_flow_diverts {
         // Both edges reach the join, so the binding is the union of what each
         // branch left it as — the fall-through edge the no-else form uses does
         // not exist here.
-        branch_assigned_names(&if_statement.then_body, &mut joinable_assignments);
-        branch_assigned_names(&if_statement.else_body, &mut joinable_assignments);
+        nested_assigned_names(&if_statement.then_body, &mut joinable_assignments);
+        nested_assigned_names(&if_statement.else_body, &mut joinable_assignments);
     }
+
+    let mut then_written = Vec::new();
+    nested_assigned_names(&if_statement.then_body, &mut then_written);
 
     let flow_active = flow_state.tracked_local_count() > 0;
     let condition_blocked = if flow_active {
@@ -152,6 +156,7 @@ pub(crate) fn check_function_if_statement(
 
     if flow_active {
         let mut branch_deltas = Vec::new();
+        let then_entry = branch_assignment_types(&then_written, scopes);
         scopes.push_child();
         apply_condition_true_assignment_types(&if_statement.condition, scopes, ctx);
         narrow_condition_and_aliases_in_scope(
@@ -194,6 +199,7 @@ pub(crate) fn check_function_if_statement(
             surviving_narrowings = scopes.current_frame_narrowings();
         }
         scopes.pop_child();
+        restore_branch_entry(&then_entry, scopes);
         if !has_else_body {
             join_branch_assignments(&then_assignment_types, base_condition, scopes, ctx);
         }
@@ -265,6 +271,7 @@ pub(crate) fn check_function_if_statement(
         }
         merge_branch_deltas(flow_state, &branch_deltas, false);
     } else {
+        let then_entry = branch_assignment_types(&then_written, scopes);
         scopes.push_child();
         narrow_condition_and_aliases_in_scope(
             base_condition,
@@ -289,6 +296,7 @@ pub(crate) fn check_function_if_statement(
             surviving_narrowings = scopes.current_frame_narrowings();
         }
         scopes.pop_child();
+        restore_branch_entry(&then_entry, scopes);
         if !has_else_body {
             join_branch_assignments(&then_assignment_types, base_condition, scopes, ctx);
         }
@@ -617,12 +625,24 @@ pub(crate) fn check_function_for_of_statement(
                     InferredExpression::Known(Type::GenuineUnknown)
                 )
             {
+                let diagnostic = if for_of_statement.is_await {
+                    Diagnostic::ts2504("unknown", ctx.file_name.clone())
+                } else {
+                    Diagnostic::ts2488("unknown", ctx.file_name.clone())
+                };
                 ctx.push(crate::spans::diagnostic_with_syntax_span(
-                    Diagnostic::ts2488("unknown", ctx.file_name.clone()),
+                    diagnostic,
                     for_of_statement.iterable_span,
                 ));
             }
-            if !for_of_statement.is_await {
+            if for_of_statement.is_await {
+                crate::checks::expr::check_async_iterable_operand(
+                    &iterable_type,
+                    for_of_statement.iterable_span,
+                    true,
+                    ctx,
+                );
+            } else {
                 crate::checks::expr::check_iterable_operand(
                     &iterable_type,
                     for_of_statement.iterable_span,
@@ -630,6 +650,14 @@ pub(crate) fn check_function_for_of_statement(
                     ctx,
                 );
             }
+            crate::checks::expr::check_iteration_next_type(
+                &iterable_type,
+                for_of_statement.iterable_span,
+                &Type::Undefined,
+                crate::checks::expr::IterationSend::ForOf,
+                for_of_statement.is_await,
+                ctx,
+            );
             if let InferredExpression::Known(iterable_type) = iterable_type {
                 element_type = for_of_element_type(&iterable_type);
             }
@@ -1188,7 +1216,7 @@ pub(crate) fn check_function_switch_statement(
     // there is no `default`; the bindings the cases assign are joined over them.
     let mut assigned = Vec::new();
     for switch_case in &switch_statement.cases {
-        branch_assigned_names(&switch_case.consequent, &mut assigned);
+        nested_assigned_names(&switch_case.consequent, &mut assigned);
     }
     let case_reaches_end: Vec<bool> = switch_statement
         .cases
@@ -1204,6 +1232,17 @@ pub(crate) fn check_function_switch_statement(
     if !has_default && !assigned.is_empty() {
         edges.push(branch_assignment_types(&assigned, scopes));
     }
+    // A case is entered from the `switch` itself, and from the case before it
+    // only when that one runs off its end.
+    let switch_entry = branch_assignment_types(&assigned, scopes);
+    let falls_into_next: Vec<bool> = switch_statement
+        .cases
+        .iter()
+        .map(|switch_case| {
+            let flow = analyze_function_body_flow(&switch_case.consequent);
+            !flow.guarantees_value_return && !flow.guarantees_exit
+        })
+        .collect();
 
     if flow_active {
         let mut branch_deltas = Vec::new();
@@ -1221,6 +1260,9 @@ pub(crate) fn check_function_switch_statement(
                 );
             }
 
+            if case_index > 0 && !falls_into_next[case_index - 1] {
+                restore_branch_entry(&switch_entry, scopes);
+            }
             scopes.push_child();
             if let Some((condition, branch_is_true)) = case_group_conditions[case_index].as_ref() {
                 narrow_switch_case(condition, *branch_is_true, scopes, flow_state, ctx);
@@ -1245,6 +1287,9 @@ pub(crate) fn check_function_switch_statement(
         merge_branch_deltas(flow_state, &branch_deltas, false);
     } else {
         for (case_index, switch_case) in switch_statement.cases.into_iter().enumerate() {
+            if case_index > 0 && !falls_into_next[case_index - 1] {
+                restore_branch_entry(&switch_entry, scopes);
+            }
             scopes.push_child();
             if let Some((condition, branch_is_true)) = case_group_conditions[case_index].as_ref() {
                 narrow_switch_case(condition, *branch_is_true, scopes, flow_state, ctx);
@@ -1262,6 +1307,7 @@ pub(crate) fn check_function_switch_statement(
             scopes.pop_child();
         }
     }
+    restore_branch_entry(&switch_entry, scopes);
     join_branch_edges(&edges, scopes);
 
     // Only the implicit `default` path continues past a `switch` whose every

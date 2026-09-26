@@ -5,7 +5,7 @@
 // `file:line:code` key the oracle sweep gates on. See README.md in this
 // directory for what the numbers do and do not mean.
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
@@ -141,7 +141,7 @@ type ProcessOutput = {
 
 // macOS enforces no address-space rlimit, and a runaway checker has taken this
 // 16 GB machine down well inside the wall-clock timeout, so every spawned tool
-// is polled for resident memory and its process group killed past the cap.
+// is polled for memory and its process group killed past the cap.
 const memoryPollMs = 100;
 
 function residentBytes(pid: number): number {
@@ -153,10 +153,109 @@ function residentBytes(pid: number): number {
     .reduce((total, kb) => total + kb * 1024, 0);
 }
 
+// Resident size is the wrong measure on macOS: under pressure the kernel
+// compresses and swaps a process's pages out of its resident set, so `ps rss`
+// stays under the cap while the process keeps growing. Five bolt-ts runs
+// reached 12–23 GB each that way and panicked the machine. There a process
+// group is measured by physical footprint (`proc_pid_rusage`, what jetsam
+// charges), through one sidecar the whole run shares.
+const footprintSidecar = `
+import ctypes, sys
+libproc = ctypes.CDLL('/usr/lib/libproc.dylib')
+class Usage(ctypes.Structure):
+    _fields_ = [('uuid', ctypes.c_uint8 * 16)] + [(name, ctypes.c_uint64) for name in (
+        'user_time', 'system_time', 'pkg_idle_wkups', 'interrupt_wkups', 'pageins',
+        'wired_size', 'resident_size', 'phys_footprint', 'proc_start_abstime', 'proc_exit_abstime',
+        'child_user_time', 'child_system_time', 'child_pkg_idle_wkups', 'child_interrupt_wkups',
+        'child_pageins', 'child_elapsed_abstime', 'diskio_bytesread', 'diskio_byteswritten')]
+members = (ctypes.c_int * 4096)()
+usage = Usage()
+for line in sys.stdin:
+    totals = []
+    for group in line.split():
+        count = libproc.proc_listpgrppids(int(group), members, ctypes.sizeof(members))
+        total = 0
+        for pid in members[:max(count, 0)]:
+            if pid > 0 and libproc.proc_pid_rusage(pid, 2, ctypes.byref(usage)) == 0:
+                total += usage.phys_footprint
+        totals.append('%s:%d' % (group, total))
+    print(' '.join(totals), flush=True)
+`;
+
+type MemoryWatch = { group: number; maxBytes: number; exceeded: () => void };
+
+const memoryWatches = new Set<MemoryWatch>();
+let memoryTimer: NodeJS.Timeout | undefined;
+let footprintProbe: ChildProcess | undefined;
+let footprintProbeUnavailable = process.platform !== 'darwin';
+let footprintPending = false;
+
+function watchMemory(watch: MemoryWatch): () => void {
+  memoryWatches.add(watch);
+  memoryTimer ??= setInterval(pollMemory, memoryPollMs);
+  return () => {
+    memoryWatches.delete(watch);
+    if (memoryWatches.size === 0 && memoryTimer) {
+      clearInterval(memoryTimer);
+      memoryTimer = undefined;
+    }
+  };
+}
+
+function pollMemory() {
+  const probe = footprintProbeUnavailable ? undefined : startFootprintProbe();
+  if (!probe) {
+    for (const watch of [...memoryWatches]) {
+      if (residentBytes(watch.group) > watch.maxBytes) watch.exceeded();
+    }
+    return;
+  }
+  if (footprintPending || memoryWatches.size === 0) return;
+  footprintPending = true;
+  probe.stdin?.write(`${[...memoryWatches].map((watch) => watch.group).join(' ')}\n`);
+}
+
+function startFootprintProbe(): ChildProcess | undefined {
+  if (footprintProbe) return footprintProbe;
+  const probe = spawn('python3', ['-c', footprintSidecar], { stdio: ['pipe', 'pipe', 'ignore'] });
+  let buffered = '';
+  const retire = () => {
+    if (footprintProbe === probe) footprintProbe = undefined;
+    footprintPending = false;
+  };
+  probe.on('error', () => {
+    footprintProbeUnavailable = true;
+    retire();
+  });
+  probe.on('exit', retire);
+  probe.stdout?.on('data', (chunk: Buffer) => {
+    buffered += chunk.toString('utf8');
+    let newline;
+    while ((newline = buffered.indexOf('\n')) >= 0) {
+      const line = buffered.slice(0, newline);
+      buffered = buffered.slice(newline + 1);
+      footprintPending = false;
+      for (const entry of line.split(' ')) {
+        const [group, bytes] = entry.split(':').map(Number);
+        for (const watch of [...memoryWatches]) {
+          if (watch.group === group && bytes > watch.maxBytes) watch.exceeded();
+        }
+      }
+    }
+  });
+  // The sidecar must never keep the harness alive; the poll timer does while
+  // anything is watched.
+  probe.unref();
+  (probe.stdin as unknown as { unref?: () => void } | null)?.unref?.();
+  (probe.stdout as unknown as { unref?: () => void } | null)?.unref?.();
+  footprintProbe = probe;
+  return probe;
+}
+
 export function runProcess(
   command: string,
   args: string[],
-  options: { cwd: string; timeoutMs: number; maxRssBytes: number; env?: NodeJS.ProcessEnv },
+  options: { cwd: string; timeoutMs: number; maxMemoryBytes: number; env?: NodeJS.ProcessEnv },
 ): Promise<ProcessOutput> {
   return new Promise((resolve) => {
     const started = performance.now();
@@ -177,15 +276,20 @@ export function runProcess(
       timedOut = true;
       killGroup();
     }, options.timeoutMs);
-    const memoryTimer = setInterval(() => {
-      if (child.pid !== undefined && residentBytes(child.pid) > options.maxRssBytes) {
-        memoryExceeded = true;
-        killGroup();
-      }
-    }, memoryPollMs);
+    const unwatch =
+      child.pid === undefined
+        ? () => {}
+        : watchMemory({
+            group: child.pid,
+            maxBytes: options.maxMemoryBytes,
+            exceeded: () => {
+              memoryExceeded = true;
+              killGroup();
+            },
+          });
     const stop = () => {
       clearTimeout(timer);
-      clearInterval(memoryTimer);
+      unwatch();
     };
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
@@ -568,7 +672,7 @@ function filesCount(stdout: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
-type RunLimits = { timeoutMs: number; maxRssBytes: number };
+type RunLimits = { timeoutMs: number; maxMemoryBytes: number };
 
 type BaselineRuns = { tsgo: ProcessOutput; listed: ProcessOutput };
 
@@ -625,7 +729,7 @@ async function evaluateTarget(target: Target, args: ParsedArgs): Promise<TargetR
   const corpus = target.tier === 'corpus';
   const limits: RunLimits = {
     timeoutMs: corpus ? args.corpusTimeoutMs : args.timeoutMs,
-    maxRssBytes: (corpus ? args.corpusMaxMemoryMb : args.maxMemoryMb) * 1024 * 1024,
+    maxMemoryBytes: (corpus ? args.corpusMaxMemoryMb : args.maxMemoryMb) * 1024 * 1024,
   };
   const projectDir = path.dirname(target.tsconfig);
   const result: TargetResult = {
@@ -920,7 +1024,7 @@ export function renderMarkdown(results: TargetResult[], meta: Record<string, str
   lines.push('- The corpora are the projects surge-ts has burned its false positives down on, and three of them are checked through a surge-specific `tsconfig.surge.json`; the corpus tier is biased toward surge-ts as well.');
   lines.push('- bolt-ts prints no diagnostic codes; codes are recovered by matching its message text against the TypeScript 6 diagnostic table. A message it words differently from tsc is `unmapped` (not an FP), and the tsgo diagnostic it stood for still counts as an FN.');
   lines.push('- bolt-ts cannot read `extends`, `files` or a directory `include`, so each config is resolved by TypeScript and handed to bolt-ts as explicit root files plus effective options in bolt-ts spelling. Options it has no field for (`paths`, `types`, `skipLibCheck`, …) and libs it does not ship are dropped and listed as config translation gaps. Per its README it also does not resolve `exports`/`imports` or `node_modules/@types`.');
-  lines.push('- `memory limit` means the harness killed the process for exceeding its resident-memory cap (`--maxMemory`, `--corpusMaxMemory`); like crashes and timeouts it is counted, never scored.');
+  lines.push('- `memory limit` means the harness killed the process for exceeding its memory cap (`--maxMemory`, `--corpusMaxMemory`; physical footprint on macOS, resident size elsewhere); like crashes and timeouts it is counted, never scored.');
   lines.push('- `no input` means bolt-ts exited cleanly having loaded only its bundled lib files (its include glob matched no project source); such targets are not scored.');
   lines.push('- Diagnostics in files outside the tsgo program (`--listFilesOnly`) are counted as out-of-program, not FP. bolt-ts globs `.js` sources even without `allowJs`.');
   lines.push('');
