@@ -53,6 +53,20 @@ fn insert_unresolved_import_binding(
     }
 }
 
+/// tsc binds an import whose module does not resolve to `unknownSymbol`, whose
+/// type meaning is the error type as much as its value meaning is. Inside a
+/// declaration file an import surge could not follow stays its own gap.
+fn insert_unresolved_import_type(
+    local_name: &str,
+    name_span: Option<TextSpan>,
+    type_declarations: &mut TypeDeclarationTable,
+    ctx: &mut CheckerContext,
+) {
+    if !is_declaration_file_name(&ctx.file_name) && type_declarations.get(local_name).is_none() {
+        insert_error_type_import(type_declarations, local_name, ctx.file_name_arc(), name_span);
+    }
+}
+
 pub(crate) fn report_unresolved_module(ctx: &mut CheckerContext, import: &ParsedImportDeclaration) {
     record_unresolved_external_module(ctx, &import.module_specifier);
     if !(ctx.options.stub_external_modules && is_external_specifier(&import.module_specifier)) {
@@ -1063,6 +1077,7 @@ fn resolve_default_and_named_import(
                 let _ = type_declarations.insert(local_name.clone(), declaration);
             }
         } else {
+            insert_unresolved_import_type(local_name, *name_span, type_declarations, ctx);
             insert_unresolved_import_binding(local_name, ctx, import, symbols);
         }
 
@@ -1416,6 +1431,7 @@ fn resolve_default_import(
         if type_only {
             insert_error_type_import(type_declarations, local_name, ctx.file_name_arc(), *name_span);
         } else {
+            insert_unresolved_import_type(local_name, *name_span, type_declarations, ctx);
             insert_unresolved_import_binding(local_name, ctx, import, symbols);
         }
         return;
@@ -1851,7 +1867,7 @@ fn resolve_namespace_import(
 ) {
     let ParsedImportKind::Namespace {
         local_name,
-        name_span: _,
+        name_span,
         is_type_only,
     } = &import.kind
     else {
@@ -1968,6 +1984,7 @@ fn resolve_namespace_import(
             } else {
                 report_non_module_import(ctx, import, program_files);
             }
+            insert_unresolved_import_type(local_name, *name_span, type_declarations, ctx);
             insert_unresolved_import_binding(local_name, ctx, import, symbols);
             return;
         };

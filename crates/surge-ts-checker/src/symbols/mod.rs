@@ -10,7 +10,7 @@ pub(crate) use type_declarations::{
     merge_type_declaration_into_table,
 };
 pub(crate) use values::{
-    AutoArrayBinding, BodyReturnSource, DestructureKey, FunctionSignatureInfo, InferredPredicate,
-    SymbolInfo, SymbolInfoHandle, SymbolKind, SymbolTable, TupleDestructureBinding,
-    clone_symbol_info_handle, map_symbol_kind,
+    AutoArrayBinding, BodyReturnSource, ConstructSignature, DestructureKey, FunctionSignatureInfo,
+    InferredPredicate, SymbolInfo, SymbolInfoHandle, SymbolKind, SymbolTable,
+    TupleDestructureBinding, clone_symbol_info_handle, map_symbol_kind,
 };

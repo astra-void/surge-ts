@@ -125,11 +125,11 @@ pub(crate) fn check_function_return_statement(
             ctx.degraded_expected_type_depth -= 1;
         }
         match inferred {
-            InferredExpression::Known(source_type) => ctx.note_contextual_return_type(&source_type, Some(expression)),
+            InferredExpression::Known(source_type) => ctx.note_contextual_return_type(&source_type, Some(expression), symbols),
             // A value surge could not type still counts as returned: tsc knows
             // its type and decides TS7030 from it, so the sentinel must suppress
             // the report the same way a known `unknown` result does.
-            _ => ctx.note_contextual_return_type(&Type::Unknown, Some(expression)),
+            _ => ctx.note_contextual_return_type(&Type::Unknown, Some(expression), symbols),
         }
         return;
     };
@@ -206,7 +206,7 @@ pub(crate) fn check_function_return_statement(
             } else {
                 (source_type, return_type)
             };
-            ctx.note_contextual_return_type(&source_type, Some(expression));
+            ctx.note_contextual_return_type(&source_type, Some(expression), symbols);
             // A sentinel anywhere in either side means surge lost part of the
             // shape, so a mismatch reflects the modelling gap rather than the
             // source — the same deep guard the variable-declaration check
@@ -266,7 +266,7 @@ pub(crate) fn check_function_return_statement(
         // A failed lookup returns tsc's error type.
         failed @ (InferredExpression::UnresolvedIdentifier { .. }
         | InferredExpression::MissingProperty { .. }) => {
-            ctx.note_contextual_return_type(&failed.flowing_type().unwrap_or(Type::Unknown), Some(expression));
+            ctx.note_contextual_return_type(&failed.flowing_type().unwrap_or(Type::Unknown), Some(expression), symbols);
         }
         InferredExpression::Unknown => {
             let mut noted = false;
@@ -274,11 +274,11 @@ pub(crate) fn check_function_return_statement(
                 && let InferredExpression::Known(source_type) =
                     crate::infer::infer_expression(expression, symbols, ctx)
             {
-                ctx.note_contextual_return_type(&source_type, Some(expression));
+                ctx.note_contextual_return_type(&source_type, Some(expression), symbols);
                 noted = true;
             }
             if !noted {
-                ctx.note_contextual_return_type(&Type::Unknown, Some(expression));
+                ctx.note_contextual_return_type(&Type::Unknown, Some(expression), symbols);
             }
         }
     }

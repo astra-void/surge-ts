@@ -557,6 +557,7 @@ export const fixturePresets: Record<string, string> = {
   'this-container-rules-basic': path.join(workspaceRoot, 'tests/compat-projects/this-container-rules-basic/tsconfig.json'),
   'catch-yield-await-placement-basic': path.join(workspaceRoot, 'tests/compat-projects/catch-yield-await-placement-basic/tsconfig.json'),
   'super-and-this-placement-basic': path.join(workspaceRoot, 'tests/compat-projects/super-and-this-placement-basic/tsconfig.json'),
+  'decorated-static-this-basic': path.join(workspaceRoot, 'tests/compat-projects/decorated-static-this-basic/tsconfig.json'),
   'ambient-and-signature-grammar-basic': path.join(workspaceRoot, 'tests/compat-projects/ambient-and-signature-grammar-basic/tsconfig.json'),
   'overload-agreement-basic': path.join(workspaceRoot, 'tests/compat-projects/overload-agreement-basic/tsconfig.json'),
   'write-target-kinds-basic': path.join(workspaceRoot, 'tests/compat-projects/write-target-kinds-basic/tsconfig.json'),
@@ -1104,6 +1105,14 @@ export const fixturePresets: Record<string, string> = {
   'verbatim-module-syntax-commonjs': path.join(workspaceRoot, 'tests/compat-projects/verbatim-module-syntax-commonjs/tsconfig.json'),
   'import-call-module-options': path.join(workspaceRoot, 'tests/compat-projects/import-call-module-options/tsconfig.json'),
   'jsx-factory-and-type-argument-arity': path.join(workspaceRoot, 'tests/compat-projects/jsx-factory-and-type-argument-arity/tsconfig.json'),
+  'import-attribute-value-literals': path.join(workspaceRoot, 'tests/compat-projects/import-attribute-value-literals/tsconfig.json'),
+  'logical-truthiness-and-literal-checks': path.join(workspaceRoot, 'tests/compat-projects/logical-truthiness-and-literal-checks/tsconfig.json'),
+  'jsx-tag-signature-checks': path.join(workspaceRoot, 'tests/compat-projects/jsx-tag-signature-checks/tsconfig.json'),
+  'jsx-spread-child-factory-option': path.join(workspaceRoot, 'tests/compat-projects/jsx-spread-child-factory-option/tsconfig.json'),
+  'jsx-fragment-factory-pragma': path.join(workspaceRoot, 'tests/compat-projects/jsx-fragment-factory-pragma/tsconfig.json'),
+  'jsx-spread-attribute-checks': path.join(workspaceRoot, 'tests/compat-projects/jsx-spread-attribute-checks/tsconfig.json'),
+  'unresolved-import-type-references': path.join(workspaceRoot, 'tests/compat-projects/unresolved-import-type-references/tsconfig.json'),
+  'jsx-element-grammar-checks': path.join(workspaceRoot, 'tests/compat-projects/jsx-element-grammar-checks/tsconfig.json'),
 };
 
 export function main(argv = process.argv.slice(2)): void {

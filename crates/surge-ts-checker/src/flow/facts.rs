@@ -675,7 +675,9 @@ pub(crate) fn report_read_flow_positioned(
 
             ctx.push(diagnostic);
             record_unassigned_read(span);
-            FlowCheck::Blocked
+            // tsc's `checkIdentifier` goes on with the declared type "to reduce
+            // follow-on errors", so the expression around the read is checked.
+            FlowCheck::Clear
         }
         FlowReadOutcome::UseBeforeDeclaration {
             unassigned,

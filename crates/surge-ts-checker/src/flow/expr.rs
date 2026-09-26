@@ -534,7 +534,7 @@ pub(crate) fn check_expression_flow_impl(
 
             FlowCheck::Clear
         }
-        ParsedExpression::ArrowFunction(_) => FlowCheck::Clear,
+        ParsedExpression::ArrowFunction(_) | ParsedExpression::ClassExpression(_) => FlowCheck::Clear,
         ParsedExpression::TemplateLiteral { expressions, .. } => {
             for expression in expressions {
                 blocked |= check_expression_flow_impl(
@@ -556,6 +556,7 @@ pub(crate) fn check_expression_flow_impl(
         | ParsedExpression::UndefinedLiteral
         | ParsedExpression::NullLiteral
         | ParsedExpression::TemplateStringsArray { .. }
+        | ParsedExpression::RegExpLiteral
         | ParsedExpression::Unknown => FlowCheck::Clear,
     };
     if blocked { FlowCheck::Blocked } else { result }
@@ -594,7 +595,7 @@ fn check_jsx_child_flow(
 ) -> FlowCheck {
     match child {
         ParsedJsxChild::Text => FlowCheck::Clear,
-        ParsedJsxChild::Expression { expression, span } => match expression {
+        ParsedJsxChild::Expression { expression, span, .. } => match expression {
             Some(expression) => check_expression_flow_impl(
                 expression,
                 span.or(fallback_span),

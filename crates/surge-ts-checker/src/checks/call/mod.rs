@@ -20,6 +20,7 @@ use crate::spans::diagnostic_with_syntax_span;
 use crate::symbols::{FunctionSignatureInfo, SymbolTable};
 
 mod builtins;
+pub(crate) mod construct;
 mod instantiate;
 pub(crate) mod property;
 
@@ -239,36 +240,39 @@ pub(crate) fn check_call_like_with_expected_type(
                 evaluate_arguments_under_degraded_callee(callee_name, arguments, symbols, ctx);
                 return None;
             }
-            // Only the first type argument's position is known (types carry no
-            // spans), so only it is related to its constraint.
-            if let (Some(first), Some(parameter)) =
-                (type_arguments.first(), signature.type_parameters.first())
-                && let Some(constraint) = &parameter.constraint
+            // tsc's `chooseOverload` relates the type arguments only for a
+            // candidate whose parameters fit the arguments; one that fails
+            // them leaves the call unresolved (`resolveErrorCall`), so the value
+            // arguments are not related to the rejected instantiation. Only the
+            // first type argument's position is known (types carry no spans),
+            // so the report sits there whichever argument failed.
+            if let Type::Function(function) = &callee_ty
+                && arguments_fit(function, arguments)
+                && let Some((argument_type, constraint_type)) =
+                    unsatisfied_type_argument(signature, type_arguments, symbols, ctx)
             {
-                let checkpoint = ctx.diagnostics().len();
-                let argument_type = crate::infer::map_parsed_type(first.clone(), ctx);
-                let constraint_type = crate::infer::map_parsed_type(constraint.clone(), ctx);
-                ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
-                if !crate::checks::function::type_contains_degradation(&argument_type)
-                    && !crate::checks::function::type_contains_degradation(&constraint_type)
-                    && !is_assignable_to(&argument_type, &constraint_type)
-                {
-                    let first_argument = callee_span.map(|span| SyntaxTextSpan {
-                        start: span.end + 1,
-                        end: span.end + 1,
-                    });
-                    ctx.push(diagnostic_with_syntax_span(
-                        Diagnostic::ts2344(
-                            crate::checks::expr::source_display_name(
-                                &argument_type,
-                                &constraint_type,
-                            ),
-                            constraint_type.name(),
-                            ctx.file_name.clone(),
-                        ),
-                        first_argument,
-                    ));
-                }
+                let first_argument = callee_span.map(|span| SyntaxTextSpan {
+                    start: span.end + 1,
+                    end: span.end + 1,
+                });
+                // `isRelatedTo` reports a weak-type failure as TS2559 in place of
+                // the constraint message.
+                let diagnostic = if surge_ts_types::has_no_common_properties(&argument_type, &constraint_type) {
+                    Diagnostic::ts2559(
+                        source_display_name(&argument_type, &constraint_type),
+                        constraint_type.name(),
+                        ctx.file_name.clone(),
+                    )
+                } else {
+                    Diagnostic::ts2344(
+                        source_display_name(&argument_type, &constraint_type),
+                        constraint_type.name(),
+                        ctx.file_name.clone(),
+                    )
+                };
+                ctx.push(diagnostic_with_syntax_span(diagnostic, first_argument));
+                evaluate_arguments_under_degraded_callee(callee_name, arguments, symbols, ctx);
+                return None;
             }
         }
     }
@@ -1178,6 +1182,7 @@ pub(crate) fn check_new_like(
         }
         _ => None,
     };
+    let mut resolution_stopped = false;
     if let Some(info) = &class_info {
         // `resolveNewExpression` checks the constructor's modifier first, then
         // whether the class is abstract; each stops the resolution. tsc
@@ -1199,6 +1204,7 @@ pub(crate) fn check_new_like(
                 }
             };
             ctx.push(diagnostic_with_syntax_span(diagnostic, call_span.or(callee_span)));
+            resolution_stopped = true;
         } else if info.is_abstract_class {
             // An `abstract class` has a construct signature like any other
             // class — the instance type is still what `new` produces, and tsc
@@ -1207,6 +1213,34 @@ pub(crate) fn check_new_like(
                 Diagnostic::ts2511(ctx.file_name.clone()),
                 call_span.or(callee_span),
             ));
+            resolution_stopped = true;
+        } else if !type_arguments.is_empty()
+            && let Some((argument_type, constraint_type)) = unsatisfied_class_type_argument(
+                info,
+                callee,
+                type_arguments,
+                arguments,
+                symbols,
+                ctx,
+            )
+        {
+            // `resolveCall` then relates the written type arguments; a failure
+            // leaves the expression unresolved, its arguments unrelated.
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2344(
+                    source_display_name(&argument_type, &constraint_type),
+                    constraint_type.name(),
+                    ctx.file_name.clone(),
+                ),
+                callee_span.map(|span| SyntaxTextSpan {
+                    start: span.end + 1,
+                    end: span.end + 1,
+                }),
+            ));
+            for argument in arguments {
+                let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+            }
+            return None;
         }
     }
 
@@ -1430,50 +1464,68 @@ pub(crate) fn check_new_like(
             )
         }
         // `new (Custom ?? Default)(…)`: a union whose every member is
-        // constructable is constructable, and the result is the union of the
-        // instance types. Arguments are checked against the first member only —
-        // checking each would report the same argument diagnostics per member.
+        // constructable is resolved against tsc's `getUnionSignatures` over the
+        // members' construct signatures, as a call on a union is against their
+        // call signatures.
         Type::Union(union)
             if union
                 .types()
                 .iter()
                 .all(|member| construct_signature_of(member).is_some()) =>
         {
-            let signatures: Vec<surge_ts_types::FunctionType> = union
+            let lists: Vec<Vec<FunctionType>> = union
                 .types()
                 .iter()
                 .filter_map(construct_signature_of)
+                .map(|signature| {
+                    let mut members = Vec::new();
+                    signature.push_overload_members(&mut members);
+                    members
+                })
                 .collect();
-            let mut results = Vec::with_capacity(signatures.len());
-            for (index, signature) in signatures.iter().enumerate() {
-                if index == 0 {
-                    if let Some(result) = check_function_type_call(
-                        signature,
-                        callee_span,
-                        call_span,
-                        type_arguments,
-                        arguments,
-                        None,
-                        symbols,
-                        ctx,
-                    ) {
-                        results.push(result);
-                    }
-                } else {
-                    results.push(signature.return_type().clone());
-                }
-            }
-            (!results.is_empty()).then(|| surge_ts_types::union_type(results))
+            let (signatures, combined) = union_signatures(&lists);
+            let Some(signature) = overload_group(signatures) else {
+                ctx.push(diagnostic_with_syntax_span(
+                    Diagnostic::ts2351(ctx.file_name.clone()),
+                    callee_span,
+                ));
+                return None;
+            };
+            COMBINED_UNION_SIGNATURE.with(|flag| flag.set(combined));
+            with_type_copy_reason(TypeCopyReason::CallResolution, || {
+                check_function_type_call(
+                    &signature,
+                    callee_span,
+                    call_span,
+                    type_arguments,
+                    arguments,
+                    None,
+                    symbols,
+                    ctx,
+                )
+            })
         }
         // A generic class's value side is deliberately modelled as `any`
         // (`build_class_value_symbol_with_scope`), which would open the whole
         // instance: every read off `new C<Args>()` silently accepted. The class's
         // *type* side is exact, so build the instance by name the way an
-        // annotation does. Only the instance is recovered here; the constructor's
-        // own arity still goes unchecked, which is what the `any` value side
-        // already implied.
-        Type::Any => generic_class_instance_type(callee, type_arguments, arguments, symbols, ctx)
-            .or(Some(Type::Any)),
+        // annotation does. The arguments are checked against the construct
+        // signatures the value carries.
+        Type::Any => {
+            if !resolution_stopped {
+                construct::check_generic_class_construct(
+                    callee,
+                    callee_span,
+                    call_span,
+                    type_arguments,
+                    arguments,
+                    symbols,
+                    ctx,
+                );
+            }
+            generic_class_instance_type(callee, type_arguments, arguments, symbols, ctx)
+                .or(Some(Type::Any))
+        }
         // `resolveNewExpression` resolves an error-typed target as an error
         // call: the arguments are checked and nothing more is reported.
         Type::ErrorType => {
@@ -1770,16 +1822,32 @@ fn new_with_call_signature(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
-    let _ = check_function_type_call(
-        function_type,
-        callee_span,
-        call_span,
+    // `resolveCall` over the call signatures: written type arguments no
+    // signature takes are TS2558, and no argument is related to one then.
+    if report_type_argument_arity(
+        &Type::Function(function_type.clone()),
         type_arguments,
-        arguments,
-        None,
-        symbols,
+        type_arguments_start(callee_span),
+        true,
         ctx,
-    );
+    ) {
+        ctx.degraded_expected_type_depth += 1;
+        for argument in arguments {
+            let _ = evaluate_expression(&argument.expression, argument.span, symbols, ctx);
+        }
+        ctx.degraded_expected_type_depth -= 1;
+    } else {
+        let _ = check_function_type_call(
+            function_type,
+            callee_span,
+            call_span,
+            type_arguments,
+            arguments,
+            None,
+            symbols,
+            ctx,
+        );
+    }
     // A return inferred from the body is a lazy reference until read.
     let returned = function_type.return_type().peeled();
     let diagnostic = if ctx.options.no_implicit_any {
@@ -2751,6 +2819,107 @@ fn has_top_level_default(segment: &str) -> bool {
     false
 }
 
+/// `checkTypeArguments` for `new C<…>(…)`: the first written type argument
+/// that does not satisfy its class type parameter's constraint instantiated
+/// with every argument (defaults filling the rest), paired with that
+/// constraint. tsc only gets there with the right number of type arguments
+/// (TS2558 otherwise) and a construct signature fitting the argument count.
+/// The class must be declared in the file being checked, so its constraints
+/// and defaults resolve where they are written.
+fn unsatisfied_class_type_argument(
+    class: &crate::symbols::InterfaceInfo,
+    callee: &ParsedExpression,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<(Type, Type)> {
+    let ParsedExpression::Identifier { name, .. } = callee else {
+        return None;
+    };
+    let type_parameters = &class.body.type_parameters;
+    let minimum = type_parameters
+        .iter()
+        .filter(|parameter| parameter.default_type.is_none())
+        .count();
+    if *class.file_name != *ctx.file_name
+        || type_arguments.len() < minimum
+        || type_arguments.len() > type_parameters.len()
+        || type_parameters[..type_arguments.len()]
+            .iter()
+            .all(|parameter| parameter.constraint.is_none())
+    {
+        return None;
+    }
+    let Type::Object(constructor) = symbols.get(name)?.ty.peeled() else {
+        return None;
+    };
+    let construct = constructor.construct_signature()?;
+    let fits = match construct.overloads() {
+        Some(members) => members.iter().any(|member| arguments_fit(member, arguments)),
+        None => arguments_fit(construct, arguments),
+    };
+    if !fits {
+        return None;
+    }
+    let checkpoint = ctx.diagnostics().len();
+    let mut substitution = crate::infer::TypeParameterSubstitution::new();
+    for (index, parameter) in type_parameters.iter().enumerate() {
+        let resolved = match (type_arguments.get(index), &parameter.default_type) {
+            (Some(argument), _) => {
+                let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+                let resolved = crate::infer::map_parsed_type_with_substitution(
+                    argument.clone(),
+                    ctx,
+                    &crate::infer::TypeParameterSubstitution::new(),
+                );
+                ctx.symbols = saved_symbols;
+                resolved
+            }
+            (None, Some(default_type)) => crate::infer::map_parsed_type_with_substitution(
+                default_type.clone(),
+                ctx,
+                &substitution,
+            ),
+            (None, None) => Type::Unknown,
+        };
+        substitution.insert(parameter.name.clone(), resolved);
+    }
+    let mut unsatisfied = None;
+    for parameter in &type_parameters[..type_arguments.len()] {
+        let (Some(constraint), Some(argument)) =
+            (parameter.constraint.clone(), substitution.get(&parameter.name).cloned())
+        else {
+            continue;
+        };
+        let constraint =
+            crate::infer::map_parsed_type_with_substitution(constraint, ctx, &substitution);
+        if !crate::infer::types::constraint_relation_decidable(&argument, &constraint) {
+            continue;
+        }
+        if !is_assignable_to(&argument, &constraint) {
+            unsatisfied = Some((argument, constraint));
+            break;
+        }
+    }
+    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    unsatisfied
+}
+
+/// tsc's `hasCorrectArity` for written arguments. A spread's count is its
+/// operand's, so with one the spread's position must fall where the signature
+/// still takes arguments: past the required ones, within the parameters or
+/// into a rest.
+fn arguments_fit(candidate: &FunctionType, arguments: &[ParsedCallArgument]) -> bool {
+    match arguments.iter().position(|argument| argument.spread) {
+        Some(index) => {
+            index >= candidate.required_parameter_count()
+                && (candidate.is_variadic() || index < candidate.parameters().len())
+        }
+        None => overload_arity_fits(candidate, arguments.len()),
+    }
+}
+
 fn overload_arity_fits(candidate: &FunctionType, argument_count: usize) -> bool {
     let parameters = candidate.parameters();
     let mut required = candidate.required_parameter_count();
@@ -3205,7 +3374,8 @@ pub(crate) fn check_function_type_call(
                             && crate::checks::assign::definite_primitive_member_mismatch(
                                 &argument_type,
                                 &parameter_type,
-                            )))
+                            ))
+                        || type_variable_decides(&argument_type, &parameter_type))
                     && !is_open_instantiation(&argument_type)
                     && !is_assignable_to(&argument_type, &parameter_type)
                 {
@@ -3293,23 +3463,47 @@ pub(crate) fn check_function_type_call(
     // position — but a call is resolved against one candidate at a time, and
     // `pair(1, 2)` fits neither `(string, number)` nor `(number, string)`. When
     // every candidate of fitting arity provably rejects some argument, tsc
-    // reports TS2769 on the argument the *last* candidate rejects.
+    // reports TS2769 on the argument the *last* candidate rejects. A generic
+    // member of an interface or class group still carries its own type
+    // parameters, which `chooseOverload` infers for the call before it relates
+    // the arguments.
+    let mut instantiated_overloads: Vec<Option<FunctionType>> = Vec::new();
     if !mismatch_reported
         && !has_spread_argument
         && arity_candidates > 1
         && let Some(members) = function_type.overloads()
     {
-        let rejections: Vec<Option<usize>> = members
-            .iter()
-            .filter(|member| overload_arity_fits(member, arguments.len()))
-            .map(|member| first_rejected_argument(member, &argument_types))
-            .collect();
-        if rejections.iter().all(Option::is_some)
-            && let Some(Some(index)) = rejections.last()
-        {
+        instantiated_overloads = vec![None; members.len()];
+        let mut last_rejected = None;
+        let mut every_candidate_rejects = true;
+        for (index, member) in members.iter().enumerate() {
+            if !overload_arity_fits(member, arguments.len()) {
+                continue;
+            }
+            if type_arguments.is_empty() && !own_type_parameter_names(member).is_empty() {
+                instantiated_overloads[index] = Some(instantiate_overload_member(
+                    member,
+                    type_arguments,
+                    callee_span,
+                    arguments,
+                    expected_return_type,
+                    symbols,
+                    ctx,
+                ));
+            }
+            let candidate = instantiated_overloads[index].as_ref().unwrap_or(member);
+            match first_rejected_argument(candidate, &argument_types) {
+                Some(rejected) => last_rejected = Some(rejected),
+                None => {
+                    every_candidate_rejects = false;
+                    break;
+                }
+            }
+        }
+        if every_candidate_rejects && let Some(index) = last_rejected {
             ctx.push(diagnostic_with_syntax_span(
                 Diagnostic::ts2769(ctx.file_name.clone()),
-                arguments[*index].span,
+                arguments[index].span,
             ));
             return None;
         }
@@ -3329,6 +3523,7 @@ pub(crate) fn check_function_type_call(
             callee_span,
             arguments,
             expected_return_type,
+            instantiated_overloads,
             symbols,
             ctx,
         )
@@ -3494,6 +3689,10 @@ fn select_overload_return_type(
 /// parameters, which reject every argument exactly as they did before this
 /// walk: a free function's group is instantiated per call before it is attached,
 /// so only an interface method group reaches the instantiation.
+///
+/// `instantiated` holds the candidates the caller already instantiated for this
+/// call (by index); one is used only where this walk would instantiate it.
+#[allow(clippy::too_many_arguments)]
 fn choose_overload_return_type(
     function_type: &FunctionType,
     argument_types: &[ArgumentShape],
@@ -3501,36 +3700,33 @@ fn choose_overload_return_type(
     callee_span: Option<SyntaxTextSpan>,
     arguments: &[ParsedCallArgument],
     expected_return_type: Option<&Type>,
+    mut instantiated: Vec<Option<FunctionType>>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
     let overloads = function_type.overloads()?;
     crate::program::record_overload_selection_attempt();
-    let mut instantiated: Vec<Option<FunctionType>> = vec![None; overloads.len()];
+    instantiated.resize(overloads.len(), None);
     for relation in overload_relations(overloads) {
         for (index, candidate) in overloads.iter().enumerate() {
             // Written type arguments replace what a member was resolved with,
             // its type parameters' defaults included.
-            if (!type_arguments.is_empty() || names_open_parameter(&Type::Function(candidate.clone())))
-                && instantiated[index].is_none()
-            {
-                let diagnostics_before = ctx.diagnostics.len();
-                instantiated[index] = Some(
-                    property::instantiate_declared_member_signature(
-                        candidate,
-                        None,
-                        type_arguments,
-                        callee_span,
-                        arguments,
-                        expected_return_type,
-                        symbols,
-                        ctx,
-                    )
-                    .into_owned(),
-                );
-                ctx.diagnostics.truncate(diagnostics_before);
+            let open = !type_arguments.is_empty() || names_open_parameter(&Type::Function(candidate.clone()));
+            if open && instantiated[index].is_none() {
+                instantiated[index] = Some(instantiate_overload_member(
+                    candidate,
+                    type_arguments,
+                    callee_span,
+                    arguments,
+                    expected_return_type,
+                    symbols,
+                    ctx,
+                ));
             }
-            let candidate = instantiated[index].as_ref().unwrap_or(candidate);
+            let candidate = match &instantiated[index] {
+                Some(own) if open => own,
+                _ => candidate,
+            };
             if !signature_accepts_argument_types(candidate, argument_types, relation) {
                 continue;
             }
@@ -3542,6 +3738,34 @@ fn choose_overload_return_type(
         }
     }
     None
+}
+
+/// `candidate` with its own type parameters inferred for this call, as
+/// `chooseOverload` instantiates each generic candidate before it relates the
+/// arguments. The probe's diagnostics are discarded.
+fn instantiate_overload_member(
+    candidate: &FunctionType,
+    type_arguments: &[ParsedType],
+    callee_span: Option<SyntaxTextSpan>,
+    arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> FunctionType {
+    let diagnostics_before = ctx.diagnostics.len();
+    let instantiated = property::instantiate_declared_member_signature(
+        candidate,
+        None,
+        type_arguments,
+        callee_span,
+        arguments,
+        expected_return_type,
+        symbols,
+        ctx,
+    )
+    .into_owned();
+    ctx.diagnostics.truncate(diagnostics_before);
+    instantiated
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -3836,6 +4060,7 @@ fn substituted_construct_signature(
         overload_alternatives: Vec::new(),
         inferred_predicate: None,
         body_return: None,
+        construct_signatures: None,
     };
     let mut substitution = crate::infer::TypeParameterSubstitution::new();
     for (type_parameter, argument) in parsed.type_parameters.iter().zip(type_arguments.iter()) {
@@ -4016,6 +4241,18 @@ pub(crate) fn type_contains_unknown(ty: &Type) -> bool {
         Type::Union(union) => union.types().iter().any(type_contains_unknown),
         _ => false,
     }
+}
+
+/// relater.go relates a source to a type-parameter target only when the
+/// source is that parameter, one constrained to it, `any` or `never`, so an
+/// argument that mentions no type variable is decided against a variable of
+/// the body being checked (`cb(null)` for `cb: (t: T) => U` inside the
+/// generic), though `parameter_type_is_degraded` reads every type parameter as
+/// a hole.
+fn type_variable_decides(argument_type: &Type, parameter_type: &Type) -> bool {
+    parameter_type.is_type_variable()
+        && !surge_ts_types::type_variable::mentions_type_variable(argument_type)
+        && !as_source(|| type_contains_degradation(argument_type))
 }
 
 fn is_unnarrowable_literal(expression: &ParsedExpression) -> bool {

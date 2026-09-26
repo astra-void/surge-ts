@@ -242,8 +242,8 @@ fn infer_expression_unsettled(
                 // unresolved-identifier error.
                 .unwrap_or(InferredExpression::Unknown)
         }
-        ParsedExpression::ObjectLiteral { properties, .. } => {
-            InferredExpression::Known(infer_object_literal(properties, symbols, ctx))
+        ParsedExpression::ObjectLiteral { properties, span } => {
+            InferredExpression::Known(infer_object_literal(properties, *span, symbols, ctx))
         }
         ParsedExpression::ArrayLiteral {
             elements,
@@ -310,15 +310,30 @@ fn infer_expression_unsettled(
             object_span,
             property_name,
             property_span,
+            is_bracketed,
             ..
-        } => infer_property_access(
-            object,
-            object_span,
-            property_name,
-            property_span,
-            symbols,
-            ctx,
-        ),
+        } => {
+            let lacking_enum_object = if *is_bracketed {
+                None
+            } else {
+                const_enum_object_lacks_member(object, property_name, symbols, ctx)
+            };
+            match lacking_enum_object {
+                Some(object_type) => InferredExpression::MissingProperty {
+                    property_name: property_name.clone(),
+                    object_type,
+                    span: *property_span,
+                },
+                None => infer_property_access(
+                    object,
+                    object_span,
+                    property_name,
+                    property_span,
+                    symbols,
+                    ctx,
+                ),
+            }
+        }
         ParsedExpression::IndexAccess {
             object_name,
             object_span,
@@ -621,6 +636,22 @@ fn infer_expression_unsettled(
                 None => InferredExpression::Unknown,
             }
         }
+        ParsedExpression::RegExpLiteral => match ctx.lookup_type_declaration("RegExp") {
+            Some(_) => InferredExpression::Known(crate::infer::map_parsed_type(
+                surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(
+                    surge_ts_syntax::ParsedNamedType {
+                        name: "RegExp".to_string(),
+                        span: None,
+                        type_arguments: Vec::new(),
+                    },
+                )),
+                ctx,
+            )),
+            None => InferredExpression::Unknown,
+        },
+        ParsedExpression::ClassExpression(class_expression) => InferredExpression::Known(
+            crate::program::class_expression_type(class_expression, symbols, ctx),
+        ),
         ParsedExpression::ImportCall { .. } | ParsedExpression::Unknown => InferredExpression::Unknown,
     };
     record_program_timing(ctx.timings.as_ref(), |timings| {

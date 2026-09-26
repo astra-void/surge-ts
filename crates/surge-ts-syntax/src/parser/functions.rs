@@ -479,13 +479,18 @@ fn parse_variable_declaration_as_function_body(
             crate::ParsedStatement::VariableDeclaration(variable) => {
                 Some(ParsedFunctionBodyStatement::VariableDeclaration(variable))
             }
+            // `const C = class {}`, which lowers to a class declaration.
+            crate::ParsedStatement::ClassDeclaration(class) => {
+                Some(ParsedFunctionBodyStatement::Class(class))
+            }
             _ => None,
         })
         .collect()
 }
 
 pub(super) fn parse_if_statement(if_statement: &IfStatement<'_>) -> Option<ParsedIfStatement> {
-    let (condition, condition_span) = parse_expression(&if_statement.test);
+    let (mut condition, condition_span) = parse_expression(&if_statement.test);
+    clear_condition_chain_tests(&mut condition);
     let then_body = parse_branch_body(&if_statement.consequent);
     let else_body = if_statement
         .alternate
@@ -502,14 +507,39 @@ pub(super) fn parse_if_statement(if_statement: &IfStatement<'_>) -> Option<Parse
     })
 }
 
-/// tsc's `checkTestingKnownTruthyTypes` candidates in an `if` condition: the
-/// condition itself, the right operand of a top-level logical expression and
-/// every operand along its `||`/`??` chain, and the left operand of every `&&`,
-/// when that operand is a name or a member path.
+/// tsc's `checkTestingKnownTruthyTypes` candidates in an `if` condition. The
+/// condition itself is checked (`checkIfStatement`), and so is the left operand
+/// of every logical operator along it, since each one's parent walk reaches the
+/// `if` (`checkBinaryLikeExpression`) — together that is every operand of the
+/// condition's logical chain, each tested against the then branch.
 fn unreferenced_truthiness_tests(
     if_statement: &IfStatement<'_>,
 ) -> Vec<crate::ParsedTruthinessTest> {
-    unreferenced_truthiness_tests_in(&if_statement.test, TruthinessBody::Statement(&if_statement.consequent))
+    let mut found = Vec::new();
+    if_condition_operands(&if_statement.test, Vec::new(), &mut found);
+    unreferenced_candidates(found, Some(&TruthinessBody::Statement(&if_statement.consequent)))
+}
+
+/// The logical operators along an `if` condition are tested against its then
+/// branch by [`unreferenced_truthiness_tests`], not on their own.
+fn clear_condition_chain_tests(condition: &mut ParsedExpression) {
+    match condition {
+        ParsedExpression::Logical {
+            left,
+            right,
+            truthiness_tests,
+            ..
+        } => {
+            truthiness_tests.clear();
+            clear_condition_chain_tests(left);
+            clear_condition_chain_tests(right);
+        }
+        ParsedExpression::NullishCoalescing { left, right, .. } => {
+            clear_condition_chain_tests(left);
+            clear_condition_chain_tests(right);
+        }
+        _ => {}
+    }
 }
 
 /// Where a truthiness test holds: an `if`'s then branch, or a conditional
@@ -519,79 +549,175 @@ pub(crate) enum TruthinessBody<'e, 'a> {
     Expression(&'e Expression<'a>),
 }
 
-/// The candidates of [`unreferenced_truthiness_tests`] for any test and the
-/// code it guards. A candidate the guarded code or the right side of its `&&`
-/// chain mentions again is dropped (`isSymbolUsedInConditionBody`,
-/// `isSymbolUsedInBinaryExpressionChain`), matched by name and member path. Only
-/// an `if` hands its body to the `&&` operands of its condition; elsewhere they
-/// see just their chain.
+/// A tested operand and the right operands `isSymbolUsedInBinaryExpressionChain`
+/// visits from the node tsc handed the check: the `&&` expressions it is the
+/// unparenthesized left side of, outward.
+type TruthinessCandidate<'e, 'a> = (&'e Expression<'a>, Vec<&'e Expression<'a>>);
+
+/// A conditional expression's test, checked against `whenTrue`
+/// (`checkConditionalExpression`). The `&&` operands inside it carry their own
+/// tests, see [`and_operand_truthiness_tests`].
 pub(crate) fn unreferenced_truthiness_tests_in(
     test: &Expression<'_>,
     body: TruthinessBody<'_, '_>,
 ) -> Vec<crate::ParsedTruthinessTest> {
-    use oxc_ast::ast::LogicalOperator;
+    let mut found = Vec::new();
+    testing_known_truthy_types(test, Vec::new(), &mut found);
+    unreferenced_candidates(found, Some(&body))
+}
 
-    fn collect<'e, 'a>(
-        expression: &'e Expression<'a>,
-        tested: bool,
-        top_chain: bool,
-        and_rights: Option<Vec<&'e Expression<'a>>>,
-        found: &mut Vec<(&'e Expression<'a>, Option<Vec<&'e Expression<'a>>>)>,
-    ) {
-        match expression.without_parentheses() {
-            Expression::LogicalExpression(logical)
-                if matches!(logical.operator, LogicalOperator::Or | LogicalOperator::Coalesce) =>
-            {
-                collect(&logical.left, true, top_chain, None, found);
-                collect(&logical.right, top_chain, top_chain, None, found);
+/// tsc checks the left operand of every `&&` (`checkBinaryLikeExpression`);
+/// outside an `if` condition nothing but the rest of the chain can use it. The
+/// operands of a left-leaning chain are all computed at its root, where every
+/// operand's chain is known; an `if` condition drops these for its own.
+pub(crate) fn and_operand_truthiness_tests(
+    logical: &oxc_ast::ast::LogicalExpression<'_>,
+) -> Vec<crate::ParsedTruthinessTest> {
+    use oxc_ast::ast::LogicalOperator;
+    let mut found = Vec::new();
+    let mut chain = vec![&logical.right];
+    let mut current = logical;
+    loop {
+        testing_known_truthy_types(&current.left, chain.clone(), &mut found);
+        match &current.left {
+            Expression::LogicalExpression(inner) if inner.operator == LogicalOperator::And => {
+                chain.insert(0, &inner.right);
+                current = inner;
             }
-            Expression::LogicalExpression(logical) => {
-                let mut rights = vec![&logical.right];
-                rights.extend(and_rights.into_iter().flatten());
-                collect(&logical.left, true, false, Some(rights), found);
-                collect(&logical.right, top_chain, top_chain, None, found);
-            }
-            leaf if tested && member_path(leaf).is_some() => found.push((leaf, and_rights)),
-            _ => {}
+            _ => break,
         }
     }
+    unreferenced_candidates(found, None)
+}
 
-    let is_if = matches!(body, TruthinessBody::Statement(_));
-    let mut found = Vec::new();
-    collect(test, true, true, None, &mut found);
-    found
-        .into_iter()
-        .filter_map(|(leaf, and_rights)| {
-            let path = member_path(leaf)?;
-            let is_and_operand = and_rights.is_some();
-            let mut chain = PathReferences::default();
-            for right in and_rights.into_iter().flatten() {
+fn unparenthesized<'e, 'a>(
+    expression: &'e Expression<'a>,
+    seen: Vec<&'e Expression<'a>>,
+) -> (&'e Expression<'a>, Vec<&'e Expression<'a>>) {
+    match expression {
+        Expression::ParenthesizedExpression(_) => (expression.without_parentheses(), Vec::new()),
+        _ => (expression, seen),
+    }
+}
+
+/// The chain a direct operand of `logical` walks: an `&&` adds its right side
+/// to the chain `logical` itself walks.
+fn operand_chain<'e, 'a>(
+    logical: &'e oxc_ast::ast::LogicalExpression<'a>,
+    seen: &[&'e Expression<'a>],
+) -> Vec<&'e Expression<'a>> {
+    if logical.operator != oxc_ast::ast::LogicalOperator::And {
+        return Vec::new();
+    }
+    let mut chain = vec![&logical.right];
+    chain.extend_from_slice(seen);
+    chain
+}
+
+/// `checkTestingKnownTruthyTypes`: the expression, then each left operand down
+/// its `||`/`??` chain.
+fn testing_known_truthy_types<'e, 'a>(
+    expression: &'e Expression<'a>,
+    seen: Vec<&'e Expression<'a>>,
+    found: &mut Vec<TruthinessCandidate<'e, 'a>>,
+) {
+    use oxc_ast::ast::LogicalOperator;
+    let (condition, seen) = unparenthesized(expression, seen);
+    testing_known_truthy_type(condition, seen, found);
+    let mut current = condition;
+    while let Expression::LogicalExpression(logical) = current
+        && matches!(logical.operator, LogicalOperator::Or | LogicalOperator::Coalesce)
+    {
+        current = logical.left.without_parentheses();
+        testing_known_truthy_type(current, Vec::new(), found);
+    }
+}
+
+/// `checkTestingKnownTruthyType`: a logical expression is tested at its right
+/// operand, whose use is still judged from the logical expression's own chain.
+fn testing_known_truthy_type<'e, 'a>(
+    condition: &'e Expression<'a>,
+    seen: Vec<&'e Expression<'a>>,
+    found: &mut Vec<TruthinessCandidate<'e, 'a>>,
+) {
+    let Expression::LogicalExpression(logical) = condition else {
+        found.push((condition, seen));
+        return;
+    };
+    let location = logical.right.without_parentheses();
+    if matches!(location, Expression::LogicalExpression(_)) {
+        let location_seen = match &logical.right {
+            Expression::ParenthesizedExpression(_) => Vec::new(),
+            _ => operand_chain(logical, &seen),
+        };
+        testing_known_truthy_types(location, location_seen, found);
+        return;
+    }
+    found.push((location, seen));
+}
+
+fn if_condition_operands<'e, 'a>(
+    expression: &'e Expression<'a>,
+    seen: Vec<&'e Expression<'a>>,
+    found: &mut Vec<TruthinessCandidate<'e, 'a>>,
+) {
+    let (condition, seen) = unparenthesized(expression, seen);
+    let Expression::LogicalExpression(logical) = condition else {
+        found.push((condition, seen));
+        return;
+    };
+    let chain = operand_chain(logical, &seen);
+    if_condition_operands(&logical.left, chain.clone(), found);
+    match logical.right.without_parentheses() {
+        Expression::LogicalExpression(_) => if_condition_operands(&logical.right, chain, found),
+        right => found.push((right, seen)),
+    }
+}
+
+/// Drops a candidate its chain or the guarded code mentions again
+/// (`isSymbolUsedInBinaryExpressionChain`, `isSymbolUsedInConditionBody`),
+/// matched by name and member path.
+fn unreferenced_candidates(
+    found: Vec<TruthinessCandidate<'_, '_>>,
+    body: Option<&TruthinessBody<'_, '_>>,
+) -> Vec<crate::ParsedTruthinessTest> {
+    let mut references = PathReferences::default();
+    match body {
+        Some(TruthinessBody::Statement(statement)) => {
+            oxc_ast_visit::Visit::visit_statement(&mut references, statement)
+        }
+        Some(TruthinessBody::Expression(expression)) => {
+            oxc_ast_visit::Visit::visit_expression(&mut references, expression)
+        }
+        None => {}
+    }
+    let mut tests: Vec<crate::ParsedTruthinessTest> = Vec::new();
+    for (leaf, chain_rights) in found {
+        let Some(path) = member_path(leaf) else {
+            continue;
+        };
+        // The walk visits each right operand's children, so a bare name there
+        // is not a use of itself.
+        let mut chain = PathReferences::default();
+        for right in chain_rights {
+            if !matches!(right, Expression::Identifier(_)) {
                 oxc_ast_visit::Visit::visit_expression(&mut chain, right);
             }
-            if chain.mentions_name(&path) {
-                return None;
-            }
-            if is_if || !is_and_operand {
-                let mut references = PathReferences::default();
-                match &body {
-                    TruthinessBody::Statement(statement) => {
-                        oxc_ast_visit::Visit::visit_statement(&mut references, statement)
-                    }
-                    TruthinessBody::Expression(expression) => {
-                        oxc_ast_visit::Visit::visit_expression(&mut references, expression)
-                    }
-                }
-                if references.mentions(&path) {
-                    return None;
-                }
-            }
-            let (expression, span) = parse_expression(leaf);
-            Some(crate::ParsedTruthinessTest {
-                expression,
-                span: Some(text_span_from_oxc_span(span)),
-            })
-        })
-        .collect()
+        }
+        if chain.mentions_name(&path) || references.mentions(&path) {
+            continue;
+        }
+        let span = Some(text_span_from_oxc_span(leaf.span()));
+        if tests.iter().any(|test| test.span == span) {
+            continue;
+        }
+        let (expression, span) = parse_expression(leaf);
+        tests.push(crate::ParsedTruthinessTest {
+            expression,
+            span: Some(text_span_from_oxc_span(span)),
+        });
+    }
+    tests
 }
 
 /// `a`, `this.m` or `a.b.c` as written; `None` for anything else, including a

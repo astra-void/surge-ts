@@ -398,6 +398,66 @@ pub(crate) fn check_annotated_binding_pattern_reads(
     crate::infer::types::check_binding_pattern_reads(&parameter.binding_name, &parent, ctx);
 }
 
+/// tsc's `checkVariableLikeDeclaration` on a parameter with a written type: the
+/// initializer is checked against the parameter's type, anchored on its name.
+/// An unannotated parameter's initializer is what resolving the signature
+/// already evaluated for its type.
+pub(crate) fn check_annotated_parameter_initializer(
+    parameter: &ParsedFunctionParameter,
+    parameter_type: &Type,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let (Some(_), Some(initializer)) = (&parameter.declared_type, &parameter.initializer) else {
+        return;
+    };
+    let _ = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
+        initializer,
+        parameter.initializer_span,
+        binding_name_span(&parameter.binding_name),
+        Some(parameter_type),
+        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
+        symbols,
+        ctx,
+    );
+}
+
+/// A parameter's binding element reads a property that must be accessible where
+/// the pattern is written (`checkVariableLikeDeclaration`); a declaration's
+/// pattern is lowered to member reads, which check it themselves.
+pub(crate) fn check_parameter_pattern_accessibility(
+    binding: &ParsedBindingName,
+    bound_type: &Type,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let ParsedBindingName::ObjectPattern(pattern) = binding else {
+        return;
+    };
+    let source = surge_ts_syntax::ParsedExpression::Identifier {
+        name: String::new(),
+        span: None,
+    };
+    for element in &pattern.elements {
+        crate::checks::expr::check_member_accessibility(
+            &source,
+            bound_type,
+            &element.property_name,
+            element.span,
+            false,
+            symbols,
+            ctx,
+        );
+        let element_type = object_binding_element_type(bound_type, &element.property_name);
+        check_parameter_pattern_accessibility(
+            &element.binding_name,
+            &surge_ts_types::remove_undefined(&element_type),
+            symbols,
+            ctx,
+        );
+    }
+}
+
 /// Evaluates the defaults a destructuring pattern writes (`{ c = fallback }`)
 /// in the scope the pattern binds into, for their own diagnostics. The bound
 /// type contextually types each default; only a pattern whose root is
@@ -1824,6 +1884,7 @@ pub(crate) fn function_signature_info(
         overload_alternatives: Vec::new(),
         inferred_predicate: None,
         body_return: None,
+        construct_signatures: None,
     })
 }
 
@@ -1918,6 +1979,7 @@ pub(crate) fn function_type_signature_info(
         overload_alternatives: Vec::new(),
         inferred_predicate: None,
         body_return: None,
+        construct_signatures: None,
     })
 }
 
@@ -1961,6 +2023,70 @@ pub(crate) fn check_type_parameter_declarations(
             }
         }
     });
+    check_type_parameter_defaults(type_parameters, ctx);
+}
+
+/// tsc's `checkTypeParameter`: a default must satisfy its parameter's
+/// constraint, instantiated with the default in the parameter's place. Inside
+/// the declaration its parameters are type variables, so `U extends number = T`
+/// is judged through `T`'s own constraint and `U extends T = number` against
+/// `T` itself. A constraint naming its own parameter needs that instantiation,
+/// which is not modelled here. The resolutions are speculative; only the
+/// verdict is reported.
+fn check_type_parameter_defaults(type_parameters: &[ParsedTypeParameter], ctx: &mut CheckerContext) {
+    if !type_parameters
+        .iter()
+        .any(|parameter| parameter.constraint.is_some() && parameter.default_type.is_some())
+    {
+        return;
+    }
+    let _variables = enter_body_type_variables(type_parameters, ctx);
+    let diagnostics_before = ctx.diagnostics().len();
+    let mut violations = Vec::new();
+    with_type_parameter_scope(type_parameters, ctx, |ctx| {
+        for parameter in type_parameters {
+            let (Some(constraint), Some(default_type)) = (&parameter.constraint, &parameter.default_type)
+            else {
+                continue;
+            };
+            if crate::infer::types::constraint_names_a_sibling(constraint, std::slice::from_ref(parameter)) {
+                continue;
+            }
+            // tsc reports at the default; a keyword has no span of its own.
+            let span = match default_type {
+                ParsedType::Named(named) => named.span.or(parameter.name_span),
+                _ => parameter.name_span,
+            };
+            let names_a_parameter =
+                crate::infer::types::constraint_names_a_sibling(default_type, type_parameters);
+            let default_type = crate::infer::map_parsed_type(default_type.clone(), ctx);
+            // A default written over the list's parameters that resolves to no
+            // type variable lost them on the way (`${P}:baz` reads as `string`).
+            if names_a_parameter && !surge_ts_types::type_variable::mentions_type_variable(&default_type) {
+                continue;
+            }
+            let constraint = crate::infer::map_parsed_type(constraint.clone(), ctx);
+            if crate::infer::types::judgeable_through_type_variable(&default_type)
+                && crate::infer::types::judgeable_through_type_variable(&constraint)
+                && !surge_ts_types::is_assignable_to(&default_type, &constraint)
+            {
+                violations.push((
+                    span,
+                    crate::checks::expr::source_display_name(&default_type, &constraint),
+                    constraint.name(),
+                ));
+            }
+        }
+    });
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    for (span, default_name, constraint_name) in violations {
+        let Some(span) = span else {
+            continue;
+        };
+        let diagnostic = Diagnostic::ts2344(default_name, constraint_name, ctx.file_name.clone())
+            .with_span(convert_span(span));
+        ctx.push_utility_diagnostic_once(diagnostic);
+    }
 }
 
 /// The variable `type_parameter` is bound to while its body is checked.
@@ -2489,11 +2615,23 @@ pub(crate) fn check_function_body_with_signature_and_this(
     with_type_parameter_scope(type_parameters, ctx, |ctx| {
         for (parameter, parameter_type) in parameters.iter().zip(function_type.parameters().iter())
         {
+            check_annotated_parameter_initializer(
+                parameter,
+                parameter_type,
+                scopes.visible_symbols(),
+                ctx,
+            );
             check_annotated_binding_pattern_reads(parameter, parameter_type, ctx);
             check_binding_pattern_defaults(
                 &parameter.binding_name,
                 Some(parameter_type),
                 parameter.declared_type.is_some(),
+                scopes.visible_symbols(),
+                ctx,
+            );
+            check_parameter_pattern_accessibility(
+                &parameter.binding_name,
+                parameter_type,
                 scopes.visible_symbols(),
                 ctx,
             );

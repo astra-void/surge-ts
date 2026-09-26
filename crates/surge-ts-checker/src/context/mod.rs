@@ -197,6 +197,7 @@ impl CheckerContext {
         &mut self,
         ty: &surge_ts_types::Type,
         expression: Option<&surge_ts_syntax::ParsedExpression>,
+        symbols: &crate::symbols::SymbolTable,
     ) {
         fn admits_undefined(ty: &surge_ts_types::Type) -> bool {
             match ty {
@@ -243,7 +244,7 @@ impl CheckerContext {
                         false,
                     ),
                     shape: crate::checks::expr::literal_shape(expression),
-                    fresh: !is_type_assertion(expression),
+                    fresh: returns_fresh_literal(expression, symbols),
                 },
                 None => ReturnedForm {
                     widened: ty.clone(),
@@ -272,14 +273,30 @@ impl CheckerContext {
             }
         }
 
-        fn is_type_assertion(expression: &surge_ts_syntax::ParsedExpression) -> bool {
+        // An assertion yields its regular type, and so does a parameter read: its
+        // type comes from an annotation or a context, and a type parameter a
+        // call instantiated it with was written or inferred there, not here.
+        fn returns_fresh_literal(
+            expression: &surge_ts_syntax::ParsedExpression,
+            symbols: &crate::symbols::SymbolTable,
+        ) -> bool {
             use surge_ts_syntax::ParsedExpression;
             match expression {
-                ParsedExpression::ConstAssertion { .. } | ParsedExpression::TypeAssertion { .. } => true,
+                ParsedExpression::ConstAssertion { .. } | ParsedExpression::TypeAssertion { .. } => false,
                 ParsedExpression::NonNullAssertion { expression, .. }
                 | ParsedExpression::SatisfiesExpression { expression, .. }
-                | ParsedExpression::Await { operand: expression, .. } => is_type_assertion(expression),
-                _ => false,
+                | ParsedExpression::Await { operand: expression, .. } => {
+                    returns_fresh_literal(expression, symbols)
+                }
+                ParsedExpression::Identifier { name, .. } => !symbols
+                    .get(name)
+                    .is_some_and(|symbol| symbol.kind == crate::symbols::SymbolKind::Parameter),
+                ParsedExpression::Conditional {
+                    when_true,
+                    when_false,
+                    ..
+                } => returns_fresh_literal(when_true, symbols) || returns_fresh_literal(when_false, symbols),
+                _ => true,
             }
         }
     }
@@ -669,6 +686,9 @@ pub(crate) struct CheckerContext {
     /// a function or an empty object literal, which a member write declares
     /// members on (`IsExpandoInitializer`).
     pub(crate) javascript_expando_objects: Arc<HashSet<String>>,
+    /// The member assignment about to be checked is a module-level statement,
+    /// in the container of the module's own declarations. Taken by that check.
+    pub(crate) module_level_member_write: bool,
     /// The members the constructor being checked may initialize even when they
     /// are `readonly`: its class's own instance properties and parameter
     /// properties. `None` everywhere else — tsc allows the write only when the
@@ -797,6 +817,17 @@ pub(crate) struct CheckerContext {
     /// (see [`surge_ts_syntax::ParsedSource::global_this_starts`]); empty for
     /// a module. Per-file: cleared by `begin_file_check`.
     pub(crate) global_this_starts: Arc<[u32]>,
+    /// The file's object-literal members whose `this` is the literal itself
+    /// (see [`surge_ts_syntax::ParsedSource::literal_this_members`]).
+    /// Per-file: cleared by `begin_file_check`.
+    pub(crate) literal_this_members: Arc<[u32]>,
+    /// The `this` an object literal hands the member whose arrow check runs
+    /// next (tsc's `getContextualThisParameterType`). Taken by that check.
+    pub(crate) next_arrow_this: Option<Type>,
+    /// The start of the object literal being evaluated as an assignment
+    /// declaration's value (`F.prototype = { … }`), which has no contextual
+    /// type: its members' `this` is the literal itself.
+    pub(crate) expando_object_literal: Option<u32>,
     /// The receiver of a `push`/`unshift`/`length`/`x[n] = v` about to be
     /// evaluated: an evolving array read there is typed `any[]` and is not a
     /// read tsc reports.
@@ -954,6 +985,7 @@ impl CheckerContext {
             unmodelled_jsx_props_depth: 0,
             this_is_implicitly_any: false,
             javascript_expando_objects: Arc::default(),
+            module_level_member_write: false,
             constructor_writable_members: None,
             super_constructor_type: None,
             collecting_signatures: false,
@@ -989,6 +1021,9 @@ impl CheckerContext {
             nested_function_scope: None,
             parenthesized_expressions: Arc::from([]),
             global_this_starts: Arc::from([]),
+            literal_this_members: Arc::from([]),
+            next_arrow_this: None,
+            expando_object_literal: None,
             evolving_array_operation_target: None,
             auto_arrays_declared: false,
             let_assignments: Arc::from([]),
@@ -1149,6 +1184,7 @@ impl CheckerContext {
             unmodelled_jsx_props_depth: 0,
             this_is_implicitly_any: false,
             javascript_expando_objects: Arc::default(),
+            module_level_member_write: false,
             constructor_writable_members: None,
             super_constructor_type: None,
             collecting_signatures: false,
@@ -1184,6 +1220,9 @@ impl CheckerContext {
             nested_function_scope: None,
             parenthesized_expressions: Arc::from([]),
             global_this_starts: Arc::from([]),
+            literal_this_members: Arc::from([]),
+            next_arrow_this: None,
+            expando_object_literal: None,
             evolving_array_operation_target: None,
             auto_arrays_declared: false,
             let_assignments: Arc::from([]),
@@ -1806,6 +1845,7 @@ impl CheckerContext {
         self.inferred_any_vars.clear();
         self.this_is_implicitly_any = false;
         self.javascript_expando_objects = Arc::default();
+        self.module_level_member_write = false;
         self.constructor_writable_members = None;
         self.super_constructor_type = None;
         self.collecting_signatures = false;
@@ -1819,6 +1859,9 @@ impl CheckerContext {
         self.nested_function_scope = None;
         self.parenthesized_expressions = Default::default();
         self.global_this_starts = Default::default();
+        self.literal_this_members = Default::default();
+        self.next_arrow_this = None;
+        self.expando_object_literal = None;
         self.file_const_class_names.clear();
         self.jsx_factory_uses = Default::default();
         self.jsx_namespace = None;

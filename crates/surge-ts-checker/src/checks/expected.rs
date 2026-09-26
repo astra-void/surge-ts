@@ -354,6 +354,17 @@ fn evaluate_expression_with_expected_type_inner(
         other => other,
     };
 
+    // The contextual type reaches the initializers of the class's static
+    // properties (`getContextualTypeForStaticPropertyDeclaration`).
+    if let ParsedExpression::ClassExpression(class_expression) = expression {
+        return InferredExpression::Known(crate::program::check_class_expression(
+            class_expression,
+            Some(expected_type),
+            symbols,
+            ctx,
+        ));
+    }
+
     if let (Type::Function(expected_function_type), ParsedExpression::ArrowFunction(arrow)) =
         (expected_type, expression)
     {
@@ -512,9 +523,15 @@ fn evaluate_expression_with_expected_type_inner(
         operator: operator @ surge_ts_syntax::ParsedLogicalOperator::And,
         right,
         right_span,
+        truthiness_tests,
         ..
     } = expression
     {
+        crate::checks::function::report_unreferenced_callable_conditions(
+            truthiness_tests,
+            symbols,
+            ctx,
+        );
         return crate::checks::expr::evaluate_logical_in_context(
             left,
             left_span,

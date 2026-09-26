@@ -191,8 +191,17 @@ fn evaluate_expression_unsettled(
         // property value's own errors — an unresolved name, a bad member, an
         // untyped callback parameter — never surfaced. Same split the array
         // literal arm below uses: infer for the type, evaluate for diagnostics.
-        ParsedExpression::ObjectLiteral { properties, .. } => {
+        ParsedExpression::ObjectLiteral { properties, span } => {
             let inferred_expression = infer_expression(expression, symbols, ctx);
+            let member_this = crate::infer::expression::literal_member_this(
+                properties,
+                *span,
+                match &inferred_expression {
+                    InferredExpression::Known(ty) => Some(ty),
+                    _ => None,
+                },
+                ctx,
+            );
 
             check_computed_property_keys(properties, fallback_span, None, symbols, ctx);
             let mut explicit_properties: Vec<(&str, Option<SyntaxTextSpan>)> = Vec::new();
@@ -210,12 +219,18 @@ fn evaluate_expression_unsettled(
                 if property.is_shorthand {
                     ctx.shorthand_property_depth += 1;
                 }
+                if let (Some(member_this), ParsedExpression::ArrowFunction(member)) =
+                    (&member_this, &property.value)
+                {
+                    member_this.hand_to(member, false, ctx);
+                }
                 let property_result = evaluate_expression(
                     &property.value,
                     property.value_span.or(property.span).or(fallback_span),
                     symbols,
                     ctx,
                 );
+                ctx.next_arrow_this = None;
                 if property.is_spread {
                     super::check_object_spread_type(
                         &property_result,
@@ -432,16 +447,24 @@ fn evaluate_expression_unsettled(
             operator_span: _,
             right,
             right_span,
-        } => evaluate_logical(
-            left,
-            left_span,
-            operator,
-            right,
-            right_span,
-            fallback_span,
-            symbols,
-            ctx,
-        ),
+            truthiness_tests,
+        } => {
+            crate::checks::function::report_unreferenced_callable_conditions(
+                truthiness_tests,
+                symbols,
+                ctx,
+            );
+            evaluate_logical(
+                left,
+                left_span,
+                operator,
+                right,
+                right_span,
+                fallback_span,
+                symbols,
+                ctx,
+            )
+        }
         ParsedExpression::Binary {
             left,
             left_span,
@@ -761,6 +784,9 @@ fn evaluate_expression_unsettled(
                 crate::infer::expression::with_written_predicate(function_type, arrow_function, ctx);
             InferredExpression::Known(Type::Function(function_type))
         }
+        ParsedExpression::ClassExpression(class_expression) => InferredExpression::Known(
+            crate::program::check_class_expression(class_expression, None, symbols, ctx),
+        ),
         ParsedExpression::NonNullAssertion {
             expression: asserted_expression,
             span: expression_span,
@@ -803,6 +829,7 @@ fn evaluate_expression_unsettled(
         ParsedExpression::JsxFragment { children, span } => {
             crate::checks::jsx::check_jsx_preconditions(*span, fallback_span, ctx);
             crate::checks::jsx::check_jsx_factory_reference(true, *span, fallback_span, symbols, ctx);
+            crate::checks::jsx::check_jsx_fragment_factory(*span, fallback_span, ctx);
             for child in children {
                 evaluate_jsx_child(child, fallback_span, symbols, ctx);
             }
@@ -1852,8 +1879,9 @@ fn evaluate_property_access(
         return InferredExpression::Unknown;
     }
     // `c["x"]` is tsc's deliberate escape hatch: element access skips the
-    // accessibility check that `c.x` gets.
-    if !*is_bracketed
+    // accessibility check that `c.x` gets. A destructured name is checked
+    // (`checkVariableLikeDeclaration` on the binding element).
+    if (!*is_bracketed || binding_element)
         && let InferredExpression::Known(receiver_type) = &receiver
     {
         check_member_accessibility(
@@ -1915,9 +1943,16 @@ fn evaluate_jsx_child(
 ) {
     match child {
         ParsedJsxChild::Text => {}
-        ParsedJsxChild::Expression { expression, span } => {
+        ParsedJsxChild::Expression {
+            expression,
+            span,
+            spread,
+        } => {
             if let Some(expression) = expression {
-                let _ = evaluate_expression(expression, span.or(fallback_span), symbols, ctx);
+                let inferred = evaluate_expression(expression, span.or(fallback_span), symbols, ctx);
+                if *spread {
+                    crate::checks::jsx::check_jsx_spread_child(&inferred, span.or(fallback_span), ctx);
+                }
             }
         }
         ParsedJsxChild::Element(element) => {

@@ -175,6 +175,33 @@ pub(crate) fn check_jsx_preconditions(
     ctx.push(diagnostic);
 }
 
+/// tsc's `checkJsxFragment`: under a JSX transform, a fragment in a file whose
+/// element factory is configured — the `jsxFactory` option or an `@jsx`
+/// pragma — needs its fragment factory configured as well: TS17016 for the
+/// option, TS17017 for the pragma.
+pub(crate) fn check_jsx_fragment_factory(
+    span: Option<SyntaxTextSpan>,
+    fallback_span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    let names = &ctx.options.jsx_factory_names;
+    let configured = |name: &Option<String>| name.as_deref().is_some_and(|name| !name.is_empty());
+    let factory_option = configured(&names.factory);
+    if !(ctx.options.jsx_classic_react || ctx.options.jsx_automatic_runtime)
+        || !(factory_option || ctx.jsx_factory_uses.factory_pragma.is_some())
+        || configured(&names.fragment_factory)
+        || ctx.jsx_factory_uses.fragment_pragma.is_some()
+    {
+        return;
+    }
+    let diagnostic = if factory_option {
+        Diagnostic::ts17016(ctx.file_name.clone())
+    } else {
+        Diagnostic::ts17017(ctx.file_name.clone())
+    };
+    ctx.push(diagnostic_with_syntax_span(diagnostic, span.or(fallback_span)));
+}
+
 /// Checks a JSX element: resolves the tag to an intrinsic element or function
 /// component, lowers attributes into a props object, and reports missing,
 /// excess, and mistyped props plus basic `children` mismatches. Attribute and
@@ -463,6 +490,10 @@ struct JsxProps {
     /// whole intersection, when that holds the namespace's intrinsic
     /// attributes and the namespace declares both kinds of them.
     reports_constituent: bool,
+    /// What the candidate's signature returns — a class component's instance —
+    /// and whether it constructs, which `checkJsxReturnAssignableToAppropriateBound`
+    /// relates to the namespace's element types.
+    returns: Option<(Type, bool)>,
 }
 
 impl JsxProps {
@@ -471,6 +502,7 @@ impl JsxProps {
             target,
             constituents: Vec::new(),
             reports_constituent: false,
+            returns: None,
         }
     }
 }
@@ -510,6 +542,7 @@ pub(crate) fn check_jsx_element(
     ctx: &mut CheckerContext,
 ) {
     let tag_name_span = tag.name_span.or(fallback_span);
+    check_grammar_jsx_element(tag_name, tag_name_span, attributes, ctx);
     let has_children = children.iter().any(is_semantic_child);
     // Which attribute the body forms decides what the attributes object is;
     // when surge cannot tell, the element's props cannot be judged.
@@ -530,6 +563,8 @@ pub(crate) fn check_jsx_element(
                 attributes,
                 children: has_children.then_some(children).unwrap_or_default(),
                 children_name: children_name.as_deref(),
+                tag_name,
+                element_span: tag.span.or(fallback_span),
             },
             tag_name_span,
             symbols,
@@ -614,19 +649,23 @@ pub(crate) fn check_jsx_element(
             for (diagnostic, span) in relate_attributes(&evaluated, body.as_ref(), props, &site, ctx) {
                 ctx.push(diagnostic_with_syntax_span(diagnostic, span));
             }
+            check_jsx_return_bound(props, &site, ctx);
         }
         [.., last] => {
-            let chosen = candidates.iter().any(|props| {
+            let chosen = candidates.iter().find(|props| {
                 relate_attributes(&evaluated, body.as_ref(), props, &site, ctx).is_empty()
             });
-            if !chosen {
-                // tsc reports the last candidate's errors, each as "No overload
-                // matches this call".
-                for (_, span) in relate_attributes(&evaluated, body.as_ref(), last, &site, ctx) {
-                    ctx.push(diagnostic_with_syntax_span(
-                        Diagnostic::ts2769(ctx.file_name.clone()),
-                        span,
-                    ));
+            match chosen {
+                Some(props) => check_jsx_return_bound(props, &site, ctx),
+                None => {
+                    // tsc reports the last candidate's errors, each as "No overload
+                    // matches this call".
+                    for (_, span) in relate_attributes(&evaluated, body.as_ref(), last, &site, ctx) {
+                        ctx.push(diagnostic_with_syntax_span(
+                            Diagnostic::ts2769(ctx.file_name.clone()),
+                            span,
+                        ));
+                    }
                 }
             }
         }
@@ -645,6 +684,55 @@ pub(crate) fn check_jsx_element(
     }
 }
 
+/// tsc's `checkGrammarJsxElement`, which stops at its first error: a
+/// namespaced tag whose namespace is no intrinsic name under a JSX transform
+/// (TS2639), else, attribute by attribute, a repeated name (TS17001) or a
+/// value written as an empty `{}` (TS17000).
+fn check_grammar_jsx_element(
+    tag_name: &str,
+    tag_name_span: Option<SyntaxTextSpan>,
+    attributes: &[ParsedJsxAttribute],
+    ctx: &mut CheckerContext,
+) {
+    if let Some((namespace, _)) = tag_name.split_once(':')
+        && (ctx.options.jsx_classic_react || ctx.options.jsx_automatic_runtime)
+        && !is_intrinsic_jsx_name(namespace)
+    {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2639(ctx.file_name.clone()),
+            tag_name_span,
+        ));
+        return;
+    }
+    let mut seen = std::collections::HashSet::new();
+    for attribute in attributes {
+        if attribute.name.is_empty() {
+            continue;
+        }
+        if !seen.insert(attribute.name.as_str()) {
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts17001(ctx.file_name.clone()),
+                attribute.name_span,
+            ));
+            return;
+        }
+        if matches!(attribute.value_kind, ParsedJsxAttributeValueKind::Expression)
+            && attribute.value.is_none()
+        {
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts17000(ctx.file_name.clone()),
+                attribute.value_span,
+            ));
+            return;
+        }
+    }
+}
+
+/// tsc's `scanner.IsIntrinsicJsxName`.
+fn is_intrinsic_jsx_name(name: &str) -> bool {
+    name.as_bytes().first().is_some_and(u8::is_ascii_lowercase) || name.contains('-')
+}
+
 /// A value tag seen as the call tsc resolves it as: the attributes (with the
 /// body's children) are its single argument.
 struct JsxCallSite<'a> {
@@ -655,6 +743,11 @@ struct JsxCallSite<'a> {
     /// The children when the body has semantic ones.
     children: &'a [ParsedJsxChild],
     children_name: Option<&'a str>,
+    /// The tag as written, which TS2604 names.
+    tag_name: &'a str,
+    /// The opening element, where tsc reports what the tag resolves against
+    /// rather than the tag itself.
+    element_span: Option<SyntaxTextSpan>,
 }
 
 /// The props a value tag's attributes are checked against (tsc's
@@ -679,11 +772,19 @@ fn resolve_component_props(
         | InferredExpression::MissingProperty { .. } => return PropsResolution::Unchecked,
     };
     let Some((signatures, construct)) = jsx_signatures(&component_type) else {
-        return if component_is_unmodelled(&component_type) {
-            PropsResolution::Unmodelled
-        } else {
-            PropsResolution::Unchecked
-        };
+        if component_is_unmodelled(&component_type) {
+            return PropsResolution::Unmodelled;
+        }
+        if let Type::StringLiteral(tag) = component_type.peeled() {
+            return string_literal_tag_props(&tag, site, span, ctx);
+        }
+        if has_no_jsx_signatures(&component_type, ctx) {
+            ctx.push(diagnostic_with_syntax_span(
+                Diagnostic::ts2604(site.tag_name, ctx.file_name.clone()),
+                span,
+            ));
+        }
+        return PropsResolution::Unchecked;
     };
     let signatures = match signatures.as_slice() {
         [signature] if !construct => match instantiate_jsx_signature(signature, site, symbols, ctx) {
@@ -705,7 +806,7 @@ fn resolve_component_props(
     let mut candidates = Vec::with_capacity(signatures.len());
     for signature in &signatures {
         let declared = if construct {
-            class_component_props(signature, ctx)
+            class_component_props(signature, site, ctx)
         } else {
             signature
                 .parameters()
@@ -716,11 +817,13 @@ fn resolve_component_props(
         if is_unmodelled_props(&declared) {
             return PropsResolution::Unmodelled;
         }
-        candidates.push(with_intrinsic_attributes(
+        let mut props = with_intrinsic_attributes(
             declared,
             construct.then(|| signature.return_type()),
             ctx,
-        ));
+        );
+        props.returns = Some((signature.return_type().clone(), construct));
+        candidates.push(props);
     }
     let contextual = match candidates.as_slice() {
         [single] => single.target.clone(),
@@ -730,6 +833,98 @@ fn resolve_component_props(
         contextual,
         candidates,
     }
+}
+
+/// tsc's `getIntrinsicAttributesTypeFromStringLiteralType`: a tag whose value
+/// is a string literal (`const Tag: "h1"`) resolves to the intrinsic element it
+/// names through a signature whose props carry the intrinsic attributes. When
+/// `IntrinsicElements` declares no such element the element is TS2339 and the
+/// tag, left with no signature, TS2604; with no `IntrinsicElements` at all the
+/// props are `any`, which contextually types nothing.
+fn string_literal_tag_props(
+    tag: &str,
+    site: &JsxCallSite<'_>,
+    tag_name_span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) -> PropsResolution {
+    let intrinsic_elements = match jsx_namespace_member("IntrinsicElements", ctx) {
+        JsxMember::Found(intrinsic_elements) => intrinsic_elements,
+        JsxMember::Missing => return PropsResolution::Unchecked,
+        JsxMember::Unmodelled => return PropsResolution::Unmodelled,
+    };
+    let Type::Object(object) = intrinsic_elements.peeled() else {
+        return PropsResolution::Unmodelled;
+    };
+    let props = if let Some(property_type) = object.get_property_type(tag) {
+        property_type.clone()
+    } else if object.synthetic_open_index {
+        return PropsResolution::Unmodelled;
+    } else if let Some(index_type) = object.string_index_type.as_deref() {
+        index_type.clone()
+    } else {
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2339(tag, "JSX.IntrinsicElements", ctx.file_name.clone()),
+            site.element_span,
+        ));
+        ctx.push(diagnostic_with_syntax_span(
+            Diagnostic::ts2604(site.tag_name, ctx.file_name.clone()),
+            tag_name_span,
+        ));
+        return PropsResolution::Unchecked;
+    };
+    if is_unmodelled_props(&props) {
+        return PropsResolution::Unmodelled;
+    }
+    let props = with_intrinsic_attributes(props, None, ctx);
+    PropsResolution::Props {
+        contextual: props.target.clone(),
+        candidates: vec![props],
+    }
+}
+
+/// tsc's `resolveJsxOpeningLikeElement` finding no signature to resolve: a
+/// primitive other than `string`, a union of primitives one of which has none,
+/// or an object — an array included — with neither construct nor call
+/// signatures that is no subtype of the global `Function` (a call through
+/// which is untyped). Anything surge left open is not judged.
+fn has_no_jsx_signatures(component_type: &Type, ctx: &mut CheckerContext) -> bool {
+    let primitive = |ty: &Type| {
+        matches!(
+            ty,
+            Type::String
+                | Type::Number
+                | Type::NumberLiteral(_)
+                | Type::Boolean
+                | Type::BooleanLiteral(_)
+                | Type::BigInt
+                | Type::Symbol
+        )
+    };
+    match component_type.peeled() {
+        Type::Union(union) => {
+            union.types().iter().all(primitive)
+                && union.types().iter().any(|member| !matches!(member, Type::String))
+        }
+        Type::String => false,
+        ty if primitive(&ty) => true,
+        Type::Array(_) | Type::Tuple(_) => true,
+        Type::Object(object) => {
+            !object.synthetic_open_index
+                && object.call_signature().is_none()
+                && object.construct_signature().is_none()
+                && !is_function_subtype(&Type::Object(object), ctx)
+        }
+        _ => false,
+    }
+}
+
+/// `isTypeSubtypeOf(tagType, globalFunctionType)`, as assignability answers it.
+fn is_function_subtype(ty: &Type, ctx: &mut CheckerContext) -> bool {
+    if ctx.lookup_type_declaration("Function").is_none() {
+        return false;
+    }
+    let function = map_parsed_type(named_type("Function", Vec::new()), ctx);
+    !function.is_unknown() && is_assignable_to(ty, &function)
 }
 
 /// `resolveJsxOpeningLikeElement` on an intrinsic tag: its type arguments are
@@ -878,6 +1073,7 @@ fn jsx_attributes_argument(site: &JsxCallSite<'_>) -> surge_ts_syntax::ParsedCal
             ParsedJsxChild::Expression {
                 expression: Some(expression),
                 span,
+                ..
             } => Some((expression.clone(), *span)),
             ParsedJsxChild::Element(element) => Some((element.clone(), jsx_child_span(element))),
             _ => None,
@@ -949,7 +1145,11 @@ fn jsx_signatures(component_type: &Type) -> Option<(Vec<FunctionType>, bool)> {
 /// added: the instance's `ElementAttributesProperty` member, the instance
 /// itself when that interface declares no member, and the first constructor
 /// parameter when the JSX namespace has no such interface.
-fn class_component_props(signature: &FunctionType, ctx: &mut CheckerContext) -> Type {
+fn class_component_props(
+    signature: &FunctionType,
+    site: &JsxCallSite<'_>,
+    ctx: &mut CheckerContext,
+) -> Type {
     let first_parameter = || {
         signature
             .parameters()
@@ -962,9 +1162,21 @@ fn class_component_props(signature: &FunctionType, ctx: &mut CheckerContext) -> 
         ContainerMember::Unmodelled => Type::Unknown,
         ContainerMember::Empty => signature.return_type().clone(),
         ContainerMember::Name(name) => match signature.return_type().peeled() {
-            Type::Object(instance) => instance
-                .get_property(&name)
-                .map_or(Type::GenuineUnknown, |property| property.ty.clone()),
+            Type::Object(instance) => match instance.get_property(&name) {
+                Some(property) => property.ty.clone(),
+                // tsc's `getJsxPropsTypeFromClassType`: TS2607 at the element
+                // when it writes any attribute; the props are then `unknown`,
+                // which any attributes object fits.
+                None => {
+                    if !instance.synthetic_open_index && !site.attributes.is_empty() {
+                        ctx.push(diagnostic_with_syntax_span(
+                            Diagnostic::ts2607(&name, ctx.file_name.clone()),
+                            site.element_span,
+                        ));
+                    }
+                    Type::GenuineUnknown
+                }
+            },
             Type::Any => Type::Any,
             other if other.is_unknown() => other,
             _ => Type::GenuineUnknown,
@@ -1020,6 +1232,7 @@ fn with_intrinsic_attributes(
         target,
         constituents,
         reports_constituent: both_declared,
+        returns: None,
     }
 }
 
@@ -1191,6 +1404,10 @@ fn is_hyphenated_jsx_name(name: &str) -> bool {
 struct AttributeValue<'a> {
     attribute: &'a ParsedJsxAttribute,
     ty: Option<Type>,
+    /// What a later spread writes over the value when its type always has the
+    /// property (tsc's `getSpreadType`): the attributes object carries that
+    /// instead, and elaboration reads it back.
+    overridden: Option<Type>,
 }
 
 /// tsc's `createJsxAttributesTypeFromAttributesProperty`, as far as the checks
@@ -1272,12 +1489,32 @@ fn evaluate_attributes<'a>(
                 }
                 spread => spread,
             };
+            // tsc's `isValidSpreadType` (TS2698) and, for a valid spread,
+            // `checkSpreadPropOverrides` against every attribute written so far.
+            super::expr::check_object_spread_type(
+                &spread,
+                attribute.value_span.or(fallback_span),
+                ctx,
+            );
+            let written: Vec<(&str, Option<SyntaxTextSpan>)> = evaluated
+                .explicit
+                .iter()
+                .map(|value| (value.attribute.name.as_str(), value.attribute.name_span))
+                .collect();
+            super::expr::report_overwritten_properties(&spread, &written, ctx);
             match spread {
                 InferredExpression::Known(ty) => match ty.peeled() {
                     Type::Any | Type::ErrorType => evaluated.any_spread = true,
                     Type::Object(object) => {
                         if object.allows_string_index_access() {
                             evaluated.opaque_spread = true;
+                        }
+                        for value in &mut evaluated.explicit {
+                            if let Some(property) = object.get_property(&value.attribute.name)
+                                && !property.is_optional()
+                            {
+                                value.overridden = Some(property.ty.clone());
+                            }
                         }
                         for (name, property) in object.properties.iter() {
                             evaluated.spread.shift_remove(name);
@@ -1301,7 +1538,11 @@ fn evaluate_attributes<'a>(
             symbols,
             ctx,
         );
-        evaluated.explicit.push(AttributeValue { attribute, ty });
+        evaluated.explicit.push(AttributeValue {
+            attribute,
+            ty,
+            overridden: None,
+        });
     }
     evaluated
 }
@@ -1650,7 +1891,11 @@ fn evaluate_children(
     for (index, &(child, child_span)) in semantic.iter().enumerate() {
         let (kind, ty) = match child {
             ParsedJsxChild::Text => (ChildKind::Text, Some(Type::String)),
-            ParsedJsxChild::Expression { expression, span } => {
+            ParsedJsxChild::Expression {
+                expression,
+                span,
+                spread,
+            } => {
                 let Some(expression) = expression else {
                     continue;
                 };
@@ -1686,6 +1931,9 @@ fn evaluate_children(
                     ctx,
                 );
                 ctx.unmodelled_jsx_props_depth = saved_depth;
+                if *spread {
+                    check_jsx_spread_child(&inferred, child_span.or(*span), ctx);
+                }
                 let ty = match inferred {
                     InferredExpression::Known(ty) if !ty.is_unknown() => Some(
                         crate::checks::function::widen_unit_return_type(
@@ -1718,6 +1966,31 @@ fn evaluate_children(
             .map(|types| Type::Array(Box::new(union_type(types)))),
     };
     ChildrenAttribute { ty, single }
+}
+
+/// tsc's `checkJsxExpression`: a `{...spread}` child must be `any` or an array
+/// (`isArrayType`, which a tuple or a union is not). TS2609 at the container.
+pub(crate) fn check_jsx_spread_child(
+    child: &InferredExpression,
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    let InferredExpression::Known(ty) = child else {
+        return;
+    };
+    let is_array = match ty {
+        Type::Reference(reference) => {
+            reference.is_readonly_array() || matches!(ty.peeled(), Type::Array(_))
+        }
+        other => matches!(other, Type::Array(_)),
+    };
+    if is_array || matches!(ty, Type::Any | Type::Unknown | Type::TypeParameter(_)) {
+        return;
+    }
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts2609(ctx.file_name.clone()),
+        span,
+    ));
 }
 
 fn jsx_child_span(element: &ParsedExpression) -> Option<SyntaxTextSpan> {
@@ -1769,7 +2042,8 @@ fn relate_attributes(
         if is_hyphenated_jsx_name(name) {
             continue;
         }
-        let (Some(ty), Some(expected)) = (&value.ty, attribute_target_type(&target, name)) else {
+        let source = value.overridden.as_ref().or(value.ty.as_ref());
+        let (Some(ty), Some(expected)) = (source, attribute_target_type(&target, name)) else {
             continue;
         };
         if type_contains_unknown_or_any(&expected) || is_assignable_to(ty, &expected) {
@@ -1793,6 +2067,43 @@ fn relate_attributes(
         Some(failure) => vec![body_diagnostic.unwrap_or(failure)],
         None => Vec::new(),
     }
+}
+
+/// tsc's `checkJsxReturnAssignableToAppropriateBound` for a namespace that
+/// declares no `ElementType` (which replaces it with a relation of the tag
+/// itself): what a function component returns must be an `Element` or `null`,
+/// what a class component constructs an `ElementClass`, each only when the
+/// namespace declares it. TS2786 at the tag name.
+fn check_jsx_return_bound(props: &JsxProps, site: &RelationSite<'_>, ctx: &mut CheckerContext) {
+    let Some((returned, construct)) = &props.returns else {
+        return;
+    };
+    if !matches!(jsx_namespace_member("ElementType", ctx), JsxMember::Missing) {
+        return;
+    }
+    let member = if *construct { "ElementClass" } else { "Element" };
+    let bound = match jsx_namespace_member(member, ctx) {
+        JsxMember::Found(bound) if !is_unmodelled_member(&bound) => bound,
+        _ => return,
+    };
+    let bound = if *construct {
+        bound
+    } else {
+        union_type(vec![bound, Type::Null])
+    };
+    if returned.is_unknown()
+        || matches!(returned.peeled(), Type::Any)
+        || mentions_type_parameter(returned)
+        || crate::checks::call::type_contains_unknown(returned)
+        || crate::checks::call::type_contains_unknown(&bound)
+        || is_assignable_to(returned, &bound)
+    {
+        return;
+    }
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts2786(site.tag_name, ctx.file_name.clone()),
+        site.tag_name_span,
+    ));
 }
 
 /// The relation's own report when no attribute or child elaborates it.
@@ -1827,6 +2138,15 @@ fn relation_failure(
         }
     }
 
+    // An attributes object relates to no primitive, which the first
+    // constructor parameter a class-like component is typed by can be when the
+    // namespace names no `ElementAttributesProperty` member.
+    if is_primitive_type(target) && !evaluated.opaque_spread {
+        return Some((
+            Diagnostic::ts2322(source_name(), props.target.name(), ctx.file_name.clone()),
+            tag_name_span,
+        ));
+    }
     let Type::Object(object) = target else {
         return None;
     };

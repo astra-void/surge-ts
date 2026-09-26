@@ -2269,7 +2269,7 @@
     "message": "JSX attributes must only be assigned a non-empty 'expression'.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS18010",
@@ -5989,7 +5989,7 @@
     "message": "Import attribute values must be string literal expressions.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS7036",
@@ -5997,6 +5997,78 @@
     "message": "Dynamic import's specifier must be of type 'string', but here has type '{0}'.",
     "source": "typescript",
     "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2604",
+    "category": "Error",
+    "message": "JSX element type '{0}' does not have any construct or call signatures.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2607",
+    "category": "Error",
+    "message": "JSX element class does not support attributes because it does not have a '{0}' property.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2609",
+    "category": "Error",
+    "message": "JSX spread child must be an array type.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2786",
+    "category": "Error",
+    "message": "'{0}' cannot be used as a JSX component.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17016",
+    "category": "Error",
+    "message": "The 'jsxFragmentFactory' compiler option must be provided to use JSX fragments with the 'jsxFactory' compiler option.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17017",
+    "category": "Error",
+    "message": "An @jsxFrag pragma is required when using an @jsx pragma with JSX fragments.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2639",
+    "category": "Error",
+    "message": "React components cannot include JSX namespace names",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS17001",
+    "category": "Error",
+    "message": "JSX elements cannot have multiple attributes with the same name.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2816",
+    "category": "Error",
+    "message": "Cannot use 'this' in a static property initializer of a decorated class.",
+    "source": "typescript",
+    "arity": 0,
     "support": "emitted"
   }
 ]

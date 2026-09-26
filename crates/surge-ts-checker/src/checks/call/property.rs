@@ -1825,6 +1825,7 @@ pub(crate) fn overloaded_member_call_return_type(
         property_span,
         arguments,
         None,
+        Vec::new(),
         symbols,
         ctx,
     )

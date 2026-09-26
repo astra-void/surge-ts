@@ -1509,6 +1509,7 @@ pub(super) fn check_program_file(
     {
         ctx.global_this_starts = parsed_file.global_this_starts.clone();
     }
+    ctx.literal_this_members = parsed_file.literal_this_members.clone();
     ctx.let_assignments = parsed_file.let_assignments.clone();
     ctx.jsx_factory_uses = parsed_file.jsx_factory_uses.clone();
     crate::checks::jsx::check_jsx_runtime_import(ctx);

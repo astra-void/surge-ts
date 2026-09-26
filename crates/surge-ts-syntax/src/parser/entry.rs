@@ -389,6 +389,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             grammar_diagnostics: Vec::new(),
             parenthesized_expressions: Vec::new(),
             global_this_starts: Vec::new(),
+            literal_this_members: Vec::new(),
             // A `.json` file that does not parse still *is* a JSON module —
             // reporting its importer as unresolved would be a worse answer than
             // an unmodelled value, and surge does not report JSON syntax errors.
@@ -606,6 +607,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     // A CommonJS module has no `ExternalModuleIndicator` either, so its
     // top-level `this` is `globalThis` as a script's is (`tryGetThisTypeAtEx`).
     let global_this_starts = super::grammar_context::take_global_this_starts();
+    let literal_this_members = super::grammar_context::take_literal_this_members();
     parser_errors.retain(|error| {
         if error.code == Some(1029)
             && error.span.is_some_and(|span| examined_modifiers.contains(&(span.start as u32)))
@@ -651,6 +653,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         grammar_diagnostics,
         parenthesized_expressions,
         global_this_starts,
+        literal_this_members,
         json_module_type: None,
         jsx_factory_uses,
     }

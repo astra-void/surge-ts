@@ -125,6 +125,8 @@ pub(crate) struct ParsedProgramFile {
     pub(crate) parenthesized_expressions: std::sync::Arc<[surge_ts_syntax::ParenthesizedExpressionSpan]>,
     /// See [`surge_ts_syntax::ParsedSource::global_this_starts`].
     pub(crate) global_this_starts: std::sync::Arc<[u32]>,
+    /// See [`surge_ts_syntax::ParsedSource::literal_this_members`].
+    pub(crate) literal_this_members: std::sync::Arc<[u32]>,
     /// See [`surge_ts_syntax::ParsedSource::let_assignments`].
     pub(crate) let_assignments: std::sync::Arc<[surge_ts_syntax::LetAssignmentSummary]>,
     /// See [`surge_ts_syntax::ParsedSource::json_module_type`]. Set for every

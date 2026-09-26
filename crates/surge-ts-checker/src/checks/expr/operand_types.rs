@@ -242,14 +242,34 @@ pub(crate) fn is_definitely_not_iterable(ty: &Type, nullish_is_error: bool) -> b
                     operands.iter().all(|operand| is_definitely_not_iterable(operand, nullish_is_error))
                 })
         }
+        // `getIterationTypesOfIterable` looks the protocol member up as a
+        // property, which no index signature answers; only an index surge
+        // opened over an operand it could not enumerate proves nothing.
         Type::Object(object) => {
             object
                 .get_property(surge_ts_types::ITERATION_PROTOCOL_MEMBER)
                 .is_none()
                 && object.call_signature().is_none()
                 && object.construct_signature().is_none()
-                && object.string_index_type.is_none()
-                && object.number_index_type.is_none()
+                && !(object.synthetic_open_index && object.string_index_type.is_some())
+                // An interface extending `Array` inherits its iterator, which
+                // surge's collapsed `Array` heritage does not carry over.
+                && !(object.number_index_type.is_some() && object.get_property("length").is_some())
+        }
+        // A declaration file's interface (the lib's `ArrayIterator`, say) can
+        // inherit its protocol member through heritage surge does not resolve
+        // in full; only a source-declared type is judged.
+        Type::Reference(reference)
+            if reference
+                .id
+                .split('\u{0}')
+                .next()
+                .is_some_and(|file| !file.is_empty() && !crate::modules::is_declaration_file_name(file)) =>
+        {
+            match ty.peeled() {
+                peeled @ Type::Object(_) => is_definitely_not_iterable(&peeled, nullish_is_error),
+                _ => false,
+            }
         }
         _ => false,
     }

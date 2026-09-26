@@ -1461,6 +1461,14 @@ impl<'a> VisitMut<'a> for IntendedTypes<'a> {
         if let TSType::TSTypeReference(reference) = ty {
             let span = reference.span;
             let arguments = reference.type_arguments.as_ref().map_or(0, |arguments| arguments.params.len());
+            // `IsJSDocIndexSignature`: `Object.<K, V>` is an index signature
+            // only for a `string` or `number` key; any other key is `any`.
+            let index_signature_key = reference.type_arguments.as_ref().is_some_and(|arguments| {
+                matches!(
+                    arguments.params.first(),
+                    Some(TSType::TSStringKeyword(_) | TSType::TSNumberKeyword(_))
+                )
+            });
             if let TSTypeName::IdentifierReference(name) = &mut reference.type_name {
                 let replacement = match (name.name.as_str(), arguments) {
                     ("String", 0) => Some(self.ast.ts_type_string_keyword(span)),
@@ -1478,7 +1486,11 @@ impl<'a> VisitMut<'a> for IntendedTypes<'a> {
                 }
                 match (name.name.as_str(), arguments) {
                     ("function", 0) => name.name = self.ast.ident("Function"),
-                    ("Object", 2) => name.name = self.ast.ident("Record"),
+                    ("Object", 2) if index_signature_key => name.name = self.ast.ident("Record"),
+                    ("Object", 2) => {
+                        *ty = self.ast.ts_type_any_keyword(span);
+                        return;
+                    }
                     _ => {}
                 }
             }
@@ -1642,6 +1654,9 @@ pub(crate) struct JsDocIndex {
     type_parameters: std::collections::HashMap<u32, Vec<ParsedTypeParameter>>,
     /// A function's `@this` type, by the function's start.
     this_types: std::collections::HashMap<u32, ParsedType>,
+    /// The functions whose `@type` full signature is a type whose `this`
+    /// parameter cannot be read off it (a named type), by the function's start.
+    opaque_full_signatures: std::collections::HashSet<u32>,
     /// The `@type` of a variable, class field or accessor, by its start.
     declared: std::collections::HashMap<u32, (ParsedType, TextSpan)>,
     /// `/** @type {T} */ (e)` and `@satisfies`, by the parenthesized
@@ -1720,6 +1735,12 @@ pub(crate) fn type_parameters_at(start: u32) -> Option<Vec<ParsedTypeParameter>>
 
 pub(crate) fn this_type_at(function_start: u32) -> Option<ParsedType> {
     with_index(|index| index.this_types.get(&function_start).cloned())
+}
+
+/// Whether the function at `function_start` takes its signature from a JSDoc
+/// `@type` naming a type, whose `this` parameter is not known here.
+pub(crate) fn has_opaque_full_signature(function_start: u32) -> bool {
+    with_index(|index| index.opaque_full_signatures.contains(&function_start).then_some(())).is_some()
 }
 
 pub(crate) fn declared_type_at(start: u32) -> Option<(ParsedType, TextSpan)> {
@@ -2201,6 +2222,19 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
                 span: tag.span,
                 name: None,
             });
+        }
+        // `getThisTypeOfSignature` of the full signature: its `this` parameter
+        // is the function's, unless a `@this` tag already gave one.
+        let signature = match tag.ty.as_ref() {
+            Some(ParsedType::Function(signature)) => Some(signature.as_ref()),
+            Some(ParsedType::Object(object)) => object.call_signature.as_deref(),
+            _ => None,
+        };
+        let this = signature.and_then(|signature| signature.parameters.iter().find(|parameter| parameter.is_this));
+        if let Some(this) = this {
+            self.index.this_types.entry(host.start()).or_insert(this.ty.clone());
+        } else if tag.ty.as_ref().is_some_and(|ty| signature_takes(ty, 0).is_none()) {
+            self.index.opaque_full_signatures.insert(host.start());
         }
     }
 

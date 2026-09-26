@@ -40,14 +40,17 @@ pub(crate) fn check_program_file_statements(
 }
 
 /// tsc's `isImplementationCompatibleWithOverload` for a module-level function
-/// overload group (TS2394 on each overload): the return types must be related
-/// in either direction unless the overload returns `void`, the implementation
-/// may not require more arguments than the overload declares, and each of the
-/// overload's parameters must be assignable to the implementation's (strict
-/// variance, as for any function declaration). A generic group is erased to
-/// `any` by tsc, which surge approximates by not checking it; an implementation
-/// without a written return type, or any type surge could not resolve, is
-/// likewise left alone.
+/// overload group (TS2394 on the first incompatible overload): the return
+/// types must be related in either direction unless the overload returns
+/// `void`, the implementation may not require more arguments than the overload
+/// declares, and each of the overload's parameters must be assignable to the
+/// implementation's (strict variance, as for any function declaration). tsc
+/// erases a generic signature's type parameters to `any`
+/// (`getErasedSignature`); an overload's resolve to placeholders, which relate
+/// the same way, and a generic implementation is left unchecked. An
+/// implementation without a written return type is judged by the return its
+/// body infers when that is a primitive; any type surge could not resolve is
+/// left alone.
 fn check_overload_implementation_compatibility(
     statements: &[ParsedStatement],
     file_index: usize,
@@ -89,7 +92,7 @@ fn check_overload_implementation_compatibility(
         if group.len() < 2
             || !implementation.has_body
             || implementation.is_declare
-            || group.iter().any(|(_, function)| !function.type_parameters.is_empty())
+            || !implementation.type_parameters.is_empty()
         {
             continue;
         }
@@ -120,6 +123,9 @@ fn check_overload_implementation_compatibility(
                 Diagnostic::ts2394(ctx.file_name.clone()),
                 overload.name_span,
             ));
+            // `checkFunctionOrConstructorSymbol` stops at the first
+            // incompatible overload.
+            break;
         }
     }
 }
@@ -134,9 +140,14 @@ fn overload_is_compatible(
     let related = |left: &Type, right: &Type| {
         unresolved(left) || unresolved(right) || is_assignable_to(left, right) || is_assignable_to(right, left)
     };
-    if implementation_returns_written
+    let implementation_return = if implementation_returns_written {
+        Some(implementation.return_type().clone())
+    } else {
+        Some(implementation.return_type().peeled()).filter(is_primitive_return)
+    };
+    if let Some(implementation_return) = implementation_return
         && !matches!(overload.return_type(), Type::Void)
-        && !related(implementation.return_type(), overload.return_type())
+        && !related(&implementation_return, overload.return_type())
     {
         return false;
     }
@@ -181,6 +192,27 @@ fn overload_is_compatible(
     })
 }
 
+/// Primitives, their literals, `null`, `undefined` and `void`, alone or in a
+/// union: the body-inferred returns surge relates here.
+fn is_primitive_return(ty: &surge_ts_types::Type) -> bool {
+    use surge_ts_types::Type;
+    match ty {
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::Null
+        | Type::Undefined
+        | Type::Void
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => true,
+        Type::Union(union) => union.types().iter().all(is_primitive_return),
+        _ => false,
+    }
+}
+
 /// `const ok = typeof v === "string"; if (ok) …` narrows by the condition the
 /// alias was written as, as a function body does (tsc's aliased-condition
 /// narrowing). Module scope keeps no flow state to record the alias in, so the
@@ -223,6 +255,7 @@ fn expand_module_alias_condition(
             operator_span,
             right,
             right_span,
+            ..
         } => {
             let expanded_left = expand_module_alias_condition(left, preceding);
             let expanded_right = expand_module_alias_condition(right, preceding);
@@ -236,6 +269,7 @@ fn expand_module_alias_condition(
                 operator_span: *operator_span,
                 right: Box::new(expanded_right.unwrap_or_else(|| (**right).clone())),
                 right_span: *right_span,
+                truthiness_tests: Vec::new(),
             })
         }
         _ => None,
@@ -783,7 +817,12 @@ fn check_program_statement_itself(
                 },
                 _ => None,
             };
+            // A module-level write shares its container with the module's
+            // declarations, which is where tsc's binder looks an expando
+            // container up.
+            ctx.module_level_member_write = true;
             crate::checks::function::check_member_assignment(*assignment, &mut scopes, ctx);
+            ctx.module_level_member_write = false;
             // The scope stack is this statement's alone. An expando member the
             // write *declared* (`fn.x = v`) belongs to the binding, so it is
             // carried back as its type; what a write to an existing member

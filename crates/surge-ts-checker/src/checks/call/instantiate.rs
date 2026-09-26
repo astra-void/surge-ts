@@ -271,6 +271,10 @@ fn fold_overload_alternative_parameters<'a>(
                     symbols,
                     ctx,
                 );
+            // `getInferredType` puts the constraint in place of a candidate
+            // that breaks it for every overload tried, not only the kept one.
+            seed_outer_type_arguments(&mut substitution, outer_type_arguments);
+            enforce_inferred_constraints(alternative, &mut substitution, ctx);
             apply_uninferred_type_parameter_defaults(
                 alternative,
                 arguments.len(),
@@ -701,6 +705,83 @@ pub(crate) fn explicit_type_argument_substitution(
         substitution.insert(type_parameter.name.clone(), resolved);
     }
     substitution
+}
+
+/// tsc's `checkTypeArguments` for one signature: the first written type
+/// argument that does not satisfy its parameter's constraint instantiated with
+/// every argument (defaults filling the rest), paired with that constraint.
+/// The arguments name types visible at the call; the constraint resolves where
+/// it was written. A constraint that computes keys or branches is left alone —
+/// `keyof` has [`enforce_explicit_keyof_constraints`] — and so is a pair either
+/// side of which surge could not model.
+pub(crate) fn unsatisfied_type_argument(
+    function_signature: &FunctionSignatureInfo,
+    type_arguments: &[ParsedType],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<(Type, Type)> {
+    let related: Vec<&surge_ts_syntax::ParsedTypeParameter> = function_signature
+        .type_parameters
+        .iter()
+        .take(type_arguments.len())
+        .filter(|parameter| {
+            parameter
+                .constraint
+                .as_ref()
+                .is_some_and(|constraint| !constraint_computes_keys(constraint))
+        })
+        .collect();
+    if related.is_empty() {
+        return None;
+    }
+    let checkpoint = ctx.diagnostics().len();
+    let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+    let substitution = explicit_type_argument_substitution(function_signature, type_arguments, ctx);
+    ctx.symbols = saved_symbols;
+    let mut unsatisfied = None;
+    for parameter in related {
+        let (Some(constraint), Some(argument)) =
+            (parameter.constraint.clone(), substitution.get(&parameter.name).cloned())
+        else {
+            continue;
+        };
+        let constraint = with_declaring_scope(function_signature, ctx, |ctx| {
+            map_parsed_type_with_substitution(constraint, ctx, &substitution)
+        });
+        if crate::checks::function::type_contains_degradation(&argument)
+            || crate::checks::function::type_contains_degradation(&constraint)
+        {
+            continue;
+        }
+        // Without the lib's `BigInt` interface a `bigint` has no apparent
+        // members, so the weak-type check does not apply to it.
+        let bigint_without_members = matches!(argument, Type::BigInt)
+            && ctx.lookup_type_declaration("BigInt").is_none()
+            && surge_ts_types::has_no_common_properties(&argument, &constraint);
+        if !bigint_without_members && !surge_ts_types::is_assignable_to(&argument, &constraint) {
+            unsatisfied = Some((argument, constraint));
+            break;
+        }
+    }
+    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    unsatisfied
+}
+
+/// Whether a written constraint computes keys or branches somewhere
+/// (`keyof`, an indexed access, a conditional or mapped type).
+fn constraint_computes_keys(constraint: &ParsedType) -> bool {
+    match constraint {
+        ParsedType::KeyOf(_)
+        | ParsedType::IndexedAccess(_)
+        | ParsedType::Conditional(_)
+        | ParsedType::Mapped(_) => true,
+        ParsedType::Named(named) => named.type_arguments.iter().any(constraint_computes_keys),
+        ParsedType::Array(inner) | ParsedType::Readonly(inner) => constraint_computes_keys(inner),
+        ParsedType::Union(members)
+        | ParsedType::Intersection(members)
+        | ParsedType::Tuple(members) => members.iter().any(constraint_computes_keys),
+        _ => false,
+    }
 }
 
 /// Binds the type parameters inference left untouched to their declared
@@ -2802,8 +2883,20 @@ pub(crate) fn collect_inferred_type_argument(
             // member for member, infers nothing from a primitive. Infer the
             // argument against the awaited actual, which is the actual itself
             // when it is already awaited.
+            // A namespace's own `Promise` is an ordinary generic interface: it
+            // is matched by its type arguments like any other reference.
+            let namespaced_promise = matches!(
+                argument_type,
+                Type::Reference(reference)
+                    if reference.display.split('<').next().is_some_and(|base| {
+                        base.rsplit_once('.').is_some_and(|(_, name)| {
+                            matches!(name, "Promise" | "PromiseLike")
+                        })
+                    })
+            );
             if named_type.type_arguments.len() == 1
                 && matches!(named_type.name.as_str(), "Promise" | "PromiseLike")
+                && !namespaced_promise
             {
                 let awaited = crate::checks::call::promise_like_awaited_type(argument_type);
                 collect_inferred_type_argument(

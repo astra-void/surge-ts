@@ -1744,6 +1744,13 @@ status = "emitted"
 oracle = [
   "function-expression-this-basic",
   "super-and-this-placement-basic",
+  "decorated-static-this-basic",
+]
+
+[TS2816]
+status = "emitted"
+oracle = [
+  "decorated-static-this-basic",
 ]
 
 [TS2571]
@@ -2030,8 +2037,10 @@ oracle = [
 ]
 
 [TS17000]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "jsx-element-grammar-checks",
+]
 [TS18058]
 status = "catalog-only"
 reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
@@ -4776,5 +4785,55 @@ status = "catalog-only"
 reason = "Emitted for a dynamic import under a lib without `Promise`, where tsgo also reports the global TS2468 that surge does not, so no preset matches yet (checked 2026-09-26)."
 
 [TS2858]
-status = "catalog-only"
-reason = "Emitted for a literal non-string import attribute value, where tsgo also reports the attribute object's TS2322 that surge does not, so no preset matches yet (checked 2026-09-26)."
+status = "emitted"
+oracle = [
+  "import-attribute-value-literals",
+]
+
+[TS2604]
+status = "emitted"
+oracle = [
+  "jsx-tag-signature-checks",
+]
+
+[TS2607]
+status = "emitted"
+oracle = [
+  "jsx-tag-signature-checks",
+]
+
+[TS2786]
+status = "emitted"
+oracle = [
+  "jsx-tag-signature-checks",
+]
+
+[TS2609]
+status = "emitted"
+oracle = [
+  "jsx-spread-child-factory-option",
+]
+
+[TS17016]
+status = "emitted"
+oracle = [
+  "jsx-spread-child-factory-option",
+]
+
+[TS17017]
+status = "emitted"
+oracle = [
+  "jsx-fragment-factory-pragma",
+]
+
+[TS2639]
+status = "emitted"
+oracle = [
+  "jsx-element-grammar-checks",
+]
+
+[TS17001]
+status = "emitted"
+oracle = [
+  "jsx-element-grammar-checks",
+]

@@ -6,7 +6,7 @@ use surge_ts_syntax::ParsedExpression;
 use surge_ts_types::fx::FxBuildHasher;
 
 use surge_ts_syntax::{ParsedType, ParsedTypeParameter, TextSpan};
-use surge_ts_types::{Type, TypeCopyReason, with_type_copy_reason};
+use surge_ts_types::{FunctionType, Type, TypeCopyReason, with_type_copy_reason};
 
 use crate::program::{
     record_symbol_info_handle_copy_count, record_symbol_info_payload_deep_clone_count,
@@ -92,6 +92,20 @@ pub(crate) struct FunctionSignatureInfo {
     /// its return from the body (`getReturnTypeFromBody`) and instantiates it
     /// per call, so each call infers the body under its own type arguments.
     pub(crate) body_return: Option<Arc<BodyReturnSource>>,
+    /// A generic class's construct signatures, which `new` resolves against:
+    /// the class's value side is `any` (`generic_class_value_symbol`), so they
+    /// ride on the signature that value carries.
+    pub(crate) construct_signatures: Option<Arc<Vec<ConstructSignature>>>,
+}
+
+/// One construct signature of a generic class, written over the class's type
+/// parameters. `template` holds what `signature` does not say: the parameter
+/// count, the minimum argument count, the rest flag, and the type of each
+/// parameter `signature` leaves unwritten.
+#[derive(Debug, Clone)]
+pub(crate) struct ConstructSignature {
+    pub(crate) signature: Arc<FunctionSignatureInfo>,
+    pub(crate) template: FunctionType,
 }
 
 /// The body behind [`FunctionSignatureInfo::body_return`], with the returns

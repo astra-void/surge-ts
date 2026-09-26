@@ -341,11 +341,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
             let span = self.end_span(span_start);
 
-            // Empty expression is not allowed in JSX attribute value
-            // e.g. `<C attr={} />`
-            if !in_jsx_child {
-                self.error(diagnostics::jsx_attribute_value_empty_expression(span));
-            }
+            // surge: an empty attribute value (`<C attr={} />`) is TS17000 from
+            // tsc's checker (`checkGrammarJsxElement`), first error per element
+            // only; the parser accepts it.
 
             // Handle comment between curly braces (ex. `{/* comment */}`)
             //                                            ^^^^^^^^^^^^^ span

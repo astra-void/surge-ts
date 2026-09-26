@@ -153,6 +153,63 @@ fn resolve_value_heritage_base(
     })
 }
 
+/// tsc's `resolveEntityName` stops at a qualifier bound to `unknownSymbol` — an
+/// import whose module does not resolve — and the whole reference is the error
+/// type, reported nowhere; only its type arguments are still checked. A class
+/// deriving from it has no base type at all (`resolveBaseTypesOfClass`), so its
+/// inherited members are missing rather than open. Such an import binds the
+/// error type as its type meaning and nothing under its name; a type-only
+/// namespace import of a module that resolves binds the error type too, but
+/// publishes the module's members as `ns.Member`. Inside a declaration file an
+/// import surge could not follow stays its own gap, as a miss there does
+/// elsewhere.
+fn resolve_through_unresolved_import(
+    named_type: &ParsedNamedType,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    substitution: &TypeParameterSubstitution,
+) -> Option<ResolvedType> {
+    if ctx.options.stub_external_modules
+        || crate::modules::is_declaration_file_name(&ctx.file_name)
+    {
+        return None;
+    }
+    let (head, _) = named_type.name.split_once('.')?;
+    let error_alias = matches!(
+        ctx.lookup_type_declaration(head),
+        Some(TypeDeclarationInfo::Alias(alias)) if matches!(alias.body.ty, ParsedType::ErrorType)
+    );
+    if !error_alias
+        || ctx.is_complete_namespace_import_binding(head)
+        || declares_qualified_members(head, ctx)
+    {
+        return None;
+    }
+    let mut had_error = false;
+    for argument in &named_type.type_arguments {
+        had_error |= resolve_parsed_type(argument.clone(), ctx, resolving, substitution).had_error;
+    }
+    Some(ResolvedType {
+        ty: Type::ErrorType,
+        had_error,
+    })
+}
+
+/// Whether a table the reference reads declares anything as `head.Member`.
+fn declares_qualified_members(head: &str, ctx: &CheckerContext) -> bool {
+    let heads = |key: &std::sync::Arc<str>| {
+        key.strip_prefix(head)
+            .is_some_and(|rest| rest.starts_with('.'))
+    };
+    ctx.type_declarations.iter().any(|(key, _)| heads(key))
+        || ctx.type_declaration_scope.as_ref().is_some_and(|scope| {
+            scope
+                .layers()
+                .iter()
+                .any(|layer| layer.iter().any(|(key, _)| heads(key)))
+        })
+}
+
 /// Opt-in (`SURGE_TYPE_PROBE=<substring>`) probe: prints what a named type
 /// resolved to, with its taint, every time a matching name is resolved.
 fn type_probe_filter() -> Option<&'static str> {
@@ -245,6 +302,11 @@ fn resolve_named_type_inner(
             };
         }
         if let Some(resolved) = resolve_value_heritage_base(&named_type, ctx) {
+            return resolved;
+        }
+        if let Some(resolved) =
+            resolve_through_unresolved_import(&named_type, ctx, resolving, substitution)
+        {
             return resolved;
         }
         // `class C extends number`: the class check reports the primitive as a
@@ -487,6 +549,16 @@ fn resolve_named_type_inner(
         ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
         all_clean.then_some(arguments)
     };
+    if library_scoped && let Some(arguments) = resolved_arguments.as_deref() {
+        check_library_reference_constraints(
+            declaration,
+            &named_type,
+            arguments,
+            substitution,
+            ctx,
+            resolving,
+        );
+    }
     let cached_arguments = if library_scoped {
         resolved_arguments.clone()
     } else {
@@ -1323,6 +1395,61 @@ fn bound_argument_display(
 fn complete_default_arguments_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("SURGE_COMPLETE_DEFAULT_ARGS").as_deref() == Ok("1"))
+}
+
+/// Relates a written reference to a library declaration to its parameters'
+/// constraints (see `check_written_type_argument_constraints`), under the scope
+/// and namespace prefix the declaration's own binding uses.
+fn check_library_reference_constraints(
+    declaration: &TypeDeclarationInfo,
+    named_type: &ParsedNamedType,
+    arguments: &[Type],
+    substitution: &TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+) {
+    let (type_parameters, resolution_scope, file_name, declared_name, name) = match declaration {
+        TypeDeclarationInfo::Alias(alias) => (
+            &alias.body.type_parameters,
+            &alias.resolution_scope,
+            &alias.file_name,
+            alias.declared_name.as_deref(),
+            &alias.name,
+        ),
+        TypeDeclarationInfo::Interface(interface) => (
+            &interface.body.type_parameters,
+            &interface.resolution_scope,
+            &interface.file_name,
+            interface.declared_name.as_deref(),
+            &interface.name,
+        ),
+    };
+    if type_parameters.iter().all(|parameter| parameter.constraint.is_none()) {
+        return;
+    }
+    let declaration_scope = resolution_scope.clone().or_else(|| {
+        ctx.module_scope_for_file(file_name)
+            .filter(|scope| !scope.is_empty())
+    });
+    let prefix = crate::infer::types::utility::namespace_member_prefix(declared_name, name);
+    if let Some(prefix) = prefix.clone() {
+        ctx.namespace_member_resolution_depth += 1;
+        ctx.namespace_member_prefix_stack.push(prefix);
+    }
+    check_written_type_argument_constraints(
+        type_parameters,
+        &named_type.type_arguments,
+        arguments,
+        named_type.span,
+        substitution,
+        (&declaration_scope, &**file_name),
+        ctx,
+        resolving,
+    );
+    if prefix.is_some() {
+        ctx.namespace_member_resolution_depth -= 1;
+        ctx.namespace_member_prefix_stack.pop();
+    }
 }
 
 /// The written arguments followed by the declaration's resolved defaults, in

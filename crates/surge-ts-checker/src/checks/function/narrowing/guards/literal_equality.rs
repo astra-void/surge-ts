@@ -336,7 +336,8 @@ pub(super) fn literal_equality_applies(ty: &Type) -> bool {
 /// replaces a member the literal is strictly narrower than — `string` for
 /// `"query"` — with the literal itself. The complement drops only the members
 /// that *are* the literal; a wider member survives, since a `string` that is not
-/// `"query"` is still a `string`.
+/// `"query"` is still a `string`. `boolean` is the exception: tsc's is the union
+/// `true | false`, so what is not one of its literals is the other.
 pub(crate) fn narrow_by_literal_equality(
     ty: &Type,
     literal: &Type,
@@ -353,10 +354,14 @@ pub(crate) fn narrow_by_literal_equality(
     let base = literal_base_primitive(literal)?;
 
     let Type::Union(union) = ty else {
-        if !keep_matching || *ty != base {
+        if *ty != base {
             return None;
         }
-        return Some(literal.clone());
+        return Some(if keep_matching {
+            literal.clone()
+        } else {
+            other_boolean_literal(literal)?
+        });
     };
 
     let members = union.types();
@@ -383,11 +388,22 @@ pub(crate) fn narrow_by_literal_equality(
         let kept: Vec<Type> = members
             .iter()
             .filter(|member| **member != *literal)
-            .cloned()
+            .map(|member| match member {
+                Type::Boolean => other_boolean_literal(literal).unwrap_or_else(|| member.clone()),
+                _ => member.clone(),
+            })
             .collect();
-        if kept.is_empty() || kept.len() == members.len() {
+        if kept.is_empty() || kept.as_slice() == members {
             return None;
         }
         Some(union_type(kept))
+    }
+}
+
+/// The `boolean` member left when `literal` is removed from it.
+fn other_boolean_literal(literal: &Type) -> Option<Type> {
+    match literal {
+        Type::BooleanLiteral(value) => Some(Type::BooleanLiteral(!*value)),
+        _ => None,
     }
 }

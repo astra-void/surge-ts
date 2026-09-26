@@ -452,6 +452,14 @@ pub(crate) fn merge_interface_infos(
     Arc::make_mut(&mut merged_info.body).member_fragments = member_fragments;
     // The merged symbol keeps tsc's `SymbolFlagsClass` when either side is one.
     merged_info.is_class_instance = existing.is_class_instance || incoming.is_class_instance;
+    // `new` reads the modifiers of the symbol's value declaration, its first
+    // class (`resolveNewExpression`): an interface merged with an `abstract
+    // class` in either order leaves it abstract, and a later class of the same
+    // name is a duplicate the name does not denote.
+    let class_side = if existing.is_class_instance { existing } else { incoming };
+    merged_info.is_abstract_class = class_side.is_abstract_class;
+    merged_info.declares_constructor = class_side.declares_constructor;
+    merged_info.constructor_accessibility = class_side.constructor_accessibility;
     let mut fragment_scopes = existing.body.fragment_scopes.clone();
     for entry in &incoming.body.fragment_scopes {
         if !fragment_scopes

@@ -429,6 +429,7 @@ pub(crate) fn check_function_body(
     }
     hoist_nested_functions(&nested_functions, scopes, ctx);
     crate::modules::exports::apply_body_expando_members(&body, scopes, ctx);
+    let saved_expando_objects = extend_javascript_expando_objects(&body, ctx);
 
 
     // A body-local type declaration's own body may name a body-local *value*
@@ -466,6 +467,10 @@ pub(crate) fn check_function_body(
         );
     }
 
+    if let Some(saved) = saved_expando_objects {
+        ctx.javascript_expando_objects = saved;
+    }
+
     // A nested `function` is hoisted: it may read a binding declared after it
     // (called only once that binding exists), so its body is checked once the
     // whole block is bound. It sees every binding at its declared type — tsc
@@ -495,6 +500,46 @@ pub(crate) fn check_function_body(
     if let Some(saved) = saved_module_value_fallback {
         ctx.module_value_fallback = saved;
     }
+}
+
+/// tsc's binder looks an expando write's container up in the write's own
+/// container (`lookupEntity`), so a JavaScript body's variables initialized
+/// with a function or an empty object literal (`IsExpandoInitializer`) are
+/// containers for the writes in that body, as the module's are for the
+/// module's. Returns the file's set, to restore once the body's statements
+/// are checked.
+fn extend_javascript_expando_objects(
+    body: &[ParsedFunctionBodyStatement],
+    ctx: &mut CheckerContext,
+) -> Option<std::sync::Arc<std::collections::HashSet<String>>> {
+    if !surge_ts_syntax::is_javascript_file_name(&ctx.file_name) {
+        return None;
+    }
+    let mut names = body
+        .iter()
+        .filter_map(|statement| match statement {
+            ParsedFunctionBodyStatement::VariableDeclaration(variable)
+                if variable.declared_type.is_none()
+                    && match &variable.initializer {
+                        Some(surge_ts_syntax::ParsedExpression::ObjectLiteral { properties, .. }) => {
+                            properties.is_empty()
+                        }
+                        Some(surge_ts_syntax::ParsedExpression::ArrowFunction(_)) => true,
+                        _ => false,
+                    } =>
+            {
+                Some(variable.name.clone())
+            }
+            _ => None,
+        })
+        .peekable();
+    names.peek()?;
+    let mut extended = (*ctx.javascript_expando_objects).clone();
+    extended.extend(names);
+    Some(std::mem::replace(
+        &mut ctx.javascript_expando_objects,
+        std::sync::Arc::new(extended),
+    ))
 }
 
 fn hoist_nested_functions(
@@ -535,7 +580,7 @@ fn hoist_nested_functions(
 
 /// `symbols` with every narrowed binding, in it or a parent, back at its
 /// declared type.
-fn declared_type_view(symbols: &SymbolTable) -> SymbolTable {
+pub(crate) fn declared_type_view(symbols: &SymbolTable) -> SymbolTable {
     let mut view = symbols.clone_with_reason(TypeCopyReason::FunctionBodySetup);
     // A function declaration never continues the enclosing flow.
     view.mark_auto_arrays_declared_only();
@@ -647,6 +692,54 @@ fn install_body_local_type_declarations(
     }
 
     Some(saved)
+}
+
+/// Binds a class expression's instance type under the class's name, as
+/// `install_body_local_type_declarations` binds a body-local class's, and
+/// returns the scope to restore once the class has been read.
+pub(crate) fn install_class_expression_type_declaration(
+    class: &surge_ts_syntax::ParsedClassDeclaration,
+    ctx: &mut CheckerContext,
+) -> Option<std::sync::Arc<crate::symbols::TypeDeclarationScope>> {
+    let mut info = crate::program::class_instance_interface_info(class, ctx.file_name_arc());
+    info.name = body_local_declaration_name(&class.name, class.name_span).into();
+    let mut declaration = crate::symbols::TypeDeclarationInfo::Interface(info);
+    set_declared_name(&mut declaration, &class.name);
+    let declarations = vec![(class.name.clone(), declaration)];
+
+    let outer_layers: Vec<std::sync::Arc<crate::symbols::TypeDeclarationTable>> = ctx
+        .type_declaration_scope
+        .as_ref()
+        .map(|scope| scope.layers().to_vec())
+        .unwrap_or_default();
+    let outer_lexical_layers = ctx
+        .type_declaration_scope
+        .as_ref()
+        .map_or(0, |scope| scope.lexical_layer_count());
+    // The class's own members resolve against the placeholder layer, never a
+    // scope holding the class itself — see `install_body_local_type_declarations`.
+    let placeholder_layer = std::sync::Arc::new(body_local_placeholder_table(&declarations, ctx));
+    let mut declaration_layers = Vec::with_capacity(outer_layers.len() + 1);
+    declaration_layers.push(placeholder_layer);
+    declaration_layers.extend(outer_layers.iter().cloned());
+    let declaration_scope = std::sync::Arc::new(
+        crate::symbols::TypeDeclarationScope::new(declaration_layers)
+            .with_lexical_layers(1 + outer_lexical_layers),
+    );
+
+    let mut class_layer = crate::symbols::TypeDeclarationTable::new();
+    for (name, declaration) in declarations {
+        let _ = class_layer.insert(name.as_str(), with_resolution_scope(declaration, declaration_scope.clone()));
+    }
+    let mut layers = Vec::with_capacity(outer_layers.len() + 1);
+    layers.push(std::sync::Arc::new(class_layer));
+    layers.extend(outer_layers);
+    std::mem::replace(
+        &mut ctx.type_declaration_scope,
+        Some(std::sync::Arc::new(
+            crate::symbols::TypeDeclarationScope::new(layers).with_lexical_layers(1 + outer_lexical_layers),
+        )),
+    )
 }
 
 /// Opt-in (`SURGE_LOCAL_TYPE_DECLARATION_CHECKS=1`): check a body-local type

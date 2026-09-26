@@ -229,8 +229,44 @@ fn walk(
         reported.push((name.clone(), *use_span, declared.is_enum));
         return;
     }
+    if let ParsedExpression::ClassExpression(class_expression) = expression {
+        walk_class_expression_head(class_expression, classes, reported);
+        return;
+    }
 
     for_each_child_expression(expression, &mut |child| walk(child, classes, reported));
+}
+
+/// What a class expression evaluates as it runs: its base, and its members'
+/// computed names, where a name the class writes for itself is still in its
+/// temporal dead zone (`isBlockScopedNameDeclaredBeforeUse`). A later class
+/// named in a computed name is not reported: in a method's name it is
+/// deferred (`isUsedInFunctionOrInstanceProperty`), which the name alone does
+/// not tell apart.
+fn walk_class_expression_head(
+    class_expression: &surge_ts_syntax::ParsedClassExpression,
+    classes: &FxHashMap<String, ForwardDeclaration>,
+    reported: &mut Vec<(String, TextSpan, bool)>,
+) {
+    let class = &class_expression.class;
+    for base in &class.extends {
+        let head = base.name.split('.').next().unwrap_or(&base.name);
+        if let Some(declared) = classes.get(head)
+            && let Some(span) = base.span
+            && span.start < declared.span.start
+        {
+            let use_span = TextSpan { start: span.start, end: span.start + head.len() };
+            reported.push((head.to_string(), use_span, declared.is_enum));
+        }
+    }
+    if let Some(expression) = &class.heritage_expression {
+        walk(expression, classes, reported);
+    }
+    if class_expression.has_own_name {
+        for (key, _) in &class.computed_keys {
+            walk_self_reference(key, &class.name, reported);
+        }
+    }
 }
 
 /// The expressions an immediately invoked body evaluates as it runs, nested

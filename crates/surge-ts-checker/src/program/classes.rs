@@ -500,21 +500,46 @@ fn parameter_to_type_parameter(parameter: &ParsedFunctionParameter) -> ParsedFun
 /// value side so `new C(arg)` can infer the class's type arguments from the
 /// arguments instead of falling back to their declared defaults
 /// (`MutationObserver<…, TVariables = void>` stayed at `void`). Only an explicit
-/// constructor contributes: with none there is nothing to infer from.
+/// constructor contributes: with none there is nothing to infer from, and the
+/// signature carried declares no type parameters. It also carries the class's
+/// construct signatures, which `new` checks its arguments against.
 fn generic_class_constructor_signature(
     class: &ParsedClassDeclaration,
+    scope: Option<&SymbolTable>,
     ctx: &CheckerContext,
 ) -> Option<Arc<crate::symbols::FunctionSignatureInfo>> {
+    let base = class.extends.first().and_then(|base| {
+        scope
+            .and_then(|scope| scope.get(&base.name))
+            .or_else(|| ctx.symbols.get(&base.name))
+            .or_else(|| {
+                ctx.module_value_fallback
+                    .as_ref()
+                    .and_then(|fallback| fallback.get(&base.name))
+            })
+    });
+    let construct_signatures =
+        crate::checks::call::construct::generic_class_construct_signatures(class, base, &ctx.file_name);
     let constructor = class.members.iter().find_map(|member| match member {
         ParsedClassMember::Constructor(constructor) => Some(constructor),
         _ => None,
-    })?;
-    Some(crate::checks::function::function_signature_info(
-        &class.type_parameters,
-        &constructor.parameters,
-        None,
-        &ctx.file_name,
-    ))
+    });
+    let signature = match constructor {
+        Some(constructor) => crate::checks::function::function_signature_info(
+            &class.type_parameters,
+            &constructor.parameters,
+            None,
+            &ctx.file_name,
+        ),
+        None if !construct_signatures.is_empty() => {
+            crate::checks::function::function_signature_info(&[], &[], None, &ctx.file_name)
+        }
+        None => return None,
+    };
+    let mut signature = Arc::unwrap_or_clone(signature);
+    signature.construct_signatures =
+        (!construct_signatures.is_empty()).then(|| Arc::new(construct_signatures));
+    Some(Arc::new(signature))
 }
 
 /// Writes `class`'s own static properties, methods and accessors into
@@ -591,13 +616,14 @@ fn declares_narrowing_static(class: &ParsedClassDeclaration) -> bool {
 /// (`static assert(v): asserts v is E`) needs to narrow at all.
 fn generic_class_value_symbol(
     class: &ParsedClassDeclaration,
+    scope: Option<&SymbolTable>,
     ctx: &mut CheckerContext,
 ) -> SymbolInfo {
     if !declares_narrowing_static(class) {
         return SymbolInfo {
             ty: Type::Any,
             kind: SymbolKind::Const,
-            function_signature: generic_class_constructor_signature(class, ctx),
+            function_signature: generic_class_constructor_signature(class, scope, ctx),
         };
     }
 
@@ -612,7 +638,7 @@ fn generic_class_value_symbol(
     SymbolInfo {
         ty: Type::Object(static_type),
         kind: SymbolKind::Const,
-        function_signature: generic_class_constructor_signature(class, ctx),
+        function_signature: generic_class_constructor_signature(class, scope, ctx),
     }
 }
 
@@ -653,7 +679,7 @@ pub(crate) fn build_class_value_symbol_with_scope(
     ctx: &mut CheckerContext,
 ) -> SymbolInfo {
     if !class.type_parameters.is_empty() {
-        return generic_class_value_symbol(class, ctx);
+        return generic_class_value_symbol(class, scope, ctx);
     }
 
     let instance_type = class_instance_type(class, ctx);
@@ -1637,7 +1663,7 @@ fn check_decorator_call(
 }
 
 pub(crate) fn check_class_declaration(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
-    check_class_declaration_parts(class, true, ctx);
+    check_class_declaration_parts(class, true, None, ctx);
 }
 
 /// A class declared in a function body, checked once the body is bound, as a
@@ -1654,11 +1680,161 @@ pub(crate) fn check_nested_class_declaration(
     }
     let symbols = enclosing.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
     let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols);
-    check_class_declaration_parts(class, false, ctx);
+    let scopes = ClassMemberScopes {
+        narrowed: None,
+        contextual_type: None,
+    };
+    check_class_declaration_parts(class, false, Some(&scopes), ctx);
     ctx.symbols = saved_symbols;
 }
 
-fn check_class_declaration_parts(class: &ParsedClassDeclaration, check_head: bool, ctx: &mut CheckerContext) {
+/// The scopes a class checked where it is written — a class expression, or a
+/// class declared in a function body — gives its member bodies. Without them
+/// a body is rooted at the module (`merged_function_body_root_symbols`) and
+/// loses every binding of an enclosing function but the innermost's.
+struct ClassMemberScopes<'a> {
+    /// A class expression's scope, narrowing kept, for the members that
+    /// continue the enclosing flow.
+    narrowed: Option<&'a SymbolTable>,
+    /// A class expression's contextual type.
+    contextual_type: Option<&'a Type>,
+}
+
+impl ClassMemberScopes<'_> {
+    /// The scope `member`'s body reads outer names from. tsc continues the
+    /// enclosing flow into a class expression's method or accessor
+    /// (`checkIdentifier` widens the flow container past
+    /// `IsObjectLiteralOrClassExpressionMethodOrAccessor`) and evaluates a
+    /// static block in place; any other member reads each binding at its
+    /// declared type, which is the scope the class is checked in.
+    fn body_scope(&self, member: &ParsedClassMember, ctx: &CheckerContext) -> Arc<SymbolTable> {
+        let continues_flow = matches!(
+            member,
+            ParsedClassMember::Method(_) | ParsedClassMember::Accessor(_) | ParsedClassMember::StaticBlock(_)
+        );
+        let Some(narrowed) = self.narrowed.filter(|_| continues_flow) else {
+            return Arc::new(ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext));
+        };
+        let mut scope = narrowed.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+        match ctx.symbols.get_own_handle("super") {
+            Some(base) => {
+                let _ = scope.insert_handle("super", base);
+            }
+            None => {
+                let _ = scope.remove("super");
+            }
+        }
+        Arc::new(scope)
+    }
+
+    /// tsc's `getContextualTypeForStaticPropertyDeclaration`: an unannotated
+    /// static property of a class expression takes its initializer's
+    /// contextual type from the class's.
+    fn static_property_context(&self, property: &ParsedClassProperty) -> Option<Type> {
+        if !property.is_static || property.declared_type.is_some() {
+            return None;
+        }
+        surge_ts_types::remove_nullish(self.contextual_type?).get_property_access_type(&property.name)
+    }
+}
+
+/// tsc's `checkClassExpression`: the class is checked where it is evaluated,
+/// as a declaration is, and evaluates to its constructor. `contextual_type`
+/// is the expression's own contextual type.
+pub(crate) fn check_class_expression(
+    class_expression: &surge_ts_syntax::ParsedClassExpression,
+    contextual_type: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Type {
+    let class = &class_expression.class;
+    let saved_scope = crate::checks::function::install_class_expression_type_declaration(class, ctx);
+    let value = class_expression_value(class, symbols, ctx);
+    let class_type = value.ty.clone();
+    // A name the class writes for itself is bound inside it alone.
+    let mut narrowed = symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    if class_expression.has_own_name {
+        let _ = narrowed.insert(class.name.clone(), value);
+    }
+    let declared = crate::checks::function::declared_type_view(&narrowed);
+    let saved_symbols = std::mem::replace(&mut ctx.symbols, declared);
+    // What the class reports is its own, not a verdict on the value it is.
+    let saved_return_check = std::mem::replace(&mut ctx.in_contextual_return_check, false);
+    // tsc's `nodeCanBeDecorated`: under legacy decorators nothing in a class
+    // expression can be decorated, so no decorator in it is checked.
+    let undecorated;
+    let head = if ctx.options.experimental_decorators && !class.decorators.is_empty() {
+        undecorated = ParsedClassDeclaration {
+            decorators: Vec::new(),
+            ..class.clone()
+        };
+        &undecorated
+    } else {
+        class
+    };
+    let head_symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    check_class_head_expressions(head, &head_symbols, ctx);
+    crate::flow::check_class_member_flow(class, ctx);
+    let scopes = ClassMemberScopes {
+        narrowed: Some(&narrowed),
+        contextual_type,
+    };
+    check_class_declaration_parts(class, false, Some(&scopes), ctx);
+    ctx.in_contextual_return_check = saved_return_check;
+    ctx.symbols = saved_symbols;
+    ctx.type_declaration_scope = saved_scope;
+    class_type
+}
+
+/// The constructor a class expression evaluates to, read without checking
+/// the class.
+pub(crate) fn class_expression_type(
+    class_expression: &surge_ts_syntax::ParsedClassExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Type {
+    let class = &class_expression.class;
+    let saved_scope = crate::checks::function::install_class_expression_type_declaration(class, ctx);
+    let class_type = class_expression_value(class, symbols, ctx).ty;
+    ctx.type_declaration_scope = saved_scope;
+    class_type
+}
+
+/// A class expression's value side. The scope it is evaluated in is the value
+/// table a base in its `extends` clause is read from, for the static side and
+/// the instance's heritage both; building it reports nothing.
+fn class_expression_value(
+    class: &ParsedClassDeclaration,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> SymbolInfo {
+    let saved_symbols = std::mem::replace(
+        &mut ctx.symbols,
+        symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+    );
+    let checkpoint = ctx.diagnostics().len();
+    let mut value = build_class_value_symbol_with_scope(class, Some(symbols), ctx);
+    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+    ctx.symbols = saved_symbols;
+    // In JavaScript a class expression is an expando container (`C.x = 0`
+    // declares a static member), which surge does not collect for it: its
+    // static side stays open.
+    if surge_ts_syntax::is_javascript_file_name(&ctx.file_name)
+        && let Type::Object(object) = &value.ty
+    {
+        let mut open = object.clone().with_open_index_marker();
+        open.string_index_type = Some(std::sync::Arc::new(Type::Any));
+        value.ty = Type::Object(open);
+    }
+    value
+}
+
+fn check_class_declaration_parts(
+    class: &ParsedClassDeclaration,
+    check_head: bool,
+    scopes: Option<&ClassMemberScopes<'_>>,
+    ctx: &mut CheckerContext,
+) {
     crate::checks::function::check_type_parameter_declarations(&class.type_parameters, ctx);
     crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
         for member in &class.members {
@@ -1679,7 +1855,7 @@ fn check_class_declaration_parts(class: &ParsedClassDeclaration, check_head: boo
     // what decides whether its `private`/`protected` members are reachable.
     let lineage = crate::checks::expr::enclosing_class_lineage(class, ctx);
     ctx.enclosing_classes.push(lineage);
-    check_class_declaration_inside(class, ctx);
+    check_class_declaration_inside(class, scopes, ctx);
     ctx.enclosing_classes.pop();
 }
 
@@ -1879,7 +2055,11 @@ fn check_base_constructor_accessibility(class: &ParsedClassDeclaration, ctx: &mu
     }
 }
 
-fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+fn check_class_declaration_inside(
+    class: &ParsedClassDeclaration,
+    scopes: Option<&ClassMemberScopes<'_>>,
+    ctx: &mut CheckerContext,
+) {
     check_heritage_base_resolves(class, ctx);
     check_base_constructor_accessibility(class, ctx);
     check_inherited_abstract_members(class, ctx);
@@ -1904,7 +2084,7 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
     // resolves to nothing.
     let _type_variables = crate::checks::function::enter_body_type_variables(&class.type_parameters, ctx);
     crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
-        check_class_member_bodies(class, ctx)
+        check_class_member_bodies(class, scopes, ctx)
     });
 }
 
@@ -1955,7 +2135,11 @@ fn report_ambient_member_implicit_any(class: &ParsedClassDeclaration, ctx: &mut 
     }
 }
 
-fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerContext) {
+fn check_class_member_bodies(
+    class: &ParsedClassDeclaration,
+    scopes: Option<&ClassMemberScopes<'_>>,
+    ctx: &mut CheckerContext,
+) {
     // Building the class's own instance and static types is this check's
     // lookup, not a use of the class: a generic class referred to without
     // arguments here would report TS2314 against its own declaration.
@@ -2044,6 +2228,7 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
                 },
             );
         }
+        let body_scope = scopes.map(|scopes| scopes.body_scope(member, ctx));
         match member {
             ParsedClassMember::Constructor(constructor) => {
                 let function_type =
@@ -2056,6 +2241,9 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
                         .as_ref()
                         .map(|(_, constructor)| constructor.clone()),
                 );
+                if let Some(scope) = body_scope {
+                    ctx.nested_function_scope = Some(scope);
+                }
                 check_function_body_with_signature_and_this(
                     None,
                     constructor.parameters.clone(),
@@ -2106,6 +2294,9 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
                     None if method.is_static => static_type.clone(),
                     None => instance_type.clone(),
                 };
+                if let Some(scope) = body_scope {
+                    ctx.nested_function_scope = Some(scope);
+                }
                 check_function_body_with_signature_and_this(
                     None,
                     method.parameters.clone(),
@@ -2149,13 +2340,17 @@ fn check_class_member_bodies(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
                         ctx.push(diagnostic);
                     }
                 }
-                check_class_property_initializer(property, this_type, ctx);
+                let contextual_type = scopes.and_then(|scopes| scopes.static_property_context(property));
+                check_class_property_initializer(property, this_type, contextual_type, ctx);
             }
             ParsedClassMember::Accessor(accessor) => {
-                check_class_accessor_body(accessor, &instance_type, &static_type, ctx);
+                check_class_accessor_body(accessor, &instance_type, &static_type, body_scope, ctx);
             }
             ParsedClassMember::StaticBlock(block) => {
                 let function_type = FunctionType::new(Vec::new(), Type::Void, false, 0);
+                if let Some(scope) = body_scope {
+                    ctx.nested_function_scope = Some(scope);
+                }
                 check_function_body_with_signature_and_this(
                     None,
                     Vec::new(),
@@ -2189,6 +2384,7 @@ fn check_class_accessor_body(
     accessor: &surge_ts_syntax::ParsedClassAccessor,
     instance_type: &Type,
     static_type: &Type,
+    body_scope: Option<Arc<SymbolTable>>,
     ctx: &mut CheckerContext,
 ) {
     for declaration in &accessor.declarations {
@@ -2217,6 +2413,9 @@ fn check_class_accessor_body(
         } else {
             instance_type.clone()
         };
+        if let Some(scope) = &body_scope {
+            ctx.nested_function_scope = Some(scope.clone());
+        }
         check_function_body_with_signature_and_this(
             None,
             parameters,
@@ -2242,6 +2441,7 @@ fn check_class_accessor_body(
 fn check_class_property_initializer(
     property: &ParsedClassProperty,
     this_type: Type,
+    contextual_type: Option<Type>,
     ctx: &mut CheckerContext,
 ) {
     let Some(initializer) = &property.initializer else {
@@ -2280,12 +2480,27 @@ fn check_class_property_initializer(
     let saved_outer_bindings =
         std::mem::replace(&mut ctx.constructor_local_outer_bindings, outer_bindings);
     let Some(declared_type) = property.declared_type.clone() else {
-        crate::checks::expr::evaluate_expression(
-            initializer,
-            property.initializer_span,
-            &symbols,
-            ctx,
-        );
+        match contextual_type {
+            Some(contextual_type) => {
+                let _ = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
+                    initializer,
+                    property.initializer_span,
+                    property.name_span,
+                    Some(&contextual_type),
+                    crate::checks::expected::ExpectedTypeDiagnostic::ContextOnly,
+                    &symbols,
+                    ctx,
+                );
+            }
+            None => {
+                crate::checks::expr::evaluate_expression(
+                    initializer,
+                    property.initializer_span,
+                    &symbols,
+                    ctx,
+                );
+            }
+        }
         ctx.constructor_local_outer_bindings = saved_outer_bindings;
         return;
     };

@@ -275,7 +275,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     fn is_unambiguously_index_signature(&mut self) -> bool {
         self.bump_any();
-        if matches!(self.cur_kind(), Kind::Dot3 | Kind::LBrack) {
+        // surge: tsc's recovery set (`isUnambiguouslyIndexSignature`) has `[]`,
+        // not `[[`, which opens a computed name such as `[[]]() {}`.
+        if matches!(self.cur_kind(), Kind::Dot3 | Kind::RBrack) {
             return true;
         }
         if self.cur_kind().is_modifier_kind() {

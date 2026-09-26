@@ -80,7 +80,7 @@ fn index_narrows_to_keyof(index: &ParsedType, object_name: &str) -> bool {
 }
 
 /// Whether `parsed` refers by name to a type parameter `bound` accepts.
-fn mentions_type_parameter(parsed: &ParsedType, bound: &dyn Fn(&str) -> bool) -> bool {
+pub(super) fn mentions_type_parameter(parsed: &ParsedType, bound: &dyn Fn(&str) -> bool) -> bool {
     let mentions = |ty: &ParsedType| mentions_type_parameter(ty, bound);
     match parsed {
         ParsedType::Named(named) => bound(&named.name) || named.type_arguments.iter().any(mentions),

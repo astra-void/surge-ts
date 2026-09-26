@@ -313,6 +313,41 @@ pub(crate) fn enum_member_value_type(
     matches!(&member, Type::Reference(reference) if reference.enum_owner.is_some()).then_some(member)
 }
 
+/// tsc reads a dotted member of a const enum's object with
+/// `skipObjectFunctionPropertyAugment` (`isConstEnumObjectType` in
+/// `checkPropertyAccessExpressionOrQualifiedName`), so the global `Object`
+/// members every other object answers are not there: `E.toString` is TS2339
+/// on `typeof E`. The enum object's type when the read misses for that reason.
+pub(crate) fn const_enum_object_lacks_member(
+    object: &ParsedExpression,
+    property_name: &str,
+    symbols: &SymbolTable,
+    ctx: &CheckerContext,
+) -> Option<Type> {
+    surge_ts_types::object_prototype_member_type(property_name)?;
+    let ParsedExpression::Identifier { name, .. } = object else {
+        return None;
+    };
+    let object_type = &symbols.get(name)?.ty;
+    let Type::Object(enum_object) = object_type else {
+        return None;
+    };
+    if enum_object.contains_property(property_name) {
+        return None;
+    }
+    let crate::symbols::TypeDeclarationInfo::Alias(alias) = ctx.lookup_type_declaration(name)? else {
+        return None;
+    };
+    // A value of the same name that is not the enum's object shadows it.
+    let is_enum_object = enum_object
+        .alias_name
+        .as_deref()
+        .and_then(|display| display.strip_prefix("typeof "))
+        == Some(name.as_str());
+    (alias.enum_is_const && alias.enum_name.as_deref() == Some(name.as_str()) && is_enum_object)
+        .then(|| object_type.clone())
+}
+
 pub(crate) fn infer_property_access(
     object: &ParsedExpression,
     _object_span: &Option<TextSpan>,

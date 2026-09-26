@@ -28,6 +28,7 @@ mod reflect_collision;
 thread_local! {
     static EXAMINED_MODIFIERS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
     static GLOBAL_THIS_STARTS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    static LITERAL_THIS_MEMBERS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Where every modifier the last walk judged starts. The walk is tsc's
@@ -45,6 +46,13 @@ pub(crate) fn take_global_this_starts() -> Vec<u32> {
     GLOBAL_THIS_STARTS.with(|starts| std::mem::take(&mut *starts.borrow_mut()))
 }
 
+/// Where every object-literal member the last walk found reading its own
+/// `this`, in a literal with no contextual type, starts (see
+/// [`crate::ParsedSource::literal_this_members`]), sorted.
+pub(crate) fn take_literal_this_members() -> Vec<u32> {
+    LITERAL_THIS_MEMBERS.with(|members| std::mem::take(&mut *members.borrow_mut()))
+}
+
 pub(crate) fn collect_context_grammar_diagnostics(
     program: &Program<'_>,
     out: &mut Vec<ParsedGrammarDiagnostic>,
@@ -59,6 +67,7 @@ pub(crate) fn collect_context_grammar_diagnostics(
         const_enum_names: unshadowed_const_enum_names(program),
         examined_modifiers: Vec::new(),
         global_this_starts: Vec::new(),
+        literal_this_members: Vec::new(),
     };
     collector.visit_program(program);
     let examined = std::mem::take(&mut collector.examined_modifiers);
@@ -69,6 +78,11 @@ pub(crate) fn collect_context_grammar_diagnostics(
     let mut global_this = std::mem::take(&mut collector.global_this_starts);
     global_this.retain(|start| !with_bodies.iter().any(|body| body.start <= *start && *start < body.end));
     GLOBAL_THIS_STARTS.with(|slot| *slot.borrow_mut() = global_this);
+    let mut literal_this = std::mem::take(&mut collector.literal_this_members);
+    literal_this.retain(|start| !with_bodies.iter().any(|body| body.start <= *start && *start < body.end));
+    literal_this.sort_unstable();
+    literal_this.dedup();
+    LITERAL_THIS_MEMBERS.with(|slot| *slot.borrow_mut() = literal_this);
     if !with_bodies.is_empty() {
         collector.out.retain(|finding| {
             !with_bodies.iter().any(|body| {
@@ -118,6 +132,8 @@ struct ContextCollector<'a, 'o> {
     examined_modifiers: Vec<u32>,
     /// See [`take_global_this_starts`].
     global_this_starts: Vec<u32>,
+    /// See [`take_literal_this_members`].
+    literal_this_members: Vec<u32>,
 }
 
 /// The top-level `const enum` names whose every binding in the file is such a
@@ -626,6 +642,21 @@ impl<'a> ContextCollector<'a, '_> {
                 self.push(2465, span, &[]);
                 return;
             }
+            // An object-literal member's `this` is the literal
+            // (`getContextualThisParameterType`), never TS2683. Where the
+            // literal has no contextual type that is the literal's own type,
+            // which the checker gives the members recorded here.
+            if let AstKind::Function(function) = kind
+                && let Some(literal) = self.object_literal_of_member(index)
+            {
+                if function.this_param.is_none()
+                    && super::jsdoc::this_type_at(function.span.start).is_none()
+                    && self.expression_has_no_contextual_type(literal)
+                {
+                    self.literal_this_members.push(function.span.start);
+                }
+                return;
+            }
             // tsc's `tryGetThisTypeAtEx` finds no `this` for a namespace or enum
             // body, nor for a function declaration without a `this`
             // parameter — TS2683 under `noImplicitThis`.
@@ -643,7 +674,8 @@ impl<'a> ContextCollector<'a, '_> {
                 AstKind::Function(function)
                     if function.r#type == oxc_ast::ast::FunctionType::FunctionDeclaration
                         && function.this_param.is_none()
-                        && super::jsdoc::this_type_at(function.span.start).is_none() =>
+                        && super::jsdoc::this_type_at(function.span.start).is_none()
+                        && !super::jsdoc::has_opaque_full_signature(function.span.start) =>
                 {
                     self.push(2683, span, &[]);
                     return;
@@ -657,9 +689,25 @@ impl<'a> ContextCollector<'a, '_> {
                     self.push(2683, span, &[]);
                     return;
                 }
+                AstKind::PropertyDefinition(property) => {
+                    self.check_this_in_decorated_static_initializer(
+                        index,
+                        property.r#static,
+                        property.value.as_ref(),
+                        span,
+                    );
+                    return;
+                }
+                AstKind::AccessorProperty(property) => {
+                    self.check_this_in_decorated_static_initializer(
+                        index,
+                        property.r#static,
+                        property.value.as_ref(),
+                        span,
+                    );
+                    return;
+                }
                 AstKind::Function(_)
-                | AstKind::PropertyDefinition(_)
-                | AstKind::AccessorProperty(_)
                 | AstKind::StaticBlock(_)
                 | AstKind::TSPropertySignature(_)
                 | AstKind::TSMethodSignature(_)
@@ -682,6 +730,33 @@ impl<'a> ContextCollector<'a, '_> {
                 _ => {}
             }
             child_span = kind.span();
+        }
+    }
+
+    /// tsc's `checkThisInStaticClassFieldInitializerInDecoratedClass`: under
+    /// `experimentalDecorators`, `this` in a static property's initializer of
+    /// a decorated class — TS2816. `member` is the property's stack index.
+    fn check_this_in_decorated_static_initializer(
+        &mut self,
+        member: usize,
+        is_static: bool,
+        initializer: Option<&oxc_ast::ast::Expression<'a>>,
+        span: Span,
+    ) {
+        let decorated = matches!(
+            member.checked_sub(2).map(|class| self.stack[class]),
+            Some(AstKind::Class(class)) if !class.decorators.is_empty()
+        );
+        let in_initializer = initializer.is_some_and(|initializer| {
+            let range = initializer.span();
+            range.start <= span.start && span.end <= range.end
+        });
+        if is_static && decorated && in_initializer {
+            self.out.push(ParsedGrammarDiagnostic {
+                kind: Kind::TsUnderLegacyDecorators(2816),
+                span: text_span_from_oxc_span(span),
+                name: None,
+            });
         }
     }
 
@@ -749,12 +824,12 @@ impl<'a> ContextCollector<'a, '_> {
     /// Whether the function expression at stack `index` sits where tsc's
     /// `getContextualThisParameterType` can find nothing: not an object-literal
     /// member or a member assignment (those give `this` the object), and in a
-    /// position with no contextual type at all — an unannotated variable, an
-    /// IIFE callee, an expression statement, or the `return` of a function
-    /// declaration without a return type — reached through parentheses,
-    /// conditionals, logical operators, commas and array literals. An argument
-    /// or an annotated target might supply a `this:` parameter, so it is left
-    /// alone.
+    /// position with no contextual type at all — an unannotated variable or
+    /// class property, an IIFE callee, an expression statement, or a `return`
+    /// whose function has no contextual return type — reached through
+    /// parentheses, conditionals, logical operators, commas and array
+    /// literals. An argument or an annotated target might supply a `this:`
+    /// parameter, so it is left alone.
     fn function_expression_has_no_contextual_this(&self, index: usize) -> bool {
         let mut child_span = self.stack[index].span();
         let mut position = index;
@@ -799,21 +874,234 @@ impl<'a> ContextCollector<'a, '_> {
                             Some(oxc_ast::ast::Expression::Identifier(object)) if object.name == "exports"
                         );
                 }
-                AstKind::ExpressionStatement(_) => return true,
-                AstKind::ReturnStatement(_) => {
-                    return self.stack[..position].iter().rev().find_map(|kind| match kind {
-                        AstKind::Function(function) => Some(
-                            function.r#type == oxc_ast::ast::FunctionType::FunctionDeclaration
-                                && function.return_type.is_none(),
-                        ),
-                        AstKind::ArrowFunctionExpression(_) => Some(false),
-                        _ => None,
-                    }) == Some(true);
+                AstKind::PropertyDefinition(property) => {
+                    return property.value.as_ref().is_some_and(|value| value.span() == child_span)
+                        && self.class_property_supplies_no_this(
+                            position,
+                            property.r#static,
+                            property.type_annotation.as_deref(),
+                            property.span.start,
+                        );
                 }
+                AstKind::AccessorProperty(property) => {
+                    return property.value.as_ref().is_some_and(|value| value.span() == child_span)
+                        && self.class_property_supplies_no_this(
+                            position,
+                            property.r#static,
+                            property.type_annotation.as_deref(),
+                            property.span.start,
+                        );
+                }
+                AstKind::ExpressionStatement(_) => return self.statement_has_no_contextual_type(position),
+                AstKind::ReturnStatement(_) => return self.returns_have_no_contextual_type(position),
                 _ => return false,
             }
         }
         false
+    }
+
+    /// Whether a class property at stack `member` gives its initializer no
+    /// contextual `this` (`getContextualTypeForVariableLikeDeclaration`): an
+    /// annotation or JSDoc `@type` is the contextual type, which supplies none
+    /// unless it is a function type with a `this` parameter; without one, only
+    /// a static property of a class expression has a contextual type.
+    fn class_property_supplies_no_this(
+        &self,
+        member: usize,
+        is_static: bool,
+        annotation: Option<&oxc_ast::ast::TSTypeAnnotation<'a>>,
+        start: u32,
+    ) -> bool {
+        match annotation {
+            Some(annotation) => matches!(
+                &annotation.type_annotation,
+                oxc_ast::ast::TSType::TSFunctionType(signature) if signature.this_param.is_none()
+            ),
+            None => match super::jsdoc::declared_type_supplies_this(start) {
+                Some(supplies) => !supplies,
+                None => !is_static || self.class_of_member_has_no_contextual_type(member),
+            },
+        }
+    }
+
+    /// A class declaration's static property has no contextual type; a class
+    /// expression's takes it from the class expression's own
+    /// (`getContextualTypeForStaticPropertyDeclaration`).
+    fn class_of_member_has_no_contextual_type(&self, member: usize) -> bool {
+        match member.checked_sub(2).map(|class| (class, self.stack[class])) {
+            Some((_, AstKind::Class(class)))
+                if class.r#type == oxc_ast::ast::ClassType::ClassDeclaration =>
+            {
+                true
+            }
+            Some((class, AstKind::Class(_))) => self.expression_has_no_contextual_type(class),
+            _ => false,
+        }
+    }
+
+    /// Whether the expression at stack `index` has no contextual type at all
+    /// (tsc's `getContextualType` answering nothing), where syntax alone
+    /// decides it: an unannotated variable or class property, an IIFE callee,
+    /// the left of `&&`, a comma operand before the last, a conditional's
+    /// test, an expression statement, or a `return` whose function has no
+    /// contextual return type.
+    fn expression_has_no_contextual_type(&self, index: usize) -> bool {
+        let mut child_span = self.stack[index].span();
+        let mut position = index;
+        while position > 0 {
+            position -= 1;
+            match self.stack[position] {
+                AstKind::ParenthesizedExpression(_)
+                | AstKind::ArrayExpression(_)
+                | AstKind::ObjectExpression(_) => {}
+                // A member's value takes the literal's contextual type's
+                // member; a computed key has none.
+                AstKind::ObjectProperty(property) => {
+                    if property.computed && property.key.span() == child_span {
+                        return true;
+                    }
+                    if property.value.span() != child_span {
+                        return false;
+                    }
+                }
+                AstKind::ConditionalExpression(conditional) => {
+                    if conditional.test.span() == child_span {
+                        return true;
+                    }
+                }
+                AstKind::LogicalExpression(logical) => {
+                    let is_and = logical.operator == oxc_syntax::operator::LogicalOperator::And;
+                    if logical.left.span() == child_span {
+                        if is_and {
+                            return true;
+                        }
+                    } else if !is_and {
+                        // The right of `||`/`??` is typed by the left.
+                        return false;
+                    }
+                }
+                AstKind::SequenceExpression(sequence) => {
+                    if sequence.expressions.last().is_some_and(|last| last.span() != child_span) {
+                        return true;
+                    }
+                }
+                AstKind::VariableDeclarator(declarator) => {
+                    return declarator.type_annotation.is_none()
+                        && matches!(declarator.id, BindingPattern::BindingIdentifier(_))
+                        && super::jsdoc::declared_type_at(declarator.span.start).is_none()
+                        && declarator.init.as_ref().is_some_and(|init| init.span() == child_span);
+                }
+                AstKind::PropertyDefinition(property) => {
+                    return property.value.as_ref().is_some_and(|value| value.span() == child_span)
+                        && property.type_annotation.is_none()
+                        && super::jsdoc::declared_type_at(property.span.start).is_none()
+                        && (!property.r#static || self.class_of_member_has_no_contextual_type(position));
+                }
+                AstKind::AccessorProperty(property) => {
+                    return property.value.as_ref().is_some_and(|value| value.span() == child_span)
+                        && property.type_annotation.is_none()
+                        && super::jsdoc::declared_type_at(property.span.start).is_none()
+                        && (!property.r#static || self.class_of_member_has_no_contextual_type(position));
+                }
+                AstKind::CallExpression(call) => return call.callee.span() == child_span,
+                AstKind::ExpressionStatement(_) => return self.statement_has_no_contextual_type(position),
+                AstKind::ReturnStatement(_) => return self.returns_have_no_contextual_type(position),
+                _ => return false,
+            }
+            child_span = self.stack[position].span();
+        }
+        false
+    }
+
+    /// An expression statement's expression has no contextual type, except an
+    /// arrow's expression body, which is the arrow's return value.
+    fn statement_has_no_contextual_type(&self, statement: usize) -> bool {
+        match (
+            statement.checked_sub(1).map(|body| self.stack[body]),
+            statement.checked_sub(2).map(|arrow| self.stack[arrow]),
+        ) {
+            (Some(AstKind::FunctionBody(_)), Some(AstKind::ArrowFunctionExpression(arrow)))
+                if arrow.expression =>
+            {
+                self.function_has_no_contextual_return(statement - 2)
+            }
+            _ => true,
+        }
+    }
+
+    /// Whether the `return` at stack `position` has no contextual type.
+    fn returns_have_no_contextual_type(&self, position: usize) -> bool {
+        self.stack[..position]
+            .iter()
+            .rposition(|kind| {
+                matches!(kind, AstKind::Function(_) | AstKind::ArrowFunctionExpression(_))
+            })
+            .is_some_and(|function| self.function_has_no_contextual_return(function))
+    }
+
+    /// tsc's `getContextualReturnType` finding nothing for the function at
+    /// stack `index`: no return type annotation and no contextual signature —
+    /// a declaration or a class method has none, a function expression or an
+    /// arrow none where it has no contextual type — and, when it is invoked
+    /// on the spot, a call without a contextual type.
+    fn function_has_no_contextual_return(&self, index: usize) -> bool {
+        let written_return = match self.stack[index] {
+            AstKind::Function(function) => {
+                function.return_type.is_some()
+                    || super::jsdoc::return_type_at(function.span.start).is_some()
+            }
+            AstKind::ArrowFunctionExpression(arrow) => {
+                arrow.return_type.is_some() || super::jsdoc::return_type_at(arrow.span.start).is_some()
+            }
+            _ => return false,
+        };
+        if written_return {
+            return false;
+        }
+        match (self.stack[index], index.checked_sub(1).map(|parent| self.stack[parent])) {
+            (_, Some(AstKind::MethodDefinition(method))) => method.kind == MethodDefinitionKind::Method,
+            (_, Some(AstKind::ObjectProperty(_))) => self
+                .object_literal_of_member(index)
+                .is_some_and(|literal| self.expression_has_no_contextual_type(literal)),
+            (AstKind::Function(function), _)
+                if function.r#type == oxc_ast::ast::FunctionType::FunctionDeclaration =>
+            {
+                true
+            }
+            _ => match self.immediately_invoking_call(index) {
+                Some(call) => self.expression_has_no_contextual_type(call),
+                None => self.expression_has_no_contextual_type(index),
+            },
+        }
+    }
+
+    /// The stack index of the object literal the function at `index` is a
+    /// member of: a method, an accessor, or the value of `key: function`.
+    fn object_literal_of_member(&self, index: usize) -> Option<usize> {
+        let AstKind::ObjectProperty(property) = self.stack[index.checked_sub(1)?] else {
+            return None;
+        };
+        if property.value.span() != self.stack[index].span() {
+            return None;
+        }
+        let literal = index.checked_sub(2)?;
+        matches!(self.stack[literal], AstKind::ObjectExpression(_)).then_some(literal)
+    }
+
+    /// The call that invokes the function at stack `index` on the spot, through
+    /// parentheses (`GetImmediatelyInvokedFunctionExpression`).
+    fn immediately_invoking_call(&self, index: usize) -> Option<usize> {
+        let mut child_span = self.stack[index].span();
+        let mut position = index;
+        while position > 0 {
+            position -= 1;
+            match self.stack[position] {
+                AstKind::ParenthesizedExpression(parenthesized) => child_span = parenthesized.span,
+                AstKind::CallExpression(call) if call.callee.span() == child_span => return Some(position),
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// tsc's `checkGrammarStatementInAmbientContext` for a statement directly
@@ -1754,6 +2042,9 @@ impl<'a> ContextCollector<'a, '_> {
     /// `typeof` there does not close a cycle.
     fn check_self_referencing_annotations(&mut self, statements: &[Statement<'_>]) {
         let mut variables: Vec<(&str, Span, Vec<&str>)> = Vec::new();
+        // A redeclared variable takes its type from its first declaration
+        // (`valueDeclaration`); a later `var p: typeof p` reads that type.
+        let mut declared: Vec<&str> = Vec::new();
         for statement in statements {
             let declaration = match statement {
                 Statement::VariableDeclaration(declaration) => Some(&**declaration),
@@ -1767,9 +2058,14 @@ impl<'a> ContextCollector<'a, '_> {
                 continue;
             };
             for declarator in &declaration.declarations {
-                let (BindingPattern::BindingIdentifier(id), Some(annotation)) =
-                    (&declarator.id, declarator.type_annotation.as_ref())
-                else {
+                let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                    continue;
+                };
+                if declared.contains(&id.name.as_str()) {
+                    continue;
+                }
+                declared.push(id.name.as_str());
+                let Some(annotation) = declarator.type_annotation.as_ref() else {
                     continue;
                 };
                 let mut queried = Vec::new();

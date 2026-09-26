@@ -554,72 +554,145 @@ impl GrammarCollector {
     /// tsc's `pushTypeResolution` cycle for module-level type aliases: an
     /// alias whose body reaches itself through positions resolved eagerly
     /// (union and intersection members, `keyof`, indexed access, a conditional's
-    /// check and extends types, template literal spans, another alias and its
-    /// type arguments) circularly references itself (TS2456). Object members,
-    /// signatures, array and tuple elements, conditional branches and the type
-    /// arguments of other references are deferred. Only the aliases on the
-    /// cycle are reported, not those that merely lead into one.
+    /// check and extends types, template literal spans, a mapped type's
+    /// constraint, another alias and its type arguments) circularly references
+    /// itself (TS2456). Object members, signatures, array and tuple elements,
+    /// conditional branches and the type arguments of other references are
+    /// deferred. A `typeof` query of an annotated variable resolves the
+    /// annotation (`getTypeOfVariableOrParameterOrProperty`), where only object
+    /// members, signatures and conditional branches are deferred, since
+    /// `isDeferredTypeReferenceNode` defers the rest only under an alias; such a
+    /// variable on the cycle is TS2502. Only the declarations on the cycle are
+    /// reported, not those that merely lead into one.
     fn check_circular_type_aliases(&mut self, statements: &[Statement<'_>]) {
-        use oxc_ast::ast::{TSType, TSTypeAliasDeclaration, TSTypeName, TSTypeOperatorOperator};
-        let aliases: Vec<&TSTypeAliasDeclaration<'_>> = statements
-            .iter()
-            .filter_map(|statement| {
-                let declaration = match statement {
-                    Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
-                    other => other.as_declaration(),
-                };
-                match declaration {
-                    Some(Declaration::TSTypeAliasDeclaration(alias)) => Some(alias.as_ref()),
-                    _ => None,
+        use oxc_ast::ast::{
+            BindingIdentifier, BindingPattern, TSTupleElement, TSType, TSTypeAliasDeclaration,
+            TSTypeName, TSTypeOperatorOperator, TSTypeQueryExprName,
+        };
+        let mut aliases: Vec<&TSTypeAliasDeclaration<'_>> = Vec::new();
+        let mut variables: Vec<(&BindingIdentifier<'_>, &TSType<'_>)> = Vec::new();
+        for statement in statements {
+            let declaration = match statement {
+                Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+                other => other.as_declaration(),
+            };
+            match declaration {
+                Some(Declaration::TSTypeAliasDeclaration(alias)) => aliases.push(alias.as_ref()),
+                Some(Declaration::VariableDeclaration(variable)) => {
+                    for declarator in &variable.declarations {
+                        // A redeclared `var` is typed by its first declaration.
+                        if let BindingPattern::BindingIdentifier(identifier) = &declarator.id
+                            && let Some(annotation) = &declarator.type_annotation
+                            && !variables.iter().any(|(known, _)| known.name == identifier.name)
+                        {
+                            variables.push((identifier.as_ref(), &annotation.type_annotation));
+                        }
+                    }
                 }
-            })
-            .collect();
-        let names: Vec<&str> = aliases.iter().map(|alias| alias.id.name.as_str()).collect();
+                _ => {}
+            }
+        }
 
-        fn eager_references<'n>(ty: &TSType<'_>, names: &[&'n str], out: &mut Vec<&'n str>) {
+        struct Declarations<'n> {
+            aliases: Vec<&'n str>,
+            variables: Vec<&'n str>,
+        }
+        let declarations = Declarations {
+            aliases: aliases.iter().map(|alias| alias.id.name.as_str()).collect(),
+            variables: variables.iter().map(|(identifier, _)| identifier.name.as_str()).collect(),
+        };
+
+        fn tuple_element_type<'e, 'a>(element: &'e TSTupleElement<'a>) -> Option<&'e TSType<'a>> {
+            match element {
+                TSTupleElement::TSOptionalType(optional) => Some(&optional.type_annotation),
+                TSTupleElement::TSRestType(rest) => Some(&rest.type_annotation),
+                TSTupleElement::TSNamedTupleMember(member) => tuple_element_type(&member.element_type),
+                other => other.as_ts_type(),
+            }
+        }
+
+        // `annotation`: the type is a variable's annotation rather than an
+        // alias body. Declarations are numbered aliases first, then variables.
+        fn eager_references(
+            ty: &TSType<'_>,
+            annotation: bool,
+            declarations: &Declarations<'_>,
+            out: &mut Vec<usize>,
+        ) {
             match ty {
                 TSType::TSTypeReference(reference) => {
                     let TSTypeName::IdentifierReference(identifier) = &reference.type_name else {
                         return;
                     };
-                    if let Some(name) = names.iter().find(|name| **name == identifier.name.as_str()) {
-                        out.push(name);
-                        if let Some(arguments) = &reference.type_arguments {
-                            for argument in &arguments.params {
-                                eager_references(argument, names, out);
-                            }
+                    let alias = declarations
+                        .aliases
+                        .iter()
+                        .position(|name| *name == identifier.name.as_str());
+                    if let Some(index) = alias {
+                        out.push(index);
+                    }
+                    if (alias.is_some() || annotation)
+                        && let Some(arguments) = &reference.type_arguments
+                    {
+                        for argument in &arguments.params {
+                            eager_references(argument, annotation, declarations, out);
                         }
                     }
                 }
+                TSType::TSTypeQuery(query) => {
+                    if let TSTypeQueryExprName::IdentifierReference(identifier) = &query.expr_name
+                        && let Some(index) = declarations
+                            .variables
+                            .iter()
+                            .position(|name| *name == identifier.name.as_str())
+                    {
+                        out.push(declarations.aliases.len() + index);
+                    }
+                }
+                TSType::TSArrayType(array) if annotation => {
+                    eager_references(&array.element_type, annotation, declarations, out);
+                }
+                TSType::TSTupleType(tuple) if annotation => {
+                    for element in &tuple.element_types {
+                        if let Some(element) = tuple_element_type(element) {
+                            eager_references(element, annotation, declarations, out);
+                        }
+                    }
+                }
+                // `getTypeFromMappedTypeNode` resolves the constraint eagerly.
+                TSType::TSMappedType(mapped) => {
+                    eager_references(&mapped.constraint, annotation, declarations, out);
+                }
                 TSType::TSUnionType(union) => {
                     for member in &union.types {
-                        eager_references(member, names, out);
+                        eager_references(member, annotation, declarations, out);
                     }
                 }
                 TSType::TSIntersectionType(intersection) => {
                     for member in &intersection.types {
-                        eager_references(member, names, out);
+                        eager_references(member, annotation, declarations, out);
                     }
                 }
                 TSType::TSParenthesizedType(inner) => {
-                    eager_references(&inner.type_annotation, names, out);
+                    eager_references(&inner.type_annotation, annotation, declarations, out);
                 }
                 TSType::TSTypeOperatorType(operator)
-                    if operator.operator == TSTypeOperatorOperator::Keyof =>
+                    if operator.operator == TSTypeOperatorOperator::Keyof
+                        || (annotation && operator.operator == TSTypeOperatorOperator::Readonly) =>
                 {
-                    eager_references(&operator.type_annotation, names, out);
+                    eager_references(&operator.type_annotation, annotation, declarations, out);
                 }
                 TSType::TSIndexedAccessType(access) => {
-                    eager_references(&access.object_type, names, out);
-                    eager_references(&access.index_type, names, out);
+                    eager_references(&access.object_type, annotation, declarations, out);
+                    eager_references(&access.index_type, annotation, declarations, out);
                 }
                 TSType::TSConditionalType(conditional) => {
-                    eager_references(&conditional.check_type, names, out);
-                    eager_references(&conditional.extends_type, names, out);
+                    eager_references(&conditional.check_type, annotation, declarations, out);
+                    eager_references(&conditional.extends_type, annotation, declarations, out);
                 }
                 TSType::TSTemplateLiteralType(template) => {
                     for span in &template.types {
-                        eager_references(span, names, out);
+                        eager_references(span, annotation, declarations, out);
                     }
                 }
                 _ => {}
@@ -628,19 +701,18 @@ impl GrammarCollector {
 
         let edges: Vec<Vec<usize>> = aliases
             .iter()
-            .map(|alias| {
+            .map(|alias| (&alias.type_annotation, false))
+            .chain(variables.iter().map(|(_, annotation)| (*annotation, true)))
+            .map(|(ty, annotation)| {
                 let mut referenced = Vec::new();
-                eager_references(&alias.type_annotation, &names, &mut referenced);
+                eager_references(ty, annotation, &declarations, &mut referenced);
                 referenced
-                    .into_iter()
-                    .filter_map(|name| names.iter().position(|other| *other == name))
-                    .collect()
             })
             .collect();
-        for (index, alias) in aliases.iter().enumerate() {
-            // On a cycle exactly when the alias can reach itself.
-            let mut visited = vec![false; aliases.len()];
-            let mut stack = edges[index].clone();
+        for (index, reachable) in edges.iter().enumerate() {
+            // On a cycle exactly when the declaration can reach itself.
+            let mut visited = vec![false; edges.len()];
+            let mut stack = reachable.clone();
             let mut on_cycle = false;
             while let Some(next) = stack.pop() {
                 if next == index {
@@ -652,8 +724,17 @@ impl GrammarCollector {
                 }
                 stack.extend(edges[next].iter().copied());
             }
-            if on_cycle {
-                self.push(Kind::CircularTypeAlias, alias.id.span, Some(alias.id.name.as_str()));
+            if !on_cycle {
+                continue;
+            }
+            match aliases.get(index) {
+                Some(alias) => {
+                    self.push(Kind::CircularTypeAlias, alias.id.span, Some(alias.id.name.as_str()));
+                }
+                None => {
+                    let (identifier, _) = variables[index - aliases.len()];
+                    self.push(Kind::Ts(2502), identifier.span, Some(identifier.name.as_str()));
+                }
             }
         }
     }

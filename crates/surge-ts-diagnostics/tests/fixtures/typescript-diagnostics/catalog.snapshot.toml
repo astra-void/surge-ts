@@ -2268,7 +2268,7 @@ arity = 0
 code = "TS17000"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "JSX attributes must only be assigned a non-empty 'expression'."
 arity = 0
 
@@ -5988,7 +5988,7 @@ arity = 0
 code = "TS2858"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Import attribute values must be string literal expressions."
 arity = 0
 
@@ -5999,4 +5999,76 @@ source = "typescript"
 support = "emitted"
 message = "Dynamic import's specifier must be of type 'string', but here has type '{0}'."
 arity = 1
+
+[[diagnostic]]
+code = "TS2604"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "JSX element type '{0}' does not have any construct or call signatures."
+arity = 1
+
+[[diagnostic]]
+code = "TS2607"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "JSX element class does not support attributes because it does not have a '{0}' property."
+arity = 1
+
+[[diagnostic]]
+code = "TS2609"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "JSX spread child must be an array type."
+arity = 0
+
+[[diagnostic]]
+code = "TS2786"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' cannot be used as a JSX component."
+arity = 1
+
+[[diagnostic]]
+code = "TS17016"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The 'jsxFragmentFactory' compiler option must be provided to use JSX fragments with the 'jsxFactory' compiler option."
+arity = 0
+
+[[diagnostic]]
+code = "TS17017"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "An @jsxFrag pragma is required when using an @jsx pragma with JSX fragments."
+arity = 0
+
+[[diagnostic]]
+code = "TS2639"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "React components cannot include JSX namespace names"
+arity = 0
+
+[[diagnostic]]
+code = "TS17001"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "JSX elements cannot have multiple attributes with the same name."
+arity = 0
+
+[[diagnostic]]
+code = "TS2816"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Cannot use 'this' in a static property initializer of a decorated class."
+arity = 0
 

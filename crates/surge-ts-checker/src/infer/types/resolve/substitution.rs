@@ -62,6 +62,16 @@ pub(crate) fn bind_type_arguments(
     }
 
     let mut substitution = TypeParameterSubstitution::new();
+    // `checkTypeArgumentConstraints` relates the written reference once and
+    // stops at its first failure. Re-resolved under an instantiating
+    // substitution (a conditional's `infer` bindings included) it is not that
+    // node, and tsc reports nothing for it.
+    let mut constraints_settled = type_parameters
+        .iter()
+        .all(|parameter| parameter.constraint.is_none())
+        || type_arguments
+            .iter()
+            .any(|argument| names_instantiated_parameter(argument, parent_substitution));
 
     for (index, parameter) in type_parameters.iter().enumerate() {
         if let Some(argument) = type_arguments.get(index) {
@@ -84,18 +94,19 @@ pub(crate) fn bind_type_arguments(
             if parsed_type_is_placeholder_reference(argument, parent_substitution) {
                 substitution.insert_placeholder(parameter.name.clone(), resolved_ty);
             } else {
-                check_type_argument_constraint(
-                    parameter,
-                    type_parameters,
-                    &resolved_ty,
-                    argument_had_error,
-                    name_span,
-                    ctx,
-                    resolving,
-                    parent_substitution,
-                    &substitution,
-                    declaration_scope,
-                );
+                constraints_settled = constraints_settled
+                    || check_type_argument_constraint(
+                        parameter,
+                        type_parameters,
+                        &resolved_ty,
+                        argument_had_error,
+                        name_span,
+                        ctx,
+                        resolving,
+                        parent_substitution,
+                        &substitution,
+                        declaration_scope,
+                    );
                 substitution.insert(parameter.name.clone(), resolved_ty);
             }
             if argument_had_error {
@@ -364,13 +375,20 @@ fn check_type_argument_constraint(
         &Option<std::sync::Arc<crate::symbols::TypeDeclarationScope>>,
         &str,
     )>,
-) {
+) -> bool {
     let Some(constraint) = parameter.constraint.clone() else {
-        return;
+        return false;
     };
     let constraint_for_display = constraint.clone();
-    if argument_had_error || !constraint_judgeable(argument) {
-        return;
+    // An object type satisfies no primitive constraint whatever its members,
+    // so an argument outside the judgeable domain is still decided against a
+    // constraint written as primitives (`Record<Date, …>`). The written form
+    // is asked first: telling an object apart peels the argument.
+    if argument_had_error
+        || !(constraint_judgeable(argument)
+            || constraint_is_written_primitive(&constraint) && is_object_kind(argument))
+    {
+        return false;
     }
     // A constraint stated in terms of a *sibling* parameter (`K extends keyof T
     // & string`) is only as right as surge's model of that sibling. It resolves
@@ -382,7 +400,7 @@ fn check_type_argument_constraint(
     // (`Expect<a extends true>`) never names a sibling, and `Pick`/`Omit` keep
     // their own dedicated check in `utility.rs`.
     if constraint_names_a_sibling(&constraint, type_parameters) {
-        return;
+        return false;
     }
 
     let mut effective = parent_substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
@@ -393,7 +411,15 @@ fn check_type_argument_constraint(
     // speculative — it exists only to judge the argument — so anything it emits
     // on the way is rolled back.
     let diagnostics_before = ctx.diagnostics().len();
-    let resolved_constraint = if let Some((scope, file_name)) = declaration_scope {
+    let resolved_constraint = if is_written_keyof_any(&constraint) {
+        // `getIndexType(any)`. surge resolves `keyof any` to the sentinel, its
+        // `Type::Any` also standing in for types it could not model; the
+        // written keyword is the real `any`.
+        ResolvedType {
+            ty: union_type(vec![Type::String, Type::Number, Type::Symbol]),
+            had_error: false,
+        }
+    } else if let Some((scope, file_name)) = declaration_scope {
         with_type_declaration_scope(scope, ctx, |ctx| {
             with_file_name(ctx, file_name, |ctx| {
                 resolve_parsed_type(constraint, ctx, resolving, &effective)
@@ -403,20 +429,89 @@ fn check_type_argument_constraint(
         resolve_parsed_type(constraint, ctx, resolving, &effective)
     };
     ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
-    if resolved_constraint.had_error || !constraint_judgeable(&resolved_constraint.ty) {
-        return;
+    if resolved_constraint.had_error
+        || !constraint_judgeable(&resolved_constraint.ty)
+        || !constraint_judgeable(argument) && !is_primitive_kind(&resolved_constraint.ty)
+    {
+        return false;
     }
 
-    if !surge_ts_types::is_assignable_to(argument, &resolved_constraint.ty) {
-        let constraint_name = written_constraint_display(&constraint_for_display, &effective)
-            .unwrap_or_else(|| resolved_constraint.ty.name().to_string());
-        crate::infer::types::diagnostics::emit_type_argument_constraint(
+    if surge_ts_types::is_assignable_to(argument, &resolved_constraint.ty) {
+        return false;
+    }
+    let constraint_name = written_constraint_display(&constraint_for_display, &effective)
+        .unwrap_or_else(|| resolved_constraint.ty.name().to_string());
+    // `reportRelationError` names a literal source by its base type when the
+    // constraint could not hold it: `Uppercase<42>` reports 'number'.
+    let argument_name = crate::checks::expr::source_display_name(argument, &resolved_constraint.ty);
+    crate::infer::types::diagnostics::emit_type_argument_constraint(
+        &argument_name,
+        &constraint_name,
+        name_span,
+        ctx,
+    );
+    true
+}
+
+/// `checkTypeReferenceNode` relates a written reference's arguments to their
+/// parameters' constraints wherever the reference appears. A library
+/// declaration's instantiation is deferred to a lazy reference or served from a
+/// program-wide cache, and neither binds the arguments at the reference, so
+/// `ReturnType<string>` and `Uppercase<42>` were never related. Only a
+/// reference written in a checked file is related: one re-resolved under an
+/// instantiating substitution is not the node tsc checks, and tsc reports
+/// nothing for it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn check_written_type_argument_constraints(
+    type_parameters: &[ParsedTypeParameter],
+    written: &[ParsedType],
+    arguments: &[Type],
+    name_span: Option<TextSpan>,
+    substitution: &TypeParameterSubstitution,
+    declaration_scope: (
+        &Option<std::sync::Arc<crate::symbols::TypeDeclarationScope>>,
+        &str,
+    ),
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+) {
+    if name_span.is_none()
+        || ctx.is_library_scoped_file(&ctx.file_name)
+        || written
+            .iter()
+            .any(|argument| names_instantiated_parameter(argument, substitution))
+    {
+        return;
+    }
+    let unbound = TypeParameterSubstitution::new();
+    let mut bound = TypeParameterSubstitution::new();
+    for (parameter, argument) in type_parameters.iter().zip(arguments) {
+        if check_type_argument_constraint(
+            parameter,
+            type_parameters,
             argument,
-            &constraint_name,
+            false,
             name_span,
             ctx,
-        );
+            resolving,
+            &unbound,
+            &bound,
+            Some(declaration_scope),
+        ) {
+            return;
+        }
+        bound.insert(parameter.name.clone(), argument.clone());
     }
+}
+
+/// Whether a written type argument names a parameter the substitution binds to
+/// a type rather than to itself: the reference is being re-resolved as part of
+/// an instantiation.
+fn names_instantiated_parameter(argument: &ParsedType, substitution: &TypeParameterSubstitution) -> bool {
+    substitution.iter().next().is_some()
+        && super::indexed_access::mentions_type_parameter(argument, &|name: &str| {
+            substitution.get(name).is_some() && !substitution.is_placeholder(name)
+        })
 }
 
 /// The constraint as written, for the diagnostic. `keyof T` is spelled out
@@ -430,6 +525,8 @@ fn written_constraint_display(
     substitution: &TypeParameterSubstitution,
 ) -> Option<String> {
     match constraint {
+        // `keyof any` is `string | number | symbol` itself, and tsc names it so.
+        ParsedType::KeyOf(_) if is_written_keyof_any(constraint) => None,
         ParsedType::KeyOf(inner) => Some(format!(
             "keyof {}",
             written_constraint_display(inner, substitution)?
@@ -451,7 +548,10 @@ fn written_constraint_display(
 /// Anything this cannot look inside counts as mentioning one: the check is worth
 /// having only where it is certain, and a missed report costs less than a false
 /// one.
-fn constraint_names_a_sibling(constraint: &ParsedType, siblings: &[ParsedTypeParameter]) -> bool {
+pub(crate) fn constraint_names_a_sibling(
+    constraint: &ParsedType,
+    siblings: &[ParsedTypeParameter],
+) -> bool {
     let names_sibling = |name: &str| siblings.iter().any(|sibling| sibling.name == name);
     match constraint {
         ParsedType::String
@@ -488,22 +588,157 @@ fn constraint_names_a_sibling(constraint: &ParsedType, siblings: &[ParsedTypePar
 }
 
 /// A type whose constraint relationship surge can judge without leaning on
-/// structural assignability. Deliberately only primitives and literals: every
-/// structural gap surge still has (an interface that should satisfy `object`, a
-/// lazy reference whose shape is not forced) would otherwise surface here as a
-/// false `TS2344` on code that is fine, and this check has no way to tell that
-/// from a real violation. The assertion idiom this exists for — `Expect<a extends
-/// true>`, `K extends keyof T` with a written key — is entirely in this domain.
+/// structure it may model wrongly: primitives and literals, `null`,
+/// `undefined`, `void`, `never`, `any`, `unknown`, the `object` keyword, and
+/// arrays, tuples and plain signatures built from them. Every structural gap
+/// surge still has (an interface that should satisfy `object`, a lazy reference
+/// whose shape is not forced) would otherwise surface here as a false `TS2344`
+/// on code that is fine, and this check has no way to tell that from a real
+/// violation. The global `Function` interface is the one named type admitted:
+/// it declares no call signature, and that alone decides how it relates to
+/// every other type in this domain.
 fn constraint_judgeable(ty: &Type) -> bool {
     match ty {
         Type::String
         | Type::Number
         | Type::Boolean
         | Type::BigInt
+        | Type::Symbol
+        | Type::Null
+        | Type::Undefined
+        | Type::Void
+        | Type::Never
+        | Type::Any
+        | Type::GenuineUnknown
         | Type::StringLiteral(_)
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_) => true,
+        Type::Array(element) => constraint_judgeable(element),
+        Type::Tuple(elements) => elements.iter().all(constraint_judgeable),
+        Type::OpenTuple(tuple) => tuple
+            .leading
+            .iter()
+            .chain(std::iter::once(tuple.rest.as_ref()))
+            .chain(&tuple.trailing)
+            .all(constraint_judgeable),
+        Type::Function(function) => signature_judgeable(function),
+        // `object`, or a type made only of call and construct signatures
+        // (`abstract new (...args: any) => any`).
+        Type::Object(object) => {
+            let has_signature =
+                object.call_signature().is_some() || object.construct_signature().is_some();
+            !object.is_intersection
+                && object.properties.is_empty()
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none()
+                && (object.non_primitive && !has_signature
+                    || !object.non_primitive
+                        && has_signature
+                        && object.call_signature().is_none_or(signature_judgeable)
+                        && object.construct_signature().is_none_or(signature_judgeable))
+        }
         Type::Union(union) => union.types().iter().all(constraint_judgeable),
+        Type::Reference(_) => surge_ts_types::is_global_function_interface(ty),
+        _ => false,
+    }
+}
+
+/// A signature over the judgeable domain. A generic one binds type parameters
+/// of its own, and an overload fold stands for several signatures; neither
+/// relates as the one signature surge holds.
+fn signature_judgeable(function: &surge_ts_types::FunctionType) -> bool {
+    function.type_parameter_head().is_none()
+        && function.overloads().is_none()
+        && function.parameters().iter().all(constraint_judgeable)
+        && constraint_judgeable(function.return_type())
+}
+
+/// [`constraint_judgeable`] for a relation that may involve the type variables
+/// of the declaration being checked: a variable relates through its constraint
+/// (`unknown` when it has none), so it is judged when that constraint is.
+pub(crate) fn judgeable_through_type_variable(ty: &Type) -> bool {
+    match ty {
+        Type::TypeParameter(parameter) => {
+            match surge_ts_types::type_variable::active_constraint(parameter) {
+                Some(None) => true,
+                Some(Some(constraint)) => constraint_judgeable(&constraint),
+                None => false,
+            }
+        }
+        other => constraint_judgeable(other),
+    }
+}
+
+/// Whether surge decides `argument` against the constraint `constraint`
+/// exactly: both are judgeable, or an object type meets a primitive constraint.
+pub(crate) fn constraint_relation_decidable(argument: &Type, constraint: &Type) -> bool {
+    constraint_judgeable(constraint)
+        && (constraint_judgeable(argument)
+            || is_primitive_kind(constraint) && is_object_kind(argument))
+}
+
+/// A constraint written as primitives and literals alone (`string`, `keyof
+/// any`, `'a' | 1`), read off the syntax before anything is resolved.
+fn constraint_is_written_primitive(constraint: &ParsedType) -> bool {
+    match constraint {
+        ParsedType::String
+        | ParsedType::Number
+        | ParsedType::Boolean
+        | ParsedType::BigInt
+        | ParsedType::Symbol
+        | ParsedType::Null
+        | ParsedType::Undefined
+        | ParsedType::Void
+        | ParsedType::Never
+        | ParsedType::StringLiteral(_)
+        | ParsedType::NumberLiteral(_)
+        | ParsedType::BooleanLiteral(_) => true,
+        ParsedType::KeyOf(_) => is_written_keyof_any(constraint),
+        ParsedType::Union(members) => members.iter().all(constraint_is_written_primitive),
+        _ => false,
+    }
+}
+
+fn is_written_keyof_any(constraint: &ParsedType) -> bool {
+    matches!(constraint, ParsedType::KeyOf(inner) if matches!(inner.as_ref(), ParsedType::Any))
+}
+
+/// A resolved type every member of which is a primitive or a literal.
+fn is_primitive_kind(ty: &Type) -> bool {
+    match ty {
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::Null
+        | Type::Undefined
+        | Type::Void
+        | Type::Never
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => true,
+        Type::Union(union) => union.types().iter().all(is_primitive_kind),
+        _ => false,
+    }
+}
+
+/// An object type whatever its members, as relater.go's `isObjectType` (or
+/// the `object` keyword) sees it. A branded intersection keeps its primitive
+/// operand, and an enum, a unique symbol, a template literal or a string
+/// mapping is a reference that is no object.
+fn is_object_kind(ty: &Type) -> bool {
+    match ty {
+        Type::Function(_) | Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) => true,
+        Type::Object(object) => !object.is_intersection,
+        Type::Reference(reference) => {
+            reference.is_readonly_array()
+                || reference.enum_owner.is_none()
+                    && !reference.is_unique_symbol()
+                    && !surge_ts_types::is_template_literal_type(ty)
+                    && surge_ts_types::string_mapping_parts(ty).is_none()
+                    && is_object_kind(&ty.peeled())
+        }
         _ => false,
     }
 }

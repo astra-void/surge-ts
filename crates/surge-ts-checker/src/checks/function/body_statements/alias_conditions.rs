@@ -226,6 +226,7 @@ pub(super) fn rewrite_discriminant_aliases(
             operator_span,
             right,
             right_span,
+            ..
         } => {
             let new_left = rewrite_discriminant_aliases(left, flow_state);
             let new_right = rewrite_discriminant_aliases(right, flow_state);
@@ -239,6 +240,7 @@ pub(super) fn rewrite_discriminant_aliases(
                 operator_span: *operator_span,
                 right: Box::new(new_right.unwrap_or_else(|| right.as_ref().clone())),
                 right_span: *right_span,
+                truthiness_tests: Vec::new(),
             })
         }
         _ => None,
@@ -286,6 +288,7 @@ fn expand_alias_conditions(
             operator_span,
             right,
             right_span,
+            ..
         } => {
             let expanded_left = expand_alias_conditions(left, scopes, flow_state, inline_level);
             let expanded_right = expand_alias_conditions(right, scopes, flow_state, inline_level);
@@ -299,6 +302,7 @@ fn expand_alias_conditions(
                 operator_span: *operator_span,
                 right: Box::new(expanded_right.unwrap_or_else(|| (**right).clone())),
                 right_span: *right_span,
+                truthiness_tests: Vec::new(),
             })
         }
         ParsedExpression::Unary {

@@ -865,9 +865,50 @@ fn declare_expando_member(
         return;
     };
     let symbols = visible_symbols(scopes);
-    let InferredExpression::Known(value_type) =
-        evaluate_expression(&assignment.value, assignment.value_span, &symbols, ctx)
-    else {
+    // An assignment declaration's value has no contextual type, so an object
+    // literal written there is its own members' `this`.
+    let value_literal = match &assignment.value {
+        ParsedExpression::ObjectLiteral { span: Some(span), .. } => u32::try_from(span.start).ok(),
+        _ => None,
+    };
+    // The binder declares the member before a class body assigned to it is
+    // checked, so the body may already read it (`NS.K = class { m() { new
+    // NS.K() } }`); surge types it only once the class is evaluated.
+    let provisional = matches!(assignment.value, ParsedExpression::ClassExpression(_))
+        .then(|| {
+            let symbol = symbols.get(name)?;
+            let Type::Object(object) = symbol.ty.peeled() else {
+                return None;
+            };
+            if object.get_property(property_name).is_some() {
+                return None;
+            }
+            let mut properties = (*object.properties).clone();
+            properties.insert(property_name.into(), surge_ts_types::ObjectProperty::required(Type::Unknown));
+            let mut declared = symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+            let _ = declared.insert(
+                name.clone(),
+                crate::symbols::SymbolInfo {
+                    ty: Type::Object(crate::metrics::alloc_object_type(
+                        properties,
+                        object.string_index_type.as_deref().cloned(),
+                    )),
+                    kind: symbol.kind,
+                    function_signature: symbol.function_signature.clone(),
+                },
+            );
+            Some(declared)
+        })
+        .flatten();
+    let outer_literal = std::mem::replace(&mut ctx.expando_object_literal, value_literal);
+    let evaluated = evaluate_expression(
+        &assignment.value,
+        assignment.value_span,
+        provisional.as_ref().unwrap_or(symbols),
+        ctx,
+    );
+    ctx.expando_object_literal = outer_literal;
+    let InferredExpression::Known(value_type) = evaluated else {
         return;
     };
     if value_type.is_unknown() {
@@ -934,6 +975,30 @@ fn declare_expando_member(
     let _ = scopes.update_visible(name, updated);
 }
 
+/// tsc's `getContextualThisParameterType` for `obj.xxx = function () {…}`:
+/// under `noImplicitThis`, and always in JavaScript, the function's `this` is
+/// `obj`'s widened type — except `exports.xxx = …`, which a CommonJS module
+/// leaves untyped. Handed to the function's check, which runs next.
+fn hand_off_assigned_function_this(
+    assignment: &ParsedMemberAssignment,
+    object: &ParsedExpression,
+    receiver_type: &Type,
+    ctx: &mut CheckerContext,
+) {
+    let ParsedExpression::ArrowFunction(function) = &assignment.value else {
+        return;
+    };
+    let javascript = surge_ts_syntax::is_javascript_file_name(&ctx.file_name);
+    let exports = matches!(object, ParsedExpression::Identifier { name, .. } if name == "exports");
+    if function.this_binding != surge_ts_syntax::ParsedThisBinding::ImplicitAny
+        || !(javascript || ctx.options.no_implicit_this)
+        || (javascript && exports)
+    {
+        return;
+    }
+    ctx.next_arrow_this = Some(crate::checks::expr::widen_type(receiver_type));
+}
+
 pub(crate) fn check_member_assignment(
     assignment: ParsedMemberAssignment,
     scopes: &mut ScopeStack,
@@ -967,6 +1032,7 @@ fn check_member_assignment_itself(
     scopes: &mut ScopeStack,
     ctx: &mut CheckerContext,
 ) {
+    let module_level = std::mem::take(&mut ctx.module_level_member_write);
     // A private name is never a CommonJS export.
     let writes_private_name = matches!(
         &assignment.target,
@@ -1129,6 +1195,23 @@ fn check_member_assignment_itself(
         );
     }
 
+    // tsc's binder declares `F.prototype = …` on an expando container it finds
+    // in the write's own container (`bindDeferredExpandoAssignment`,
+    // `lookupEntity`): a function's own symbol never declares `prototype`,
+    // which only its apparent type has. The write is an assignment
+    // declaration, whose value has no contextual type
+    // (`getContextualTypeForAssignmentExpression`).
+    if !*is_bracketed
+        && property_name == "prototype"
+        && let ParsedExpression::Identifier { name, .. } = object.as_ref()
+        && (module_level || scopes.declares_locally(name))
+        && !ctx.is_import_binding(name)
+        && is_expando_receiver(object, &visible_symbols, ctx)
+    {
+        declare_expando_member(object, property_name, &assignment, scopes, ctx);
+        return;
+    }
+
     // A write checks against the property's *declared* type: after
     // `if (o.flag === undefined)` the read type is narrowed to `undefined`, but
     // `o.flag = true` is still an assignment to `boolean | undefined`.
@@ -1170,7 +1253,9 @@ fn check_member_assignment_itself(
         // `MyApp.getInitialProps = …` a false TS2339.
         let receiver = declared_object_type.as_ref().unwrap_or(&object_type);
         if is_expando_receiver(object, &visible_symbols, ctx) {
+            hand_off_assigned_function_this(&assignment, object, &object_type, ctx);
             declare_expando_member(object, property_name, &assignment, scopes, ctx);
+            ctx.next_arrow_this = None;
             return;
         }
         let receiver = receiver.clone();
@@ -1228,7 +1313,9 @@ fn check_member_assignment_itself(
                 ctx.push(diagnostic.with_span(convert_span(span)));
             }
         }
+        hand_off_assigned_function_this(&assignment, object, &object_type, ctx);
         check_value_without_target(&assignment, Some(&receiver), &visible_symbols, ctx);
+        ctx.next_arrow_this = None;
         return;
     };
 
@@ -1242,6 +1329,11 @@ fn check_member_assignment_itself(
     let target_unresolved = crate::checks::assign::type_contains_unknown(&target_type);
     let checkpoint = ctx.diagnostics().len();
 
+    // An expando container's member is an assignment declaration, whose
+    // value has no contextual signature to take `this` from.
+    if is_expando_receiver(object, &visible_symbols, ctx) {
+        hand_off_assigned_function_this(&assignment, object, &object_type, ctx);
+    }
     let inferred_value = crate::checks::expr::with_property_write_target(*property_span, || {
         crate::checks::expected::evaluate_expression_with_expected_type_anchored(
             &assignment.value,
@@ -1253,6 +1345,7 @@ fn check_member_assignment_itself(
             ctx,
         )
     });
+    ctx.next_arrow_this = None;
 
     if target_unresolved {
         ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
@@ -1402,6 +1495,11 @@ pub(crate) fn check_this_property_assignment(
         })
     else {
         report_missing_this_member(&assignment, None, visible_symbols, ctx);
+        // The value is still checked, as against tsc's error type: nothing it
+        // holds is contextually typed by the missing member.
+        ctx.degraded_expected_type_depth += 1;
+        let _ = evaluate_expression(&assignment.value, assignment.value_span, visible_symbols, ctx);
+        ctx.degraded_expected_type_depth -= 1;
         return;
     };
 

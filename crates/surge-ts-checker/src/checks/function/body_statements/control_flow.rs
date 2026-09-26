@@ -38,6 +38,9 @@ pub(crate) fn report_unreferenced_callable_conditions(
     symbols: &crate::symbols::SymbolTable,
     ctx: &mut CheckerContext,
 ) {
+    if !surge_ts_types::strict_null_checks() {
+        return;
+    }
     for test in tests {
         let InferredExpression::Known(ty) =
             crate::infer::infer_expression(&test.expression, symbols, ctx)
@@ -630,6 +633,26 @@ pub(crate) fn check_function_for_of_statement(
             if let InferredExpression::Known(iterable_type) = iterable_type {
                 element_type = for_of_element_type(&iterable_type);
             }
+            // `checkForOfStatement`: a head naming an existing binding is
+            // assigned each iterated value, which must fit its declared type.
+            if !for_of_statement.is_await
+                && for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::ExistingBinding
+                && let surge_ts_syntax::ParsedBindingName::Identifier {
+                    name,
+                    span: Some(span),
+                } = &for_of_statement.binding_name
+                && let Some(target_type) = visible_symbols
+                    .declared_type(name)
+                    .or_else(|| visible_symbols.get(name).map(|symbol| &symbol.ty))
+                && !crate::checks::function::type_contains_degradation(&element_type)
+                && !crate::checks::function::type_contains_degradation(target_type)
+                && !surge_ts_types::is_assignable_to(&element_type, target_type)
+            {
+                ctx.push(crate::spans::diagnostic_with_syntax_span(
+                    Diagnostic::ts2322(element_type.name(), target_type.name(), ctx.file_name.clone()),
+                    Some(*span),
+                ));
+            }
         }
     }
     if head_scoped {
@@ -1095,6 +1118,7 @@ pub(crate) fn check_function_switch_statement(
                 operator_span: None,
                 right: Box::new(right),
                 right_span: None,
+                truthiness_tests: Vec::new(),
             })
     };
     // Matching none of the cases is what the `default` clause, and the code

@@ -165,6 +165,7 @@ pub(crate) fn retain_constant_reference_guards(
             operator_span,
             right,
             right_span,
+            ..
         } => ParsedExpression::Logical {
             left: Box::new(retain_constant_reference_guards(left, symbols, is_assigned)),
             left_span: *left_span,
@@ -172,6 +173,7 @@ pub(crate) fn retain_constant_reference_guards(
             operator_span: *operator_span,
             right: Box::new(retain_constant_reference_guards(right, symbols, is_assigned)),
             right_span: *right_span,
+            truthiness_tests: Vec::new(),
         },
         ParsedExpression::Unary {
             operator: ParsedUnaryOperator::Not,

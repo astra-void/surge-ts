@@ -510,7 +510,7 @@ pub(crate) fn emit_generic_arity(
 /// (`checkTypeReferenceNode`); an instantiation surge synthesized has no
 /// reference, and tsc reports nothing for it.
 pub(crate) fn emit_type_argument_constraint(
-    argument: &surge_ts_types::Type,
+    argument_name: &str,
     constraint_name: &str,
     name_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
@@ -518,7 +518,7 @@ pub(crate) fn emit_type_argument_constraint(
     let Some(span) = name_span else {
         return;
     };
-    let diagnostic = Diagnostic::ts2344(&argument.name(), constraint_name, ctx.file_name.clone());
+    let diagnostic = Diagnostic::ts2344(argument_name, constraint_name, ctx.file_name.clone());
     ctx.push_utility_diagnostic_once(diagnostic.with_span(convert_span(span)));
 }
 

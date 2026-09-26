@@ -65,14 +65,143 @@ pub(crate) fn resolve_computed_property_names<'a>(
     std::borrow::Cow::Owned(resolved)
 }
 
+/// tsc's `checkObjectLiteral`. A member that reads its own `this` is handed
+/// the one `getContextualThisParameterType` gives it (see
+/// [`literal_member_this`]).
 pub(crate) fn infer_object_literal(
     properties: &[ParsedObjectProperty],
+    span: Option<surge_ts_syntax::TextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Type {
+    let Some(takers) = literal_this_takers(properties, span, ctx) else {
+        return infer_object_literal_members(properties, None, symbols, ctx);
+    };
+    if !literal_types_member_this(ctx) {
+        let member_this = LiteralMemberThis { ty: Type::Any, takers };
+        return infer_object_literal_members(properties, Some(&member_this), symbols, ctx);
+    }
+    // The literal's type needs its members' bodies, which read `this`: it is
+    // typed once with `this` unmodelled, what that reports discarded, and its
+    // members are then checked against that type.
+    let before = ctx.diagnostics().len();
+    let sketch = LiteralMemberThis { ty: Type::Unknown, takers };
+    let sketched = infer_object_literal_members(properties, Some(&sketch), symbols, ctx);
+    ctx.truncate_diagnostics_releasing_utility_keys(before);
+    let member_this = LiteralMemberThis {
+        ty: crate::checks::expr::widen_type(&sketched),
+        takers,
+    };
+    infer_object_literal_members(properties, Some(&member_this), symbols, ctx)
+}
+
+/// Which of an object literal's members take the `this` it hands them.
+#[derive(Clone, Copy)]
+pub(crate) enum LiteralThisTakers {
+    /// The members the grammar walk found reading `this` in a literal it saw
+    /// has no contextual type.
+    Readers,
+    /// Every member function without a `this` of its own: the literal is an
+    /// assignment declaration's value, which has no contextual type either.
+    Members,
+}
+
+/// The `this` an object literal hands the members that take it.
+pub(crate) struct LiteralMemberThis {
+    ty: Type,
+    takers: LiteralThisTakers,
+}
+
+impl LiteralMemberThis {
+    /// Hands `this` to the arrow check about to run on `member` if it takes
+    /// it. `method` for a method or accessor, whose `this` parameter the
+    /// lowering does not keep.
+    pub(crate) fn hand_to(
+        &self,
+        member: &surge_ts_syntax::ParsedArrowFunction,
+        method: bool,
+        ctx: &mut CheckerContext,
+    ) {
+        use surge_ts_syntax::ParsedThisBinding;
+        let takes = match self.takers {
+            LiteralThisTakers::Readers => reads_literal_this(member, ctx),
+            LiteralThisTakers::Members if method => member.this_binding != ParsedThisBinding::Inherited,
+            LiteralThisTakers::Members => member.this_binding == ParsedThisBinding::ImplicitAny,
+        };
+        ctx.next_arrow_this = takes.then(|| self.ty.clone());
+    }
+}
+
+fn reads_literal_this(member: &surge_ts_syntax::ParsedArrowFunction, ctx: &CheckerContext) -> bool {
+    member.this_binding != surge_ts_syntax::ParsedThisBinding::Inherited
+        && member
+            .span
+            .and_then(|span| u32::try_from(span.start).ok())
+            .is_some_and(|start| ctx.literal_this_members.binary_search(&start).is_ok())
+}
+
+/// Which members of the literal at `span` take its `this`, if any does.
+fn literal_this_takers(
+    properties: &[ParsedObjectProperty],
+    span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &CheckerContext,
+) -> Option<LiteralThisTakers> {
+    if ctx.expando_object_literal.is_some()
+        && span.and_then(|span| u32::try_from(span.start).ok()) == ctx.expando_object_literal
+    {
+        return Some(LiteralThisTakers::Members);
+    }
+    if ctx.literal_this_members.is_empty() {
+        return None;
+    }
+    properties
+        .iter()
+        .any(|property| {
+            matches!(&property.value, ParsedExpression::ArrowFunction(member) if reads_literal_this(member, ctx))
+                || property
+                    .paired_setter
+                    .as_deref()
+                    .is_some_and(|setter| reads_literal_this(setter, ctx))
+        })
+        .then_some(LiteralThisTakers::Readers)
+}
+
+/// `getContextualThisParameterType` types an object-literal member's `this`
+/// by its literal only under `noImplicitThis`, and always in JavaScript;
+/// otherwise it is `any`.
+fn literal_types_member_this(ctx: &CheckerContext) -> bool {
+    ctx.options.no_implicit_this || surge_ts_syntax::is_javascript_file_name(&ctx.file_name)
+}
+
+/// The `this` the object literal at `span`, of type `literal_type`, hands its
+/// members: the literal widened (`getWidenedType`) where it has no contextual
+/// type, `any` where `this` is not typed by it at all.
+pub(crate) fn literal_member_this(
+    properties: &[ParsedObjectProperty],
+    span: Option<surge_ts_syntax::TextSpan>,
+    literal_type: Option<&Type>,
+    ctx: &CheckerContext,
+) -> Option<LiteralMemberThis> {
+    let takers = literal_this_takers(properties, span, ctx)?;
+    let ty = if literal_types_member_this(ctx) {
+        literal_type.map_or(Type::Unknown, crate::checks::expr::widen_type)
+    } else {
+        Type::Any
+    };
+    Some(LiteralMemberThis { ty, takers })
+}
+
+fn infer_object_literal_members(
+    properties: &[ParsedObjectProperty],
+    member_this: Option<&LiteralMemberThis>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Type {
     let properties = &*resolve_computed_property_names(properties, symbols, ctx);
     let object_literal_start = Instant::now();
-    let mut merged_properties: PropertyMap = PropertyMap::default();
+    // tsc's `getSpreadType` distributes over a spread union with more than one
+    // non-empty object member, so the literal is one object per alternative.
+    let mut alternatives: Vec<PropertyMap> = vec![PropertyMap::default()];
     // A spread source that surge could not fully enumerate carries
     // `synthetic_open_index`. The members it stands for are real — the derived
     // interface was kept open precisely because they exist — so the spread
@@ -134,39 +263,8 @@ pub(crate) fn infer_object_literal(
                 }
                 Type::Object(source) => {
                     spread_source_is_open |= source.synthetic_open_index;
-                    for (name, source_property) in source.properties.iter() {
-                        // `isSpreadableProperty`: a private name stays behind.
-                        if surge_ts_types::private_name::is_private_name_key(name) {
-                            continue;
-                        }
-                        // An *optional* source property may not be carried at
-                        // all, so an earlier property of the same name survives:
-                        // tsc types the result as the union of both (with
-                        // `undefined` dropped from the spread side) and keeps
-                        // the earlier property's optionality. Replacing it
-                        // outright made zustand's `let options = { partialize:
-                        // (s) => s, …, ...baseOptions }` read `partialize` as
-                        // possibly-undefined and uncallable.
-                        let merged = match merged_properties.get(name.as_ref()) {
-                            Some(existing) if source_property.optional => {
-                                surge_ts_types::ObjectProperty {
-                                    ty: surge_ts_types::union_type(vec![
-                                        existing.ty.clone(),
-                                        surge_ts_types::remove_undefined(&source_property.ty),
-                                    ]),
-                                    optional: existing.optional,
-                                    method: existing.method || source_property.method,
-                                    readonly: false,
-                                    restriction: None,
-                                    index_slot: false,
-                                }
-                            }
-                            // `getSpreadSymbol`: outside a const context a
-                            // spread member is writable whatever it was on the
-                            // source.
-                            _ => source_property.clone().with_readonly(false),
-                        };
-                        merged_properties.insert(name.clone(), merged);
+                    for merged_properties in &mut alternatives {
+                        merge_object_spread(&source, merged_properties);
                     }
                 }
                 // `{ ...(cond ? { list } : {}) }`: spreading a union contributes
@@ -177,7 +275,29 @@ pub(crate) fn infer_object_literal(
                     spread_source_is_open |= source.types().iter().any(|member| {
                         matches!(member.peeled(), Type::Object(object) if object.synthetic_open_index)
                     });
-                    merge_union_spread(&source, &mut merged_properties);
+                    match distributed_spread_members(&source) {
+                        Some(members)
+                            if alternatives.len() * members.len() <= MAX_SPREAD_ALTERNATIVES =>
+                        {
+                            alternatives = alternatives
+                                .iter()
+                                .flat_map(|merged_properties| {
+                                    members.iter().map(move |member| {
+                                        let mut merged_properties = merged_properties.clone();
+                                        if let Some(member) = member {
+                                            merge_object_spread(member, &mut merged_properties);
+                                        }
+                                        merged_properties
+                                    })
+                                })
+                                .collect();
+                        }
+                        _ => {
+                            for merged_properties in &mut alternatives {
+                                merge_union_spread(&source, merged_properties);
+                            }
+                        }
+                    }
                 }
                 _ => continue,
             }
@@ -185,11 +305,13 @@ pub(crate) fn infer_object_literal(
         }
 
         let readonly = is_get_only_accessor(property, properties);
-        merged_properties.insert(
-            property.name.as_str().into(),
-            ObjectProperty::required(infer_object_property_type(property, symbols, ctx))
-                .with_readonly(readonly),
-        );
+        let property_type = infer_object_property_type(property, member_this, symbols, ctx);
+        for merged_properties in &mut alternatives {
+            merged_properties.insert(
+                property.name.as_str().into(),
+                ObjectProperty::required(property_type.clone()).with_readonly(readonly),
+            );
+        }
     }
 
     // tsc's `isJSLiteralType`: without noImplicitAny an object literal written
@@ -197,24 +319,120 @@ pub(crate) fn infer_object_literal(
     // reads as `any` wherever the object is used.
     let javascript_literal = !ctx.options.no_implicit_any
         && surge_ts_syntax::is_javascript_file_name(&ctx.file_name);
+    let build = |merged_properties: PropertyMap| {
+        if spread_source_is_open || javascript_literal {
+            let mut object = alloc_object_type(merged_properties, Some(Type::Any));
+            object = object.with_open_index_marker();
+            if !spread_variables.is_empty() {
+                object = object
+                    .with_intersection_marker()
+                    .with_intersection_operands(spread_variables.clone());
+            }
+            Type::Object(object)
+        } else {
+            Type::Object(alloc_object_type(merged_properties, None))
+        }
+    };
     let result = if spread_source_is_any {
         Type::Any
-    } else if spread_source_is_open || javascript_literal {
-        let mut object = alloc_object_type(merged_properties, Some(Type::Any));
-        object = object.with_open_index_marker();
-        if !spread_variables.is_empty() {
-            object = object
-                .with_intersection_marker()
-                .with_intersection_operands(spread_variables);
-        }
-        Type::Object(object)
+    } else if alternatives.len() == 1 {
+        build(alternatives.pop().unwrap_or_default())
     } else {
-        Type::Object(alloc_object_type(merged_properties, None))
+        union_type(alternatives.into_iter().map(build).collect())
     };
     record_program_timing(ctx.timings.as_ref(), |timings| {
         timings.object_literal_checking += object_literal_start.elapsed()
     });
     result
+}
+
+/// `checkCrossProductUnion` stops tsc at 100,000 spread alternatives; surge
+/// folds far earlier into the merged approximation below.
+const MAX_SPREAD_ALTERNATIVES: usize = 64;
+
+/// One object spread into the members merged so far.
+fn merge_object_spread(source: &surge_ts_types::ObjectType, merged_properties: &mut PropertyMap) {
+    for (name, source_property) in source.properties.iter() {
+        // `isSpreadableProperty`: a private name stays behind.
+        if surge_ts_types::private_name::is_private_name_key(name) {
+            continue;
+        }
+        // An *optional* source property may not be carried at
+        // all, so an earlier property of the same name survives:
+        // tsc types the result as the union of both (with
+        // `undefined` dropped from the spread side) and keeps
+        // the earlier property's optionality. Replacing it
+        // outright made zustand's `let options = { partialize:
+        // (s) => s, …, ...baseOptions }` read `partialize` as
+        // possibly-undefined and uncallable.
+        let merged = match merged_properties.get(name.as_ref()) {
+            Some(existing) if source_property.optional => surge_ts_types::ObjectProperty {
+                ty: surge_ts_types::union_type(vec![
+                    existing.ty.clone(),
+                    surge_ts_types::remove_undefined(&source_property.ty),
+                ]),
+                optional: existing.optional,
+                method: existing.method || source_property.method,
+                readonly: false,
+                restriction: None,
+                index_slot: false,
+            },
+            // `getSpreadSymbol`: outside a const context a
+            // spread member is writable whatever it was on the
+            // source.
+            _ => source_property.clone().with_readonly(false),
+        };
+        merged_properties.insert(name.clone(), merged);
+    }
+}
+
+/// The members a spread union distributes over (`getSpreadType` after
+/// `tryMergeUnionOfObjectTypeAndEmptyObject`): only when at least two of them
+/// are objects with members; an empty object, `null`, `undefined` or a
+/// primitive spreads nothing (`None`). A union with anything surge cannot see
+/// through is left to the merged approximation.
+fn distributed_spread_members(
+    source: &surge_ts_types::UnionType,
+) -> Option<Vec<Option<surge_ts_types::ObjectType>>> {
+    let mut members = Vec::new();
+    let mut objects = 0;
+    for member in source.types().iter() {
+        match member.peeled() {
+            Type::Object(object)
+                if object.synthetic_open_index
+                    || surge_ts_types::type_variable::is_narrowed_type_variable(&Type::Object(
+                        object.clone(),
+                    )) =>
+            {
+                return None;
+            }
+            Type::Object(object) => {
+                let empty = object.properties.is_empty()
+                    && object.string_index_type.is_none()
+                    && object.number_index_type.is_none()
+                    && object.call_signature().is_none()
+                    && object.construct_signature().is_none();
+                if empty {
+                    members.push(None);
+                } else {
+                    objects += 1;
+                    members.push(Some(object));
+                }
+            }
+            Type::Null
+            | Type::Undefined
+            | Type::Void
+            | Type::Boolean
+            | Type::BooleanLiteral(_)
+            | Type::Number
+            | Type::NumberLiteral(_)
+            | Type::String
+            | Type::StringLiteral(_)
+            | Type::BigInt => members.push(None),
+            _ => return None,
+        }
+    }
+    (objects >= 2).then_some(members)
 }
 
 fn merge_union_spread(source: &surge_ts_types::UnionType, merged: &mut PropertyMap) {
@@ -480,6 +698,7 @@ pub(crate) fn infer_object_property_value(
 /// declarations) rather than the inference path that widens inline parameters to `any`.
 fn infer_object_property_type(
     property: &ParsedObjectProperty,
+    member_this: Option<&LiteralMemberThis>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Type {
@@ -491,14 +710,22 @@ fn infer_object_property_type(
         } else {
             arrow.as_ref().clone()
         };
+        if let Some(member_this) = member_this {
+            member_this.hand_to(arrow, true, ctx);
+        }
         let function_type = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
             check_arrow_function_expression(checked, symbols, ctx)
         });
+        ctx.next_arrow_this = None;
         // `getTypeOfAccessors`: the getter's annotation, else the setter's, else
         // what the getter's body returns — all of which the getter's own
         // return type now is. A lone setter's property is its parameter's type.
         if property.is_getter {
+            if let (Some(member_this), Some(setter)) = (member_this, property.paired_setter.as_deref()) {
+                member_this.hand_to(setter, true, ctx);
+            }
             check_setter_of_getter(property, arrow, function_type.return_type(), symbols, ctx);
+            ctx.next_arrow_this = None;
             return function_type.return_type().clone();
         }
         if property.is_accessor {

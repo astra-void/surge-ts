@@ -2842,7 +2842,7 @@ pub const TS17000: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "JSX attributes must only be assigned a non-empty 'expression'.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS18010: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -7492,7 +7492,7 @@ pub const TS2858: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Import attribute values must be string literal expressions.",
     argument_count: 0,
-    support: DiagnosticSupport::CatalogOnly,
+    support: DiagnosticSupport::Emitted,
 };
 
 pub const TS7036: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -7502,6 +7502,96 @@ pub const TS7036: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "Dynamic import's specifier must be of type 'string', but here has type '{0}'.",
     argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2604: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2604",
+    number: Some(2604),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "JSX element type '{0}' does not have any construct or call signatures.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2607: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2607",
+    number: Some(2607),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "JSX element class does not support attributes because it does not have a '{0}' property.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2609: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2609",
+    number: Some(2609),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "JSX spread child must be an array type.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2786: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2786",
+    number: Some(2786),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' cannot be used as a JSX component.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS17016: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS17016",
+    number: Some(17016),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The 'jsxFragmentFactory' compiler option must be provided to use JSX fragments with the 'jsxFactory' compiler option.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS17017: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS17017",
+    number: Some(17017),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "An @jsxFrag pragma is required when using an @jsx pragma with JSX fragments.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2639: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2639",
+    number: Some(2639),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "React components cannot include JSX namespace names",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS17001: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS17001",
+    number: Some(17001),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "JSX elements cannot have multiple attributes with the same name.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2816: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2816",
+    number: Some(2816),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Cannot use 'this' in a static property initializer of a decorated class.",
+    argument_count: 0,
     support: DiagnosticSupport::Emitted,
 };
 
@@ -8256,6 +8346,15 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS2712,
     TS2858,
     TS7036,
+    TS2604,
+    TS2607,
+    TS2609,
+    TS2786,
+    TS17016,
+    TS17017,
+    TS2639,
+    TS17001,
+    TS2816,
 ];
 
 impl Diagnostic {
@@ -13698,5 +13797,62 @@ impl Diagnostic {
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2604(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2604,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2607(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2607,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2609(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2609, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2786(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2786,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts17016(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS17016, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts17017(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS17017, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2639(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2639, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts17001(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS17001, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2816(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2816, Vec::<DiagnosticArg>::new(), file_name)
     }
 }

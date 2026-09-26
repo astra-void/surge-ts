@@ -73,6 +73,12 @@ pub struct ParsedSource {
     /// TypeScript file without an import or export. Collected with
     /// `grammar_diagnostics`.
     pub global_this_starts: Vec<u32>,
+    /// Where each object-literal member whose `this` is the literal itself
+    /// starts (its function's span): a method, accessor or `key: function`
+    /// value that reads `this` and has no `this` parameter, in a literal with
+    /// no contextual type — tsc's `getContextualThisParameterType` types that
+    /// `this` as the literal. Sorted. Collected with `grammar_diagnostics`.
+    pub literal_this_members: Vec<u32>,
     /// For a `.json` file: the type of the value it holds, and the marker that
     /// this *is* a JSON module. Nothing in a JSON file is code, so it is never
     /// parsed as TypeScript and `statements` is empty; this carries its whole
@@ -1011,6 +1017,15 @@ pub struct ParsedClassDeclaration {
     pub decorators: Vec<ParsedDecorator>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedClassExpression {
+    /// Named as tsc writes an unassigned class (`getNameOfSymbolAsWritten`):
+    /// its own name, else `(Anonymous class)`.
+    pub class: ParsedClassDeclaration,
+    /// The class writes a name of its own, which is bound inside its body.
+    pub has_own_name: bool,
+}
+
 /// A decorator's expression, and what tsc's `nodeCanBeDecorated` asks of the
 /// declaration it decorates (which decides whether it is checked at all).
 #[derive(Debug, Clone, PartialEq)]
@@ -1528,6 +1543,11 @@ pub enum ParsedExpression {
         operator_span: Option<TextSpan>,
         right: Box<ParsedExpression>,
         right_span: Option<TextSpan>,
+        /// See [`ParsedIfStatement::unreferenced_truthiness_tests`]: the left
+        /// operands of the `&&` chain this expression is the root of, which
+        /// only the rest of the chain can use. Empty inside an `if` condition,
+        /// whose own tests cover them.
+        truthiness_tests: Vec<ParsedTruthinessTest>,
     },
     Conditional {
         condition: Box<ParsedExpression>,
@@ -1721,6 +1741,9 @@ pub enum ParsedExpression {
     TemplateStringsArray {
         span: Option<TextSpan>,
     },
+    /// `/pattern/flags`: a value of the global `RegExp`
+    /// (`checkRegularExpressionLiteral`).
+    RegExpLiteral,
     /// `import(specifier)` / `import(specifier, options)`: its arguments are
     /// checked (`checkImportCallExpression`); the `Promise` of the module it
     /// evaluates to is not modelled.
@@ -1731,6 +1754,11 @@ pub enum ParsedExpression {
         options_span: Option<TextSpan>,
         span: Option<TextSpan>,
     },
+    /// A class expression (`return class extends Base { … }`): a class whose
+    /// value is its constructor, checked where it is evaluated (tsc's
+    /// `checkClassExpression`). `const C = class {}` is lowered to a class
+    /// declaration instead.
+    ClassExpression(Box<ParsedClassExpression>),
     Unknown,
 }
 
@@ -1802,6 +1830,8 @@ pub enum ParsedJsxChild {
     Expression {
         expression: Option<ParsedExpression>,
         span: Option<TextSpan>,
+        /// A `{...spread}` child, which tsc requires to be an array.
+        spread: bool,
     },
     /// A nested JSX element or fragment (itself a [`ParsedExpression`]).
     Element(ParsedExpression),
@@ -2674,7 +2704,9 @@ impl ParsedExpression {
             | ParsedExpression::Identifier { .. }
             | ParsedExpression::This { .. }
             | ParsedExpression::ArrowFunction(_)
+            | ParsedExpression::ClassExpression(_)
             | ParsedExpression::TemplateStringsArray { .. }
+            | ParsedExpression::RegExpLiteral
             | ParsedExpression::Unknown => {}
         }
     }
@@ -2714,7 +2746,7 @@ impl ParsedExpression {
                     right_span: *right_span,
                 }
             }
-            ParsedExpression::Logical { left, left_span, operator, operator_span, right, right_span } => {
+            ParsedExpression::Logical { left, left_span, operator, operator_span, right, right_span, truthiness_tests } => {
                 ParsedExpression::Logical {
                     left: Box::new(left.with_assignments_as_reads()),
                     left_span: *left_span,
@@ -2722,6 +2754,7 @@ impl ParsedExpression {
                     operator_span: *operator_span,
                     right: Box::new(right.with_assignments_as_reads()),
                     right_span: *right_span,
+                    truthiness_tests: truthiness_tests.clone(),
                 }
             }
             ParsedExpression::Unary { operator, operator_span, operand, operand_span } => {

@@ -97,10 +97,12 @@ fn narrow_non_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Opti
     if let Some(narrowed) = narrow_type_variable_by_typeof(ty, tag) {
         return Some(narrowed);
     }
-    if matches!(
-        ty,
-        Type::Any | Type::Unknown | Type::ErrorType | Type::TypeParameter(_)
-    ) {
+    // `narrowTypeByTypeName`: a primitive tag's type is a subtype of `any` and
+    // replaces it; `"object"` and `"function"` leave `any` whole.
+    if matches!(ty, Type::Any) {
+        return type_for_typeof_tag(tag);
+    }
+    if matches!(ty, Type::Unknown | Type::ErrorType | Type::TypeParameter(_)) {
         return None;
     }
     let Some(candidate) = type_for_typeof_tag(tag) else {

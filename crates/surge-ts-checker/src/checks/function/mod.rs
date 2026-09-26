@@ -1954,6 +1954,12 @@ pub(crate) fn check_arrow_function_expression_anchored(
     } = arrow;
     let is_argument = std::mem::take(&mut ctx.next_arrow_is_argument);
     let context_only = std::mem::take(&mut ctx.next_arrow_context_only);
+    // What an object literal hands its member (tsc's
+    // `getContextualThisParameterType`); an arrow has no `this` to take it.
+    let literal_this = ctx
+        .next_arrow_this
+        .take()
+        .filter(|_| !matches!(this_binding, surge_ts_syntax::ParsedThisBinding::Inherited));
     check_type_parameter_declarations(&type_parameters, ctx);
     // A generic arrow's, function expression's or object-literal method's own
     // type parameters are type variables while its signature and body are
@@ -1969,7 +1975,9 @@ pub(crate) fn check_arrow_function_expression_anchored(
     match this_binding {
         surge_ts_syntax::ParsedThisBinding::Inherited => {}
         surge_ts_syntax::ParsedThisBinding::Own => ctx.this_is_implicitly_any = false,
-        surge_ts_syntax::ParsedThisBinding::ImplicitAny => ctx.this_is_implicitly_any = true,
+        surge_ts_syntax::ParsedThisBinding::ImplicitAny => {
+            ctx.this_is_implicitly_any = literal_this.is_none();
+        }
     }
     let _this_class = (!matches!(this_binding, surge_ts_syntax::ParsedThisBinding::Inherited))
         .then(|| crate::checks::expr::ThisParameterClassScope::enter(None));
@@ -2112,15 +2120,18 @@ pub(crate) fn check_arrow_function_expression_anchored(
         // leak in. tsc takes `this` from the contextual signature here — surge
         // does not model that, and reading the enclosing class instead reported
         // its members missing (`ws.addEventListener('message', function () {
-        // this.send(…) })` inside a class).
-        if matches!(
-            this_binding,
-            surge_ts_syntax::ParsedThisBinding::ImplicitAny
-        ) {
+        // this.send(…) })` inside a class). An object-literal member takes the
+        // `this` its literal hands it.
+        let own_this = match (&literal_this, this_binding) {
+            (Some(literal_this), _) => Some(literal_this.clone()),
+            (None, surge_ts_syntax::ParsedThisBinding::ImplicitAny) => Some(Type::Any),
+            (None, _) => None,
+        };
+        if let Some(own_this) = own_this {
             scopes.insert_current(
                 "this",
                 crate::symbols::SymbolInfo {
-                    ty: Type::Any,
+                    ty: own_this,
                     kind: crate::symbols::SymbolKind::Const,
                     function_signature: None,
                 },
@@ -2144,6 +2155,12 @@ pub(crate) fn check_arrow_function_expression_anchored(
         crate::checks::function::with_type_parameter_scope(&type_parameters, ctx, |ctx| {
             for (index, parameter) in parameters.iter().enumerate() {
                 if let Some(parameter_type) = parameter_types.get(index) {
+                    check_annotated_parameter_initializer(
+                        parameter,
+                        parameter_type,
+                        scopes.visible_symbols(),
+                        ctx,
+                    );
                     check_annotated_binding_pattern_reads(parameter, parameter_type, ctx);
                 }
                 check_binding_pattern_defaults(
@@ -2153,6 +2170,14 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     scopes.visible_symbols(),
                     ctx,
                 );
+                if let Some(parameter_type) = parameter_types.get(index) {
+                    signature::check_parameter_pattern_accessibility(
+                        &parameter.binding_name,
+                        parameter_type,
+                        scopes.visible_symbols(),
+                        ctx,
+                    );
+                }
             }
         });
 

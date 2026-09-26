@@ -116,6 +116,7 @@ fn parse_expression_unannotated(expression: &Expression<'_>) -> (ParsedExpressio
             ParsedExpression::BooleanLiteral(boolean_literal.value)
         }
         Expression::NullLiteral(_) => ParsedExpression::NullLiteral,
+        Expression::RegExpLiteral(_) => ParsedExpression::RegExpLiteral,
         Expression::BigIntLiteral(literal) => ParsedExpression::BigIntLiteral(literal.raw.as_deref().unwrap_or_default().to_string()),
         Expression::Identifier(identifier) => {
             if identifier.name == "undefined" {
@@ -293,10 +294,34 @@ fn parse_expression_unannotated(expression: &Expression<'_>) -> (ParsedExpressio
             parse_assignment_value(assignment).unwrap_or(ParsedExpression::Unknown)
         }
         Expression::ImportExpression(import) => parse_import_call(import),
+        Expression::ClassExpression(class) => parse_class_expression(class),
         _ => ParsedExpression::Unknown,
     };
 
     (parsed_expression, expression.span())
+}
+
+/// A class expression, under its own name or else `(Anonymous class)`, as tsc
+/// writes an unassigned one (`getNameOfSymbolAsWritten`). The name a variable
+/// or property lends an anonymous class (`getAssignedName`) only labels it in
+/// tsc, and is not taken: the name here is also what the class's instance
+/// type is looked up by while it is checked. An unnamed class is reported at
+/// its first token.
+fn parse_class_expression(class: &oxc_ast::ast::Class<'_>) -> ParsedExpression {
+    let (name, name_span) = match &class.id {
+        Some(id) => (id.name.to_string(), id.span),
+        None => (
+            "(Anonymous class)".to_string(),
+            Span::new(class.span.start, class.span.start + "class".len() as u32),
+        ),
+    };
+    match super::classes::parse_class_declaration_named(class, name, text_span_from_oxc_span(name_span)) {
+        Some(class_declaration) => ParsedExpression::ClassExpression(Box::new(crate::ParsedClassExpression {
+            class: class_declaration,
+            has_own_name: class.id.is_some(),
+        })),
+        None => ParsedExpression::Unknown,
+    }
 }
 
 /// `import(specifier, options)`. The parser recovers `import()` and a spread
@@ -698,13 +723,18 @@ fn parse_jsx_child(child: &JSXChild<'_>) -> ParsedJsxChild {
         JSXChild::Fragment(fragment) => ParsedJsxChild::Element(parse_jsx_fragment(fragment)),
         JSXChild::ExpressionContainer(container) => {
             let (expression, span) = parse_jsx_container_expression(container);
-            ParsedJsxChild::Expression { expression, span }
+            ParsedJsxChild::Expression {
+                expression,
+                span,
+                spread: false,
+            }
         }
         JSXChild::Spread(spread) => {
             let (expression, span) = parse_expression(&spread.expression);
             ParsedJsxChild::Expression {
                 expression: Some(expression),
                 span: Some(text_span_from_oxc_span(span)),
+                spread: true,
             }
         }
     }
@@ -1245,7 +1275,7 @@ fn parse_binary_expression(binary_expression: &BinaryExpression<'_>) -> Option<P
 fn parse_logical_expression(
     logical_expression: &LogicalExpression<'_>,
 ) -> Option<ParsedExpression> {
-    let (left, left_span) = parse_expression(&logical_expression.left);
+    let (mut left, left_span) = parse_expression(&logical_expression.left);
     let (right, right_span) = parse_expression(&logical_expression.right);
 
     if logical_expression.operator == LogicalOperator::Coalesce {
@@ -1263,6 +1293,20 @@ fn parse_logical_expression(
         LogicalOperator::Coalesce => unreachable!(),
     };
 
+    let truthiness_tests = if operator == ParsedLogicalOperator::And {
+        if let (
+            Expression::LogicalExpression(inner),
+            ParsedExpression::Logical { truthiness_tests, .. },
+        ) = (&logical_expression.left, &mut left)
+            && inner.operator == LogicalOperator::And
+        {
+            truthiness_tests.clear();
+        }
+        super::functions::and_operand_truthiness_tests(logical_expression)
+    } else {
+        Vec::new()
+    };
+
     Some(ParsedExpression::Logical {
         left: Box::new(left),
         left_span: Some(text_span_from_oxc_span(left_span)),
@@ -1270,6 +1314,7 @@ fn parse_logical_expression(
         right: Box::new(right),
         right_span: Some(text_span_from_oxc_span(right_span)),
         operator_span: None,
+        truthiness_tests,
     })
 }
 
