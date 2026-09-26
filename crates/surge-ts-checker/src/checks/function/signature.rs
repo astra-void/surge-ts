@@ -625,6 +625,63 @@ fn check_binding_element_default(
     }
 }
 
+/// Records a parameter's declared type for the compiler API's semantic index;
+/// each name a destructured parameter binds has the type
+/// [`insert_parameter_bindings`] bound it with.
+pub(crate) fn record_parameter_binding(
+    parameter: &ParsedFunctionParameter,
+    parameter_type: &Type,
+    scopes: &ScopeStack,
+    ctx: &CheckerContext,
+) {
+    if !crate::semantic::recording() {
+        return;
+    }
+    if let ParsedBindingName::Identifier { span, .. } = &parameter.binding_name {
+        crate::semantic::record_declaration_type(*span, &parameter_scope_type(parameter, parameter_type), ctx);
+        return;
+    }
+    record_binding_names(&parameter.binding_name, scopes, ctx);
+}
+
+/// Records, for the compiler API's semantic index, the type each name of
+/// `binding` was just bound with in `scopes`.
+pub(crate) fn record_binding_names(binding: &ParsedBindingName, scopes: &ScopeStack, ctx: &CheckerContext) {
+    if !crate::semantic::recording() {
+        return;
+    }
+    let mut names = Vec::new();
+    binding_names(binding, &mut names);
+    for (name, span) in names {
+        if let Some(symbol) = scopes.resolve(name) {
+            crate::semantic::record_declaration_type(span, &symbol.ty, ctx);
+        }
+    }
+}
+
+fn binding_names<'a>(binding: &'a ParsedBindingName, names: &mut Vec<(&'a str, Option<surge_ts_syntax::TextSpan>)>) {
+    match binding {
+        ParsedBindingName::Identifier { name, span } => names.push((name, *span)),
+        ParsedBindingName::ObjectPattern(pattern) => {
+            for element in &pattern.elements {
+                binding_names(&element.binding_name, names);
+            }
+            if let Some(rest) = &pattern.rest {
+                binding_names(rest, names);
+            }
+        }
+        ParsedBindingName::ArrayPattern(pattern) => {
+            for element in pattern.elements.iter().flatten() {
+                binding_names(element, names);
+            }
+            if let Some(rest) = &pattern.rest {
+                binding_names(rest, names);
+            }
+        }
+        ParsedBindingName::Unsupported { .. } => {}
+    }
+}
+
 pub(crate) fn insert_parameter_bindings(
     parameter: &ParsedFunctionParameter,
     parameter_type: &Type,
@@ -2609,6 +2666,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
 
     for (parameter, parameter_type) in parameters.iter().zip(function_type.parameters().iter()) {
         insert_parameter_bindings(parameter, parameter_type, &mut scopes);
+        record_parameter_binding(parameter, parameter_type, &scopes, ctx);
     }
     // A default is written inside the signature, so the function's own type
     // parameters are in scope for it.

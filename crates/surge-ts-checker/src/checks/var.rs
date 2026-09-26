@@ -60,6 +60,7 @@ pub(crate) fn check_variable_declaration_with_symbols(
     .flatten();
 
     let symbol = check_variable_declaration_against_symbols(variable, symbols, ctx, options)?;
+    crate::semantic::record_declaration_type(variable_name_span, &symbol.ty, ctx);
 
     if is_duplicate {
         if let Some(first_span) = symbols.take_declaration_span(&variable_name) {

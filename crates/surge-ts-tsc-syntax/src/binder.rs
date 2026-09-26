@@ -14,8 +14,9 @@ use crate::parser::ParsedFile;
 use crate::scanner::{self, Scanner};
 use crate::{Diagnostic, Message};
 
+/// `ast.SymbolFlags`, with the values tsc gives them.
 #[allow(non_upper_case_globals, dead_code)]
-mod symbol_flags {
+pub mod symbol_flags {
     pub const None: u32 = 0;
     pub const FunctionScopedVariable: u32 = 1 << 0;
     pub const BlockScopedVariable: u32 = 1 << 1;
@@ -242,6 +243,49 @@ pub(crate) fn error_range_for_node(file: &ParsedFile, text: &str, node: NodeId) 
     (pos, n.end)
 }
 
+/// A bound file's symbols, detached from the binder: what the compiler API
+/// resolves names and reads declarations from.
+#[derive(Debug, Default)]
+pub struct BoundFile {
+    pub symbols: Vec<BoundSymbol>,
+    /// `container.Locals()`, by container node.
+    pub locals: HashMap<NodeId, HashMap<String, usize>>,
+    /// `symbol.Exports()`, by symbol: a module's or namespace's exports, an
+    /// enum's members, a class's static members.
+    pub exports: HashMap<usize, HashMap<String, usize>>,
+    /// `symbol.Members()`, by symbol: a class's instance members, an
+    /// interface's, a type or object literal's.
+    pub members: HashMap<usize, HashMap<String, usize>>,
+    /// `node.Symbol()`: the symbol each declaration was added to.
+    pub node_symbol: HashMap<NodeId, usize>,
+    /// `node.LocalSymbol()`: an exported declaration's local symbol.
+    pub local_symbol: HashMap<NodeId, usize>,
+    pub diagnostics: Vec<crate::SyntaxDiagnostic>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundSymbol {
+    /// The name tsc's binder gives the symbol, internal names spelled as
+    /// tsc's `InternalSymbolName` spells them (`__call`, `__type`, ...).
+    pub name: String,
+    pub flags: u32,
+    pub declarations: Vec<NodeId>,
+    pub value_declaration: Option<NodeId>,
+    /// `Symbol.ExportSymbol`.
+    pub export_symbol: Option<usize>,
+    /// The symbol whose exports or members table holds this one.
+    pub parent: Option<usize>,
+}
+
+/// This port marks internal names with a private-use prefix where tsc
+/// escapes them with `__`; the compiler API reports tsc's spelling.
+fn public_symbol_name(name: &str) -> String {
+    match name.strip_prefix(INTERNAL_PREFIX) {
+        Some(rest) => format!("__{rest}"),
+        None => name.to_string(),
+    }
+}
+
 pub(crate) struct Binder<'a> {
     file: &'a ParsedFile,
     text: &'a str,
@@ -262,6 +306,84 @@ pub(crate) struct Binder<'a> {
 }
 
 impl<'a> Binder<'a> {
+    /// Everything the binder declared, detached from the tree it borrows.
+    pub(crate) fn into_bound_file(self) -> BoundFile {
+        let mut names: Vec<Option<String>> = vec![None; self.symbols.len()];
+        let mut parents: Vec<Option<SymbolId>> = vec![None; self.symbols.len()];
+        let mut locals = HashMap::new();
+        let mut exports = HashMap::new();
+        let mut members = HashMap::new();
+        for (table, entries) in &self.tables {
+            for (name, &symbol) in entries {
+                names[symbol].get_or_insert_with(|| public_symbol_name(name));
+            }
+            let public: HashMap<String, SymbolId> =
+                entries.iter().map(|(name, &symbol)| (public_symbol_name(name), symbol)).collect();
+            match *table {
+                Table::Locals(container) => {
+                    locals.insert(container, public);
+                }
+                Table::Exports(owner) => {
+                    for &symbol in entries.values() {
+                        parents[symbol].get_or_insert(owner);
+                    }
+                    exports.insert(owner, public);
+                }
+                Table::Members(owner) => {
+                    for &symbol in entries.values() {
+                        parents[symbol].get_or_insert(owner);
+                    }
+                    members.insert(owner, public);
+                }
+            }
+        }
+        let symbols = self
+            .symbols
+            .iter()
+            .enumerate()
+            .map(|(id, symbol)| BoundSymbol {
+                name: names[id].take().unwrap_or_else(|| {
+                    symbol.declarations.first().map_or_else(|| "__missing".to_string(), |&d| self.anonymous_name(d))
+                }),
+                flags: symbol.flags,
+                declarations: symbol.declarations.clone(),
+                value_declaration: symbol.value_declaration,
+                export_symbol: symbol.export_symbol,
+                parent: parents[id],
+            })
+            .collect();
+        BoundFile {
+            symbols,
+            locals,
+            exports,
+            members,
+            node_symbol: self.node_symbol,
+            local_symbol: self.local_symbol,
+            diagnostics: crate::render(self.diagnostics.iter()),
+        }
+    }
+
+    /// The name tsc's `bindAnonymousDeclaration` gives a symbol no table holds.
+    fn anonymous_name(&self, declaration: NodeId) -> String {
+        match self.kind(declaration) {
+            Kind::FunctionExpression | Kind::ClassExpression | Kind::ArrowFunction => {
+                match self.name_of(declaration).filter(|&name| self.kind(name) == Kind::Identifier) {
+                    Some(name) => self.node_text(name),
+                    None if self.kind(declaration) == Kind::ClassExpression => "__class".to_string(),
+                    None => "__function".to_string(),
+                }
+            }
+            Kind::ObjectLiteralExpression => "__object".to_string(),
+            Kind::JsxAttributes => "__jsxAttributes".to_string(),
+            Kind::TypeLiteral | Kind::MappedType => "__type".to_string(),
+            Kind::FunctionType => "__call".to_string(),
+            Kind::ConstructorType => "__new".to_string(),
+            Kind::SourceFile => "__module".to_string(),
+            _ if self.has_dynamic_name(declaration) => "__computed".to_string(),
+            _ => public_symbol_name(&self.declaration_name(declaration)),
+        }
+    }
+
     /// The file's binder diagnostics, and the symbols it contributes to the
     /// program's global scope.
     pub(crate) fn finish(self) -> (Vec<Diagnostic>, FileGlobals) {

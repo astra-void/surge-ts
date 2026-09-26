@@ -1,0 +1,292 @@
+//! What checking one file computed, keyed by source span.
+//!
+//! A retained program builds a file's index by checking the file again with
+//! the recorder on: the hooks below are the checker's own results at the
+//! points it computes them, so a query reads what the checker decided rather
+//! than a second implementation of it. With the recorder off (every normal
+//! run) each hook is one relaxed atomic load.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use surge_ts_syntax::{ParsedExpression, ParsedStatement, TextSpan};
+use surge_ts_types::Type;
+use surge_ts_types::fx::FxHashMap;
+
+use crate::context::CheckerContext;
+use crate::program::FunctionDeclarationLocation;
+use crate::symbols::{SymbolTable, TypeDeclarationScope, TypeDeclarationTable};
+
+static RECORDING: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    static RECORDER: RefCell<Option<Recorder>> = const { RefCell::new(None) };
+}
+
+struct Recorder {
+    file_name: String,
+    index: FileSemanticIndex,
+}
+
+type Span = (usize, usize);
+
+/// The types the checker computed while checking one file, by byte span.
+#[derive(Default)]
+pub struct FileSemanticIndex {
+    expressions: FxHashMap<Span, Type>,
+    /// A call's result, by its callee's span: the checker keeps no span of
+    /// the whole call for most call shapes.
+    call_results: FxHashMap<Span, Type>,
+    /// A declaration's type, by its name's span.
+    declarations: FxHashMap<Span, Type>,
+    /// Spans whose recorded type is final: a literal's own type, which the
+    /// contextual evaluation that follows reports as its target's.
+    sealed: surge_ts_types::fx::FxHashSet<Span>,
+    pub(crate) scope: Option<FileScope>,
+}
+
+/// The scope the file's statements were checked in, for resolving a type
+/// name as the file sees it.
+pub(crate) struct FileScope {
+    pub(crate) type_declarations: TypeDeclarationTable,
+    pub(crate) type_declaration_scope: Option<Arc<TypeDeclarationScope>>,
+    pub(crate) symbols: SymbolTable,
+}
+
+impl FileSemanticIndex {
+    pub fn expression_type(&self, start: usize, end: usize) -> Option<&Type> {
+        self.expressions.get(&(start, end))
+    }
+
+    pub fn call_result_type(&self, callee_start: usize, callee_end: usize) -> Option<&Type> {
+        self.call_results.get(&(callee_start, callee_end))
+    }
+
+    pub fn declaration_type(&self, name_start: usize, name_end: usize) -> Option<&Type> {
+        self.declarations.get(&(name_start, name_end))
+    }
+
+    pub fn recorded_count(&self) -> usize {
+        self.expressions.len() + self.call_results.len() + self.declarations.len()
+    }
+
+    fn insert(map: &mut FxHashMap<Span, Type>, span: Span, ty: &Type) {
+        // A later degraded evaluation of the same span (a re-check without the
+        // context the first one had) never replaces a modelled type.
+        if ty.is_degraded() && map.get(&span).is_some_and(|existing| !existing.is_degraded()) {
+            return;
+        }
+        map.insert(span, ty.clone());
+    }
+}
+
+#[inline]
+pub(crate) fn recording() -> bool {
+    RECORDING.load(Ordering::Relaxed)
+}
+
+fn with_index(ctx: &CheckerContext, f: impl FnOnce(&mut FileSemanticIndex)) {
+    RECORDER.with(|recorder| {
+        if let Ok(mut recorder) = recorder.try_borrow_mut()
+            && let Some(recorder) = recorder.as_mut()
+            && recorder.file_name == ctx.file_name
+        {
+            f(&mut recorder.index);
+        }
+    });
+}
+
+/// Records an inferred expression under its own span, and a call's result
+/// under its callee's.
+pub(crate) fn record_expression_type(expression: &ParsedExpression, ty: &Type, ctx: &CheckerContext) {
+    if !recording() {
+        return;
+    }
+    // tsc checks an object literal's members in a mutable location
+    // (`checkExpressionForMutableLocation`), widening their literals, where
+    // this checker keeps them for the declaration to widen.
+    let widened;
+    let ty = if matches!(expression, ParsedExpression::ObjectLiteral { .. }) {
+        widened = crate::checks::expr::widen_type(ty);
+        &widened
+    } else {
+        ty
+    };
+    with_index(ctx, |index| {
+        if let Some(span) = own_span(expression)
+            && !index.sealed.contains(&span)
+        {
+            FileSemanticIndex::insert(&mut index.expressions, span, ty);
+        }
+        if let Some(span) = callee_span(expression) {
+            FileSemanticIndex::insert(&mut index.call_results, span, ty);
+        }
+    });
+}
+
+/// Records the type the checker computed for the expression written at
+/// `span` where the expression itself is not at hand (a call checked by its
+/// parts).
+pub(crate) fn record_span_type(span: Option<TextSpan>, ty: Option<&Type>, ctx: &CheckerContext) {
+    if !recording() {
+        return;
+    }
+    let (Some(span), Some(ty)) = (span, ty) else { return };
+    with_index(ctx, |index| {
+        let key = (span.start, span.end);
+        if !index.sealed.contains(&key) {
+            FileSemanticIndex::insert(&mut index.expressions, key, ty);
+        }
+    });
+}
+
+/// Records a literal's own type at its span, final whatever is recorded
+/// there later.
+pub(crate) fn record_literal_type(span: Option<TextSpan>, ty: &Type, ctx: &CheckerContext) {
+    if !recording() {
+        return;
+    }
+    let Some(span) = span else { return };
+    with_index(ctx, |index| {
+        index.expressions.insert((span.start, span.end), ty.clone());
+        index.sealed.insert((span.start, span.end));
+    });
+}
+
+/// Records the type an `as const` operand has in its const context, final
+/// whatever the operand's own evaluation records there.
+pub(crate) fn record_const_operand_type(operand: &ParsedExpression, ty: &Type, ctx: &CheckerContext) {
+    if !recording() || !matches!(operand, ParsedExpression::ObjectLiteral { .. } | ParsedExpression::ArrayLiteral { .. }) {
+        return;
+    }
+    let Some(key) = own_span(operand) else { return };
+    with_index(ctx, |index| {
+        index.expressions.insert(key, ty.clone());
+        index.sealed.insert(key);
+    });
+}
+
+/// Records the type a declaration gives the name written at `name_span`.
+pub(crate) fn record_declaration_type(name_span: Option<TextSpan>, ty: &Type, ctx: &CheckerContext) {
+    if !recording() {
+        return;
+    }
+    let Some(span) = name_span else { return };
+    with_index(ctx, |index| {
+        FileSemanticIndex::insert(&mut index.declarations, (span.start, span.end), ty);
+    });
+}
+
+/// Captures the scope the file's statements are about to be checked in, and
+/// the signatures of its top-level functions.
+pub(crate) fn capture_file_scope(
+    ctx: &CheckerContext,
+    file_index: usize,
+    statements: &[ParsedStatement],
+    function_signatures: &HashMap<FunctionDeclarationLocation, surge_ts_types::FunctionType>,
+) {
+    if !recording() {
+        return;
+    }
+    let scope = FileScope {
+        type_declarations: ctx.type_declarations.clone(),
+        type_declaration_scope: ctx.type_declaration_scope.clone(),
+        symbols: ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+    };
+    with_index(ctx, |index| {
+        for (statement_index, statement) in statements.iter().enumerate() {
+            let function = match statement {
+                ParsedStatement::FunctionDeclaration(function) => function,
+                _ => continue,
+            };
+            let location = FunctionDeclarationLocation { file_index, statement_index };
+            if let (Some(signature), Some(span)) = (function_signatures.get(&location), function.name_span) {
+                FileSemanticIndex::insert(
+                    &mut index.declarations,
+                    (span.start, span.end),
+                    &Type::Function(signature.clone()),
+                );
+            }
+        }
+        index.scope = Some(scope);
+    });
+}
+
+/// Runs `check` with the recorder on for `file_name`, returning what it
+/// recorded. The caller holds the engine lock.
+pub(crate) fn record_file(file_name: &str, check: impl FnOnce()) -> FileSemanticIndex {
+    struct Stop;
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            RECORDING.store(false, Ordering::Relaxed);
+        }
+    }
+    RECORDER.with(|recorder| {
+        *recorder.borrow_mut() = Some(Recorder {
+            file_name: file_name.to_string(),
+            index: FileSemanticIndex::default(),
+        });
+    });
+    {
+        let _stop = Stop;
+        RECORDING.store(true, Ordering::Relaxed);
+        check();
+    }
+    RECORDER
+        .with(|recorder| recorder.borrow_mut().take())
+        .map(|recorder| recorder.index)
+        .unwrap_or_default()
+}
+
+fn span(span: &Option<TextSpan>) -> Option<Span> {
+    span.map(|span| (span.start, span.end))
+}
+
+fn join(first: &Option<TextSpan>, last: &Option<TextSpan>) -> Option<Span> {
+    Some((first.as_ref()?.start, last.as_ref()?.end))
+}
+
+/// The span tsc's node for `expression` covers, where the lowered tree keeps
+/// or implies one. Expressions the lowering synthesizes (a destructuring
+/// element's read, an object rest) have none.
+fn own_span(expression: &ParsedExpression) -> Option<Span> {
+    use ParsedExpression as E;
+    match expression {
+        E::Identifier { span: s, .. }
+        | E::This { span: s }
+        | E::ObjectLiteral { span: s, .. }
+        | E::ArrayLiteral { span: s, .. }
+        | E::TemplateLiteral { span: s, .. }
+        | E::Yield { span: s, .. }
+        | E::New { span: s, .. }
+        | E::SatisfiesExpression { span: s, .. }
+        | E::NonNullAssertion { span: s, .. }
+        | E::ConstAssertion { span: s, .. }
+        | E::JsxFragment { span: s, .. } => span(s),
+        E::ArrowFunction(function) => span(&function.span),
+        E::Binary { left_span, right_span, .. }
+        | E::Logical { left_span, right_span, .. }
+        | E::NullishCoalescing { left_span, right_span, .. } => join(left_span, right_span),
+        E::Conditional { condition_span, when_false_span, .. } => join(condition_span, when_false_span),
+        E::PropertyAccess { object_span, property_span, is_bracketed: false, binding_element: false, .. }
+        | E::OptionalPropertyAccess { object_span, property_span, is_bracketed: false, .. } => {
+            join(object_span, property_span)
+        }
+        E::PropertyCall { call_span, .. } | E::OptionalPropertyCall { call_span, .. } => span(call_span),
+        E::Unary { operator_span, operand_span, .. } => join(operator_span, operand_span),
+        E::Assignment { target_span, value_span, .. } => join(target_span, value_span),
+        _ => None,
+    }
+}
+
+fn callee_span(expression: &ParsedExpression) -> Option<Span> {
+    use ParsedExpression as E;
+    match expression {
+        E::Call { callee_span, .. } | E::OptionalCall { callee_span, .. } | E::ExpressionCall { callee_span, .. } => {
+            span(callee_span)
+        }
+        _ => None,
+    }
+}

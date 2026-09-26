@@ -37,6 +37,10 @@ npm-debug.log*
 !tests/compat-projects/**/node_modules/**
 # Untyped-module fixtures import hand-written JavaScript beside their sources.
 !tests/compat-projects/untyped-javascript-module-*/**/*.js
+# The npm package's JavaScript facade is authored by hand.
+!packages/surge-ts/**/*.cjs
+!packages/surge-ts/**/*.mjs
+packages/surge-ts/*.node
 tests/compat-projects/**/.DS_Store
 .serena/
 

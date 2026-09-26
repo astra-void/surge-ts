@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use surge_ts_checker::SourceFileInput;
@@ -144,7 +143,7 @@ pub fn expand_project_inputs(
 fn read_discovered_sources(paths: Vec<PathBuf>) -> Vec<(PathBuf, Option<String>)> {
     let read_one = |path: &Path| {
         let read_start = std::time::Instant::now();
-        let text = fs::read_to_string(path).ok();
+        let text = crate::host_fs::read_to_string(path).ok();
         if let Some(text) = &text {
             crate::io_stats::record_expansion_read(text.len(), read_start.elapsed());
         }
@@ -155,7 +154,7 @@ fn read_discovered_sources(paths: Vec<PathBuf>) -> Vec<(PathBuf, Option<String>)
         .map(|n| n.get())
         .unwrap_or(1)
         .min(paths.len());
-    if paths.len() < 8 || workers <= 1 {
+    if paths.len() < 8 || workers <= 1 || crate::host_fs::is_custom() {
         return paths
             .into_iter()
             .map(|path| {
@@ -251,6 +250,25 @@ fn resolve_relative_candidate(
     None
 }
 
+/// How the loader resolves one specifier from one importer, outside a
+/// program build: a relative path among the files on disk, else through
+/// `paths`. Bare package specifiers are the package resolver's.
+pub(crate) fn resolve_specifier_on_disk(
+    importer_file: &Path,
+    specifier: &str,
+    resolve_json_module: bool,
+    paths: &[surge_ts_config::PathMapping],
+    base_url: Option<&Path>,
+    root_dir: &Path,
+) -> Option<PathBuf> {
+    let mut probe_cache = surge_ts_types::fx::FxHashMap::default();
+    if is_relative_specifier(specifier) {
+        return resolve_relative_candidate(importer_file, specifier, &mut probe_cache, resolve_json_module)
+            .or_else(|| resolve_relative_javascript(importer_file, specifier, &mut probe_cache, resolve_json_module));
+    }
+    resolve_paths_alias_candidate(specifier, resolve_json_module, paths, base_url, root_dir, &mut probe_cache)
+}
+
 /// Where tsc's resolver lands a relative specifier no TypeScript or
 /// declaration file answers, when that is a JavaScript file. The graph never
 /// loads it, but the checker needs it to tell an untyped module (TS7016, or
@@ -281,7 +299,7 @@ fn module_on_disk(
     if let Some(file) = module_file_on_disk(candidate, probe_cache, resolve_json_module) {
         return Some(file);
     }
-    if !candidate.is_dir() {
+    if !crate::host_fs::is_dir(candidate) {
         return None;
     }
     if consider_package_json
@@ -343,7 +361,7 @@ fn module_file_on_disk(
 /// The file a directory's package.json points at, read the way tsc's
 /// `getPackageFile` reads it: `typings`, then `types`, then `main`.
 fn package_json_entry(directory: &Path) -> Option<PathBuf> {
-    let text = fs::read_to_string(directory.join("package.json")).ok()?;
+    let text = crate::host_fs::read_to_string(&directory.join("package.json")).ok()?;
     let json: serde_json::Value = serde_json::from_str(&text).ok()?;
     ["typings", "types", "main"]
         .into_iter()

@@ -1,0 +1,68 @@
+"use strict";
+
+// surge-ts: an embeddable TypeScript type checker written in Rust, with a
+// familiar TypeScript Compiler API. `require("surge-ts")` (or
+// `import ts from "surge-ts"`) is a namespace shaped like TypeScript's.
+// Supported and unsupported APIs are listed in docs/COMPILER_API.md.
+
+const native = require("./lib/native.cjs");
+const enums = require("./lib/enums.cjs");
+const guards = require("./lib/guards.cjs");
+const { sys } = require("./lib/sys.cjs");
+const nodes = require("./lib/nodes.cjs");
+const program = require("./lib/program.cjs");
+const config = require("./lib/config.cjs");
+const diagnostics = require("./lib/diagnostics.cjs");
+
+const ts = {
+	version: require("./package.json").version,
+	versionMajorMinor: require("./package.json").version.split(".").slice(0, 2).join("."),
+	...enums,
+	sys,
+	createProgram: program.createProgram,
+	createSourceFile: program.createSourceFile,
+	createCompilerHost: program.createCompilerHost,
+	getDefaultLibFileName: program.getDefaultLibFileName,
+	getPreEmitDiagnostics: program.getPreEmitDiagnostics,
+	forEachChild: nodes.forEachChild,
+	getLineAndCharacterOfPosition: (sourceFile, position) => sourceFile.getLineAndCharacterOfPosition(position),
+	getPositionOfLineAndCharacter: (sourceFile, line, character) => sourceFile.getPositionOfLineAndCharacter(line, character),
+	computeLineStarts: nodes.computeLineStarts,
+	computeLineAndCharacterOfPosition: nodes.computeLineAndCharacterOfPosition,
+	getLineStarts: (sourceFile) => sourceFile.getLineStarts(),
+	escapeLeadingUnderscores: nodes.escapeLeadingUnderscores,
+	unescapeLeadingUnderscores: nodes.unescapeLeadingUnderscores,
+	idText: (identifier) => nodes.unescapeLeadingUnderscores(identifier.escapedText),
+	symbolName: (symbol) => symbol.name,
+	readConfigFile: config.readConfigFile,
+	parseConfigFileTextToJson: config.parseConfigFileTextToJson,
+	parseJsonConfigFileContent: config.parseJsonConfigFileContent,
+	findConfigFile: config.findConfigFile,
+	getParsedCommandLineOfConfigFile: config.getParsedCommandLineOfConfigFile,
+	resolveModuleName(moduleName, containingFile, compilerOptions, host) {
+		if (host && host.fileExists !== sys.fileExists && host.readFile !== sys.readFile) {
+			throw new Error("surge-ts: resolveModuleName reads the file system; a custom ModuleResolutionHost is not supported yet");
+		}
+		const resolved = native.resolveModuleName(moduleName, containingFile, JSON.parse(JSON.stringify(compilerOptions ?? {})));
+		return { resolvedModule: resolved ?? undefined };
+	},
+	flattenDiagnosticMessageText: diagnostics.flattenDiagnosticMessageText,
+	formatDiagnostic: diagnostics.formatDiagnostic,
+	formatDiagnostics: diagnostics.formatDiagnostics,
+	formatDiagnosticsWithColorAndContext: diagnostics.formatDiagnosticsWithColorAndContext,
+	sortAndDeduplicateDiagnostics: diagnostics.sortAndDeduplicateDiagnostics,
+	diagnosticCategoryName: diagnostics.diagnosticCategoryName,
+};
+
+for (const [name, kinds] of Object.entries(guards)) {
+	if (kinds.length === 1) {
+		const [kind] = kinds;
+		ts[name] = (node) => node.kind === kind;
+	} else {
+		const accepted = new Set(kinds);
+		ts[name] = (node) => accepted.has(node.kind);
+	}
+}
+
+module.exports = ts;
+module.exports.default = ts;

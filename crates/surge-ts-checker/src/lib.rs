@@ -28,6 +28,7 @@ mod modules;
 mod paths;
 mod program;
 mod replay;
+mod semantic;
 mod spans;
 mod speculative;
 mod symbols;
@@ -66,6 +67,12 @@ pub mod lowlevel {
     };
     pub use crate::metrics::{last_rss_stage_label, record_loader_rss_stage};
     pub use crate::program::check_program_with_prescanned_sources;
+
+    /// A checked program kept alive for queries: the compiler API's backing
+    /// store. See [`crate::semantic`].
+    pub mod semantic {
+        pub use crate::semantic::{FileSemanticIndex, PropertyInfo, Query, RetainedProgram};
+    }
 
     /// Centralized relative-path candidate generation shared by the loader's
     /// import-graph/`paths` resolution and the checker's module binding, so the

@@ -231,6 +231,14 @@ provide are `null` — never omitted, never fabricated.
 - `memory.peakRssBytes` — the OS-tracked resident-set high-water mark
   (macOS and Linux). `null` elsewhere.
 
+### 1.5 Compiler API (experimental, not part of this contract)
+
+`surge_ts::api` and the `surge-ts` npm package (`import ts from "surge-ts"`)
+expose a read-only subset of TypeScript's compiler API: programs, source
+files and syntax trees, and a type checker. The API is experimental and not
+covered by this document's guarantees; its method-by-method compatibility is
+in [docs/COMPILER_API.md](docs/COMPILER_API.md).
+
 ---
 
 ## 2. Verified-perfect features (exact `tsc` parity)

@@ -524,6 +524,23 @@ pub(crate) fn check_property_call_like(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    let result = check_property_call_like_unrecorded(object, object_span, property_name, property_span, call_span, type_arguments, arguments, expected_return_type, symbols, ctx);
+    crate::semantic::record_span_type(call_span, result.as_ref(), ctx);
+    result
+}
+
+fn check_property_call_like_unrecorded(
+    object: &ParsedExpression,
+    object_span: Option<SyntaxTextSpan>,
+    property_name: &str,
+    property_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
     if matches!(property_name, "push" | "unshift") {
         crate::checks::expr::mark_evolving_array_operation(object, ctx);
     }
@@ -1330,6 +1347,23 @@ fn callable_first_parameter(ty: &Type) -> Option<Type> {
 }
 
 pub(crate) fn check_optional_property_call(
+    object: &surge_ts_syntax::ParsedExpression,
+    object_span: Option<SyntaxTextSpan>,
+    property_name: &str,
+    property_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let result = check_optional_property_call_unrecorded(object, object_span, property_name, property_span, call_span, type_arguments, arguments, expected_return_type, symbols, ctx);
+    crate::semantic::record_span_type(call_span, result.as_ref(), ctx);
+    result
+}
+
+fn check_optional_property_call_unrecorded(
     object: &surge_ts_syntax::ParsedExpression,
     object_span: Option<SyntaxTextSpan>,
     property_name: &str,

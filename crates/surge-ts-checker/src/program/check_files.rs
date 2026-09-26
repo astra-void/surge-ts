@@ -29,6 +29,7 @@ pub(super) fn check_program_files_serial(
     shared_state: &mut ProgramCheckSharedState,
     ctx: &CheckerContext,
     timings: Option<Arc<Mutex<ProgramTimings>>>,
+    retain: bool,
 ) -> Vec<FileCheckResult> {
     let mut results = Vec::with_capacity(parsed_files.len());
 
@@ -130,6 +131,9 @@ pub(super) fn check_program_files_serial(
             }
         }
         results.push(result);
+        if retain {
+            continue;
+        }
         // The file is fully checked, and per-file program state is only ever
         // read under the file's own index (checking never consults another
         // file's parse tree, analysis, or bindings — cross-file resolution
@@ -1457,7 +1461,7 @@ fn grammar_finding_diagnostic(
     Some(diagnostic.with_span(crate::context::convert_span(finding.span)))
 }
 
-pub(super) fn check_program_file(
+pub(crate) fn check_program_file(
     file_index: usize,
     parsed_file: &ParsedProgramFile,
     shared_state: &ProgramCheckSharedState,
@@ -1722,6 +1726,7 @@ pub(super) fn check_program_file(
         );
         ctx.namespace_require_reads =
             super::namespace_require_reads(&parsed_file.statements, &parsed_file.module_reads);
+        crate::semantic::capture_file_scope(ctx, file_index, &parsed_file.statements, &final_function_signatures);
         check_program_file_statements(
             &parsed_file.statements,
             file_index,
@@ -1834,6 +1839,12 @@ pub(super) fn check_program_file(
         );
         ctx.namespace_require_reads =
             super::namespace_require_reads(&parsed_file.statements, &parsed_file.module_reads);
+        crate::semantic::capture_file_scope(
+            ctx,
+            file_index,
+            &parsed_file.statements,
+            &shared_state.function_signatures,
+        );
         check_program_file_statements(
             &parsed_file.statements,
             file_index,

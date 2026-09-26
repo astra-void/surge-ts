@@ -3,21 +3,26 @@
 //! `internal/parser`, `internal/binder`), kept to the parts that decide which
 //! errors are reported and where.
 //!
-//! tsc reports a program's syntactic diagnostics alone when there are any, so
-//! the syntax tree built here is only read by the parser's own decisions and,
-//! for a file that parses cleanly, by the binder.
+//! The syntax tree is also the one the compiler API hands out: [`SyntaxTree`]
+//! is its read-only view, and [`BoundFile`] what the binder declared in it.
 
-mod ast;
+pub mod ast;
 mod binder;
 mod chars;
 mod checker_grammar;
-mod flags;
-mod kind;
+pub mod flags;
+pub mod kind;
 mod merge;
 mod messages;
 mod parser;
+pub mod properties;
 mod regexp;
 mod scanner;
+mod tree;
+
+pub use kind::Kind;
+pub use scanner::skip_trivia;
+pub use tree::{BoundFile, BoundSymbol, SyntaxTree, symbol_flags};
 
 pub struct Message {
     pub code: u32,

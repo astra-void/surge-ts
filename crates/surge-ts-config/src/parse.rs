@@ -24,6 +24,55 @@ pub fn load_tsconfig(options: TsConfigLoadOptions) -> LoadedTsConfig {
     let mut visited = HashSet::new();
 
     let merged = load_merged_config(&config_path, &mut diagnostics, &mut visited);
+    finish_loaded_config(config_path, root_dir, merged, diagnostics)
+}
+
+/// A config the caller already parsed: what `load_tsconfig` makes of a file,
+/// made of `value` as if it were the file at `config_path` (its `extends`
+/// and `include` resolve against `config_path`'s directory). Also returns the
+/// merged `compilerOptions` as written, before normalization.
+pub fn load_tsconfig_from_value(value: &Value, config_path: &Path) -> (LoadedTsConfig, Map<String, Value>) {
+    let root_dir = config_path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let mut diagnostics = Vec::new();
+    let mut visited = HashSet::new();
+    let merged = match value.as_object() {
+        Some(object) => crate::extends::merge_config_object(config_path, object, &mut diagnostics, &mut visited),
+        None => {
+            diagnostics.push(ConfigDiagnostic {
+                code: ConfigDiagnosticCode::ConfigParseError,
+                message: "tsconfig.json must contain a JSON object".to_string(),
+                file_name: config_path.to_path_buf(),
+            });
+            RawTsConfig::default()
+        }
+    };
+    let raw_options = merged.compiler_options.clone().unwrap_or_default();
+    (finish_loaded_config(config_path.to_path_buf(), root_dir, merged, diagnostics), raw_options)
+}
+
+/// A `compilerOptions` object normalized as a config at `config_dir` would
+/// be: for callers holding options without a config file.
+pub fn normalize_compiler_options_json(
+    options: &Map<String, Value>,
+    config_dir: &Path,
+) -> (crate::model::NormalizedCompilerOptions, Vec<ConfigDiagnostic>) {
+    let mut diagnostics = Vec::new();
+    let normalized = normalize_compiler_options(Some(options), config_dir, &mut diagnostics);
+    (normalized, diagnostics)
+}
+
+/// Parses a config file's text the way `load_tsconfig` does: JSON with
+/// comments and trailing commas.
+pub fn parse_config_text(text: &str) -> Result<Value, String> {
+    jsonc_parser::parse_to_serde_value::<Value>(text, &Default::default()).map_err(|error| error.to_string())
+}
+
+fn finish_loaded_config(
+    config_path: std::path::PathBuf,
+    root_dir: std::path::PathBuf,
+    merged: RawTsConfig,
+    mut diagnostics: Vec<ConfigDiagnostic>,
+) -> LoadedTsConfig {
     let compiler_options = normalize_compiler_options(
         merged.compiler_options.as_ref(),
         &root_dir,

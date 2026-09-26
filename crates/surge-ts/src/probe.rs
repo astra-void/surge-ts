@@ -59,9 +59,7 @@ fn dir_exists(cache: &mut ProbeCache, dir: &Path) -> bool {
         Some(parent) if !parent.as_os_str().is_empty() && !dir_exists(cache, parent) => false,
         _ => {
             let probe_start = std::time::Instant::now();
-            let is_dir = std::fs::metadata(dir)
-                .map(|metadata| metadata.is_dir())
-                .unwrap_or(false);
+            let is_dir = crate::host_fs::is_dir(dir);
             crate::io_stats::record_existence_probe(probe_start.elapsed());
             is_dir
         }
@@ -82,9 +80,7 @@ pub(crate) fn clear_probe_cache() {
 
 fn stat_is_file(path: &Path) -> bool {
     let probe_start = std::time::Instant::now();
-    let is_file = std::fs::metadata(path)
-        .map(|metadata| metadata.is_file())
-        .unwrap_or(false);
+    let is_file = crate::host_fs::is_file(path);
     crate::io_stats::record_existence_probe(probe_start.elapsed());
     crate::io_stats::record_probe_parent(path);
     is_file
@@ -93,6 +89,12 @@ fn stat_is_file(path: &Path) -> bool {
 fn build_dir_listing(dir: &Path) -> DirListing {
     let read_start = std::time::Instant::now();
     let mut listing = DirListing::default();
+    // A host's listing cannot tell a missing file from one it does not list,
+    // so every probe under a host asks it directly.
+    if crate::host_fs::is_custom() {
+        listing.unlisted = true;
+        return listing;
+    }
     match std::fs::read_dir(dir) {
         Ok(entries) => {
             for entry in entries.flatten() {
@@ -145,6 +147,9 @@ pub(crate) fn is_existing_file(path: &Path) -> bool {
         let mut cache = cache.borrow_mut();
         let cache = &mut *cache;
         let is_file = match path.parent().zip(path.file_name()) {
+            // A host answers for the files it has, not for every directory
+            // above them: tsc's resolver asks a host `fileExists` alone.
+            _ if crate::host_fs::is_custom() => stat_is_file(path),
             Some((parent, name)) if name.as_encoded_bytes().is_ascii() => {
                 if !dir_exists(cache, parent) {
                     false

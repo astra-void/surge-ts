@@ -366,6 +366,9 @@ impl FunctionType {
         if self.parameter_names.is_some() || self.type_parameter_head.is_some() {
             return self.render_name();
         }
+        if crate::tsc_display::active() {
+            return crate::tsc_display::memoized(Arc::as_ptr(&self.payload) as usize, || self.render_name());
+        }
         self.payload
             .name_memo
             .get_or_render(|| self.render_name())
@@ -384,6 +387,18 @@ impl FunctionType {
 
     fn render_with_return_separator(&self, separator: &str) -> String {
         let names = self.parameter_names();
+        // A variadic signature's named last parameter of an array type is its
+        // rest parameter, which tsc prints as one (`...items: T[]`).
+        let rest = self
+            .parameters()
+            .len()
+            .checked_sub(1)
+            .filter(|last| {
+                crate::tsc_display::active()
+                    && self.is_variadic()
+                    && names.is_some_and(|names| names[*last].is_some())
+                    && crate::tsc_display::is_rest_parameter_type(&self.parameters()[*last])
+            });
         let mut parameters = self
             .parameters()
             .iter()
@@ -391,6 +406,7 @@ impl FunctionType {
             .map(|(index, parameter)| {
                 let optional = index >= self.required_parameter_count();
                 match names.and_then(|names| names[index].as_deref()) {
+                    Some(name) if Some(index) == rest => format!("...{name}: {}", parameter.name()),
                     Some(name) if optional => format!("{name}?: {}", parameter.name()),
                     Some(name) => format!("{name}: {}", parameter.name()),
                     None => parameter.name(),
@@ -398,7 +414,7 @@ impl FunctionType {
             })
             .collect::<Vec<_>>();
 
-        if self.is_variadic() {
+        if self.is_variadic() && rest.is_none() {
             parameters.push("...args: any[]".to_string());
         }
 

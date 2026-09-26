@@ -62,8 +62,10 @@ milestone markers, not releases or crate versions
 | `surge-ts-checker` | Semantic checking and diagnostic emission |
 | `surge-ts-diagnostics` | Diagnostic codes, catalog, generated accessors, and rendering |
 | `surge-ts-config` | `tsconfig.json` loading, normalization, and file discovery |
-| `surge-ts` | Embeddable umbrella crate: `Project` (config load, package/`paths` resolution, default-lib loading, import-graph expansion) plus re-exported checker APIs |
+| `surge-ts-tsc-syntax` | Port of tsgo's scanner, parser and binder: tsc-exact syntactic diagnostics, and the syntax tree and symbols of the compiler API |
+| `surge-ts` | Embeddable umbrella crate: `Project` (config load, package/`paths` resolution, default-lib loading, import-graph expansion) plus re-exported checker APIs, and the compiler API (`surge_ts::api`) |
 | `surge-ts-cli` | CLI orchestration (built on `surge-ts`) |
+| `surge-ts-node` | Node addon (napi-rs) behind the `surge-ts` npm package (`packages/surge-ts`), the compiler API from JavaScript |
 
 A second table, mapping each crate to its role plus the codegen crate, is in
 [§ Naming](#naming).
@@ -249,6 +251,8 @@ prefix (`SURGE_PHYSICAL_LIBS`, `SURGE_TIMINGS`).
 | `surge-ts-diagnostics` | Diagnostic codes, catalog, generated accessors |
 | `surge-ts-config` | `tsconfig.json` loading and discovery |
 | `surge-ts-diagnostics-codegen` | Catalog code generation |
+| `surge-ts-tsc-syntax` | tsgo scanner, parser and binder port |
+| `surge-ts-node` | Node addon of the `surge-ts` npm package |
 
 One internal stats key is intentionally left unchanged: the bench `ts-rust` key
 in saved benchmark archive JSON is kept stable so older archives remain

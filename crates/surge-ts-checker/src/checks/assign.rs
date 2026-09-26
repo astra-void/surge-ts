@@ -146,6 +146,16 @@ pub(crate) fn check_assignment_with_symbols(
         symbols,
         ctx,
     );
+    if crate::semantic::recording()
+        && let crate::infer::InferredExpression::Known(value_type) = &inferred_value
+    {
+        let written = assignment.written_target_span.or(assignment.target_span);
+        let span = written.zip(assignment.value_span).map(|(target, value)| surge_ts_syntax::TextSpan {
+            start: target.start,
+            end: value.end,
+        });
+        crate::semantic::record_span_type(span, Some(value_type), ctx);
+    }
 
     match inferred_value {
         crate::infer::InferredExpression::Known(inferred_value_type) => {

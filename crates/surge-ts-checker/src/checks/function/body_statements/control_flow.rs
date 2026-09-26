@@ -1579,6 +1579,7 @@ pub(crate) fn check_function_try_statement(
                     });
                 crate::infer::types::check_binding_pattern_reads(binding_name, &catch_type, ctx);
                 insert_binding_name(binding_name, catch_type, scopes);
+                crate::checks::function::signature::record_binding_names(binding_name, scopes, ctx);
             }
             flow_state.begin_branch_capture();
             // The catch variable is a binding of the clause, assigned when it
@@ -1690,6 +1691,7 @@ pub(crate) fn check_function_try_statement(
                     });
                 crate::infer::types::check_binding_pattern_reads(binding_name, &catch_type, ctx);
                 insert_binding_name(binding_name, catch_type, scopes);
+                crate::checks::function::signature::record_binding_names(binding_name, scopes, ctx);
             }
             check_function_body(
                 handler_clause.body,

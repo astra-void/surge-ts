@@ -62,6 +62,18 @@ pub(crate) fn load_merged_config(
         return RawTsConfig::default();
     };
 
+    let merged = merge_config_object(config_path, object, diagnostics, visited);
+    visited.remove(&config_key);
+    merged
+}
+
+/// A config object's own settings merged over what its `extends` names.
+pub(crate) fn merge_config_object(
+    config_path: &Path,
+    object: &serde_json::Map<String, Value>,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    visited: &mut HashSet<PathBuf>,
+) -> RawTsConfig {
     let parsed = parse_current_config(config_path, object, diagnostics);
     let base = match object.get("extends").and_then(Value::as_str) {
         Some(extends_spec) => match resolve_extends(config_path, extends_spec) {
@@ -79,7 +91,6 @@ pub(crate) fn load_merged_config(
         None => None,
     };
 
-    visited.remove(&config_key);
     merge_configs(base.as_ref(), &parsed)
 }
 

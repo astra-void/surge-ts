@@ -112,6 +112,21 @@ pub(crate) fn check_call_like_with_expected_type(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    let result = check_call_like_with_expected_type_unrecorded(callee_name, callee_span, call_span, type_arguments, arguments, expected_return_type, symbols, ctx);
+    crate::semantic::record_span_type(call_span, result.as_ref(), ctx);
+    result
+}
+
+fn check_call_like_with_expected_type_unrecorded(
+    callee_name: &str,
+    callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
     record_call_resolution();
     let call_start = Instant::now();
     // A call may target a module-scope binding declared later in the file when it
@@ -1116,6 +1131,21 @@ pub(crate) fn check_new_like(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    let result = check_new_like_unrecorded(callee, callee_span, call_span, type_arguments, arguments, expected_type, symbols, ctx);
+    crate::semantic::record_span_type(call_span, result.as_ref(), ctx);
+    result
+}
+
+fn check_new_like_unrecorded(
+    callee: &ParsedExpression,
+    callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    expected_type: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
     // Written type arguments on `new C<…>()` must fit the class's type
     // parameters (TS2558). Only a class declared in a source file is checked:
     // a library constructor's generics need not match its instance interface.
@@ -2098,6 +2128,20 @@ pub(crate) fn check_expression_call(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<Type> {
+    let result = check_expression_call_unrecorded(callee, callee_span, call_span, type_arguments, arguments, symbols, ctx);
+    crate::semantic::record_span_type(call_span, result.as_ref(), ctx);
+    result
+}
+
+fn check_expression_call_unrecorded(
+    callee: &surge_ts_syntax::ParsedExpression,
+    callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
     // tsc resolves `super(…)` against the base constructor's construct
     // signatures and types the call `void`. A base surge has no constructor
     // value for falls through to the degraded walk below.
@@ -2357,6 +2401,20 @@ pub(crate) fn with_chain_undefined(returned: Type, receiver: &Type) -> Type {
 }
 
 pub(crate) fn check_optional_call_like(
+    callee: &surge_ts_syntax::ParsedExpression,
+    callee_span: Option<SyntaxTextSpan>,
+    call_span: Option<SyntaxTextSpan>,
+    type_arguments: &[ParsedType],
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let result = check_optional_call_like_unrecorded(callee, callee_span, call_span, type_arguments, arguments, symbols, ctx);
+    crate::semantic::record_span_type(call_span, result.as_ref(), ctx);
+    result
+}
+
+fn check_optional_call_like_unrecorded(
     callee: &surge_ts_syntax::ParsedExpression,
     callee_span: Option<SyntaxTextSpan>,
     call_span: Option<SyntaxTextSpan>,

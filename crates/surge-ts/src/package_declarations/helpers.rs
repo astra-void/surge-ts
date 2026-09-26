@@ -45,16 +45,16 @@ pub(super) fn discover_wildcard_type_names(
 
     for root in roots {
         let list_start = std::time::Instant::now();
-        let entries = std::fs::read_dir(root);
+        let entries = crate::host_fs::read_dir(root);
         crate::io_stats::record_read_dir(list_start.elapsed());
         let Ok(entries) = entries else {
             continue;
         };
 
         let mut dir_names: Vec<String> = entries
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.path().is_dir())
-            .filter_map(|entry| entry.file_name().into_string().ok())
+            .into_iter()
+            .filter(|entry| entry.is_dir || entry.indirect && crate::host_fs::is_dir(&root.join(&entry.name)))
+            .filter_map(|entry| entry.name.into_string().ok())
             .filter(|name| !name.starts_with('.'))
             .collect();
         dir_names.sort();
@@ -210,7 +210,7 @@ fn prefer_declaration_sibling(path: PathBuf) -> PathBuf {
             break;
         };
         let sibling = append_extension(&base, declaration);
-        if sibling.is_file() {
+        if crate::host_fs::is_file(&sibling) {
             return sibling;
         }
     }
@@ -286,14 +286,14 @@ pub(super) fn load_type_package_file(
     sources: &mut Vec<(PathBuf, String, String)>,
     known_file_names: &mut HashSet<String>,
 ) {
-    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canonical_path = crate::host_fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let normalized_file_name = canonicalize_if_exists_string(&canonical_path);
     if !known_file_names.insert(normalized_file_name.clone()) {
         return;
     }
 
     let read_start = std::time::Instant::now();
-    let Ok(source_text) = std::fs::read_to_string(&canonical_path) else {
+    let Ok(source_text) = crate::host_fs::read_to_string(&canonical_path) else {
         return;
     };
     crate::io_stats::record_expansion_read(source_text.len(), read_start.elapsed());
@@ -911,7 +911,7 @@ pub(super) fn read_package_json(
     }
 
     crate::io_stats::record_package_json_read();
-    let parsed = std::fs::read_to_string(pkg_json_path)
+    let parsed = crate::host_fs::read_to_string(pkg_json_path)
         .ok()
         .and_then(|json_str| serde_json::from_str::<serde_json::Value>(&json_str).ok())
         .map(std::sync::Arc::new);

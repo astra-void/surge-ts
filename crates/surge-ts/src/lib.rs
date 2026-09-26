@@ -19,6 +19,8 @@
 //! For in-memory, single- or multi-file checking without a tsconfig, use the
 //! re-exported [`Checker`] builder directly.
 
+pub mod api;
+mod host_fs;
 mod import_graph;
 mod io_stats;
 mod package_declarations;
@@ -203,6 +205,23 @@ impl Project {
     /// program. Returns [`ProjectError::SourceRead`] if a discovered file cannot
     /// be read.
     pub fn check(&self, options: &ProjectOptions) -> Result<ProjectCheckResult, ProjectError> {
+        let (run, finish) = match self.prepare(options)? {
+            Prepared::Empty(result) => return Ok(result),
+            Prepared::Ready(run, finish) => (run, finish),
+        };
+        let checking_start = Instant::now();
+        let result = surge_ts_checker::lowlevel::check_program_with_prescanned_sources(
+            run.inputs,
+            run.prescanned,
+            run.checker_options,
+            options.jobs,
+        );
+        Ok(finish.finish(result, checking_start.elapsed(), options))
+    }
+
+    /// Everything [`Self::check`] does before and after the type check, which
+    /// the compiler API's program runs around a retained check instead.
+    pub(crate) fn prepare(&self, options: &ProjectOptions) -> Result<Prepared<'_>, ProjectError> {
         let loaded = &self.loaded;
         let mut timings = ProjectTimings::default();
         let collect = options.collect_timings;
@@ -223,13 +242,13 @@ impl Project {
         };
 
         if loaded.files.is_empty() {
-            return Ok(ProjectCheckResult {
+            return Ok(Prepared::Empty(ProjectCheckResult {
                 diagnostics: Vec::new(),
                 stats: CompatibilityStats::default(),
                 sources: Vec::new(),
                 warnings,
                 timings,
-            });
+            }));
         }
 
         probe::clear_probe_cache();
@@ -273,22 +292,7 @@ impl Project {
         let mut package_resolution_cache =
             package_declarations::PackageDeclarationResolverCache::default();
 
-        let resolver_options = package_resolution::ResolverOptions {
-            module_resolution: loaded.compiler_options.module_resolution,
-            resolve_exports: loaded.compiler_options.resolve_package_json_exports,
-            resolve_imports: loaded.compiler_options.resolve_package_json_imports,
-            custom_conditions: loaded.compiler_options.custom_conditions.clone(),
-            path_mappings: loaded.compiler_options.paths.clone(),
-            path_mapping_base: Some(
-                loaded
-                    .compiler_options
-                    .base_url
-                    .clone()
-                    .unwrap_or_else(|| loaded.root_dir.clone()),
-            ),
-            emit_module: loaded.compiler_options.emit_module,
-            resolve_json_module: loaded.compiler_options.resolve_json_module,
-        };
+        let resolver_options = resolver_options(loaded);
 
         let type_package_resolution = package_declarations::resolve_type_packages(
             &mut inputs,
@@ -733,40 +737,139 @@ impl Project {
         // on-disk file keep their text — they cannot be re-read.
         if !options.retain_all_sources {
             for (file_path, _, source_text) in &mut sources {
-                if !source_text.is_empty() && file_path.is_file() {
+                if !source_text.is_empty() && host_fs::is_file(file_path) {
                     *source_text = String::new();
                 }
             }
         }
 
-        let checking_start = Instant::now();
-        let result = surge_ts_checker::lowlevel::check_program_with_prescanned_sources(
-            inputs,
-            prescanned_sources,
-            checker_options,
-            options.jobs,
-        );
-        if collect {
-            timings.checking += checking_start.elapsed();
+        Ok(Prepared::Ready(
+            PreparedRun {
+                inputs,
+                prescanned: prescanned_sources,
+                checker_options,
+            },
+            PreparedFinish {
+                loaded,
+                sources,
+                warnings,
+                timings,
+                type_package_missing: type_package_resolution.missing,
+                reference_type_resolution,
+            },
+        ))
+    }
+}
+
+/// The package resolver's options for a loaded config.
+pub(crate) fn resolver_options(loaded: &LoadedTsConfig) -> package_resolution::ResolverOptions {
+    package_resolution::ResolverOptions {
+        module_resolution: loaded.compiler_options.module_resolution,
+        resolve_exports: loaded.compiler_options.resolve_package_json_exports,
+        resolve_imports: loaded.compiler_options.resolve_package_json_imports,
+        custom_conditions: loaded.compiler_options.custom_conditions.clone(),
+        path_mappings: loaded.compiler_options.paths.clone(),
+        path_mapping_base: Some(
+            loaded
+                .compiler_options
+                .base_url
+                .clone()
+                .unwrap_or_else(|| loaded.root_dir.clone()),
+        ),
+        emit_module: loaded.compiler_options.emit_module,
+        resolve_json_module: loaded.compiler_options.resolve_json_module,
+    }
+}
+
+/// What [`Project::prepare`] hands the type check.
+pub(crate) struct PreparedRun {
+    pub(crate) inputs: Vec<SourceFileInput>,
+    pub(crate) prescanned: Vec<surge_ts_syntax::ParsedSource>,
+    pub(crate) checker_options: CheckerOptions,
+}
+
+/// What [`Project::prepare`] keeps for turning the check's result into the
+/// project's.
+pub(crate) struct PreparedFinish<'a> {
+    loaded: &'a LoadedTsConfig,
+    pub(crate) sources: Vec<ProjectSource>,
+    warnings: Vec<String>,
+    timings: ProjectTimings,
+    type_package_missing: Vec<String>,
+    reference_type_resolution: package_declarations::ReferenceTypeDirectiveResolution,
+}
+
+pub(crate) enum Prepared<'a> {
+    Empty(ProjectCheckResult),
+    Ready(PreparedRun, PreparedFinish<'a>),
+}
+
+impl PreparedFinish<'_> {
+    pub(crate) fn finish(
+        self,
+        result: ProgramCheckResult,
+        checking: Duration,
+        options: &ProjectOptions,
+    ) -> ProjectCheckResult {
+        let stats = result.stats.clone();
+        let (parts, mut sources, warnings, timings) = self.into_parts(result, checking, options);
+        let diagnostics = parts.tsc_diagnostics();
+
+        if !options.retain_all_sources {
+            let needed: std::collections::HashSet<&str> = diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.file_name.as_str())
+                .collect();
+            for (file_path, file_name, source_text) in &mut sources {
+                if source_text.is_empty()
+                    && needed.contains(file_name.as_str())
+                    && let Ok(read) = host_fs::read_to_string(file_path)
+                {
+                    *source_text = read;
+                }
+            }
+        }
+
+        ProjectCheckResult {
+            diagnostics,
+            stats,
+            sources,
+            warnings,
+            timings,
+        }
+    }
+
+    /// Sorts what the check and the loader found into the sets tsc's program
+    /// reports them through.
+    pub(crate) fn into_parts(
+        self,
+        result: ProgramCheckResult,
+        checking: Duration,
+        options: &ProjectOptions,
+    ) -> (DiagnosticParts, Vec<ProjectSource>, Vec<String>, ProjectTimings) {
+        let PreparedFinish {
+            loaded,
+            sources,
+            warnings,
+            mut timings,
+            type_package_missing,
+            reference_type_resolution,
+        } = self;
+        if options.collect_timings {
+            timings.checking += checking;
         }
 
         let mut program_diagnostics = removed_option_diagnostics(loaded);
         program_diagnostics.extend(
-            type_package_resolution
-                .missing
+            type_package_missing
                 .iter()
                 .map(|type_name| Diagnostic::ts2688(type_name, String::new())),
         );
-        // tsc's `GetDiagnosticsOfAnyProgram`: syntactic diagnostics alone when
-        // there are any, else the program's option and location-less
-        // file-inclusion diagnostics alone when there are any, else the
-        // semantic ones. An inclusion error located in a file (an unresolved
-        // `/// <reference types>`) is reported with that file's semantics.
-        let diagnostics = if result.syntax_errors {
+        let syntax_errors = result.syntax_errors;
+        let no_check = loaded.compiler_options.no_check;
+        let checked = if syntax_errors {
             result.diagnostics
-        } else if !program_diagnostics.is_empty() {
-            program_diagnostics
-        } else if loaded.compiler_options.no_check {
+        } else if no_check {
             // tsc's `SkipTypeChecking`: every file's bind, check and inclusion
             // diagnostics are skipped, leaving the location-less ones.
             result
@@ -816,38 +919,51 @@ impl Project {
             }
             diagnostics
         };
-        let mut diagnostics = diagnostics;
-        if loaded.compiler_options.isolated_declarations
+        let declaration = if loaded.compiler_options.isolated_declarations
             && (loaded.compiler_options.declaration || loaded.compiler_options.composite)
         {
-            diagnostics.extend(isolated_declaration_diagnostics(
-                &sources,
-                loaded.compiler_options.strict_null_checks,
-            ));
-        }
+            isolated_declaration_diagnostics(&sources, loaded.compiler_options.strict_null_checks)
+        } else {
+            Vec::new()
+        };
+        let parts = DiagnosticParts {
+            syntax_errors,
+            program: program_diagnostics,
+            checked,
+            declaration,
+        };
+        (parts, sources, warnings, timings)
+    }
+}
 
-        if !options.retain_all_sources {
-            let needed: std::collections::HashSet<&str> = diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.file_name.as_str())
-                .collect();
-            for (file_path, file_name, source_text) in &mut sources {
-                if source_text.is_empty()
-                    && needed.contains(file_name.as_str())
-                    && let Ok(read) = std::fs::read_to_string(&*file_path)
-                {
-                    *source_text = read;
-                }
-            }
-        }
+/// A checked program's diagnostics, sorted by the tsc program API that
+/// reports each.
+pub(crate) struct DiagnosticParts {
+    /// A file failed to parse: `checked` holds the syntactic diagnostics only.
+    pub(crate) syntax_errors: bool,
+    /// Location-less option and file-inclusion diagnostics
+    /// (`GetOptionsDiagnostics`).
+    pub(crate) program: Vec<Diagnostic>,
+    /// The syntactic diagnostics when `syntax_errors`, else the global and
+    /// semantic ones.
+    pub(crate) checked: Vec<Diagnostic>,
+    /// What declaration emit reports under `isolatedDeclarations`.
+    pub(crate) declaration: Vec<Diagnostic>,
+}
 
-        Ok(ProjectCheckResult {
-            diagnostics,
-            stats: result.stats,
-            sources,
-            warnings,
-            timings,
-        })
+impl DiagnosticParts {
+    /// tsc's `GetDiagnosticsOfAnyProgram`: syntactic diagnostics alone when
+    /// there are any, else the program's option and location-less
+    /// file-inclusion diagnostics alone when there are any, else the
+    /// semantic ones; then what declaration emit reports.
+    pub(crate) fn tsc_diagnostics(&self) -> Vec<Diagnostic> {
+        let mut diagnostics = if self.syntax_errors || self.program.is_empty() {
+            self.checked.clone()
+        } else {
+            self.program.clone()
+        };
+        diagnostics.extend(self.declaration.iter().cloned());
+        diagnostics
     }
 }
 
@@ -869,7 +985,7 @@ fn isolated_declaration_diagnostics(
         }
         let read;
         let text = if source_text.is_empty() {
-            let Ok(text) = std::fs::read_to_string(file_path) else {
+            let Ok(text) = host_fs::read_to_string(file_path) else {
                 continue;
             };
             read = text;
@@ -899,7 +1015,7 @@ fn read_one_source(
     read_nanos: &std::sync::atomic::AtomicU64,
 ) -> SourceReadResult {
     let read_start = Instant::now();
-    let read = std::fs::read_to_string(file_path);
+    let read = host_fs::read_to_string(file_path);
     read_nanos.fetch_add(
         read_start.elapsed().as_nanos() as u64,
         std::sync::atomic::Ordering::Relaxed,
@@ -921,7 +1037,7 @@ fn read_project_sources(
     workers: usize,
     read_nanos: &std::sync::atomic::AtomicU64,
 ) -> Result<Vec<ProjectSource>, (PathBuf, std::io::Error)> {
-    if workers <= 1 || files.len() <= 1 {
+    if workers <= 1 || files.len() <= 1 || host_fs::is_custom() {
         return files
             .iter()
             .map(|f| read_one_source(f, read_nanos))
@@ -1206,7 +1322,7 @@ fn esm_format_files<'a>(
             }
             visited.push(dir.clone());
             let manifest = dir.join("package.json");
-            if let Ok(text) = std::fs::read_to_string(&manifest) {
+            if let Ok(text) = host_fs::read_to_string(&manifest) {
                 answer = serde_json::from_str::<serde_json::Value>(&text)
                     .ok()
                     .and_then(|json| json.get("type").and_then(|t| t.as_str()).map(|t| t == "module"))

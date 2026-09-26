@@ -9,6 +9,7 @@ members = [
   "crates/surge-ts-diagnostics-codegen",
   "crates/surge-ts-types",
   "crates/surge-ts-config",
+  "crates/surge-ts-node",
 ]
 resolver = "2"
 exclude = ["crates/surge-ts-parser"]

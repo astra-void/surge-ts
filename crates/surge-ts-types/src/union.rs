@@ -156,24 +156,25 @@ impl UnionType {
         if self.types().is_empty() {
             return "unknown".to_string();
         }
-        self.payload
-            .name_memo
-            .get_or_render(|| {
-                // Distinct members can render to one name — every member of a
-                // nominal enum displays as the enum itself — and tsc prints that
-                // name once.
-                let mut rendered: Vec<String> = Vec::with_capacity(self.types().len());
-                let mut members: Vec<&Type> = self.types().iter().collect();
-                members.sort_by_key(|member| display_rank(member));
-                for member in members {
-                    let name = member.name();
-                    if !rendered.iter().any(|existing| *existing == name) {
-                        rendered.push(name);
-                    }
-                }
-                rendered.join(" | ")
-            })
-            .to_string()
+        if crate::tsc_display::active() {
+            return crate::tsc_display::memoized(self.payload_address(), || self.render_members());
+        }
+        self.payload.name_memo.get_or_render(|| self.render_members()).to_string()
+    }
+
+    fn render_members(&self) -> String {
+        // Distinct members can render to one name — every member of a nominal
+        // enum displays as the enum itself — and tsc prints that name once.
+        let mut rendered: Vec<String> = Vec::with_capacity(self.types().len());
+        let mut members: Vec<&Type> = self.types().iter().collect();
+        members.sort_by_key(|member| display_rank(member));
+        for member in members {
+            let name = crate::tsc_display::constituent_name(member);
+            if !rendered.iter().any(|existing| *existing == name) {
+                rendered.push(name);
+            }
+        }
+        rendered.join(" | ")
     }
 
     pub fn id(&self) -> Option<UnionTypeId> {

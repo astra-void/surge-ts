@@ -127,10 +127,14 @@ pub(crate) fn infer_expression(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    crate::checks::function::settle_call_result(
+    let result = crate::checks::function::settle_call_result(
         parsed_expression,
         infer_expression_unsettled(parsed_expression, symbols, ctx),
-    )
+    );
+    if let InferredExpression::Known(ty) = &result {
+        crate::semantic::record_expression_type(parsed_expression, ty, ctx);
+    }
+    result
 }
 
 fn infer_expression_unsettled(

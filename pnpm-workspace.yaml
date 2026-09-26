@@ -2,6 +2,8 @@
 # (default on). On this workspace it costs ~10s per invocation and dominates
 # oracle:* / real:* startup. Disabled here; run `pnpm install` after changing deps.
 verifyDepsBeforeRun: false
+packages:
+  - packages/*
 allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:

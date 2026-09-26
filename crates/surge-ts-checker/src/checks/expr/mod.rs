@@ -440,6 +440,19 @@ pub(crate) fn evaluate_const_expression(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    let result = evaluate_const_expression_unrecorded(expression, fallback_span, symbols, ctx);
+    if let InferredExpression::Known(ty) = &result {
+        crate::semantic::record_const_operand_type(expression, ty, ctx);
+    }
+    result
+}
+
+fn evaluate_const_expression_unrecorded(
+    expression: &ParsedExpression,
+    fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
     match expression {
         ParsedExpression::ArrayLiteral { elements, .. } => {
             let mut element_types = Vec::new();

@@ -2148,6 +2148,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 .as_ref()
                 .unwrap_or_else(|| parameter_types.get(index).unwrap_or(&Type::Any));
             insert_parameter_bindings(parameter, parameter_type, &mut scopes);
+            signature::record_parameter_binding(parameter, parameter_type, &scopes, ctx);
         }
         if let Some(expected_type) = expected_type {
             record_dependent_parameters(&parameters, expected_type, &body, arrow_span, &mut scopes);

@@ -29,6 +29,8 @@ pub fn check_source_with_options(
     file_name: &str,
     options: crate::context::CheckerOptions,
 ) -> Vec<Diagnostic> {
+    let _lock = crate::semantic::engine_lock();
+    crate::semantic::claim_thread_caches(crate::semantic::next_program_id());
     surge_ts_types::with_strict_null_checks(options.strict_null_checks, || {
         check_single_source(source_text, file_name, options)
     })

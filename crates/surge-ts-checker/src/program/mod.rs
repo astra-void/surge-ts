@@ -40,6 +40,7 @@ mod unused_locals;
 pub(crate) use ambient::*;
 pub(crate) use binding::*;
 use check_files::*;
+pub(crate) use check_files::check_program_file;
 pub(crate) use check_files::{
     emit_deferred_grammar_diagnostics, emit_grammar_diagnostics, unclaimed_parser_errors,
 };
@@ -148,26 +149,26 @@ pub struct ProgramCheckResult {
 }
 
 #[derive(Debug, Clone)]
-struct ProgramCheckSharedState {
+pub(crate) struct ProgramCheckSharedState {
     /// Prebuilt global+ambient declaration table for script (non-module) files.
     /// Built once on the main thread before the check-phase fan-out; workers
     /// clone it per file rather than rebuilding it, so every script file sees
     /// the same merged global interfaces.
-    script_type_declarations: TypeDeclarationTable,
-    global_symbols: SymbolTable,
+    pub(crate) script_type_declarations: TypeDeclarationTable,
+    pub(crate) global_symbols: SymbolTable,
     /// Each script's own top-level values, indexed by file; see
     /// [`globals::collect_script_values`].
     script_values: Vec<Option<Arc<SymbolTable>>>,
     /// See [`globals::module_script_globals`].
     module_script_globals: Option<Arc<SymbolTable>>,
     function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
-    module_analyses: Vec<Option<ModuleAnalysis>>,
+    pub(crate) module_analyses: Vec<Option<ModuleAnalysis>>,
     module_import_bindings: Vec<Option<ModuleImportBindings>>,
-    module_resolution_scopes: Vec<Option<Arc<TypeDeclarationScope>>>,
+    pub(crate) module_resolution_scopes: Vec<Option<Arc<TypeDeclarationScope>>>,
 }
 
 #[derive(Debug)]
-struct FileCheckResult {
+pub(crate) struct FileCheckResult {
     file_index: usize,
     diagnostics: Vec<Diagnostic>,
     stats: CompatibilityStats,
@@ -255,10 +256,36 @@ pub fn check_program_with_prescanned_sources(
     options: CheckerOptions,
     jobs: usize,
 ) -> ProgramCheckResult {
+    let _lock = crate::semantic::engine_lock();
+    crate::semantic::claim_thread_caches(crate::semantic::next_program_id());
     let store = ProgramTypeStore::new();
     store.set_strict_null_checks(options.strict_null_checks);
     with_program_type_store(store.clone(), || {
-        check_program_with_stats_and_jobs_inner(files, prescanned, options, jobs, store)
+        check_program_with_stats_and_jobs_inner(files, prescanned, options, jobs, store, false).0
+    })
+}
+
+/// The run's state as the check phase left it, kept for queries instead of
+/// being torn down: see [`crate::semantic::RetainedProgram`].
+pub(crate) struct RetainedRun {
+    pub(crate) ctx: CheckerContext,
+    pub(crate) parsed_files: Vec<ParsedProgramFile>,
+    pub(crate) shared_state: ProgramCheckSharedState,
+}
+
+/// [`check_program_with_prescanned_sources`], keeping the checked program
+/// alive. The diagnostics are the ones the one-shot check reports; only the
+/// end-of-run teardown and the per-file release of checked files are skipped.
+pub(crate) fn check_program_retained(
+    files: Vec<SourceFileInput>,
+    prescanned: Vec<ParsedSource>,
+    options: CheckerOptions,
+    jobs: usize,
+    store: Arc<ProgramTypeStore>,
+) -> (ProgramCheckResult, Option<RetainedRun>) {
+    store.set_strict_null_checks(options.strict_null_checks);
+    with_program_type_store(store.clone(), || {
+        check_program_with_stats_and_jobs_inner(files, prescanned, options, jobs, store, true)
     })
 }
 
@@ -306,13 +333,15 @@ fn check_program_with_stats_and_jobs_inner(
     options: CheckerOptions,
     jobs: usize,
     store: Arc<ProgramTypeStore>,
-) -> ProgramCheckResult {
+    retain: bool,
+) -> (ProgramCheckResult, Option<RetainedRun>) {
     if files.is_empty() {
-        return ProgramCheckResult {
+        let result = ProgramCheckResult {
             diagnostics: Vec::new(),
             stats: CompatibilityStats::default(),
             syntax_errors: false,
         };
+        return (result, None);
     }
 
     // tsc's `SkipTypeChecking`: a `// @ts-nocheck` file keeps only its
@@ -433,6 +462,7 @@ fn check_program_with_stats_and_jobs_inner(
         &timings,
         program_start,
         jobs,
+        retain,
     );
     emit_check_phase_retention_census(
         "after_check_phase",
@@ -441,6 +471,27 @@ fn check_program_with_stats_and_jobs_inner(
         &shared_state,
         &parsed_files,
     );
+    if retain {
+        let mut result = ProgramCheckResult {
+            diagnostics: std::mem::take(&mut ctx.diagnostics),
+            stats: std::mem::take(&mut ctx.stats),
+            syntax_errors: false,
+        };
+        set_check_phase(false);
+        filter_program_diagnostics(
+            &mut result,
+            oxc_aborted_only,
+            syntax_errors,
+            &unchecked_files,
+            &unchecked_bind_reports,
+        );
+        let retained = RetainedRun {
+            ctx,
+            parsed_files,
+            shared_state,
+        };
+        return (result, Some(retained));
+    }
     // Checking is complete and the diagnostics are extracted: the cross-file
     // program state and every remaining parse tree are dead. Dropping them here
     // (rather than at function exit, after the finish measurements) makes the
@@ -466,10 +517,29 @@ fn check_program_with_stats_and_jobs_inner(
         census_external,
         skip_teardown,
     );
+    filter_program_diagnostics(
+        &mut result,
+        oxc_aborted_only,
+        syntax_errors,
+        &unchecked_files,
+        &unchecked_bind_reports,
+    );
+    (result, None)
+}
+
+/// What a program with syntax errors or unchecked files reports of what its
+/// check found.
+fn filter_program_diagnostics(
+    result: &mut ProgramCheckResult,
+    oxc_aborted_only: bool,
+    syntax_errors: bool,
+    unchecked_files: &HashSet<String>,
+    unchecked_bind_reports: &HashSet<(String, u32, usize)>,
+) {
     if oxc_aborted_only {
         result
             .diagnostics
-            .retain(|diagnostic| is_unchecked_bind_report(diagnostic, &unchecked_bind_reports));
+            .retain(|diagnostic| is_unchecked_bind_report(diagnostic, unchecked_bind_reports));
     } else if syntax_errors {
         result.diagnostics.retain(diagnostics::is_syntactic_diagnostic);
         result.syntax_errors = true;
@@ -478,10 +548,9 @@ fn check_program_with_stats_and_jobs_inner(
         result.diagnostics.retain(|diagnostic| {
             !unchecked_files.contains(&diagnostic.file_name)
                 || diagnostics::is_syntactic_diagnostic(diagnostic)
-                || is_unchecked_bind_report(diagnostic, &unchecked_bind_reports)
+                || is_unchecked_bind_report(diagnostic, unchecked_bind_reports)
         });
     }
-    result
 }
 
 /// A JavaScript file's binder reports survive the file being otherwise
@@ -1470,6 +1539,7 @@ fn run_check_phase(
     timings: &Option<Arc<Mutex<ProgramTimings>>>,
     program_start: Instant,
     jobs: usize,
+    retain: bool,
 ) {
     let worker_count = resolve_worker_count(jobs, &parsed_files);
     crate::metrics::release_free_memory();
@@ -1480,7 +1550,7 @@ fn run_check_phase(
     report_import_call_resolutions(parsed_files.as_slice(), ctx);
     set_check_phase(true);
     let file_results = if worker_count <= 1 {
-        check_program_files_serial(parsed_files, shared_state, &ctx, timings.clone())
+        check_program_files_serial(parsed_files, shared_state, &ctx, timings.clone(), retain)
     } else {
         check_program_files_parallel(
             &parsed_files,

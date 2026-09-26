@@ -137,6 +137,9 @@ pub(crate) fn evaluate_expression(
     if let Some(substitutions) = tagged_template_substitutions(expression) {
         report_symbol_substitutions(substitutions, symbols, ctx);
     }
+    if let InferredExpression::Known(ty) = &result {
+        crate::semantic::record_expression_type(expression, ty, ctx);
+    }
     result
 }
 

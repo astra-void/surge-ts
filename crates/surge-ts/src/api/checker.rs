@@ -1,0 +1,2189 @@
+//! TypeScript's `TypeChecker`, answering from what surge's checker computed.
+//!
+//! Symbols come from the binder (see [`super::symbols`]). Types come from the
+//! checked program: an expression's or declaration's type is the one the
+//! checker recorded while checking its file, a named type is resolved with
+//! the checker's own resolution in the file's scope. Where the checker has no
+//! answer, the result is the error type (`any`, as tsc's `errorType` is),
+//! never a guess.
+
+use std::sync::Arc;
+
+use surge_ts_checker::lowlevel::semantic::{PropertyInfo, Query};
+use surge_ts_tsc_syntax::Kind;
+use surge_ts_tsc_syntax::symbol_flags as sf;
+use surge_ts_types::fx::FxHashMap;
+use surge_ts_types::{FunctionType, Type};
+
+use super::enums_generated::{SyntaxKind, object_flags as of, symbol_flags as ts_sf, type_flags as tf};
+use super::handles::{NodeId, SignatureId, SymbolId, TypeId};
+use super::node::NodePropertyValue;
+use super::program::Program;
+use super::symbols::{GlobalScope, Meaning, SymbolData, SymbolKey};
+
+/// `SignatureKind`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum SignatureKind {
+    Call = 0,
+    Construct = 1,
+}
+
+#[derive(Default)]
+pub(crate) struct SemanticTables {
+    pub(crate) types: Vec<TypeEntry>,
+    type_by_key: FxHashMap<TypeKey, u32>,
+    pub(crate) symbols: Vec<SymbolData>,
+    pub(crate) symbol_by_key: FxHashMap<SymbolKey, u32>,
+    signatures: Vec<SignatureEntry>,
+    signature_by_key: FxHashMap<(TypeId, SignatureKind, u32), u32>,
+    pub(crate) globals: Option<GlobalScope>,
+}
+
+pub(crate) struct TypeEntry {
+    pub(crate) ty: Type,
+    /// The symbol whose type this is, when a query started from one: its
+    /// declarations are the signatures' declarations.
+    origin: Option<SymbolId>,
+    /// The node whose type this is, when a query started from one.
+    location: Option<NodeId>,
+}
+
+#[derive(Clone)]
+struct SignatureEntry {
+    function: FunctionType,
+    kind: SignatureKind,
+    declaration: Option<NodeId>,
+}
+
+/// A location's type: a symbol's own type handle, or a type computed for
+/// the location.
+enum Located {
+    Handle(TypeId),
+    Computed(Type),
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum TypeKey {
+    Intrinsic(&'static str),
+    Location(NodeId),
+    SymbolType(SymbolId),
+    DeclaredType(SymbolId),
+    Apparent(TypeId),
+}
+
+/// A query surge does not answer yet: the API says so rather than answering
+/// with a guess.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Unsupported(pub &'static str);
+
+impl std::fmt::Display for Unsupported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "surge-ts: {} is not supported yet", self.0)
+    }
+}
+
+impl std::error::Error for Unsupported {}
+
+/// `TypeChecker`. Cheap to clone; shares its program.
+#[derive(Clone)]
+pub struct TypeChecker {
+    pub(crate) program: Program,
+}
+
+/// How a type names its constituents, for [`TypeChecker::type_constituents`].
+fn intrinsic_name(ty: &Type) -> Option<&'static str> {
+    Some(match ty {
+        Type::Any => "any",
+        Type::ErrorType | Type::Unknown => "error",
+        Type::GenuineUnknown => "unknown",
+        Type::String => "string",
+        Type::Number => "number",
+        Type::Boolean => "boolean",
+        Type::BigInt => "bigint",
+        Type::Symbol => "symbol",
+        Type::Undefined => "undefined",
+        Type::Null => "null",
+        Type::Void => "void",
+        Type::Never => "never",
+        _ => return None,
+    })
+}
+
+impl TypeChecker {
+    pub(crate) fn new(program: Program) -> Self {
+        TypeChecker { program }
+    }
+
+    pub fn program(&self) -> &Program {
+        &self.program
+    }
+
+    /// The type handle with this index, if this checker handed one out.
+    pub fn type_handle(&self, index: u32) -> Option<TypeId> {
+        let count = self.with_tables(|tables| tables.types.len());
+        ((index as usize) < count).then_some(TypeId { program: self.program.inner().identity, index })
+    }
+
+    /// The symbol handle with this index, if this checker handed one out.
+    pub fn symbol_handle(&self, index: u32) -> Option<SymbolId> {
+        let count = self.with_tables(|tables| tables.symbols.len());
+        ((index as usize) < count).then_some(SymbolId { program: self.program.inner().identity, index })
+    }
+
+    /// The signature handle with this index, if this checker handed one out.
+    pub fn signature_handle(&self, index: u32) -> Option<SignatureId> {
+        let count = self.with_tables(|tables| tables.signatures.len());
+        ((index as usize) < count).then_some(SignatureId { program: self.program.inner().identity, index })
+    }
+
+    /// The file an import of `specifier` in `file` resolved to in this
+    /// program (`getResolvedModule`).
+    pub fn resolved_module(&self, file: super::handles::SourceFileId, specifier: &str) -> Option<super::handles::SourceFileId> {
+        self.resolved_module_file(file, specifier)
+    }
+
+    fn query<R>(&self, f: impl FnOnce(&mut Query<'_>) -> R) -> Option<R> {
+        Some(self.program.inner().checked.as_ref()?.query(f))
+    }
+
+    fn type_id(&self, key: Option<TypeKey>, origin: Option<SymbolId>, ty: impl FnOnce() -> Type) -> TypeId {
+        let program = self.program.inner().identity;
+        if let Some(key) = &key
+            && let Some(index) = self.with_tables(|tables| tables.type_by_key.get(key).copied())
+        {
+            return TypeId { program, index };
+        }
+        let ty = ty();
+        let location = match &key {
+            Some(TypeKey::Location(node)) => Some(*node),
+            _ => None,
+        };
+        let key = key.or_else(|| intrinsic_name(&ty).map(TypeKey::Intrinsic));
+        self.with_tables(|tables| {
+            if let Some(key) = &key
+                && let Some(&index) = tables.type_by_key.get(key)
+            {
+                return TypeId { program, index };
+            }
+            let index = tables.types.len() as u32;
+            tables.types.push(TypeEntry { ty, origin, location });
+            if let Some(key) = key {
+                tables.type_by_key.insert(key, index);
+            }
+            TypeId { program, index }
+        })
+    }
+
+    pub(crate) fn intern(&self, ty: Type) -> TypeId {
+        self.type_id(None, None, || ty)
+    }
+
+    pub(crate) fn ty(&self, ty: TypeId) -> Type {
+        assert_eq!(ty.program, self.program.inner().identity, "type handle belongs to another program");
+        self.with_tables(|tables| tables.types[ty.index as usize].ty.clone())
+    }
+
+    fn origin(&self, ty: TypeId) -> Option<SymbolId> {
+        self.with_tables(|tables| tables.types[ty.index as usize].origin)
+    }
+
+    fn location(&self, ty: TypeId) -> Option<NodeId> {
+        self.with_tables(|tables| tables.types[ty.index as usize].location)
+    }
+
+    /// tsc's `unresolvedType`: the declared type of a type reference nothing
+    /// declares, an error type printed as `/*unresolved*/ any`.
+    fn unresolved_type(&self) -> TypeId {
+        self.type_id(Some(TypeKey::Intrinsic("unresolved")), None, || Type::ErrorType)
+    }
+
+    /// tsc's `errorType`: `any`, standing for a type there is no answer for.
+    pub fn error_type(&self) -> TypeId {
+        self.intern(Type::ErrorType)
+    }
+
+    pub fn any_type(&self) -> TypeId {
+        self.intern(Type::Any)
+    }
+    pub fn unknown_type(&self) -> TypeId {
+        self.intern(Type::GenuineUnknown)
+    }
+    pub fn string_type(&self) -> TypeId {
+        self.intern(Type::String)
+    }
+    pub fn number_type(&self) -> TypeId {
+        self.intern(Type::Number)
+    }
+    pub fn boolean_type(&self) -> TypeId {
+        self.intern(Type::Boolean)
+    }
+    pub fn bigint_type(&self) -> TypeId {
+        self.intern(Type::BigInt)
+    }
+    pub fn es_symbol_type(&self) -> TypeId {
+        self.intern(Type::Symbol)
+    }
+    pub fn undefined_type(&self) -> TypeId {
+        self.intern(Type::Undefined)
+    }
+    pub fn null_type(&self) -> TypeId {
+        self.intern(Type::Null)
+    }
+    pub fn void_type(&self) -> TypeId {
+        self.intern(Type::Void)
+    }
+    pub fn never_type(&self) -> TypeId {
+        self.intern(Type::Never)
+    }
+
+    // --- locations -----------------------------------------------------------
+
+    /// `getSymbolAtLocation`, with tsc's dispatch: a declaration's name is
+    /// its symbol, a name or property access is what it resolves to, a module
+    /// specifier is its module, `this` is its type's symbol.
+    pub fn symbol_at_location(&self, node: NodeId) -> Option<SymbolId> {
+        let program = &self.program;
+        let kind = program.node_kind(node);
+        if kind == SyntaxKind::SourceFile {
+            return if program.is_external_module(node.source_file()) { self.module_symbol(node.source_file()) } else { None };
+        }
+        let parent = program.node_parent(node)?;
+        let parent_kind = program.node_kind(parent);
+        if program.is_declaration_name_or_import_property_name(node) {
+            let declared = self.declared_symbol(parent)?;
+            if matches!(parent_kind, SyntaxKind::ImportSpecifier | SyntaxKind::ExportSpecifier)
+                && self.node_child(parent, "propertyName") == Some(node)
+            {
+                return self.alias_target(declared).filter(|target| *target != declared);
+            }
+            return Some(declared);
+        }
+        match kind {
+            SyntaxKind::Identifier | SyntaxKind::PrivateIdentifier => self.symbol_of_name(node),
+            SyntaxKind::PropertyAccessExpression => self.symbol_of_name(self.node_child(node, "name")?),
+            SyntaxKind::QualifiedName => self.symbol_of_name(self.node_child(node, "right")?),
+            SyntaxKind::ThisKeyword | SyntaxKind::SuperKeyword => {
+                let ty = self.type_at_location(node);
+                self.type_symbol(ty)
+            }
+            SyntaxKind::ConstructorKeyword if parent_kind == SyntaxKind::Constructor => {
+                self.declared_symbol(program.node_parent(parent)?)
+            }
+            SyntaxKind::StringLiteral | SyntaxKind::NoSubstitutionTemplateLiteral => self
+                .module_symbol_of_specifier(node)
+                .or_else(|| self.element_access_property(node)),
+            SyntaxKind::NumericLiteral => self.element_access_property(node),
+            SyntaxKind::DefaultKeyword
+            | SyntaxKind::FunctionKeyword
+            | SyntaxKind::EqualsGreaterThanToken
+            | SyntaxKind::ClassKeyword => self.declared_symbol(parent),
+            SyntaxKind::ExportKeyword if parent_kind == SyntaxKind::ExportAssignment => self.declared_symbol(parent),
+            SyntaxKind::ImportType => {
+                let argument = self.node_child(node, "argument")?;
+                self.symbol_at_location(self.node_child(argument, "literal")?)
+            }
+            _ => None,
+        }
+    }
+
+    /// tsc's `getSymbolOfNameOrPropertyAccessExpression` for a name that is
+    /// not a declaration's.
+    fn symbol_of_name(&self, node: NodeId) -> Option<SymbolId> {
+        let program = &self.program;
+        let parent = program.node_parent(node)?;
+        let parent_kind = program.node_kind(parent);
+        let name = program.node_value_text(node)?.to_string();
+        // A name the parser recovered resolves to nothing.
+        if name.is_empty() {
+            return None;
+        }
+        if parent_kind == SyntaxKind::PropertyAccessExpression && self.node_child(parent, "name") == Some(node) {
+            let object = self.node_child(parent, "expression")?;
+            return self.property_symbol_of_expression(object, &name);
+        }
+        if parent_kind == SyntaxKind::QualifiedName && self.node_child(parent, "right") == Some(node) {
+            let left = self.node_child(parent, "left")?;
+            let resolved = self.symbol_at_location(left).and_then(|namespace| self.export_of_symbol(namespace, &name));
+            return resolved.or_else(|| self.unresolved_type_reference_symbol(parent));
+        }
+        if parent_kind == SyntaxKind::BindingElement
+            && self.node_child(parent, "propertyName") == Some(node)
+            && let Some(pattern) = program.node_parent(parent)
+            && program.node_kind(pattern) == SyntaxKind::ObjectBindingPattern
+        {
+            let owner = self.type_at_location(pattern);
+            return self.property_of_type(owner, &name);
+        }
+        let meaning = meaning_of_location(program, node);
+        let resolved = self
+            .resolve_name(node, &name, meaning)
+            .or_else(|| (meaning == Meaning::Namespace).then(|| self.resolve_name(node, &name, Meaning::Value)).flatten());
+        if resolved.is_none() {
+            let unresolved = self.unresolved_type_reference_symbol(node);
+            if unresolved.is_some() {
+                return unresolved;
+            }
+        }
+        if resolved.is_none() && name == "undefined" && meaning == Meaning::Value {
+            let ty = self.undefined_type();
+            return Some(self.symbol_id(SymbolKey::Global(Arc::from("\0undefined")), || SymbolData::Transient {
+                name: Arc::from("undefined"),
+                flags: ts_sf::Property,
+                ty,
+                parent: None,
+                declaration: None,
+            }));
+        }
+        resolved
+    }
+
+    /// tsc's `getUnresolvedSymbolForEntityName`, for a type reference's name
+    /// nothing declares (the `const` of `as const` among them): a type alias
+    /// placeholder per written path, `Foo.Bar` a child of `Foo`'s.
+    fn unresolved_type_reference_symbol(&self, name: NodeId) -> Option<SymbolId> {
+        let mut reference = name;
+        while let Some(parent) = self.program.node_parent(reference)
+            && self.program.node_kind(parent) == SyntaxKind::QualifiedName
+        {
+            reference = parent;
+        }
+        let parent = self.program.node_parent(reference)?;
+        if self.program.node_kind(parent) != SyntaxKind::TypeReference {
+            return None;
+        }
+        self.unresolved_symbol_with_path(name).map(|(symbol, _)| symbol)
+    }
+
+    fn unresolved_symbol_with_path(&self, name: NodeId) -> Option<(SymbolId, String)> {
+        let program = &self.program;
+        let (identifier, parent) = match program.node_kind(name) {
+            SyntaxKind::QualifiedName => {
+                let left = self.unresolved_symbol_with_path(self.node_child(name, "left")?)?;
+                (self.node_child(name, "right")?, Some(left))
+            }
+            SyntaxKind::Identifier => (name, None),
+            _ => return None,
+        };
+        let text = program.node_value_text(identifier)?.to_string();
+        let path = match &parent {
+            Some((_, parent_path)) => format!("{parent_path}.{text}"),
+            None => text.clone(),
+        };
+        let ty = self.error_type();
+        let symbol = self.symbol_id(SymbolKey::Global(Arc::from(format!("\0unresolved\0{path}"))), || SymbolData::Transient {
+            name: Arc::from(text.as_str()),
+            flags: ts_sf::TypeAlias,
+            ty,
+            parent: parent.map(|(symbol, _)| symbol),
+            declaration: None,
+        });
+        Some((symbol, path))
+    }
+
+    /// The property `obj["key"]` (or `obj[0]`) reads: tsc's answer for a
+    /// literal argument of an element access.
+    fn element_access_property(&self, literal: NodeId) -> Option<SymbolId> {
+        let parent = self.program.node_parent(literal)?;
+        if self.program.node_kind(parent) != SyntaxKind::ElementAccessExpression
+            || self.node_child(parent, "argumentExpression") != Some(literal)
+        {
+            return None;
+        }
+        let object = self.node_child(parent, "expression")?;
+        let name = self.program.node_value_text(literal)?.to_string();
+        self.property_of_type(self.type_at_location(object), &name)
+    }
+
+    fn node_child(&self, node: NodeId, property: &str) -> Option<NodeId> {
+        match self.program.node_property(node, property)? {
+            super::node::NodePropertyValue::Node(child) => Some(child),
+            _ => None,
+        }
+    }
+
+    fn declared_symbol(&self, declaration: NodeId) -> Option<SymbolId> {
+        let symbol = self.program.declared_symbol_index(declaration)?;
+        Some(self.bound_symbol(declaration.file, symbol))
+    }
+
+    /// `getTypeAtLocation`.
+    pub fn type_at_location(&self, node: NodeId) -> TypeId {
+        let key = Some(TypeKey::Location(node));
+        if let Some(index) = self.with_tables(|tables| tables.type_by_key.get(key.as_ref().unwrap()).copied()) {
+            return TypeId { program: node.program, index };
+        }
+        match self.compute_type_at_location(node) {
+            // The very type of the symbol, as tsc answers with the same object.
+            Located::Handle(ty) => {
+                self.with_tables(|tables| tables.type_by_key.insert(key.unwrap(), ty.index));
+                ty
+            }
+            Located::Computed(ty) => self.type_id(key, None, || ty),
+        }
+    }
+
+    /// tsc's `getTypeOfNode`: a type node's type, an expression's type as
+    /// the checker computed it, a declaration's or declaration name's
+    /// symbol's type, a type declaration's declared type.
+    fn compute_type_at_location(&self, node: NodeId) -> Located {
+        let program = &self.program;
+        let kind = program.node_kind(node);
+        let error = Located::Computed(Type::ErrorType);
+        if kind == SyntaxKind::SourceFile && !program.is_external_module(node.source_file()) {
+            return error;
+        }
+        if program.is_part_of_type_node(node) {
+            if matches!(kind, SyntaxKind::Identifier | SyntaxKind::QualifiedName | SyntaxKind::PropertyAccessExpression) {
+                return self.symbol_at_location(node).map_or(error, |symbol| Located::Handle(self.declared_type_at(symbol, Some(node))));
+            }
+            return Located::Computed(self.type_of_type_node(node).unwrap_or(Type::ErrorType));
+        }
+        if program.is_expression_node(node) {
+            return self.type_of_expression(node, kind);
+        }
+        if program.is_type_declaration(node) {
+            return self.declared_symbol(node).map_or(error, |symbol| Located::Handle(self.declared_type_of_symbol(symbol)));
+        }
+        if program.is_type_declaration_name(node) {
+            return self.symbol_at_location(node).map_or(error, |symbol| Located::Handle(self.declared_type_of_symbol(symbol)));
+        }
+        if super::classify::is_declaration_kind(kind) {
+            return self.declared_symbol(node).map_or(error, |symbol| Located::Handle(self.type_of_symbol(symbol)));
+        }
+        if program.is_declaration_name_or_import_property_name(node) {
+            return self.symbol_at_location(node).map_or(error, |symbol| Located::Handle(self.type_of_symbol(symbol)));
+        }
+        if matches!(kind, SyntaxKind::ObjectBindingPattern | SyntaxKind::ArrayBindingPattern) {
+            return Located::Computed(self.binding_pattern_source_type(node).unwrap_or(Type::ErrorType));
+        }
+        error
+    }
+
+    fn located_type(&self, located: Located) -> Type {
+        match located {
+            Located::Handle(ty) => self.ty(ty),
+            Located::Computed(ty) => ty,
+        }
+    }
+
+    /// The type a binding pattern destructures: its declaration's annotation,
+    /// else its initializer's type (tsc's `getTypeForVariableLikeDeclaration`).
+    fn binding_pattern_source_type(&self, pattern: NodeId) -> Option<Type> {
+        let declaration = self.program.node_parent(pattern)?;
+        if let Some(annotation) = self.node_child(declaration, "type") {
+            return self.type_of_type_node(annotation);
+        }
+        if let Some(initializer) = self.node_child(declaration, "initializer") {
+            let kind = self.program.node_kind(initializer);
+            return Some(self.located_type(self.type_of_expression(initializer, kind)));
+        }
+        match self.program.node_kind(declaration) {
+            SyntaxKind::BindingElement => {
+                let outer = self.program.node_parent(declaration)?;
+                let source = self.binding_pattern_source_type(outer)?;
+                let name = self
+                    .node_child(declaration, "propertyName")
+                    .or_else(|| self.node_child(declaration, "name"))
+                    .and_then(|name| self.program.node_value_text(name).map(str::to_string))?;
+                self.query(|query| query.property(&source, &name)).flatten().map(|property| property.ty)
+            }
+            _ => None,
+        }
+    }
+
+    /// tsc's `getRegularTypeOfExpression`, answered from what the checker
+    /// recorded for the expression.
+    fn type_of_expression(&self, node: NodeId, kind: SyntaxKind) -> Located {
+        let program = &self.program;
+        // The name of an access is typed as the access (tsc's
+        // `isRightSideOfQualifiedNameOrPropertyAccess`).
+        if let Some(parent) = program.node_parent(node)
+            && matches!(
+                (program.node_kind(parent), self.node_child(parent, "name").or_else(|| self.node_child(parent, "right"))),
+                (SyntaxKind::PropertyAccessExpression | SyntaxKind::QualifiedName | SyntaxKind::MetaProperty, Some(name)) if name == node
+            )
+        {
+            return self.type_of_expression(parent, program.node_kind(parent));
+        }
+        if kind == SyntaxKind::ParenthesizedExpression
+            && let Some(inner) = self.node_child(node, "expression")
+        {
+            return self.type_of_expression(inner, program.node_kind(inner));
+        }
+        if let Some(literal) = literal_type(program, node, kind) {
+            return Located::Computed(literal);
+        }
+        if let Some(own) = self.own_value_type(node, kind) {
+            return Located::Handle(own);
+        }
+        if let Some(ty) = self.recorded_type(node, kind) {
+            return Located::Computed(ty);
+        }
+        // tsc types `a = b` as `b`, except a JavaScript assignment declaration
+        // (`module.exports = …`, `this.x = …`), typed as its target.
+        if kind == SyntaxKind::BinaryExpression
+            && self
+                .node_child(node, "operatorToken")
+                .is_some_and(|operator| program.node_kind(operator) == SyntaxKind::EqualsToken)
+            && let (Some(left), Some(right)) = (self.node_child(node, "left"), self.node_child(node, "right"))
+        {
+            let script_kind = program.script_kind(node.source_file());
+            let javascript = script_kind == super::enums_generated::script_kind::JS
+                || script_kind == super::enums_generated::script_kind::JSX;
+            let access = matches!(
+                program.node_kind(left),
+                SyntaxKind::PropertyAccessExpression | SyntaxKind::ElementAccessExpression
+            );
+            if !(javascript && access) {
+                return self.type_of_expression(right, program.node_kind(right));
+            }
+        }
+        if matches!(kind, SyntaxKind::Identifier | SyntaxKind::PrivateIdentifier | SyntaxKind::PropertyAccessExpression)
+            && let Some(symbol) = self.symbol_at_location(node)
+        {
+            return Located::Handle(self.type_of_symbol(symbol));
+        }
+        Located::Computed(Type::ErrorType)
+    }
+
+    /// An unannotated `const` initialized with a class, enum, namespace or
+    /// expando value: its type is that value's, the same type.
+    fn initializing_own_value(&self, symbol: SymbolId) -> Option<TypeId> {
+        if self.symbol_flags(symbol) & ts_sf::BlockScopedVariable == 0 {
+            return None;
+        }
+        let declaration = self.symbol_value_declaration(symbol)?;
+        if self.program.node_kind(declaration) != SyntaxKind::VariableDeclaration
+            || self.node_child(declaration, "type").is_some()
+            || self.program.node_flags(self.program.node_parent(declaration)?) & super::enums_generated::node_flags::Const == 0
+        {
+            return None;
+        }
+        let mut initializer = self.node_child(declaration, "initializer")?;
+        while self.program.node_kind(initializer) == SyntaxKind::ParenthesizedExpression {
+            initializer = self.node_child(initializer, "expression")?;
+        }
+        // One level only: a `const` read from another is not followed, which
+        // keeps `const a = b; const b = a;` from looping.
+        let referenced = self.referenced_value_symbol(initializer, self.program.node_kind(initializer))?;
+        let target = if self.is_alias(referenced) { self.aliased_symbol(referenced).unwrap_or(referenced) } else { referenced };
+        self.is_typeof_named(target).then(|| self.type_of_symbol(referenced))
+    }
+
+    fn referenced_value_symbol(&self, node: NodeId, kind: SyntaxKind) -> Option<SymbolId> {
+        if !matches!(kind, SyntaxKind::Identifier | SyntaxKind::PropertyAccessExpression | SyntaxKind::QualifiedName) {
+            return None;
+        }
+        self.symbol_at_location(node)
+    }
+
+    /// A reference to a class, enum, namespace or expando value, whose type
+    /// is its symbol's own however it is reached.
+    fn own_value_type(&self, node: NodeId, kind: SyntaxKind) -> Option<TypeId> {
+        let symbol = self.referenced_value_symbol(node, kind)?;
+        let target = if self.is_alias(symbol) { self.aliased_symbol(symbol).unwrap_or(symbol) } else { symbol };
+        if self.is_typeof_named(target) {
+            return Some(self.type_of_symbol(symbol));
+        }
+        self.initializing_own_value(target)
+    }
+
+    /// What checking the node's file recorded for it.
+    fn recorded_type(&self, node: NodeId, kind: SyntaxKind) -> Option<Type> {
+        let checker_index = self.program.file(node.source_file()).checker_index?;
+        let (start, end) = self.program.node_byte_span(node);
+        let callee = (kind == SyntaxKind::CallExpression)
+            .then(|| self.node_child(node, "expression"))
+            .flatten()
+            .map(|callee| self.program.node_byte_span(callee));
+        let declaration_name = self
+            .program
+            .node_parent(node)
+            .filter(|parent| {
+                self.program.node_property(*parent, "name") == Some(super::node::NodePropertyValue::Node(node))
+            })
+            .is_some();
+        self.query(|query| {
+            let index = query.semantic_index(checker_index);
+            if declaration_name && let Some(ty) = index.declaration_type(start, end) {
+                return Some(ty.clone());
+            }
+            if let Some(ty) = index.expression_type(start, end) {
+                return Some(ty.clone());
+            }
+            if let Some((callee_start, callee_end)) = callee
+                && let Some(ty) = index.call_result_type(callee_start, callee_end)
+            {
+                return Some(ty.clone());
+            }
+            index.declaration_type(start, end).cloned()
+        })
+        .flatten()
+    }
+
+    /// A type node's type: its source text resolved by the checker where it
+    /// is written, with the type parameters in scope there standing for
+    /// themselves.
+    fn type_of_type_node(&self, node: NodeId) -> Option<Type> {
+        let kind = self.program.node_kind(node);
+        if let Some(keyword) = keyword_type(kind) {
+            return Some(keyword);
+        }
+        let checker_index = self.program.file(node.source_file()).checker_index?;
+        let text = self.program.node_text(node).to_string();
+        let type_parameters = self.type_parameters_in_scope(node);
+        self.query(|query| query.resolve_type_text(checker_index, &text, &type_parameters)).flatten()
+    }
+
+    // --- symbols -------------------------------------------------------------
+
+    /// `getTypeOfSymbol` / `getTypeOfSymbolAtLocation`: the type a value
+    /// symbol declares; at a reference, what the checker narrowed it to there.
+    pub fn type_of_symbol_at_location(&self, symbol: SymbolId, location: NodeId) -> TypeId {
+        let kind = self.program.node_kind(location);
+        if matches!(kind, SyntaxKind::Identifier | SyntaxKind::PrivateIdentifier)
+            && self.symbol_at_location(location) == Some(symbol)
+            && !self.is_declaration_name(location)
+        {
+            let reference = match self.program.node_parent(location) {
+                Some(parent)
+                    if (self.program.node_kind(parent) == SyntaxKind::PropertyAccessExpression
+                        && self.node_child(parent, "name") == Some(location))
+                        || (self.program.node_kind(parent) == SyntaxKind::QualifiedName
+                            && self.node_child(parent, "right") == Some(location)) =>
+                {
+                    parent
+                }
+                _ => location,
+            };
+            let reference_kind = self.program.node_kind(reference);
+            if let Some(own) = self.own_value_type(reference, reference_kind) {
+                return own;
+            }
+            if let Some(ty) = self.recorded_type(reference, reference_kind) {
+                return self.type_id(Some(TypeKey::Location(reference)), Some(symbol), || ty);
+            }
+        }
+        self.type_of_symbol(symbol)
+    }
+
+    fn is_declaration_name(&self, node: NodeId) -> bool {
+        self.program.node_parent(node).is_some_and(|parent| {
+            declaration_kinds().contains(&self.program.node_kind(parent))
+                && self.node_child(parent, "name") == Some(node)
+        })
+    }
+
+    /// `getTypeOfSymbol`.
+    pub fn type_of_symbol(&self, symbol: SymbolId) -> TypeId {
+        let key = TypeKey::SymbolType(symbol);
+        if let Some(index) = self.with_tables(|tables| tables.type_by_key.get(&key).copied()) {
+            return TypeId { program: symbol.program, index };
+        }
+        if self.is_alias(symbol) {
+            // An alias has the very type of what it aliases (`getTypeOfAlias`).
+            let target = self.aliased_symbol(symbol).filter(|target| *target != symbol);
+            let ty = match target {
+                Some(target) => self.type_of_symbol(target),
+                None => self.error_type(),
+            };
+            // A value target this API cannot type or reach (declared inside an
+            // ambient module) has the type the importing file bound; a
+            // type-only target has none.
+            let ty = match self.ty(ty) {
+                Type::ErrorType if target.is_none_or(|target| self.symbol_flags(target) & ts_sf::Value != 0) => {
+                    self.imported_value_type(symbol).unwrap_or(ty)
+                }
+                _ => ty,
+            };
+            self.with_tables(|tables| tables.type_by_key.insert(key, ty.index));
+            return ty;
+        }
+        if let Some(own) = self.initializing_own_value(symbol) {
+            self.with_tables(|tables| tables.type_by_key.insert(key, own.index));
+            return own;
+        }
+        let ty = self.compute_type_of_symbol(symbol).unwrap_or(Type::ErrorType);
+        self.type_id(Some(key), Some(symbol), || ty)
+    }
+
+    /// A placeholder symbol of [`Self::unresolved_type_reference_symbol`]:
+    /// the only transient type alias.
+    fn is_unresolved_symbol(&self, symbol: SymbolId) -> bool {
+        matches!(self.symbol_data(symbol), SymbolData::Transient { flags, .. } if flags == ts_sf::TypeAlias)
+    }
+
+    /// The type an import (or export) binding has in the file that declares
+    /// it.
+    fn imported_value_type(&self, alias: SymbolId) -> Option<TypeId> {
+        let declaration = *self.symbol_declarations(alias).first()?;
+        if !matches!(
+            self.program.node_kind(declaration),
+            SyntaxKind::ImportSpecifier
+                | SyntaxKind::ImportClause
+                | SyntaxKind::NamespaceImport
+                | SyntaxKind::ImportEqualsDeclaration
+                | SyntaxKind::ExportSpecifier
+        ) {
+            return None;
+        }
+        let checker_index = self.program.file(declaration.source_file()).checker_index?;
+        let name = self.symbol_name(alias);
+        let ty = self.query(|query| query.file_value_type(checker_index, &name)).flatten()?;
+        (!matches!(ty, Type::Unknown | Type::ErrorType)).then(|| self.intern(ty))
+    }
+
+    fn is_alias(&self, symbol: SymbolId) -> bool {
+        match self.symbol_data(symbol) {
+            SymbolData::Bound { file, symbol } => {
+                self.program.syntax(self.program.file_id(file)).bound.symbols[symbol].flags & sf::Alias != 0
+            }
+            _ => false,
+        }
+    }
+
+    fn compute_type_of_symbol(&self, symbol: SymbolId) -> Option<Type> {
+        let data = self.symbol_data(symbol);
+        let (file, index) = match &data {
+            SymbolData::Transient { ty, .. } => return Some(self.ty(*ty)),
+            SymbolData::Global { name, .. } => return self.query(|query| query.global_value_type(name)).flatten(),
+            SymbolData::Bound { file, symbol } => (*file, *symbol),
+        };
+        let file_id = self.program.file_id(file);
+        let syntax = self.program.syntax(file_id).clone();
+        let bound = &syntax.bound.symbols[index];
+        if bound.flags & (sf::Value | sf::ValueModule) == 0 {
+            return None;
+        }
+        let declaration = bound.value_declaration.or_else(|| bound.declarations.first().copied())?;
+        let declaration_id = NodeId { program: symbol.program, file, node: declaration };
+        if syntax.tree.kind(declaration) == Kind::SourceFile {
+            let checker_index = self.program.file(file_id).checker_index?;
+            return self.query(|query| query.module_namespace_type(checker_index)).flatten();
+        }
+        let declaration_kind = syntax.tree.kind(declaration);
+        if declaration_kind == Kind::EnumMember
+            && let Some(ty) = self.enum_member_type(declaration_id)
+        {
+            return Some(ty);
+        }
+        // A function or class expression's symbol has the expression's type.
+        if matches!(declaration_kind, Kind::ArrowFunction | Kind::FunctionExpression | Kind::ClassExpression)
+            && let Some(ty) = self.recorded_type(declaration_id, self.program.node_kind(declaration_id))
+        {
+            return Some(ty);
+        }
+        if let Some(name) = syntax.tree.node(declaration).name {
+            let name_id = NodeId { node: name, ..declaration_id };
+            if let Some(ty) = self.recorded_type(name_id, SyntaxKind::Identifier) {
+                return Some(ty);
+            }
+        }
+        if matches!(declaration_kind, Kind::PropertyAssignment | Kind::ShorthandPropertyAssignment | Kind::MethodDeclaration | Kind::GetAccessor | Kind::SetAccessor)
+            && let Some(object) = syntax.tree.parent(declaration)
+            && syntax.tree.kind(object) == Kind::ObjectLiteralExpression
+        {
+            let object_type = self.ty(self.type_at_location(NodeId { node: object, ..declaration_id }));
+            return self.query(|query| query.property(&object_type, &bound.name)).flatten().map(|property| self.property_type(&property));
+        }
+        if let Some(parent) = bound.parent {
+            let parent_symbol = self.bound_symbol(file, parent);
+            let parent_flags = syntax.bound.symbols[parent].flags;
+            let owner = if parent_flags & (sf::Class | sf::Interface | sf::TypeLiteral) != 0
+                && bound.flags & sf::ClassMember != 0
+                && !is_static_member(&syntax.tree, declaration)
+            {
+                self.declared_type_of_symbol(parent_symbol)
+            } else {
+                self.type_of_symbol(parent_symbol)
+            };
+            let owner = self.ty(owner);
+            let property = self.query(|query| query.property(&owner, &bound.name)).flatten();
+            if let Some(property) = property {
+                return Some(self.property_type(&property));
+            }
+        }
+        if let Some(written) = self.written_type_of_symbol(symbol) {
+            return Some(written);
+        }
+        let checker_index = self.program.file(file_id).checker_index?;
+        let name = bound.name.clone();
+        let is_top_level = bound.parent.is_none_or(|parent| {
+            syntax.tree.kind(syntax.bound.symbols[parent].declarations.first().copied().unwrap_or(0)) == Kind::SourceFile
+        });
+        if is_top_level {
+            let found = self
+                .query(|query| {
+                    query
+                        .module_value_type(checker_index, &name)
+                        .or_else(|| query.module_export_type(checker_index, &name))
+                })
+                .flatten();
+            if found.is_some() {
+                return found;
+            }
+            if !syntax.tree.is_external_module() {
+                return self.query(|query| query.global_value_type(&name)).flatten();
+            }
+        }
+        None
+    }
+
+    /// An enum member's type: its enum literal type, which the enum's scope
+    /// names `E.Member`.
+    fn enum_member_type(&self, member: NodeId) -> Option<Type> {
+        let program = &self.program;
+        let enum_name = self.node_child(program.node_parent(member)?, "name")?;
+        let member_name = self.node_child(member, "name")?;
+        if program.node_kind(enum_name) != SyntaxKind::Identifier || program.node_kind(member_name) != SyntaxKind::Identifier {
+            return None;
+        }
+        let text = format!("{}.{}", program.node_text(enum_name), program.node_text(member_name));
+        let checker_index = program.file(member.source_file()).checker_index?;
+        self.query(|query| query.resolve_type_text(checker_index, &text, &[])).flatten()
+    }
+
+    /// A symbol's type as its declarations write it: an annotation, or the
+    /// signatures of a function-like declaration (an overload group as a type
+    /// literal of call signatures), resolved by the checker where they are
+    /// written. `None` for a declaration whose type is inferred.
+    fn written_type_of_symbol(&self, symbol: SymbolId) -> Option<Type> {
+        let declarations = self.symbol_declarations(symbol);
+        let first = *declarations.first()?;
+        let program = &self.program;
+        let kind = program.node_kind(first);
+        let text = match kind {
+            SyntaxKind::Parameter => {
+                let annotation = program.node_text(self.node_child(first, "type")?).to_string();
+                // An initializer makes a parameter optional to callers, not
+                // possibly undefined in the body.
+                let optional = self.node_child(first, "questionToken").is_some();
+                if optional && self.program.inner().strict_null_checks && self.node_child(first, "dotDotDotToken").is_none() {
+                    format!("({annotation}) | undefined")
+                } else {
+                    annotation
+                }
+            }
+            SyntaxKind::PropertyDeclaration | SyntaxKind::PropertySignature | SyntaxKind::VariableDeclaration => {
+                let annotation = program.node_text(self.node_child(first, "type")?).to_string();
+                if self.node_child(first, "questionToken").is_some() && self.program.inner().strict_null_checks {
+                    format!("({annotation}) | undefined")
+                } else {
+                    annotation
+                }
+            }
+            SyntaxKind::GetAccessor => program.node_text(self.node_child(first, "type")?).to_string(),
+            SyntaxKind::SetAccessor => {
+                let accessor = declarations.iter().copied().find(|declaration| program.node_kind(*declaration) == SyntaxKind::GetAccessor);
+                match accessor.and_then(|getter| self.node_child(getter, "type")) {
+                    Some(annotation) => program.node_text(annotation).to_string(),
+                    None => match program.node_property(first, "parameters") {
+                        Some(NodePropertyValue::List { nodes, .. }) => program.node_text(self.node_child(*nodes.first()?, "type")?).to_string(),
+                        _ => return None,
+                    },
+                }
+            }
+            SyntaxKind::FunctionDeclaration | SyntaxKind::MethodDeclaration | SyntaxKind::MethodSignature => {
+                let signatures: Vec<NodeId> = declarations
+                    .iter()
+                    .copied()
+                    .filter(|declaration| program.node_kind(*declaration) == kind)
+                    .collect();
+                let overloads: Vec<NodeId> = if signatures.len() > 1 {
+                    signatures.iter().copied().filter(|declaration| self.node_child(*declaration, "body").is_none()).collect()
+                } else {
+                    signatures
+                };
+                let parts = overloads.iter().map(|declaration| self.signature_parts(*declaration)).collect::<Option<Vec<_>>>()?;
+                match parts.as_slice() {
+                    [(head, parameters, returns)] => format!("{head}({parameters}) => {returns}"),
+                    _ => format!(
+                        "{{ {}; }}",
+                        parts
+                            .iter()
+                            .map(|(head, parameters, returns)| format!("{head}({parameters}): {returns}"))
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    ),
+                }
+            }
+            SyntaxKind::ClassDeclaration | SyntaxKind::EnumDeclaration | SyntaxKind::ModuleDeclaration => {
+                let name = self.node_child(first, "name")?;
+                if program.node_kind(name) != SyntaxKind::Identifier {
+                    return None;
+                }
+                format!("typeof {}", program.node_text(name))
+            }
+            _ => return None,
+        };
+        let checker_index = program.file(first.source_file()).checker_index?;
+        let type_parameters = self.type_parameters_in_scope(first);
+        self.query(|query| query.resolve_type_text(checker_index, &text, &type_parameters)).flatten()
+    }
+
+    /// A function-like declaration's signature as source text: its type
+    /// parameter list, its parameter list (`a: A, b?: B`) and its return type.
+    /// `None` when a parameter's or the return type is not written.
+    fn signature_parts(&self, declaration: NodeId) -> Option<(String, String, String)> {
+        let program = &self.program;
+        let type_parameters = match program.node_property(declaration, "typeParameters") {
+            Some(NodePropertyValue::List { nodes, .. }) if !nodes.is_empty() => {
+                format!("<{}>", nodes.iter().map(|parameter| program.node_text(*parameter)).collect::<Vec<_>>().join(", "))
+            }
+            _ => String::new(),
+        };
+        let parameters = match program.node_property(declaration, "parameters") {
+            Some(NodePropertyValue::List { nodes, .. }) => nodes,
+            _ => Vec::new(),
+        };
+        let mut written = Vec::new();
+        for (position, parameter) in parameters.iter().enumerate() {
+            let name = self.node_child(*parameter, "name")?;
+            let name = match program.node_kind(name) {
+                SyntaxKind::Identifier => program.node_text(name).to_string(),
+                _ => format!("__{position}"),
+            };
+            let rest = if self.node_child(*parameter, "dotDotDotToken").is_some() { "..." } else { "" };
+            let optional = if self.node_child(*parameter, "questionToken").is_some() || self.node_child(*parameter, "initializer").is_some() {
+                "?"
+            } else {
+                ""
+            };
+            let annotation = program.node_text(self.node_child(*parameter, "type")?);
+            // A `?` parameter's type includes `undefined` (tsc's `addOptionality`).
+            if rest.is_empty() && self.node_child(*parameter, "questionToken").is_some() && program.inner().strict_null_checks {
+                written.push(format!("{name}?: ({annotation}) | undefined"));
+            } else {
+                written.push(format!("{rest}{name}{optional}: {annotation}"));
+            }
+        }
+        let return_type = program.node_text(self.node_child(declaration, "type")?).to_string();
+        Some((type_parameters, written.join(", "), return_type))
+    }
+
+    /// The type parameters of every declaration `node` is written inside.
+    fn type_parameters_in_scope(&self, node: NodeId) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut current = Some(node);
+        while let Some(owner) = current {
+            if let Some(NodePropertyValue::List { nodes, .. }) = self.program.node_property(owner, "typeParameters") {
+                for parameter in nodes {
+                    if let Some(name) = self.node_child(parameter, "name") {
+                        names.push(self.program.node_text(name).to_string());
+                    }
+                }
+            }
+            current = self.program.node_parent(owner);
+        }
+        names
+    }
+
+    /// `getDeclaredTypeOfSymbol`: the type a class, interface, type alias,
+    /// enum or type parameter declares.
+    pub fn declared_type_of_symbol(&self, symbol: SymbolId) -> TypeId {
+        self.declared_type_at(symbol, None)
+    }
+
+    /// [`Self::declared_type_of_symbol`], resolved preferably where
+    /// `location` names the symbol.
+    fn declared_type_at(&self, symbol: SymbolId, location: Option<NodeId>) -> TypeId {
+        if self.is_unresolved_symbol(symbol) {
+            return self.unresolved_type();
+        }
+        let key = Some(TypeKey::DeclaredType(symbol));
+        if let Some(index) = self.with_tables(|tables| tables.type_by_key.get(key.as_ref().unwrap()).copied()) {
+            return TypeId { program: symbol.program, index };
+        }
+        let ty = self.compute_declared_type(symbol, location).unwrap_or(Type::ErrorType);
+        self.type_id(key, Some(symbol), || ty)
+    }
+
+    fn compute_declared_type(&self, symbol: SymbolId, location: Option<NodeId>) -> Option<Type> {
+        let (file, name, flags) = match self.symbol_data(symbol) {
+            SymbolData::Bound { file, symbol } => {
+                let syntax = self.program.syntax(self.program.file_id(file)).clone();
+                let bound = &syntax.bound.symbols[symbol];
+                (file, bound.name.clone(), bound.flags)
+            }
+            SymbolData::Global { name, parts } => {
+                let (file, symbol) = *parts.first()?;
+                let syntax = self.program.syntax(self.program.file_id(file)).clone();
+                let flags = parts
+                    .iter()
+                    .map(|&(file, symbol)| self.program.syntax(self.program.file_id(file)).bound.symbols[symbol].flags)
+                    .fold(0, |all, flags| all | flags);
+                let _ = symbol;
+                drop(syntax);
+                (file, name.to_string(), flags)
+            }
+            SymbolData::Transient { .. } => return None,
+        };
+        if flags & sf::Alias != 0 {
+            let target = self.aliased_symbol(symbol)?;
+            return (target != symbol).then(|| self.ty(self.declared_type_at(target, location)));
+        }
+        if flags & sf::TypeParameter != 0 {
+            return Some(Type::type_parameter(&name));
+        }
+        if flags & (sf::Class | sf::Interface | sf::TypeAlias | sf::Enum) == 0 {
+            return None;
+        }
+        let type_parameters = self.declared_type_parameter_names(symbol);
+        // A declaration inside namespaces is named by its path from the file;
+        // one inside an ambient module, by its name where it is imported.
+        let (path, outermost) = self.namespace_path(symbol).unwrap_or_else(|| (name.clone(), symbol));
+        let text = if type_parameters.is_empty() { path.clone() } else { format!("{path}<{}>", type_parameters.join(", ")) };
+        let head = path.split('.').next().unwrap_or(&path).to_string();
+        // The declaring file's scope, unless the checker kept none for it (a
+        // default library): then a file that sees the same global, the
+        // referencing one first.
+        let declaring = self.program.file_id(file);
+        let mut scopes = vec![declaring];
+        scopes.extend(location.map(NodeId::source_file));
+        scopes.extend(
+            self.program
+                .root_file_names()
+                .iter()
+                .filter_map(|root| self.program.source_file(root)),
+        );
+        scopes.dedup();
+        for scope in scopes {
+            if scope != declaring {
+                let meaning = if head == path { Meaning::Type } else { Meaning::Namespace };
+                let seen = self
+                    .resolve_name(self.program.root(scope), &head, meaning)
+                    .map(|found| if self.is_alias(found) { self.aliased_symbol(found).unwrap_or(found) } else { found });
+                if seen != Some(outermost) {
+                    continue;
+                }
+            }
+            let Some(checker_index) = self.program.file(scope).checker_index else { continue };
+            let resolved = self.query(|query| query.resolve_type_text(checker_index, &text, &type_parameters)).flatten();
+            if let Some(ty) = resolved.filter(|ty| !matches!(ty, Type::Unknown | Type::ErrorType)) {
+                return Some(ty);
+            }
+        }
+        None
+    }
+
+    /// The dotted path naming a declaration from its file's scope (its own
+    /// name behind the namespaces it is declared in), with the outermost of
+    /// them. `None` inside an ambient module (`declare module "m"`), which no
+    /// path from the file reaches.
+    fn namespace_path(&self, symbol: SymbolId) -> Option<(String, SymbolId)> {
+        let mut path = vec![self.symbol_name(symbol)];
+        let mut current = symbol;
+        while let Some(parent) = self.symbol_parent(current) {
+            let declaration = *self.symbol_declarations(parent).first()?;
+            match self.program.node_kind(declaration) {
+                SyntaxKind::SourceFile => break,
+                // `declare global { … }` declares globals.
+                SyntaxKind::ModuleDeclaration
+                    if self.program.node_flags(declaration) & super::enums_generated::node_flags::GlobalAugmentation != 0 =>
+                {
+                    break;
+                }
+                SyntaxKind::ModuleDeclaration => {
+                    let name = self.node_child(declaration, "name")?;
+                    if self.program.node_kind(name) != SyntaxKind::Identifier {
+                        return None;
+                    }
+                    path.push(self.program.node_text(name).to_string());
+                }
+                _ => return None,
+            }
+            current = parent;
+        }
+        path.reverse();
+        Some((path.join("."), current))
+    }
+
+    fn declared_type_parameter_names(&self, symbol: SymbolId) -> Vec<String> {
+        let (file, symbol) = match self.symbol_data(symbol) {
+            SymbolData::Bound { file, symbol } => (file, symbol),
+            SymbolData::Global { parts, .. } => match parts.first() {
+                Some(&(file, symbol)) => (file, symbol),
+                None => return Vec::new(),
+            },
+            SymbolData::Transient { .. } => return Vec::new(),
+        };
+        let syntax = self.program.syntax(self.program.file_id(file)).clone();
+        let Some(&declaration) = syntax.bound.symbols[symbol].declarations.first() else { return Vec::new() };
+        syntax
+            .tree
+            .node(declaration)
+            .type_parameters
+            .as_ref()
+            .map(|list| {
+                list.nodes
+                    .iter()
+                    .filter_map(|&parameter| syntax.tree.node(parameter).name.map(|name| syntax.tree.text(name).to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// `Symbol.name`.
+    pub fn symbol_name(&self, symbol: SymbolId) -> String {
+        match self.symbol_data(symbol) {
+            SymbolData::Bound { file, symbol } => {
+                let name = self.program.syntax(self.program.file_id(file)).bound.symbols[symbol].name.clone();
+                if name == "__module" {
+                    return format!("\"{}\"", strip_extension(self.program.file_name(self.program.file_id(file))));
+                }
+                name
+            }
+            SymbolData::Global { name, .. } | SymbolData::Transient { name, .. } => name.to_string(),
+        }
+    }
+
+    /// `Symbol.escapedName`: the name with a leading `__` escaped as tsc's
+    /// `escapeLeadingUnderscores` does, internal names as they are.
+    pub fn symbol_escaped_name(&self, symbol: SymbolId) -> String {
+        let name = self.symbol_name(symbol);
+        let internal = matches!(
+            name.as_str(),
+            "__call" | "__constructor" | "__new" | "__index" | "__export" | "__global" | "__missing" | "__type"
+                | "__object" | "__jsxAttributes" | "__class" | "__function" | "__computed"
+        );
+        if name.starts_with("__") && !internal { format!("_{name}") } else { name }
+    }
+
+    /// `Symbol.flags`, as TypeScript's `SymbolFlags`.
+    pub fn symbol_flags(&self, symbol: SymbolId) -> i32 {
+        match self.symbol_data(symbol) {
+            SymbolData::Bound { file, symbol } => {
+                self.program.syntax(self.program.file_id(file)).bound.symbols[symbol].flags as i32
+            }
+            SymbolData::Global { parts, .. } => parts
+                .iter()
+                .map(|&(file, symbol)| self.program.syntax(self.program.file_id(file)).bound.symbols[symbol].flags as i32)
+                .fold(0, |all, flags| all | flags),
+            SymbolData::Transient { flags, .. } => flags | ts_sf::Transient,
+        }
+    }
+
+    /// `Symbol.declarations`.
+    pub fn symbol_declarations(&self, symbol: SymbolId) -> Vec<NodeId> {
+        let program = symbol.program;
+        let parts = match self.symbol_data(symbol) {
+            SymbolData::Bound { file, symbol } => vec![(file, symbol)],
+            SymbolData::Global { parts, .. } => parts,
+            SymbolData::Transient { declaration, .. } => return declaration.into_iter().collect(),
+        };
+        parts
+            .into_iter()
+            .flat_map(|(file, symbol)| {
+                self.program.syntax(self.program.file_id(file)).bound.symbols[symbol]
+                    .declarations
+                    .iter()
+                    .map(move |&node| NodeId { program, file, node })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// `Symbol.valueDeclaration`.
+    pub fn symbol_value_declaration(&self, symbol: SymbolId) -> Option<NodeId> {
+        match self.symbol_data(symbol) {
+            SymbolData::Bound { file, symbol: index } => {
+                let node = self.program.syntax(self.program.file_id(file)).bound.symbols[index].value_declaration?;
+                Some(NodeId { program: symbol.program, file, node })
+            }
+            SymbolData::Global { parts, .. } => parts.iter().find_map(|&(file, index)| {
+                let node = self.program.syntax(self.program.file_id(file)).bound.symbols[index].value_declaration?;
+                Some(NodeId { program: symbol.program, file, node })
+            }),
+            SymbolData::Transient { declaration, .. } => declaration,
+        }
+    }
+
+    /// `Symbol.parent`: the symbol whose exports or members hold this one.
+    pub fn symbol_parent(&self, symbol: SymbolId) -> Option<SymbolId> {
+        match self.symbol_data(symbol) {
+            SymbolData::Bound { file, symbol } => {
+                let parent = self.program.syntax(self.program.file_id(file)).bound.symbols[symbol].parent?;
+                Some(self.bound_symbol(file, parent))
+            }
+            SymbolData::Transient { parent, .. } => parent,
+            SymbolData::Global { .. } => None,
+        }
+    }
+
+    fn table_symbols(&self, symbol: SymbolId, members: bool) -> Vec<SymbolId> {
+        let parts = match self.symbol_data(symbol) {
+            SymbolData::Bound { file, symbol } => vec![(file, symbol)],
+            SymbolData::Global { parts, .. } => parts,
+            SymbolData::Transient { .. } => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        for (file, index) in parts {
+            let syntax = self.program.syntax(self.program.file_id(file)).clone();
+            let table = if members { syntax.bound.members.get(&index) } else { syntax.bound.exports.get(&index) };
+            let Some(table) = table else { continue };
+            let mut entries: Vec<(&String, &usize)> = table.iter().collect();
+            entries.sort_by_key(|(_, member)| syntax.bound.symbols[**member].declarations.first().copied());
+            out.extend(entries.into_iter().map(|(_, &member)| self.bound_symbol(file, member)));
+        }
+        out
+    }
+
+    /// `Symbol.members`, in declaration order.
+    pub fn symbol_members(&self, symbol: SymbolId) -> Vec<SymbolId> {
+        self.table_symbols(symbol, true)
+    }
+
+    /// `Symbol.exports`, in declaration order.
+    pub fn symbol_exports(&self, symbol: SymbolId) -> Vec<SymbolId> {
+        self.table_symbols(symbol, false)
+    }
+
+    fn export_of_symbol(&self, symbol: SymbolId, name: &str) -> Option<SymbolId> {
+        let symbol = self.aliased_symbol(symbol).unwrap_or(symbol);
+        self.exports_of_module(symbol).into_iter().find(|export| self.symbol_name(*export) == name)
+    }
+
+    /// `symbolToString`: the symbol's name.
+    pub fn symbol_to_string(&self, symbol: SymbolId) -> String {
+        self.symbol_name(symbol)
+    }
+
+    // --- modules and aliases -------------------------------------------------
+
+    fn module_symbol(&self, file: super::handles::SourceFileId) -> Option<SymbolId> {
+        let syntax = self.program.syntax(file).clone();
+        let &symbol = syntax.bound.node_symbol.get(&syntax.tree.root())?;
+        Some(self.bound_symbol(file.index, symbol))
+    }
+
+    fn module_symbol_of_specifier(&self, specifier: NodeId) -> Option<SymbolId> {
+        let parent = self.program.node_parent(specifier)?;
+        let parent_kind = self.program.node_kind(parent);
+        let is_specifier = match parent_kind {
+            SyntaxKind::ImportDeclaration | SyntaxKind::ExportDeclaration | SyntaxKind::JSDocImportTag => {
+                self.node_child(parent, "moduleSpecifier") == Some(specifier)
+            }
+            SyntaxKind::ExternalModuleReference => true,
+            SyntaxKind::LiteralType => self.program.node_parent(parent).is_some_and(|import| self.program.node_kind(import) == SyntaxKind::ImportType),
+            SyntaxKind::ModuleDeclaration => return self.declared_symbol(parent),
+            _ => false,
+        };
+        if !is_specifier {
+            return None;
+        }
+        let target = self.resolved_module_file(specifier.source_file(), self.program.node_value_text(specifier)?)?;
+        self.module_symbol(target)
+    }
+
+    /// The file an import in `file` of `specifier` resolved to, as the
+    /// program resolved it.
+    pub(crate) fn resolved_module_file(&self, file: super::handles::SourceFileId, specifier: &str) -> Option<super::handles::SourceFileId> {
+        let checker_index = self.program.file(file).checker_index?;
+        let resolved = self.query(|query| query.resolved_module(checker_index, specifier)).flatten()?;
+        self.program.source_file(&resolved)
+    }
+
+    /// `getExportsOfModule`: a module's exports, `export *` re-exports
+    /// included.
+    pub fn exports_of_module(&self, module: SymbolId) -> Vec<SymbolId> {
+        let mut out: Vec<SymbolId> = Vec::new();
+        let mut seen_names = std::collections::HashSet::new();
+        let mut visited = std::collections::HashSet::new();
+        self.collect_module_exports(module, &mut out, &mut seen_names, &mut visited);
+        out
+    }
+
+    fn collect_module_exports(
+        &self,
+        module: SymbolId,
+        out: &mut Vec<SymbolId>,
+        seen_names: &mut std::collections::HashSet<String>,
+        visited: &mut std::collections::HashSet<SymbolId>,
+    ) {
+        if !visited.insert(module) {
+            return;
+        }
+        let exports = self.symbol_exports(module);
+        let mut stars = Vec::new();
+        for export in exports {
+            let name = self.symbol_name(export);
+            if name == "__export" {
+                stars.push(export);
+                continue;
+            }
+            if seen_names.insert(name) {
+                out.push(export);
+            }
+        }
+        for star in stars {
+            for declaration in self.symbol_declarations(star) {
+                let Some(specifier) = self.node_child(declaration, "moduleSpecifier") else { continue };
+                let Some(text) = self.program.node_value_text(specifier) else { continue };
+                let Some(target) = self.resolved_module_file(declaration.source_file(), text) else { continue };
+                if let Some(target_module) = self.module_symbol(target) {
+                    let mut star_names = std::collections::HashSet::new();
+                    let mut star_exports = Vec::new();
+                    self.collect_module_exports(target_module, &mut star_exports, &mut star_names, visited);
+                    for export in star_exports {
+                        let name = self.symbol_name(export);
+                        if name != "default" && seen_names.insert(name) {
+                            out.push(export);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// `getAliasedSymbol`: what an import or export alias finally names. A
+    /// symbol that is not an alias is its own target.
+    pub fn aliased_symbol(&self, symbol: SymbolId) -> Option<SymbolId> {
+        let mut current = symbol;
+        for _ in 0..64 {
+            match self.alias_target(current) {
+                Some(next) if next != current => current = next,
+                Some(_) => return Some(current),
+                None => return (current != symbol).then_some(current),
+            }
+        }
+        Some(current)
+    }
+
+    /// One step of alias resolution; `Some(symbol)` itself for a non-alias.
+    fn alias_target(&self, symbol: SymbolId) -> Option<SymbolId> {
+        if self.symbol_flags(symbol) & ts_sf::Alias == 0 {
+            return Some(symbol);
+        }
+        let declaration = *self.symbol_declarations(symbol).first()?;
+        let program = &self.program;
+        let kind = program.node_kind(declaration);
+        let module_of = |statement: NodeId| -> Option<SymbolId> {
+            let specifier = self.node_child(statement, "moduleSpecifier")?;
+            let target = self.resolved_module_file(statement.source_file(), program.node_value_text(specifier)?)?;
+            self.module_symbol(target)
+        };
+        let export_named = |module: SymbolId, name: &str| -> Option<SymbolId> {
+            self.exports_of_module(module).into_iter().find(|export| self.symbol_name(*export) == name)
+        };
+        match kind {
+            SyntaxKind::ImportClause => {
+                let import = program.node_parent(declaration)?;
+                let module = module_of(import)?;
+                export_named(module, "default").or_else(|| export_named(module, "export="))
+            }
+            SyntaxKind::NamespaceImport => {
+                let import = program.node_parent(program.node_parent(declaration)?)?;
+                module_of(import)
+            }
+            SyntaxKind::ImportSpecifier => {
+                let named = program.node_parent(declaration)?;
+                let clause = program.node_parent(named)?;
+                let import = program.node_parent(clause)?;
+                let module = module_of(import)?;
+                let imported = self.node_child(declaration, "propertyName").or_else(|| self.node_child(declaration, "name"))?;
+                export_named(module, program.node_value_text(imported)?)
+            }
+            SyntaxKind::ExportSpecifier => {
+                let named = program.node_parent(declaration)?;
+                let export = program.node_parent(named)?;
+                let local = self.node_child(declaration, "propertyName").or_else(|| self.node_child(declaration, "name"))?;
+                let local_name = program.node_value_text(local)?.to_string();
+                match module_of(export) {
+                    Some(module) => export_named(module, &local_name),
+                    None => self
+                        .resolve_name(local, &local_name, Meaning::Value)
+                        .or_else(|| self.resolve_name(local, &local_name, Meaning::Type))
+                        .filter(|target| *target != symbol),
+                }
+            }
+            SyntaxKind::ImportEqualsDeclaration => {
+                let reference = self.node_child(declaration, "moduleReference")?;
+                if program.node_kind(reference) == SyntaxKind::ExternalModuleReference {
+                    let specifier = self.node_child(reference, "expression")?;
+                    let target = self.resolved_module_file(declaration.source_file(), program.node_value_text(specifier)?)?;
+                    let module = self.module_symbol(target)?;
+                    return export_named(module, "export=").or(Some(module));
+                }
+                self.symbol_at_location(reference)
+            }
+            SyntaxKind::NamespaceExport => {
+                let export = program.node_parent(declaration)?;
+                module_of(export)
+            }
+            SyntaxKind::ExportAssignment => {
+                let expression = self.node_child(declaration, "expression")?;
+                self.symbol_at_location(expression)
+            }
+            _ => None,
+        }
+    }
+
+    // --- types ---------------------------------------------------------------
+
+    /// `typeToString`.
+    pub fn type_to_string(&self, ty: TypeId) -> String {
+        if ty == self.unresolved_type() {
+            return "/*unresolved*/ any".to_string();
+        }
+        // The checker's type for a module's namespace object carries no
+        // symbol; tsc names that type by its module.
+        if let Some(origin) = self.origin(ty)
+            && self.is_module_symbol(origin)
+        {
+            return format!("typeof import({})", self.symbol_name(origin));
+        }
+        // tsc names a class's, enum's or namespace's value by its symbol
+        // (`createAnonymousTypeNode`), and so a function or object with
+        // members of its own.
+        if let Some(origin) = self.origin(ty)
+            && self.is_typeof_named(origin)
+            && self.with_tables(|tables| tables.type_by_key.get(&TypeKey::SymbolType(origin)).copied()) == Some(ty.index)
+        {
+            return format!("typeof {}", self.symbol_name_as_written(origin));
+        }
+        let value = self.ty(ty);
+        let text = self
+            .query(|query| surge_ts_types::with_tsc_display(|| query.type_to_string(&value)))
+            .unwrap_or_else(|| surge_ts_types::with_tsc_display(|| value.name()));
+        truncated(text)
+    }
+
+    /// A value symbol whose type tsc prints as `typeof Name`: a class, an
+    /// enum, a namespace with values, and a function or variable given value
+    /// members of its own.
+    fn is_typeof_named(&self, symbol: SymbolId) -> bool {
+        let flags = self.symbol_flags(symbol);
+        if flags & (ts_sf::Class | ts_sf::Enum | ts_sf::ValueModule) != 0 {
+            return !self.is_module_symbol(symbol);
+        }
+        flags & (ts_sf::Function | ts_sf::Variable) != 0
+            && self.symbol_exports(symbol).into_iter().any(|export| self.symbol_flags(export) & ts_sf::Value != 0)
+    }
+
+    /// tsc's `getNameOfSymbolAsWritten`: the name its declaration writes (a
+    /// default export's own name), `(Missing)` for a name the parser
+    /// recovered.
+    fn symbol_name_as_written(&self, symbol: SymbolId) -> String {
+        for declaration in self.symbol_declarations(symbol) {
+            if let Some(name) = self.node_child(declaration, "name") {
+                let text = self.program.node_text(name);
+                return if text.is_empty() { "(Missing)".to_string() } else { text.to_string() };
+            }
+        }
+        self.symbol_name(symbol)
+    }
+
+    fn is_module_symbol(&self, symbol: SymbolId) -> bool {
+        match self.symbol_data(symbol) {
+            SymbolData::Bound { file, symbol } => {
+                let syntax = self.program.syntax(self.program.file_id(file)).clone();
+                syntax.bound.symbols[symbol].declarations.first().is_some_and(|&declaration| syntax.tree.kind(declaration) == Kind::SourceFile)
+            }
+            _ => false,
+        }
+    }
+
+    /// `Type.flags`, as TypeScript's `TypeFlags`. Only flags surge models are
+    /// ever set: a type surge could not resolve is `Any`, as tsc's error type.
+    pub fn type_flags(&self, ty: TypeId) -> i32 {
+        let value = self.ty(ty);
+        self.query(|query| flags_of(query, &value)).unwrap_or_else(|| shallow_flags(&value))
+    }
+
+    /// `ObjectType.objectFlags`: `Reference` for arrays, tuples and generic
+    /// instantiations, `Tuple` for tuples, `Anonymous` for object and
+    /// function literals, `Interface`/`Class` for named object types.
+    pub fn object_flags(&self, ty: TypeId) -> i32 {
+        let value = self.ty(ty);
+        match &value {
+            Type::Array(_) => of::Reference,
+            Type::Tuple(_) | Type::OpenTuple(_) => of::Reference | of::Tuple,
+            Type::Function(_) => of::Anonymous,
+            Type::Object(object) if object.alias_id.is_some() => of::Interface,
+            Type::Object(_) => of::Anonymous,
+            Type::Reference(reference) if !reference.arguments.is_empty() => of::Reference,
+            Type::Reference(_) => match value.peeled() {
+                Type::Object(object) if object.alias_id.is_some() => of::Interface,
+                Type::Object(_) | Type::Function(_) => of::Anonymous,
+                _ => 0,
+            },
+            _ => 0,
+        }
+    }
+
+    /// The literal a literal type holds (`LiteralType.value`).
+    pub fn literal_value(&self, ty: TypeId) -> Option<LiteralValue> {
+        match self.ty(ty) {
+            Type::StringLiteral(value) => Some(LiteralValue::String(value)),
+            Type::NumberLiteral(value) => value.value.parse().ok().map(LiteralValue::Number),
+            _ => None,
+        }
+    }
+
+    /// `UnionOrIntersectionType.types`.
+    pub fn type_constituents(&self, ty: TypeId) -> Vec<TypeId> {
+        let value = self.ty(ty);
+        let members = match value.peeled() {
+            Type::Union(union) => union.types().to_vec(),
+            Type::Boolean => vec![Type::BooleanLiteral(false), Type::BooleanLiteral(true)],
+            Type::Object(object) if object.is_intersection => object.intersection_operands.as_deref().map(<[Type]>::to_vec).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        members.into_iter().map(|member| self.intern(member)).collect()
+    }
+
+    /// `Type.symbol`: the symbol of the declaration a named type came from.
+    pub fn type_symbol(&self, ty: TypeId) -> Option<SymbolId> {
+        let symbol = self.named_symbol(ty)?;
+        if self.symbol_flags(symbol) & ts_sf::TypeAlias == 0 {
+            return Some(symbol);
+        }
+        // An alias names its type without being its symbol: an object type
+        // written as a type literal has the literal's own (`__type`).
+        let declaration = self
+            .symbol_declarations(symbol)
+            .into_iter()
+            .find(|declaration| self.program.node_kind(*declaration) == SyntaxKind::TypeAliasDeclaration)?;
+        let written = self.node_child(declaration, "type")?;
+        if matches!(self.program.node_kind(written), SyntaxKind::TypeLiteral | SyntaxKind::MappedType) {
+            self.declared_symbol(written)
+        } else {
+            None
+        }
+    }
+
+    /// `Type.aliasSymbol`: the type alias a type was written through, when
+    /// surge's type keeps one. An object type keeps its alias's declaration;
+    /// a union keeps only the alias's name, resolved where the type was
+    /// reached.
+    pub fn alias_symbol(&self, ty: TypeId) -> Result<Option<SymbolId>, Unsupported> {
+        let is_type_alias = |symbol: &SymbolId| self.symbol_flags(*symbol) & ts_sf::TypeAlias != 0;
+        let value = self.ty(ty);
+        let Type::Union(union) = &value else {
+            return Ok(self.named_symbol(ty).filter(is_type_alias));
+        };
+        let Some(alias) = union.alias_name() else { return Ok(None) };
+        let name = alias.split('<').next().unwrap_or(alias);
+        let scope = self
+            .origin(ty)
+            .and_then(|origin| self.symbol_declarations(origin).first().copied())
+            .or_else(|| self.location(ty));
+        scope
+            .and_then(|node| self.resolve_name(node, name, Meaning::Type))
+            .or_else(|| self.global_symbol(name, Meaning::Type))
+            .map(|symbol| if self.is_alias(symbol) { self.aliased_symbol(symbol).unwrap_or(symbol) } else { symbol })
+            .filter(is_type_alias)
+            .map(Some)
+            .ok_or(Unsupported("Type.aliasSymbol for a union type alias out of scope where the type was reached"))
+    }
+
+    /// The class, interface or type alias a type's declaration identity names.
+    fn named_symbol(&self, ty: TypeId) -> Option<SymbolId> {
+        let value = self.ty(ty);
+        let id = match &value {
+            Type::Reference(reference) => Some(reference.id.to_string()),
+            Type::Object(object) => object.alias_id.as_deref().map(str::to_string),
+            _ => None,
+        }
+        .or_else(|| match value.peeled() {
+            Type::Object(object) => object.alias_id.as_deref().map(str::to_string),
+            _ => None,
+        })?;
+        let (file_name, name) = id.split_once('\0')?;
+        let file = self.program.source_file(file_name)?;
+        let root = self.program.root(file);
+        self.resolve_name(root, name, Meaning::Type).or_else(|| self.global_symbol(name, Meaning::Type))
+    }
+
+    /// `getPropertiesOfType`.
+    pub fn properties_of_type(&self, ty: TypeId) -> Vec<SymbolId> {
+        let value = self.ty(ty);
+        let properties = self.query(|query| query.properties(&value)).unwrap_or_default();
+        properties.into_iter().map(|property| self.property_symbol(ty, property)).collect()
+    }
+
+    /// `getPropertyOfType`.
+    pub fn property_of_type(&self, ty: TypeId, name: &str) -> Option<SymbolId> {
+        let value = self.ty(ty);
+        let property = self.query(|query| query.property(&value, name)).flatten()?;
+        Some(self.property_symbol(ty, property))
+    }
+
+    /// A property's type as `getTypeOfSymbol` gives it: an optional
+    /// property's includes `undefined` under `strictNullChecks`.
+    fn property_type(&self, property: &PropertyInfo) -> Type {
+        if property.optional && self.program.inner().strict_null_checks {
+            surge_ts_types::union_type(vec![property.ty.clone(), Type::Undefined])
+        } else {
+            property.ty.clone()
+        }
+    }
+
+    fn property_symbol(&self, owner: TypeId, property: PropertyInfo) -> SymbolId {
+        let declared = self.type_symbol(owner).and_then(|symbol| {
+            self.symbol_members(symbol)
+                .into_iter()
+                .chain(self.symbol_exports(symbol))
+                .find(|member| self.symbol_name(*member) == *property.name)
+        });
+        if let Some(declared) = declared {
+            return declared;
+        }
+        let name = property.name.clone();
+        let mut flags = if property.method { ts_sf::Method } else { ts_sf::Property };
+        if property.optional {
+            flags |= ts_sf::Optional;
+        }
+        let ty = self.intern(self.property_type(&property));
+        let parent = self.type_symbol(owner);
+        self.symbol_id(SymbolKey::Property(owner, name.clone()), || SymbolData::Transient {
+            name,
+            flags,
+            ty,
+            parent,
+            declaration: None,
+        })
+    }
+
+    fn property_symbol_of_expression(&self, object: NodeId, name: &str) -> Option<SymbolId> {
+        if let Some(symbol) = self.symbol_at_location(object)
+            && self.symbol_flags(symbol) & (ts_sf::ValueModule | ts_sf::NamespaceModule | ts_sf::Alias | ts_sf::Enum | ts_sf::Class) != 0
+            && let Some(export) = self.export_of_symbol(symbol, name)
+        {
+            return Some(export);
+        }
+        let object_type = self.type_at_location(object);
+        let object_type = match self.ty(object_type) {
+            Type::ErrorType if self.program.node_kind(object) == SyntaxKind::ThisKeyword => {
+                self.this_receiver_type(object).unwrap_or(object_type)
+            }
+            _ => object_type,
+        };
+        self.property_of_type(object_type, name)
+    }
+
+    /// The type `this` reads members from in a class member the checker left
+    /// unrecorded: the class's instance type, or its constructor in a static
+    /// member. An arrow function keeps its container's `this`; any other
+    /// function binds its own.
+    fn this_receiver_type(&self, this: NodeId) -> Option<TypeId> {
+        let program = &self.program;
+        let mut current = program.node_parent(this)?;
+        loop {
+            match program.node_kind(current) {
+                SyntaxKind::ArrowFunction => {}
+                SyntaxKind::FunctionDeclaration | SyntaxKind::FunctionExpression | SyntaxKind::SourceFile | SyntaxKind::ModuleBlock => {
+                    return None;
+                }
+                SyntaxKind::MethodDeclaration
+                | SyntaxKind::GetAccessor
+                | SyntaxKind::SetAccessor
+                | SyntaxKind::PropertyDeclaration
+                | SyntaxKind::Constructor
+                | SyntaxKind::ClassStaticBlockDeclaration => {
+                    let class = program.node_parent(current)?;
+                    if !matches!(program.node_kind(class), SyntaxKind::ClassDeclaration | SyntaxKind::ClassExpression) {
+                        return None;
+                    }
+                    let symbol = self.declared_symbol(class)?;
+                    let is_static = program.node_kind(current) == SyntaxKind::ClassStaticBlockDeclaration
+                        || is_static_member(&program.syntax(current.source_file()).tree, current.node);
+                    return Some(if is_static { self.type_of_symbol(symbol) } else { self.declared_type_of_symbol(symbol) });
+                }
+                _ => {}
+            }
+            current = program.node_parent(current)?;
+        }
+    }
+
+    /// `getApparentType`.
+    pub fn apparent_type(&self, ty: TypeId) -> TypeId {
+        let value = self.ty(ty);
+        let key = Some(TypeKey::Apparent(ty));
+        self.type_id(key, None, || self.query(|query| query.apparent_type(&value)).unwrap_or(value))
+    }
+
+    /// `getBaseConstraintOfType`: a type parameter's constraint, a union's
+    /// or template literal's own type, and no constraint for any other type.
+    /// surge's type for a type parameter keeps no constraint once the body
+    /// declaring it is checked, so the constraint is resolved from the
+    /// declaration as written (tsc resolves it on through other type
+    /// parameters' constraints).
+    pub fn base_constraint_of_type(&self, ty: TypeId) -> Result<Option<TypeId>, Unsupported> {
+        let flags = self.type_flags(ty);
+        if flags & tf::TypeParameter != 0 {
+            return self.type_parameter_constraint(ty);
+        }
+        if flags & (tf::Union | tf::Intersection) != 0 {
+            if has_type_parameter_member(&self.ty(ty)) {
+                return Err(Unsupported("getBaseConstraintOfType for a union or intersection with a type parameter"));
+            }
+            return Ok(Some(ty));
+        }
+        Ok((flags & (tf::TemplateLiteral | tf::StringMapping) != 0).then_some(ty))
+    }
+
+    fn type_parameter_constraint(&self, ty: TypeId) -> Result<Option<TypeId>, Unsupported> {
+        let unsupported = Unsupported("getBaseConstraintOfType for a type parameter not reached from its declaration");
+        let declaration = self
+            .origin(ty)
+            .and_then(|symbol| {
+                self.symbol_declarations(symbol)
+                    .into_iter()
+                    .find(|declaration| self.program.node_kind(*declaration) == SyntaxKind::TypeParameter)
+            })
+            .ok_or(unsupported)?;
+        let Some(constraint) = self.node_child(declaration, "constraint") else { return Ok(None) };
+        let text = self.program.node_text(constraint).to_string();
+        let checker_index = self.program.file(declaration.source_file()).checker_index.ok_or(unsupported)?;
+        let type_parameters = self.type_parameters_in_scope(declaration);
+        let resolved = self
+            .query(|query| query.resolve_type_text(checker_index, &text, &type_parameters))
+            .flatten()
+            .ok_or(unsupported)?;
+        Ok(Some(self.intern(resolved)))
+    }
+
+    /// `getNonNullableType`.
+    pub fn non_nullable_type(&self, ty: TypeId) -> TypeId {
+        let value = self.ty(ty);
+        self.intern(surge_ts_types::remove_nullish(&value))
+    }
+
+    /// `getBaseTypeOfLiteralType`.
+    pub fn base_type_of_literal_type(&self, ty: TypeId) -> TypeId {
+        match base_of_literal(&self.ty(ty)) {
+            Some(base) => self.intern(base),
+            None => ty,
+        }
+    }
+
+    /// `getWidenedType`. tsc widens only `null` and `undefined` outside
+    /// `strictNullChecks` and an object literal's freshness, which surge's
+    /// types do not carry: with `strictNullChecks` every type is its own
+    /// widened type. Without it surge cannot tell a widening `null` from a
+    /// declared one.
+    pub fn widened_type(&self, ty: TypeId) -> Result<TypeId, Unsupported> {
+        if self.program.inner().strict_null_checks {
+            Ok(ty)
+        } else {
+            Err(Unsupported("getWidenedType without strictNullChecks"))
+        }
+    }
+
+    /// `isArrayType`.
+    pub fn is_array_type(&self, ty: TypeId) -> bool {
+        matches!(self.ty(ty).peeled(), Type::Array(_))
+    }
+
+    /// `isTupleType`.
+    pub fn is_tuple_type(&self, ty: TypeId) -> bool {
+        matches!(self.ty(ty).peeled(), Type::Tuple(_) | Type::OpenTuple(_))
+    }
+
+    /// `getTypeArguments`: an array's element, a tuple's elements, a generic
+    /// instantiation's arguments.
+    pub fn type_arguments(&self, ty: TypeId) -> Vec<TypeId> {
+        let value = self.ty(ty);
+        let arguments = match &value {
+            Type::Reference(reference) if !reference.arguments.is_empty() && !reference.is_readonly_array() => {
+                reference.arguments.to_vec()
+            }
+            _ => match value.peeled() {
+                Type::Array(element) => vec![*element],
+                Type::Tuple(elements) => elements,
+                _ => Vec::new(),
+            },
+        };
+        arguments.into_iter().map(|argument| self.intern(argument)).collect()
+    }
+
+    /// `getStringIndexType` / `getNumberIndexType`.
+    pub fn index_type_of_type(&self, ty: TypeId, number: bool) -> Option<TypeId> {
+        let value = self.ty(ty);
+        let index = self.query(|query| query.index_type(&value, number)).flatten()?;
+        Some(self.intern(index))
+    }
+
+    /// `isTypeAssignableTo`.
+    pub fn is_type_assignable_to(&self, source: TypeId, target: TypeId) -> bool {
+        let (source, target) = (self.ty(source), self.ty(target));
+        self.query(|query| query.is_assignable(&source, &target)).unwrap_or(false)
+    }
+
+    // --- signatures ----------------------------------------------------------
+
+    /// `getSignaturesOfType`.
+    pub fn signatures_of_type(&self, ty: TypeId, kind: SignatureKind) -> Vec<SignatureId> {
+        let value = self.ty(ty);
+        let construct = kind == SignatureKind::Construct;
+        let functions = self.query(|query| query.signatures(&value, construct)).unwrap_or_default();
+        let declarations = self.signature_declarations(ty, kind);
+        let program = self.program.inner().identity;
+        functions
+            .into_iter()
+            .enumerate()
+            .map(|(position, function)| {
+                let key = (ty, kind, position as u32);
+                let declaration = if declarations.len() == 1 { declarations.first().copied() } else { declarations.get(position).copied() };
+                self.with_tables(|tables| {
+                    if let Some(&index) = tables.signature_by_key.get(&key) {
+                        return SignatureId { program, index };
+                    }
+                    let index = tables.signatures.len() as u32;
+                    tables.signatures.push(SignatureEntry { function, kind, declaration });
+                    tables.signature_by_key.insert(key, index);
+                    SignatureId { program, index }
+                })
+            })
+            .collect()
+    }
+
+    /// The signature-bearing declarations of the symbol a type came from, in
+    /// declaration order, an implementation that follows overloads dropped.
+    fn signature_declarations(&self, ty: TypeId, kind: SignatureKind) -> Vec<NodeId> {
+        let Some(origin) = self.origin(ty) else { return Vec::new() };
+        let declarations: Vec<NodeId> = self
+            .symbol_declarations(origin)
+            .into_iter()
+            .filter(|declaration| {
+                let declaration_kind = self.program.node_kind(*declaration);
+                match kind {
+                    SignatureKind::Call => matches!(
+                        declaration_kind,
+                        SyntaxKind::FunctionDeclaration | SyntaxKind::MethodDeclaration | SyntaxKind::MethodSignature
+                            | SyntaxKind::FunctionExpression | SyntaxKind::ArrowFunction | SyntaxKind::CallSignature
+                    ),
+                    SignatureKind::Construct => matches!(declaration_kind, SyntaxKind::Constructor | SyntaxKind::ConstructSignature),
+                }
+            })
+            .collect();
+        if declarations.len() > 1
+            && let Some(last) = declarations.last()
+            && self.node_child(*last, "body").is_some()
+        {
+            return declarations[..declarations.len() - 1].to_vec();
+        }
+        declarations
+    }
+
+    fn signature(&self, signature: SignatureId) -> SignatureEntry {
+        assert_eq!(signature.program, self.program.inner().identity, "signature handle belongs to another program");
+        self.with_tables(|tables| tables.signatures[signature.index as usize].clone())
+    }
+
+    /// `getReturnTypeOfSignature`.
+    pub fn return_type_of_signature(&self, signature: SignatureId) -> TypeId {
+        let entry = self.signature(signature);
+        self.intern(entry.function.return_type().clone())
+    }
+
+    /// `Signature.getDeclaration()`.
+    pub fn signature_declaration(&self, signature: SignatureId) -> Option<NodeId> {
+        self.signature(signature).declaration
+    }
+
+    /// `Signature.getParameters()`: the declared parameters' symbols when the
+    /// declaration is known, else symbols synthesized from the signature.
+    pub fn signature_parameters(&self, signature: SignatureId) -> Vec<SymbolId> {
+        let entry = self.signature(signature);
+        if let Some(declaration) = entry.declaration
+            && let Some(super::node::NodePropertyValue::List { nodes, .. }) = self.program.node_property(declaration, "parameters")
+        {
+            let symbols: Vec<SymbolId> = nodes.iter().filter_map(|parameter| self.declared_symbol(*parameter)).collect();
+            if symbols.len() == nodes.len() {
+                return symbols;
+            }
+        }
+        let names = entry.function.parameter_names().map(<[_]>::to_vec).unwrap_or_default();
+        entry
+            .function
+            .parameters()
+            .iter()
+            .enumerate()
+            .map(|(position, parameter_type)| {
+                let name: Arc<str> = names
+                    .get(position)
+                    .cloned()
+                    .flatten()
+                    .unwrap_or_else(|| Arc::from(format!("arg{position}")));
+                let ty = self.intern(parameter_type.clone());
+                self.symbol_id(SymbolKey::Parameter(signature.index, position as u32), || SymbolData::Transient {
+                    name,
+                    flags: ts_sf::FunctionScopedVariable,
+                    ty,
+                    parent: None,
+                    declaration: None,
+                })
+            })
+            .collect()
+    }
+
+    /// `Signature.getTypeParameters()`.
+    pub fn signature_type_parameters(&self, signature: SignatureId) -> Vec<TypeId> {
+        let entry = self.signature(signature);
+        entry.function.type_parameter_names().iter().map(|name| self.intern(Type::type_parameter(name))).collect()
+    }
+
+    /// `signatureToString`: `(a: T, b?: U): R`, as tsc writes a signature.
+    pub fn signature_to_string(&self, signature: SignatureId) -> String {
+        surge_ts_types::with_tsc_display(|| self.render_signature(signature))
+    }
+
+    fn render_signature(&self, signature: SignatureId) -> String {
+        let entry = self.signature(signature);
+        let function = &entry.function;
+        let names = function.parameter_names().map(<[_]>::to_vec).unwrap_or_default();
+        let count = function.parameters().len();
+        let parameters: Vec<String> = function
+            .parameters()
+            .iter()
+            .enumerate()
+            .map(|(position, ty)| {
+                let name = names.get(position).cloned().flatten().map(|name| name.to_string()).unwrap_or_else(|| format!("arg{position}"));
+                let rest = function.is_variadic() && position + 1 == count;
+                let optional = !rest && position >= function.required_parameter_count();
+                format!("{}{name}{}: {}", if rest { "..." } else { "" }, if optional { "?" } else { "" }, ty.name())
+            })
+            .collect();
+        let head = function.type_parameter_head().unwrap_or("");
+        let separator = if entry.kind == SignatureKind::Construct { "new " } else { "" };
+        format!("{separator}{head}({}): {}", parameters.join(", "), function.return_type().name())
+    }
+}
+
+/// tsc's `typeToString` cuts a printed type at 320 UTF-16 units
+/// (`defaultMaximumTruncationLength * 2`), ending it with `...`.
+fn truncated(text: String) -> String {
+    const LIMIT: usize = 320;
+    if text.encode_utf16().count() < LIMIT {
+        return text;
+    }
+    let mut units = 0;
+    let mut end = 0;
+    for (index, character) in text.char_indices() {
+        if units + character.len_utf16() > LIMIT - 3 {
+            break;
+        }
+        units += character.len_utf16();
+        end = index + character.len_utf8();
+    }
+    format!("{}...", &text[..end])
+}
+
+/// A literal type's value.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LiteralValue {
+    String(String),
+    Number(f64),
+}
+
+fn strip_extension(file_name: &str) -> &str {
+    for extension in [".d.ts", ".d.mts", ".d.cts", ".tsx", ".ts", ".mts", ".cts", ".jsx", ".js", ".mjs", ".cjs"] {
+        if let Some(stripped) = file_name.strip_suffix(extension) {
+            return stripped;
+        }
+    }
+    file_name
+}
+
+fn is_static_member(tree: &surge_ts_tsc_syntax::SyntaxTree, declaration: u32) -> bool {
+    tree.node(declaration).modifier_nodes().iter().any(|&modifier| tree.kind(modifier) == Kind::StaticKeyword)
+}
+
+fn declaration_kinds() -> &'static [SyntaxKind] {
+    &[
+        SyntaxKind::VariableDeclaration,
+        SyntaxKind::Parameter,
+        SyntaxKind::BindingElement,
+        SyntaxKind::FunctionDeclaration,
+        SyntaxKind::ClassDeclaration,
+        SyntaxKind::ClassExpression,
+        SyntaxKind::InterfaceDeclaration,
+        SyntaxKind::TypeAliasDeclaration,
+        SyntaxKind::EnumDeclaration,
+        SyntaxKind::EnumMember,
+        SyntaxKind::ModuleDeclaration,
+        SyntaxKind::TypeParameter,
+        SyntaxKind::PropertyDeclaration,
+        SyntaxKind::PropertySignature,
+        SyntaxKind::MethodDeclaration,
+        SyntaxKind::MethodSignature,
+        SyntaxKind::GetAccessor,
+        SyntaxKind::SetAccessor,
+        SyntaxKind::PropertyAssignment,
+        SyntaxKind::ShorthandPropertyAssignment,
+        SyntaxKind::ImportSpecifier,
+        SyntaxKind::ExportSpecifier,
+        SyntaxKind::ImportClause,
+        SyntaxKind::NamespaceImport,
+        SyntaxKind::NamespaceExport,
+        SyntaxKind::ImportEqualsDeclaration,
+        SyntaxKind::FunctionExpression,
+        SyntaxKind::JsxAttribute,
+    ]
+}
+
+fn meaning_of_location(program: &Program, node: NodeId) -> Meaning {
+    let mut current = node;
+    while let Some(parent) = program.node_parent(current) {
+        match program.node_kind(parent) {
+            SyntaxKind::TypeQuery => return Meaning::Value,
+            SyntaxKind::QualifiedName => {
+                if program.node_property(parent, "left") == Some(super::node::NodePropertyValue::Node(current)) {
+                    return Meaning::Namespace;
+                }
+                current = parent;
+            }
+            SyntaxKind::TypeReference => return Meaning::Type,
+            SyntaxKind::ExpressionWithTypeArguments => {
+                let clause = program.node_parent(parent);
+                let in_interface = clause
+                    .and_then(|clause| program.node_parent(clause))
+                    .is_some_and(|owner| program.node_kind(owner) == SyntaxKind::InterfaceDeclaration);
+                let implements = clause.is_some_and(|clause| program.node_operator(clause) == Some(SyntaxKind::ImplementsKeyword));
+                return if in_interface || implements { Meaning::Type } else { Meaning::Value };
+            }
+            SyntaxKind::PropertyAccessExpression if program.node_kind(current) == SyntaxKind::Identifier => {
+                current = parent;
+            }
+            _ => return Meaning::Value,
+        }
+    }
+    Meaning::Value
+}
+
+fn literal_type(program: &Program, node: NodeId, kind: SyntaxKind) -> Option<Type> {
+    Some(match kind {
+        SyntaxKind::StringLiteral | SyntaxKind::NoSubstitutionTemplateLiteral => {
+            Type::StringLiteral(program.node_value_text(node)?.to_string())
+        }
+        SyntaxKind::NumericLiteral => Type::NumberLiteral(surge_ts_types::NumberLiteralType {
+            value: normalize_number(program.node_value_text(node)?),
+        }),
+        SyntaxKind::TrueKeyword => Type::BooleanLiteral(true),
+        SyntaxKind::FalseKeyword => Type::BooleanLiteral(false),
+        SyntaxKind::NullKeyword => Type::Null,
+        SyntaxKind::BigIntLiteral => Type::BigInt,
+        _ => return None,
+    })
+}
+
+fn normalize_number(text: &str) -> String {
+    let cleaned = text.replace('_', "");
+    let value = if let Some(hex) = cleaned.strip_prefix("0x").or_else(|| cleaned.strip_prefix("0X")) {
+        i64::from_str_radix(hex, 16).ok().map(|value| value as f64)
+    } else if let Some(binary) = cleaned.strip_prefix("0b").or_else(|| cleaned.strip_prefix("0B")) {
+        i64::from_str_radix(binary, 2).ok().map(|value| value as f64)
+    } else if let Some(octal) = cleaned.strip_prefix("0o").or_else(|| cleaned.strip_prefix("0O")) {
+        i64::from_str_radix(octal, 8).ok().map(|value| value as f64)
+    } else {
+        cleaned.parse::<f64>().ok()
+    };
+    match value {
+        Some(value) if value.fract() == 0.0 && value.abs() < 1e21 => format!("{}", value as i64),
+        Some(value) => format!("{value}"),
+        None => text.to_string(),
+    }
+}
+
+fn keyword_type(kind: SyntaxKind) -> Option<Type> {
+    Some(match kind {
+        SyntaxKind::StringKeyword => Type::String,
+        SyntaxKind::NumberKeyword => Type::Number,
+        SyntaxKind::BooleanKeyword => Type::Boolean,
+        SyntaxKind::BigIntKeyword => Type::BigInt,
+        SyntaxKind::SymbolKeyword => Type::Symbol,
+        SyntaxKind::AnyKeyword => Type::Any,
+        SyntaxKind::UnknownKeyword => Type::GenuineUnknown,
+        SyntaxKind::NeverKeyword => Type::Never,
+        SyntaxKind::VoidKeyword => Type::Void,
+        SyntaxKind::UndefinedKeyword => Type::Undefined,
+        _ => return None,
+    })
+}
+
+fn has_type_parameter_member(ty: &Type) -> bool {
+    let is_parameter = |member: &Type| matches!(member, Type::TypeParameter(_));
+    match ty {
+        Type::Union(union) => union.types().iter().any(is_parameter),
+        Type::Object(object) => object.intersection_operands.as_ref().is_some_and(|operands| operands.iter().any(is_parameter)),
+        _ => false,
+    }
+}
+
+/// tsc's `getBaseTypeOfLiteralType`: a literal's primitive, an enum member's
+/// enum, a union's members' bases; `None` for a type it leaves as it is.
+fn base_of_literal(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::StringLiteral(_) => Some(Type::String),
+        Type::NumberLiteral(_) => Some(Type::Number),
+        Type::BooleanLiteral(_) => Some(Type::Boolean),
+        Type::Reference(reference)
+            if reference.id.as_ref() == surge_ts_types::TEMPLATE_LITERAL_REFERENCE_ID
+                || reference.id.as_ref() == surge_ts_types::STRING_MAPPING_REFERENCE_ID =>
+        {
+            Some(Type::String)
+        }
+        Type::Reference(reference) => reference.enum_base.as_deref().cloned(),
+        Type::Union(union) => Some(surge_ts_types::union_type(
+            union.types().iter().map(|member| base_of_literal(member).unwrap_or_else(|| member.clone())).collect(),
+        )),
+        _ => None,
+    }
+}
+
+fn shallow_flags(ty: &Type) -> i32 {
+    match ty {
+        Type::String => tf::String,
+        Type::Number => tf::Number,
+        Type::Boolean => tf::Boolean | tf::Union,
+        Type::BigInt => tf::BigInt,
+        Type::Symbol => tf::ESSymbol,
+        Type::Undefined => tf::Undefined,
+        Type::Null => tf::Null,
+        Type::Void => tf::Void,
+        Type::Any | Type::ErrorType | Type::Unknown => tf::Any,
+        Type::GenuineUnknown => tf::Unknown,
+        Type::TypeParameter(_) => tf::TypeParameter,
+        Type::Never => tf::Never,
+        Type::StringLiteral(_) => tf::StringLiteral,
+        Type::NumberLiteral(_) => tf::NumberLiteral,
+        Type::BooleanLiteral(_) => tf::BooleanLiteral,
+        Type::Union(_) => tf::Union,
+        Type::Object(object) if object.is_intersection && object.intersection_operands.is_some() => tf::Intersection,
+        Type::Function(_) | Type::Object(_) | Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_) => tf::Object,
+        Type::Reference(_) => 0,
+    }
+}
+
+fn flags_of(query: &mut Query<'_>, ty: &Type) -> i32 {
+    match ty {
+        Type::Reference(reference) => {
+            if reference.id.as_ref() == surge_ts_types::TEMPLATE_LITERAL_REFERENCE_ID {
+                return tf::TemplateLiteral;
+            }
+            if reference.id.as_ref() == surge_ts_types::STRING_MAPPING_REFERENCE_ID {
+                return tf::StringMapping;
+            }
+            let peeled = query.peel(ty);
+            if matches!(peeled, Type::Reference(_)) {
+                return tf::Object;
+            }
+            let flags = flags_of(query, &peeled);
+            if reference.enum_owner.is_some() && flags & (tf::NumberLiteral | tf::StringLiteral) != 0 {
+                flags | tf::EnumLiteral
+            } else {
+                flags
+            }
+        }
+        Type::Union(union) => {
+            let members = union.types();
+            let is_boolean = members.len() == 2
+                && members.contains(&Type::BooleanLiteral(true))
+                && members.contains(&Type::BooleanLiteral(false));
+            if is_boolean { tf::Boolean | tf::Union } else { tf::Union }
+        }
+        _ => shallow_flags(ty),
+    }
+}

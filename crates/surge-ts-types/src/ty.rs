@@ -516,6 +516,9 @@ impl Type {
             Type::Void => "void".to_string(),
             // tsc prints its error type as the `any` it is.
             Type::Any | Type::ErrorType => "any".to_string(),
+            // The sentinel stands for a type the checker could not compute:
+            // tsc's error type.
+            Type::Unknown if crate::tsc_display::active() => "any".to_string(),
             Type::Unknown | Type::GenuineUnknown => "unknown".to_string(),
             Type::TypeParameter(parameter) => parameter.name.to_string(),
             Type::Never => "never".to_string(),
@@ -562,6 +565,7 @@ impl Type {
                     peeled => peeled.name(),
                 }
             }
+            Type::Reference(reference) if crate::tsc_display::active() => crate::tsc_display::reference_name(reference),
             Type::Reference(reference) => reference.display.to_string(),
         }
     }
@@ -598,13 +602,17 @@ fn object_structural_name(object: &crate::ObjectType) -> String {
                     })
                     .collect::<Vec<_>>();
 
+                // tsc prints index signatures ahead of properties.
+                let index_position = if crate::tsc_display::active() { 0 } else { parts.len() };
+                let mut index_signatures = Vec::new();
                 if let Some(index_type) = &object.string_index_type {
-                    parts.push(format!("[key: string]: {}", index_type.name()));
+                    index_signatures.push(format!("[key: string]: {}", index_type.name()));
                 }
 
                 if let Some(index_type) = &object.number_index_type {
-                    parts.push(format!("[key: number]: {}", index_type.name()));
+                    index_signatures.push(format!("[key: number]: {}", index_type.name()));
                 }
+                parts.splice(index_position..index_position, index_signatures);
 
                 let properties = parts.join("; ");
 
@@ -1220,7 +1228,7 @@ fn optional_property_display(ty: &Type) -> String {
         Type::Union(union) if union.types().iter().any(|m| matches!(m, Type::Undefined)) => {
             ty.name()
         }
-        _ => format!("{} | undefined", ty.name()),
+        _ => format!("{} | undefined", crate::tsc_display::constituent_name(ty)),
     }
 }
 

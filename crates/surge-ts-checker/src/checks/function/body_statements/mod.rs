@@ -226,6 +226,7 @@ pub(crate) fn check_function_variable_declaration(
         .then(|| variable.initializer.clone().filter(crate::checks::var::may_read_enum_member))
         .flatten();
 
+    let variable_name_span = variable.name_span;
     if let Some(symbol) = check_variable_declaration_against_symbols(
         variable,
         visible_symbols,
@@ -236,6 +237,7 @@ pub(crate) fn check_function_variable_declaration(
             check_type_literal: true,
         },
     ) {
+        crate::semantic::record_declaration_type(variable_name_span, &symbol.ty, ctx);
         apply_variable_declaration_state(
             variable_kind,
             local_name.as_str(),

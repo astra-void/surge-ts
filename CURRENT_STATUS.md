@@ -110,6 +110,11 @@ The workspace ships an embeddable library (`surge-ts`, with the lower-level
 - Deterministic output: repeated runs render byte-identical diagnostics, and
   `--jobs 1` and `--jobs auto` produce identical diagnostics (worker results
   merge in loaded-file order, never completion order).
+- An experimental, read-only compiler API modeled on TypeScript's
+  (`surge_ts::api`, and the `surge-ts` npm package): see
+  [docs/COMPILER_API.md](docs/COMPILER_API.md). Its agreement with
+  typescript@6 (`scripts/api/compare-api.ts`) is **not measured** from a
+  clean checkout yet; no figure is recorded.
 
 ### Non-goals
 

@@ -211,7 +211,7 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
 
         match resolution.kind {
             PackageEntrypointKind::Declaration => {
-                let Ok(path) = resolution.path.canonicalize() else {
+                let Ok(path) = crate::host_fs::canonicalize(&resolution.path) else {
                     continue;
                 };
 
@@ -226,7 +226,7 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
 
                 if !known_file_names.contains(&normalized_file_name) {
                     let read_start = std::time::Instant::now();
-                    let Ok(source_text) = std::fs::read_to_string(&path) else {
+                    let Ok(source_text) = crate::host_fs::read_to_string(&path) else {
                         continue;
                     };
                     crate::io_stats::record_package_declaration_read(
@@ -260,7 +260,7 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
                 }
             }
             PackageEntrypointKind::RuntimeOnly => {
-                if let Ok(path) = resolution.path.canonicalize() {
+                if let Ok(path) = crate::host_fs::canonicalize(&resolution.path) {
                     let file_name = canonicalize_if_exists_string(&path);
                     let is_json = file_name.to_ascii_lowercase().ends_with(".json");
                     resolved_packages.insert(resolved_key);
@@ -279,7 +279,7 @@ pub(crate) fn resolve_package_declaration_entrypoints_with_cache(
                     if is_json
                         && opts.resolve_json_module
                         && known_file_names.insert(file_name.clone())
-                        && let Ok(source_text) = std::fs::read_to_string(&path)
+                        && let Ok(source_text) = crate::host_fs::read_to_string(&path)
                     {
                         inputs.push(SourceFileInput {
                             file_name: file_name.clone(),
@@ -319,6 +319,35 @@ fn cached_package_entrypoint(
     let resolved = resolve_package_entrypoint(req, opts, req.import_condition, cache, root_dir);
     cache.entrypoint_cache.insert(cache_key, resolved.clone());
     resolved
+}
+
+/// Resolves one bare or `#imports` specifier from `importer_file` as the
+/// loader does, outside a program build: the declaration file it names and
+/// whether it is one (a runtime-only JavaScript entrypoint is not).
+pub(crate) fn resolve_package_specifier(
+    specifier: &str,
+    importer_file: &Path,
+    opts: &ResolverOptions,
+    root_dir: &Path,
+) -> Option<(PathBuf, bool)> {
+    let mut cache = PackageDeclarationResolverCache::default();
+    let mut queue = VecDeque::new();
+    let mut queued = HashSet::new();
+    let importer_dir = importer_file.parent().unwrap_or(root_dir);
+    helpers::queue_specifier(
+        specifier,
+        ImportUsage::Declaration,
+        importer_dir,
+        importer_file,
+        opts,
+        &mut cache,
+        &mut queue,
+        &mut queued,
+    );
+    let request = queue.pop_front()?;
+    let resolution = resolve_package_entrypoint(&request, opts, request.import_condition, &mut cache, root_dir)?;
+    let path = crate::host_fs::canonicalize(&resolution.path).unwrap_or(resolution.path);
+    Some((path, resolution.kind == PackageEntrypointKind::Declaration))
 }
 
 /// Resolves each source module file's bare `declare module "m"` augmentation
@@ -367,7 +396,7 @@ pub(crate) fn resolve_module_augmentation_specifiers(
         let Some(resolution) = cached_package_entrypoint(&req, opts, cache, root_dir) else {
             continue;
         };
-        let Ok(path) = resolution.path.canonicalize() else {
+        let Ok(path) = crate::host_fs::canonicalize(&resolution.path) else {
             continue;
         };
         resolutions.push(PackageResolution {
@@ -406,7 +435,7 @@ pub(crate) fn resolve_lib_replacement(
     };
     let resolution = resolve_package_entrypoint(&req, opts, import_condition, cache, config_dir)?;
     (resolution.kind == PackageEntrypointKind::Declaration)
-        .then(|| resolution.path.canonicalize().unwrap_or(resolution.path))
+        .then(|| crate::host_fs::canonicalize(&resolution.path).unwrap_or(resolution.path))
 }
 
 /// The package a lib's replacement comes from: `@typescript/lib-dom` for

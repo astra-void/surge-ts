@@ -112,6 +112,17 @@ pub(super) fn program_module_memo()
         .get_or_init(|| std::sync::Mutex::new(surge_ts_types::fx::FxHashMap::default()))
 }
 
+/// Exchanges the program-lifetime memo with `parked`: a retained program
+/// takes its memo out of the process global when a query leaves it, so the
+/// next program starts from its own.
+pub(crate) fn swap_program_module_instantiation_memo(
+    parked: &mut surge_ts_types::fx::FxHashMap<DeclarationResolutionKey, Type>,
+) {
+    if let Ok(mut memo) = program_module_memo().lock() {
+        std::mem::swap(&mut *memo, parked);
+    }
+}
+
 pub(crate) fn clear_program_module_instantiation_memo() {
     if let Some(memo) = PROGRAM_MODULE_INSTANTIATION_MEMO.get()
         && let Ok(mut memo) = memo.lock()

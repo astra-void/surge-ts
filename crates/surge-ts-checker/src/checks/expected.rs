@@ -61,6 +61,30 @@ pub(crate) fn evaluate_expression_with_expected_type_anchored(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    let result = evaluate_contextually(
+        expression,
+        fallback_span,
+        target_span,
+        expected_type,
+        expected_diagnostic,
+        symbols,
+        ctx,
+    );
+    if let InferredExpression::Known(ty) = &result {
+        crate::semantic::record_expression_type(expression, ty, ctx);
+    }
+    result
+}
+
+fn evaluate_contextually(
+    expression: &ParsedExpression,
+    fallback_span: Option<SyntaxTextSpan>,
+    target_span: Option<SyntaxTextSpan>,
+    expected_type: Option<&Type>,
+    expected_diagnostic: ExpectedTypeDiagnostic,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
     // A degraded expectation carries no contextual parameter types, so any
     // callback or method written against it would be reported implicit-any for
     // a shape surge failed to model rather than one the source omits.
@@ -2766,6 +2790,7 @@ fn evaluate_object_literal_with_expected_type(
                                 choose_span(property.span, fallback_span),
                             ),
                         ));
+                        record_object_literal_own_type(properties, &inferred_property_types, expected_object_type, fallback_span, ctx);
                         return InferredExpression::Unknown;
                     }
                     let diagnostic = crate::checks::expr::type_not_assignable_diagnostic(
@@ -2786,6 +2811,7 @@ fn evaluate_object_literal_with_expected_type(
                             ),
                         ),
                     ));
+                    record_object_literal_own_type(properties, &inferred_property_types, expected_object_type, fallback_span, ctx);
                     return InferredExpression::Unknown;
                 }
             }
@@ -2808,6 +2834,7 @@ fn evaluate_object_literal_with_expected_type(
     if expected_diagnostic != ExpectedTypeDiagnostic::ContextOnly
         && report_excess_property(properties, expected_object_type, fallback_span, ctx)
     {
+        record_object_literal_own_type(properties, &inferred_property_types, expected_object_type, fallback_span, ctx);
         return InferredExpression::Unknown;
     }
 
@@ -2893,9 +2920,11 @@ fn evaluate_object_literal_with_expected_type(
             diagnostic,
             choose_span(target_span, fallback_span),
         ));
+        record_object_literal_own_type(properties, &inferred_property_types, expected_object_type, fallback_span, ctx);
         return InferredExpression::Unknown;
     }
 
+    record_object_literal_own_type(properties, &inferred_property_types, expected_object_type, fallback_span, ctx);
     let result = InferredExpression::Known(Type::Object(with_type_copy_reason(
         TypeCopyReason::ExpectedType,
         || expected_object_type.clone(),
@@ -2904,6 +2933,46 @@ fn evaluate_object_literal_with_expected_type(
         timings.object_literal_checking += object_start.elapsed()
     });
     result
+}
+
+/// The compiler API's type for an object literal checked against an expected
+/// object: the literal's own properties, in source order, each widened as
+/// tsc's `checkExpressionForMutableLocation` widens it unless the member the
+/// literal is contextually typed by keeps literals. A literal the check left
+/// before reaching every member has no own type recorded.
+fn record_object_literal_own_type(
+    properties: &[ParsedObjectProperty],
+    inferred_property_types: &BTreeMap<String, Type>,
+    expected_object_type: &surge_ts_types::ObjectType,
+    literal_span: Option<SyntaxTextSpan>,
+    ctx: &CheckerContext,
+) {
+    if !crate::semantic::recording() {
+        return;
+    }
+    let mut own = surge_ts_types::PropertyMap::default();
+    for property in properties.iter().filter(|property| !property.is_spread) {
+        let Some(ty) = inferred_property_types.get(&property.name) else { return };
+        let keeps_literal = expected_object_type
+            .properties
+            .get(property.name.as_str())
+            .is_some_and(|expected| contains_literal_type(&expected.ty.peeled()));
+        let ty = if keeps_literal { ty.clone() } else { crate::checks::expr::widen_type(ty) };
+        own.insert(
+            property.name.as_str().into(),
+            surge_ts_types::ObjectProperty::required(ty).with_method(property.is_method),
+        );
+    }
+    let own = Type::Object(surge_ts_types::ObjectType::new(own, None));
+    crate::semantic::record_literal_type(literal_span, &own, ctx);
+}
+
+fn contains_literal_type(ty: &Type) -> bool {
+    match ty {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => true,
+        Type::Union(union) => union.types().iter().any(contains_literal_type),
+        _ => false,
+    }
 }
 
 fn object_literal_source_type_name(

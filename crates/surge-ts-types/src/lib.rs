@@ -14,6 +14,8 @@ mod store;
 mod identity;
 mod subtype;
 mod template_literal;
+mod tsc_display;
+pub use tsc_display::with_tsc_display;
 pub mod type_variable;
 mod ty;
 mod union;
