@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "target": "es2015",
+    "module": "es2020",
+    "strict": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}

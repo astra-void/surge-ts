@@ -1192,6 +1192,11 @@ fn file_emits_commonjs(ctx: &CheckerContext) -> bool {
         || lower.ends_with(".cjs")
 }
 
+fn is_mts_or_cts_file(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    lower.ends_with(".mts") || lower.ends_with(".cts")
+}
+
 fn grammar_finding_diagnostic(
     finding: &surge_ts_syntax::ParsedGrammarDiagnostic,
     ctx: &CheckerContext,
@@ -1231,6 +1236,41 @@ fn grammar_finding_diagnostic(
             ctx.lookup_type_declaration(&entity)?;
             Diagnostic::ts2438(name, ctx.file_name.clone())
         }
+        // `verbatimModuleSyntax` in a file emitted as CommonJS (TS1286 in a
+        // `.cts`/`.cjs` file). A dynamic import is judged by `module:
+        // commonjs` alone, and `checkGrammarImportCallExpression` stops there.
+        Kind::Ts(1295) => {
+            let applies = if finding.name.as_deref() == Some("import") {
+                ctx.options.module_emit == crate::ModuleEmitKind::CommonJS
+            } else {
+                file_emits_commonjs(ctx)
+            };
+            if !ctx.options.verbatim_module_syntax || !applies {
+                return None;
+            }
+            let lower = ctx.file_name.to_ascii_lowercase();
+            if lower.ends_with(".cts") || lower.ends_with(".cjs") {
+                Diagnostic::ts1286(ctx.file_name.clone())
+            } else {
+                Diagnostic::ts1295(ctx.file_name.clone())
+            }
+        }
+        Kind::Ts(1323 | 1324 | 1325 | 1326)
+            if ctx.options.verbatim_module_syntax
+                && ctx.options.module_emit == crate::ModuleEmitKind::CommonJS =>
+        {
+            return None;
+        }
+        Kind::Ts(1009)
+            if finding.name.as_deref() == Some("import")
+                && ctx.options.verbatim_module_syntax
+                && ctx.options.module_emit == crate::ModuleEmitKind::CommonJS =>
+        {
+            return None;
+        }
+        Kind::Ts(1287) if !ctx.options.verbatim_module_syntax || !file_emits_commonjs(ctx) => {
+            return None;
+        }
         Kind::Ts(2725) if !file_emits_commonjs(ctx) => return None,
         Kind::Ts(2725) => {
             Diagnostic::ts2725(ctx.options.module_emit.option_name(), ctx.file_name.clone())
@@ -1239,8 +1279,49 @@ fn grammar_finding_diagnostic(
         // `allowUnreachableCode: false`; unset makes it a suggestion.
         Kind::Ts(7027) if !ctx.options.report_unreachable_code => return None,
         Kind::Ts(2823) if ctx.options.module_emit.supports_import_attributes() => return None,
-        Kind::Ts(7031) if !ctx.options.no_implicit_any => return None,
+        Kind::Ts(7005 | 7031) if !ctx.options.no_implicit_any => return None,
         Kind::Ts(1323) if ctx.options.module_emit != crate::ModuleEmitKind::ES2015 => return None,
+        // `checkGrammarImportCallExpression` stops at TS1323 under `module:
+        // es2015`, and takes a second argument under the module kinds that
+        // support import attributes (and `node16`).
+        Kind::Ts(1324)
+            if ctx.options.module_emit == crate::ModuleEmitKind::ES2015
+                || ctx.options.module_emit.is_node()
+                || matches!(
+                    ctx.options.module_emit,
+                    crate::ModuleEmitKind::ESNext | crate::ModuleEmitKind::Preserve
+                ) =>
+        {
+            return None;
+        }
+        Kind::Ts(1325 | 1326) if ctx.options.module_emit == crate::ModuleEmitKind::ES2015 => {
+            return None;
+        }
+        Kind::Ts(1009) if finding.name.as_deref() == Some("import") => {
+            let module = ctx.options.module_emit;
+            if module == crate::ModuleEmitKind::ES2015
+                || module.is_node()
+                || matches!(module, crate::ModuleEmitKind::ESNext | crate::ModuleEmitKind::Preserve)
+            {
+                return None;
+            }
+            Diagnostic::ts1009(ctx.file_name.clone())
+        }
+        Kind::Ts(7060) if !is_mts_or_cts_file(&ctx.file_name) => return None,
+        Kind::Ts(1309)
+            if !ctx.options.module_emit.is_node()
+                || crate::modules::implied_format_for_emit(ctx, &ctx.file_name)
+                    != Some(crate::modules::ModuleFormat::CommonJs) =>
+        {
+            return None;
+        }
+        Kind::Ts(1470)
+            if !ctx.options.module_emit.is_node()
+                || crate::modules::implied_format_for_emit(ctx, &ctx.file_name)
+                    == Some(crate::modules::ModuleFormat::Esm) =>
+        {
+            return None;
+        }
         Kind::TsUnderStrictNullChecks(_) if !ctx.options.strict_null_checks => return None,
         Kind::TsUnderLegacyDecorators(_) if !ctx.options.experimental_decorators => return None,
         Kind::TsUnderEsDecorators(_) if ctx.options.experimental_decorators => return None,
@@ -1384,6 +1465,12 @@ pub(super) fn check_program_file(
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) -> FileCheckResult {
     ctx.begin_file_check(parsed_file.file_name.clone());
+    ctx.file_const_class_names.extend(parsed_file.statements.iter().filter_map(|statement| match statement {
+        surge_ts_syntax::ParsedStatement::ClassDeclaration(class) if class.const_binding => {
+            Some(std::sync::Arc::from(class.name.as_str()))
+        }
+        _ => None,
+    }));
 
     if ctx.options.skip_lib_check && parsed_file.file_kind.is_declaration() {
         return FileCheckResult {
@@ -1413,6 +1500,15 @@ pub(super) fn check_program_file(
         ctx.javascript_expando_objects = Arc::new(javascript_expando_containers(&parsed_file.statements));
     }
     ctx.parenthesized_expressions = parsed_file.parenthesized_expressions.clone();
+    if !parsed_file.is_module
+        && !crate::program::file_is_forced_module(
+            &parsed_file.file_name,
+            parsed_file.jsx_factory_uses.first_tag.is_some(),
+            &ctx.options,
+        )
+    {
+        ctx.global_this_starts = parsed_file.global_this_starts.clone();
+    }
     ctx.let_assignments = parsed_file.let_assignments.clone();
     ctx.jsx_factory_uses = parsed_file.jsx_factory_uses.clone();
     crate::checks::jsx::check_jsx_runtime_import(ctx);
@@ -1507,6 +1603,12 @@ pub(super) fn check_program_file(
                 .into_iter()
                 .flat_map(|bindings| bindings.type_only_aliases.iter().cloned())
                 .filter(|(name, _)| !module_declared.contains(name.as_ref())),
+        );
+        ctx.set_file_complete_namespace_import_names(
+            imported_bindings
+                .into_iter()
+                .flat_map(|bindings| bindings.complete_namespace_imports.iter())
+                .filter(|name| !module_declared.contains(name.as_ref())),
         );
         ctx.set_file_import_names(
             crate::program::ambient::import_bound_names(&parsed_file.statements)
@@ -1679,6 +1781,7 @@ pub(super) fn check_program_file(
         // A script imports nothing, but its per-file import sets must still
         // describe it: the qualified-name checks only judge a file they do.
         ctx.set_file_type_only_import_names(std::iter::empty());
+        ctx.set_file_complete_namespace_import_names(std::iter::empty());
         ctx.set_file_import_names(
             crate::program::ambient::import_bound_names(&parsed_file.statements),
             crate::program::ambient::namespace_import_names(&parsed_file.statements),

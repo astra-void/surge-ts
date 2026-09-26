@@ -25,6 +25,20 @@ pub(crate) fn collect_exports_from_statement(
     type_only_exports: &mut surge_ts_types::fx::FxHashMap<Arc<str>, TypeOnlyAliasKind>,
     ctx: &mut CheckerContext,
 ) {
+    if let ParsedStatement::ExportDeclaration(export) = statement
+        && matches!(
+            export.as_ref(),
+            ParsedExportDeclaration::Equals { .. } | ParsedExportDeclaration::EqualsExpression { .. }
+        )
+        && surge_ts_syntax::is_javascript_file_name(&ctx.file_name)
+    {
+        publish_commonjs_type_exports(
+            statement_list,
+            local_type_declarations,
+            resolution_scope,
+            type_declarations,
+        );
+    }
     match statement {
         ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
             // `export import local = N.M` exports every meaning of the entity.
@@ -758,6 +772,33 @@ fn export_entity_alias_types(
     for (key, declaration) in table.iter() {
         if let Some(member) = key.strip_prefix(prefix.as_str()) {
             let _ = type_declarations.insert(format!("{exported}.{member}"), declaration.clone());
+        }
+    }
+}
+
+/// `bindCommonJSTypeExports`: a CommonJS module's JSDoc types are its
+/// exports, and with `module.exports` replaced they become members of the
+/// replacement, which an import type or a named type import of the module
+/// reaches (`import("./m").T`).
+fn publish_commonjs_type_exports(
+    statement_list: &[ParsedStatement],
+    local_type_declarations: &TypeDeclarationTable,
+    resolution_scope: Option<&Arc<TypeDeclarationScope>>,
+    type_declarations: &mut TypeDeclarationTable,
+) {
+    for statement in statement_list {
+        let ParsedStatement::TypeAliasDeclaration(alias) = statement else {
+            continue;
+        };
+        let Some(declaration) = local_type_declarations.get(&alias.name) else {
+            continue;
+        };
+        let _ = type_declarations.insert(
+            format!("{EXPORT_ASSIGNMENT_NAME}.{}", alias.name),
+            attach_type_resolution_scope_if_missing(declaration.clone(), resolution_scope),
+        );
+        if type_declarations.get(&alias.name).is_none() {
+            export_local_type_declaration(declaration, &alias.name, resolution_scope, type_declarations);
         }
     }
 }

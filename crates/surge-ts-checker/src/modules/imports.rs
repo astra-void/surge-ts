@@ -398,6 +398,7 @@ pub(crate) fn resolve_module_imports(
     let mut symbols = SymbolTable::new();
     let mut namespace_alias_layers = Vec::new();
     let mut type_only_aliases = Vec::new();
+    let mut complete_namespace_imports = Vec::new();
 
     for statement in &parsed_file.statements {
         let ParsedStatement::ImportDeclaration(import) = statement else {
@@ -414,6 +415,7 @@ pub(crate) fn resolve_module_imports(
             &mut symbols,
             &mut namespace_alias_layers,
             &mut type_only_aliases,
+            &mut complete_namespace_imports,
             ctx,
         );
     }
@@ -481,6 +483,7 @@ pub(crate) fn resolve_module_imports(
         symbols,
         namespace_alias_layers,
         type_only_aliases,
+        complete_namespace_imports,
     }
 }
 
@@ -770,9 +773,32 @@ pub(crate) fn resolve_import_declaration(
     symbols: &mut SymbolTable,
     namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
     type_only_aliases: &mut Vec<(Arc<str>, TypeOnlyAliasKind)>,
+    complete_namespace_imports: &mut Vec<Arc<str>>,
     ctx: &mut CheckerContext,
 ) {
     report_ts_extension_import(import, program_files, ctx);
+    // A JavaScript file's `require` and JSDoc `@import` lower to import
+    // declarations tsc does not count as one.
+    let javascript = surge_ts_syntax::is_javascript_file_name(&ctx.file_name);
+    let syntax = match &import.kind {
+        ParsedImportKind::EntityAlias { .. } | ParsedImportKind::Unsupported => None,
+        ParsedImportKind::Equals { .. } if !javascript => Some(ModuleImportSyntax::ImportEquals),
+        kind if import_is_type_only(kind) && !import.inline_type_specifiers && !javascript => {
+            Some(ModuleImportSyntax::TypeOnlyImportClause)
+        }
+        _ => Some(ModuleImportSyntax::Other),
+    };
+    if let Some(syntax) = syntax {
+        report_synchronous_import_of_esm(
+            &import.module_specifier,
+            import.module_specifier_span,
+            syntax,
+            import_resolution_mode(import),
+            import.resolution_mode.is_some(),
+            program_files,
+            ctx,
+        );
+    }
     if !matches!(
         import.kind,
         ParsedImportKind::EntityAlias { .. } | ParsedImportKind::SideEffect
@@ -826,6 +852,7 @@ pub(crate) fn resolve_import_declaration(
             type_declarations,
             symbols,
             namespace_alias_layers,
+            complete_namespace_imports,
             ctx,
         ),
         ParsedImportKind::Equals { .. } => resolve_import_equals(
@@ -837,6 +864,7 @@ pub(crate) fn resolve_import_declaration(
             type_declarations,
             symbols,
             namespace_alias_layers,
+            complete_namespace_imports,
             ctx,
         ),
         ParsedImportKind::SideEffect => {
@@ -1121,11 +1149,9 @@ fn resolve_default_and_named_import(
                 }
             }
             None => {
-                if !should_bind_unknown_for_missing_export(
-                    &export_table,
-                    resolved_index,
-                    program_files,
-                ) {
+                if export_table.type_declarations.get("default").is_none()
+                    && !should_bind_unknown_for_missing_export(&export_table, resolved_index, program_files)
+                {
                     emit_no_default_export_diagnostic(
                         ctx,
                         local_name,
@@ -1422,7 +1448,11 @@ fn resolve_default_import(
     bind_default_type_import(&export_table, scope.as_ref(), local_name, type_declarations);
 
     let Some(default_symbol) = export_table.get_shared_value("default") else {
-        if !should_bind_unknown_for_missing_export(&export_table, resolved_index, program_files) {
+        // A `default` with a type meaning only (`export default interface`) is
+        // an export all the same.
+        if export_table.type_declarations.get("default").is_none()
+            && !should_bind_unknown_for_missing_export(&export_table, resolved_index, program_files)
+        {
             emit_no_default_export_diagnostic(
                 ctx,
                 local_name,
@@ -1469,6 +1499,7 @@ fn resolve_import_equals(
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
     namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
+    complete_namespace_imports: &mut Vec<Arc<str>>,
     ctx: &mut CheckerContext,
 ) {
     let ParsedImportKind::Equals {
@@ -1512,6 +1543,11 @@ fn resolve_import_equals(
         return;
     };
 
+    if export_table.export_assignment_symbol.is_none()
+        && module_export_surface_is_complete(&export_table, resolved_index, program_files, ctx)
+    {
+        complete_namespace_imports.push(Arc::from(local_name.as_str()));
+    }
     // `getTargetOfImportEqualsDeclaration` → `resolveExternalModuleSymbol`.
     bind_external_module_symbol(
         &export_table,
@@ -1774,6 +1810,33 @@ fn namespace_alias_table(
     table
 }
 
+/// Whether surge saw the module's whole export list: tsc's `resolveQualifiedName`
+/// reports a member the list lacks, which surge can only repeat for a module
+/// whose `export *` targets all resolved and whose surface it lowered in full.
+/// `export =` modules expose their entity's members instead, and a JavaScript
+/// module's exports come from assignments surge only partly models.
+fn module_export_surface_is_complete(
+    export_table: &ModuleExportTable,
+    resolved_index: Option<usize>,
+    program_files: &[ParsedProgramFile],
+    ctx: &CheckerContext,
+) -> bool {
+    let Some(index) = resolved_index else {
+        return false;
+    };
+    let Some(file) = program_files.get(index) else {
+        return false;
+    };
+    !export_table.has_unresolved_star_export
+        && !export_table.has_incomplete_declaration_surface
+        && !export_table.shorthand
+        && !export_table.writes_export_assignment
+        && file.json_module_type.is_none()
+        && !surge_ts_syntax::is_javascript_file_name(&file.file_name)
+        && !should_bind_unknown_for_missing_export(export_table, resolved_index, program_files)
+        && !module_has_unresolved_star_export(index, program_files, &ctx.module_file_index_by_identity)
+}
+
 fn resolve_namespace_import(
     import: &ParsedImportDeclaration,
     program_files: &[ParsedProgramFile],
@@ -1783,6 +1846,7 @@ fn resolve_namespace_import(
     type_declarations: &mut TypeDeclarationTable,
     symbols: &mut SymbolTable,
     namespace_alias_layers: &mut Vec<Arc<TypeDeclarationTable>>,
+    complete_namespace_imports: &mut Vec<Arc<str>>,
     ctx: &mut CheckerContext,
 ) {
     let ParsedImportKind::Namespace {
@@ -1806,6 +1870,9 @@ fn resolve_namespace_import(
             module_export_tables,
             module_resolution_scopes,
         ) {
+            if module_export_surface_is_complete(&export_table, resolved_index, program_files, ctx) {
+                complete_namespace_imports.push(Arc::from(local_name.as_str()));
+            }
             namespace_alias_layers.push(namespace_alias_table(
                 &export_table,
                 local_name,
@@ -1912,6 +1979,14 @@ fn resolve_namespace_import(
     // appended as a shared scope layer rather than copied into every importer's
     // table, so `import * as` of a large barrel stays O(1) per importer.
     if let Some(export_table) = &namespace_export_table {
+        if module_export_surface_is_complete(
+            export_table,
+            namespace_resolved_index,
+            program_files,
+            ctx,
+        ) {
+            complete_namespace_imports.push(Arc::from(local_name.as_str()));
+        }
         namespace_alias_layers.push(namespace_alias_table(
             export_table,
             local_name,
@@ -2407,12 +2482,17 @@ fn report_ts_extension_import(
     ) else {
         return;
     };
-    // tsc's `ResolvedUsingTsExtension`: the file the path names, not one a
-    // CommonJS-mode lookup reached by appending extensions or as a directory.
+    // tsc's `ResolvedUsingTsExtension`: `tryAddingExtensions` found the file
+    // among the written extension's substitutes (`./a.d.ts` is `./a.ts`
+    // first), not by appending extensions to the whole path or as a
+    // directory, as a CommonJS-mode lookup can.
     let named_file = relative_specifier_path(&ctx.file_name, &import.module_specifier);
-    if canonical_file_identity(&named_file)
-        != canonical_file_identity(&resolved.resolved_file_name)
-    {
+    let resolved_identity = canonical_file_identity(&resolved.resolved_file_name);
+    let substituted = super::candidates::relative_import_candidates(&named_file, &import.module_specifier)
+        .unwrap_or_default()
+        .iter()
+        .any(|candidate| canonical_file_identity(candidate) == resolved_identity);
+    if !substituted {
         return;
     }
     let mut diagnostic = if declaration_specifier {
@@ -2449,6 +2529,84 @@ fn suggested_import_source(specifier: &str, extension: &str, ctx: &CheckerContex
         _ => if prefer_ts { ".ts" } else { ".js" },
     };
     format!("{stem}{suffix}")
+}
+
+/// How an import or export reaches the module it names, which picks the
+/// error [`report_synchronous_import_of_esm`] reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModuleImportSyntax {
+    /// `import x = require("…")` in a TypeScript file.
+    ImportEquals,
+    /// `import type … from "…"`.
+    TypeOnlyImportClause,
+    Other,
+}
+
+/// tsc's `resolveExternalModule` under `module: node16`/`node18`: an import
+/// that compiles to `require` (any in a CommonJS file, and every
+/// `import x = require()`) cannot load a file whose format is ESM, unless a
+/// `resolution-mode` attribute says how to resolve it.
+pub(crate) fn report_synchronous_import_of_esm(
+    module_specifier: &str,
+    module_specifier_span: Option<TextSpan>,
+    syntax: ModuleImportSyntax,
+    resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
+    has_resolution_mode_attribute: bool,
+    program_files: &[ParsedProgramFile],
+    ctx: &mut CheckerContext,
+) {
+    if !matches!(
+        ctx.options.module_emit,
+        crate::context::ModuleEmitKind::Node16 | crate::context::ModuleEmitKind::Node18
+    ) || has_resolution_mode_attribute
+        || ctx.ambient_modules.contains_key(module_specifier)
+    {
+        return;
+    }
+    let synchronous = syntax == ModuleImportSyntax::ImportEquals
+        || implied_format_for_emit(ctx, &ctx.file_name) == Some(ModuleFormat::CommonJs);
+    if !synchronous {
+        return;
+    }
+    let resolved = resolved_module_in_mode(ctx, &ctx.file_name, module_specifier, resolution_mode)
+        .cloned()
+        .or_else(|| {
+            resolve_relative_module_in_mode(
+                &ctx.file_name,
+                module_specifier,
+                resolution_mode,
+                program_files,
+                &ctx.module_file_index_by_identity,
+            )
+            .map(|resolution| resolution.resolved_file_name)
+        });
+    let Some(resolved) = resolved else {
+        return;
+    };
+    if implied_format_for_emit(ctx, &resolved) != Some(ModuleFormat::Esm) {
+        return;
+    }
+    // `sourceFile.Symbol`: only a module is imported at all. The index names
+    // the whole program's file list, which a caller's slice need not be.
+    let identity = canonical_file_identity(&resolved);
+    let is_module = ctx
+        .module_file_index_by_identity
+        .get(identity.as_str())
+        .and_then(|&index| program_files.get(index))
+        .filter(|file| canonical_file_identity(&file.file_name) == identity)
+        .is_none_or(|file| file.is_module);
+    if !is_module {
+        return;
+    }
+    let diagnostic = match syntax {
+        ModuleImportSyntax::ImportEquals => Diagnostic::ts1471(module_specifier, ctx.file_name.clone()),
+        ModuleImportSyntax::TypeOnlyImportClause => Diagnostic::ts1541(ctx.file_name.clone()),
+        ModuleImportSyntax::Other => Diagnostic::ts1479(module_specifier, ctx.file_name.clone()),
+    };
+    ctx.push(match module_specifier_span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
 }
 
 fn import_is_type_only(kind: &ParsedImportKind) -> bool {

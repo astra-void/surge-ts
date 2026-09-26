@@ -2,7 +2,8 @@
 //! constructs whose recovery only the parser port reproduces: a variable
 //! declaration list with a trailing comma or no declarations at all
 //! (`checkGrammarVariableDeclarationList`), and members written beside a
-//! mapped type's (`checkGrammarMappedType`, `checkGrammarProperty`).
+//! mapped type's (`checkGrammarMappedType`, `checkGrammarProperty`), and a
+//! type parameter list's duplicate names (`checkTypeParameters`).
 
 use crate::Diagnostic;
 use crate::ast::{NodeId, NodeList};
@@ -17,6 +18,9 @@ pub(crate) fn checker_grammar_diagnostics(file: &ParsedFile, text: &str) -> Vec<
     while let Some(node) = stack.pop() {
         if let Some(list) = checked_declaration_list(file, node) {
             check_declaration_list(file, text, list, &mut found);
+        }
+        if let Some(list) = &file.node(node).type_parameters {
+            check_duplicate_type_parameters(file, text, list, &mut found);
         }
         if let Some(first) = member_beside_mapped_type(file, node) {
             let (start, end) = crate::binder::error_range_for_node(file, text, first);
@@ -58,6 +62,20 @@ fn check_declaration_list(file: &ParsedFile, text: &str, list: NodeId, found: &m
             message: diagnostics::Variable_declaration_list_cannot_be_empty,
             args: Vec::new(),
         });
+    }
+}
+
+/// `checkTypeParameters`: a type parameter named like an earlier one in its
+/// list is TS2300 at its name.
+fn check_duplicate_type_parameters(file: &ParsedFile, text: &str, list: &NodeList, found: &mut Vec<Diagnostic>) {
+    let names: Vec<Option<NodeId>> = list.nodes.iter().map(|&parameter| file.node(parameter).name).collect();
+    for (index, name) in names.iter().enumerate() {
+        let Some(name) = *name else { continue };
+        let spelling = &file.node(name).text;
+        if names[..index].iter().flatten().any(|&earlier| file.node(earlier).text == *spelling) {
+            let (start, end) = crate::binder::error_range_for_node(file, text, name);
+            found.push(Diagnostic { start, end, message: diagnostics::Duplicate_identifier_0, args: vec![spelling.clone()] });
+        }
     }
 }
 

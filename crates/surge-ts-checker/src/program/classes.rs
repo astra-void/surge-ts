@@ -732,8 +732,16 @@ fn inherited_static_properties(
         Some(expression) => expression_base_constructor_type(expression, scope, ctx),
         None => base_static_side(class, scope, ctx),
     };
+    // `addInheritedMembers` leaves a static private name with its own class.
     base_static
-        .map(|base_static| base_static.properties.as_ref().clone())
+        .map(|base_static| {
+            base_static
+                .properties
+                .iter()
+                .filter(|(name, _)| !surge_ts_types::private_name::is_static(name))
+                .map(|(name, property)| (name.clone(), property.clone()))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -989,6 +997,7 @@ fn syntactic_initializer_type(initializer: &surge_ts_syntax::ParsedExpression, k
                 call_signature: None,
                 call_signature_overloads: Vec::new(),
                 construct_signature: None,
+                construct_signature_overloads: Vec::new(),
                 non_primitive: false,
                 display_name: None,
             }))
@@ -1276,15 +1285,43 @@ fn check_implemented_interfaces(class: &ParsedClassDeclaration, ctx: &mut Checke
         if super::heritage::report_incompatible_heritage_members(class, implemented, ctx) {
             continue;
         }
+        // tsc names a class it finds in the clause, merged with an interface or not.
+        let implements_class = matches!(
+            ctx.lookup_type_declaration(&implemented.name),
+            Some(crate::symbols::TypeDeclarationInfo::Interface(info)) if info.is_class_instance
+        );
         let Some(required) = unimplemented_interface_members(&implemented.name, &declared, ctx)
         else {
             continue;
         };
-        if required.is_empty() {
+        if required.is_empty() && implements_weak_type_without_common_member(&implemented.name, &declared, ctx) {
+            let diagnostic = Diagnostic::ts2559(&class.name, &implemented.name, ctx.file_name.clone());
+            ctx.push(match class.name_span {
+                Some(span) => diagnostic.with_span(convert_span(span)),
+                None => diagnostic,
+            });
             continue;
         }
-        let diagnostic =
-            Diagnostic::ts2420(&class.name, &implemented.name, ctx.file_name.clone());
+        if required.is_empty() {
+            super::heritage::report_incompatible_index_signatures(
+                class,
+                implemented,
+                |own, base, file| {
+                    if implements_class {
+                        Diagnostic::ts2720(own, base, file)
+                    } else {
+                        Diagnostic::ts2420(own, base, file)
+                    }
+                },
+                ctx,
+            );
+            continue;
+        }
+        let diagnostic = if implements_class {
+            Diagnostic::ts2720(&class.name, &implemented.name, ctx.file_name.clone())
+        } else {
+            Diagnostic::ts2420(&class.name, &implemented.name, ctx.file_name.clone())
+        };
         let diagnostic = match class.name_span {
             Some(span) => diagnostic.with_span(convert_span(span)),
             None => diagnostic,
@@ -1310,9 +1347,17 @@ fn check_extended_base_class(class: &ParsedClassDeclaration, ctx: &mut CheckerCo
         {
             continue;
         }
-        if !super::heritage::report_incompatible_heritage_members(class, base, ctx)
-            && base.type_arguments.is_empty()
+        if super::heritage::report_incompatible_heritage_members(class, base, ctx)
+            || super::heritage::report_incompatible_index_signatures(
+                class,
+                base,
+                |own, base, file| Diagnostic::ts2415(own, base, file),
+                ctx,
+            )
         {
+            continue;
+        }
+        if base.type_arguments.is_empty() {
             super::heritage::check_base_class_relation(class, &base.name, ctx);
         }
     }
@@ -1420,6 +1465,46 @@ fn unimplemented_interface_members(
     }
 
     Some(required)
+}
+
+/// tsc's weak-type check on `implements`: an interface (with its bases) whose
+/// members are all optional and that has no signature shares none of them
+/// with the class.
+fn implements_weak_type_without_common_member(
+    interface_name: &str,
+    declared: &std::collections::HashSet<String>,
+    ctx: &CheckerContext,
+) -> bool {
+    // `isRelatedTo` runs the common-property check only for a source with
+    // properties or signatures: an empty class relates to any weak type.
+    if declared.is_empty() {
+        return false;
+    }
+    let mut members = Vec::new();
+    let mut stack = vec![interface_name.to_string()];
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    while let Some(name) = stack.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        let Some(TypeDeclarationInfo::Interface(info)) = ctx.lookup_type_declaration(&name) else {
+            return false;
+        };
+        let body = &info.body;
+        if info.file_name.ends_with(".d.ts")
+            || body.string_index_type.is_some()
+            || body.number_index_type.is_some()
+            || body.call_signature.is_some()
+            || !body.construct_signatures.is_empty()
+        {
+            return false;
+        }
+        members.extend(body.members.iter().map(|member| (member.name.clone(), member.optional)));
+        stack.extend(body.extends.iter().map(|base| base.name.clone()));
+    }
+    !members.is_empty()
+        && members.iter().all(|(_, optional)| *optional)
+        && !members.iter().any(|(name, _)| declared.contains(name))
 }
 
 /// Every instance member name a class body declares, `abstract` ones included:
@@ -1804,6 +1889,7 @@ fn check_class_declaration_inside(class: &ParsedClassDeclaration, ctx: &mut Chec
     super::forward_references::check_class_property_initializers(class, ctx);
     super::override_modifiers::check_members_for_override_modifier(class, ctx);
     super::index_constraints::check_class_index_constraints(class, ctx);
+    super::index_constraints::check_class_static_index_constraints(class, ctx);
 
     // Ambient classes have no bodies. Definite assignment needs no member
     // types, so they still get it.

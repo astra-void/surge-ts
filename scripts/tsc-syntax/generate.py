@@ -43,6 +43,10 @@ used |= {'X_0_is_declared_but_its_value_is_never_read', 'X_0_is_declared_but_nev
 # and of members beside a mapped type's (checkGrammarMappedType, checkGrammarProperty).
 used |= {'Trailing_comma_not_allowed', 'Variable_declaration_list_cannot_be_empty',
          'A_mapped_type_may_not_declare_properties_or_methods'}
+# The checker's duplicate-export check of a module (checkExternalModuleExports).
+used |= {'Cannot_redeclare_exported_variable_0'}
+# The checker's alias resolution the global merge reads (resolveAlias).
+used |= {'Circular_definition_of_import_alias_0'}
 diag = (root / 'diagnostics/diagnostics_generated.go').read_text()
 def rust_str(s):
     out = []

@@ -189,12 +189,13 @@ fn collect_body_candidates(
     names: &mut Vec<Arc<str>>,
 ) {
     let mut found = Vec::new();
+    let local_types = body_local_types(body);
     for_each_declaration(body, &mut |variable| {
         let Some(annotation) = variable.declared_type.as_ref() else {
             return;
         };
         if never_initialized_candidate(variable, ctx)
-            && excludes_undefined(annotation, ctx, type_parameters)
+            && annotation_excludes(annotation, ctx, type_parameters, &local_types, &[], 0)
             && !names.iter().any(|name| name.as_ref() == variable.name)
         {
             let exempt = annotation_constraint_substitutes(annotation, ctx, type_parameters);
@@ -207,6 +208,28 @@ fn collect_body_candidates(
         }
         names.push(name);
     }
+}
+
+/// The types `body` declares for itself, which its annotations may name: an
+/// interface or class type (`None`) never admits `undefined`, a non-generic
+/// alias — an enum's included — only through its body.
+fn body_local_types(body: &[ParsedFunctionBodyStatement]) -> Vec<(String, Option<ParsedType>)> {
+    fn collect(body: &[ParsedFunctionBodyStatement], types: &mut Vec<(String, Option<ParsedType>)>) {
+        for statement in body {
+            match statement {
+                ParsedFunctionBodyStatement::TypeAlias(alias) if alias.type_parameters.is_empty() => {
+                    types.push((alias.name.clone(), Some(alias.ty.clone())));
+                }
+                ParsedFunctionBodyStatement::Interface(interface) => types.push((interface.name.clone(), None)),
+                ParsedFunctionBodyStatement::Class(class) => types.push((class.name.clone(), None)),
+                _ => {}
+            }
+            for_each_child_body(statement, &mut |child| collect(child, types));
+        }
+    }
+    let mut types = Vec::new();
+    collect(body, &mut types);
+    types
 }
 
 fn collect_declared_names(body: &[ParsedFunctionBodyStatement], names: &mut HashSet<String>) {
@@ -301,13 +324,14 @@ pub(crate) fn excludes_undefined(
     ctx: &CheckerContext,
     local_type_parameters: &[surge_ts_syntax::ParsedTypeParameter],
 ) -> bool {
-    annotation_excludes(annotation, ctx, local_type_parameters, &[], 0)
+    annotation_excludes(annotation, ctx, local_type_parameters, &[], &[], 0)
 }
 
 fn annotation_excludes(
     annotation: &ParsedType,
     ctx: &CheckerContext,
     local_type_parameters: &[surge_ts_syntax::ParsedTypeParameter],
+    local_types: &[(String, Option<ParsedType>)],
     substitution: &[(&str, &ParsedType)],
     depth: usize,
 ) -> bool {
@@ -320,12 +344,18 @@ fn annotation_excludes(
                 if let Some((_, argument)) =
                     substitution.iter().find(|(parameter, _)| *parameter == named.name)
                 {
-                    return annotation_excludes(argument, ctx, local_type_parameters, &[], depth + 1);
+                    return annotation_excludes(argument, ctx, local_type_parameters, local_types, &[], depth + 1);
                 }
                 if local_type_parameters.iter().any(|parameter| parameter.name == named.name)
                     || ctx.type_parameter_in_scope(&named.name)
                 {
                     return true;
+                }
+                if let Some((_, local)) = local_types.iter().find(|(name, _)| *name == named.name) {
+                    return match local {
+                        Some(body) => annotation_excludes(body, ctx, local_type_parameters, local_types, &[], depth + 1),
+                        None => true,
+                    };
                 }
             }
             let declaration = ctx
@@ -344,13 +374,13 @@ fn annotation_excludes(
                         .map(|parameter| parameter.name.as_str())
                         .zip(named.type_arguments.iter())
                         .collect();
-                    annotation_excludes(&alias.body.ty, ctx, local_type_parameters, &inner, depth + 1)
+                    annotation_excludes(&alias.body.ty, ctx, local_type_parameters, &[], &inner, depth + 1)
                 }
                 None => false,
             }
         }
         ParsedType::Union(members) => members.iter().all(|member| {
-            annotation_excludes(member, ctx, local_type_parameters, substitution, depth)
+            annotation_excludes(member, ctx, local_type_parameters, local_types, substitution, depth)
         }),
         other => is_plainly_defined(other),
     }
@@ -382,7 +412,9 @@ pub(crate) fn annotation_constraint_substitutes(
 
 pub(crate) fn is_plainly_defined(annotation: &ParsedType) -> bool {
     match annotation {
-        ParsedType::String
+        // `null` is not `undefined`: `containsUndefinedType` does not see it.
+        ParsedType::Null
+        | ParsedType::String
         | ParsedType::Number
         | ParsedType::Boolean
         | ParsedType::BigInt

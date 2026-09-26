@@ -130,6 +130,14 @@ pub(crate) fn emit_array_binding_pattern_diagnostics(
             emit_array_binding_element_diagnostic(element, ctx);
         }
     }
+    // A rest element is a binding element too, with no initializer to type it
+    // — except as the whole pattern, which `getTypeFromArrayBindingPattern`
+    // types `Iterable<any>` without looking at it.
+    if let Some(rest) = &pattern.rest
+        && !pattern.elements.is_empty()
+    {
+        emit_array_binding_element_diagnostic(rest, ctx);
+    }
 }
 
 /// A parameter's array literal initializer contextually typed by its binding
@@ -391,14 +399,17 @@ pub(crate) fn check_annotated_binding_pattern_reads(
 }
 
 /// Evaluates the defaults a destructuring pattern writes (`{ c = fallback }`)
-/// in the scope the pattern binds into, for their own diagnostics. Where the
-/// bound type is known this is tsc's `checkBindingElement`: the initializer of
-/// `{ a = value }` is contextually typed by, and has to be assignable to, the
-/// type the pattern reads at that position.
+/// in the scope the pattern binds into, for their own diagnostics. The bound
+/// type contextually types each default; only a pattern whose root is
+/// annotated also relates the default to it — tsc's
+/// `getBindingElementTypeFromParentType` types an element of an unannotated
+/// pattern as the union of the read and the default, which the default always
+/// satisfies.
 pub(crate) fn check_binding_pattern_defaults(
     binding: &ParsedBindingName,
     bound_type: Option<&Type>,
-    scopes: &ScopeStack,
+    annotated: bool,
+    symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
     match binding {
@@ -441,46 +452,91 @@ pub(crate) fn check_binding_pattern_defaults(
                 if let Some(default_value) = element.default_value.as_deref() {
                     check_binding_element_default(
                         default_value,
-                        element,
+                        element.default_span,
+                        element.span.or(element.default_span),
                         element_type.as_ref(),
-                        scopes,
+                        annotated,
+                        symbols,
                         ctx,
                     );
                 }
                 check_binding_pattern_defaults(
                     &element.binding_name,
                     element_type.as_ref(),
-                    scopes,
+                    annotated,
+                    symbols,
                     ctx,
                 );
             }
         }
         ParsedBindingName::ArrayPattern(pattern) => {
-            for element in pattern.elements.iter().flatten() {
-                check_binding_pattern_defaults(element, None, scopes, ctx);
+            for (index, element) in pattern.elements.iter().enumerate() {
+                let Some(element) = element else {
+                    continue;
+                };
+                let element_type = bound_type
+                    .and_then(|ty| array_pattern_read_type(ty, index))
+                    .map(|ty| surge_ts_types::remove_undefined(&ty));
+                if let Some(Some((default_value, default_span))) = pattern.default_values.get(index) {
+                    check_binding_element_default(
+                        default_value,
+                        *default_span,
+                        binding_name_span(element).or(*default_span),
+                        element_type.as_ref(),
+                        annotated,
+                        symbols,
+                        ctx,
+                    );
+                }
+                check_binding_pattern_defaults(element, element_type.as_ref(), annotated, symbols, ctx);
             }
         }
         ParsedBindingName::Identifier { .. } | ParsedBindingName::Unsupported { .. } => {}
     }
 }
 
+/// The type an array pattern reads at `index`, where surge knows it exactly:
+/// a fixed tuple's element within its length, or an array's element.
+fn array_pattern_read_type(source: &Type, index: usize) -> Option<Type> {
+    match source {
+        Type::Tuple(elements) => elements.get(index).cloned(),
+        Type::Array(element) => Some((**element).clone()),
+        _ => None,
+    }
+}
+
+fn binding_name_span(binding: &ParsedBindingName) -> Option<surge_ts_syntax::TextSpan> {
+    match binding {
+        ParsedBindingName::Identifier { span, .. } | ParsedBindingName::Unsupported { span } => *span,
+        ParsedBindingName::ObjectPattern(pattern) => pattern.span,
+        ParsedBindingName::ArrayPattern(pattern) => pattern.span,
+    }
+}
+
 fn check_binding_element_default(
     default_value: &surge_ts_syntax::ParsedExpression,
-    element: &ParsedObjectBindingElement,
+    default_span: Option<surge_ts_syntax::TextSpan>,
+    element_span: Option<surge_ts_syntax::TextSpan>,
     element_type: Option<&Type>,
-    scopes: &ScopeStack,
+    annotated: bool,
+    symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
     let diagnostics_before = ctx.diagnostics().len();
     let default_type = crate::checks::expected::evaluate_expression_with_expected_type(
         default_value,
-        element.default_span,
+        default_span,
         element_type,
-        crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,
-        scopes.visible_symbols(),
+        if annotated {
+            crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable
+        } else {
+            crate::checks::expected::ExpectedTypeDiagnostic::ContextOnly
+        },
+        symbols,
         ctx,
     );
-    let Some(element_type) = element_type.filter(|ty| !matches!(ty, Type::Any) && !ty.is_unknown())
+    let Some(element_type) = element_type
+        .filter(|ty| annotated && !matches!(ty, Type::Any) && !ty.is_unknown())
     else {
         return;
     };
@@ -504,7 +560,7 @@ fn check_binding_element_default(
                 &reported_target.name(),
                 ctx.file_name.clone(),
             ),
-            element.span.or(element.default_span),
+            element_span,
         ));
     }
 }
@@ -530,6 +586,24 @@ pub(crate) fn insert_parameter_bindings(
                 function_signature: None,
             },
             parameter_type.clone(),
+        );
+        return;
+    }
+    // A parameter written `unknown` records the keyword as its declaration,
+    // which is how a read of it tells the type from an inference gap.
+    if let ParsedBindingName::Identifier { name, .. } = &parameter.binding_name
+        && matches!(parameter.declared_type, Some(surge_ts_syntax::ParsedType::UnknownKeyword))
+        && matches!(scope_type, Type::GenuineUnknown)
+    {
+        scopes.record_tuple_destructure(name, None);
+        let _ = scopes.insert_current_declared(
+            name.as_str(),
+            SymbolInfo {
+                ty: scope_type,
+                kind: SymbolKind::Parameter,
+                function_signature: None,
+            },
+            Type::GenuineUnknown,
         );
         return;
     }
@@ -659,9 +733,11 @@ pub(crate) fn object_rest_type(source: &Type, omitted: &[String]) -> Type {
                 .collect(),
         ),
         Type::Object(object) => {
+            // `getRestType` keeps only spreadable members: no private name.
             let properties: surge_ts_types::PropertyMap = object
                 .properties
                 .iter()
+                .filter(|(name, _)| !surge_ts_types::private_name::is_private_name_key(name))
                 .filter(|(name, _)| !omitted.iter().any(|omitted| omitted.as_str() == name.as_ref()))
                 .map(|(name, property)| (name.clone(), property.clone()))
                 .collect();
@@ -2195,14 +2271,13 @@ pub(crate) fn enter_body_type_variables(
     with_type_parameter_scope(type_parameters, ctx, |ctx| {
         for parameter in type_parameters {
             if let Some(constraint) = parameter.constraint.clone() {
-                let constraint = crate::infer::map_parsed_type(constraint, ctx);
-                if constraint.is_unmodelled()
-                    || matches!(constraint, Type::ErrorType)
-                    || crate::checks::assign::type_contains_unknown(&constraint)
-                {
-                    unmodelled.push(parameter.name.as_str());
-                } else {
-                    scope.set_constraint(&parameter.name, constraint);
+                // A gap nested in the constraint (an overload group folded to
+                // the sentinel) only widens what reads through it; the
+                // variable is still a type of its own.
+                match crate::infer::map_parsed_type(constraint, ctx) {
+                    Type::GenuineUnknown => {}
+                    constraint if constraint.is_unmodelled() => unmodelled.push(parameter.name.as_str()),
+                    constraint => scope.set_constraint(&parameter.name, constraint),
                 }
             }
         }
@@ -2418,7 +2493,8 @@ pub(crate) fn check_function_body_with_signature_and_this(
             check_binding_pattern_defaults(
                 &parameter.binding_name,
                 Some(parameter_type),
-                &scopes,
+                parameter.declared_type.is_some(),
+                scopes.visible_symbols(),
                 ctx,
             );
         }

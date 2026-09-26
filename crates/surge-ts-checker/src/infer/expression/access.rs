@@ -346,6 +346,9 @@ pub(crate) fn infer_property_access(
         || match &object_type {
             Type::Any => InferredExpression::Known(Type::Any),
             Type::ErrorType => InferredExpression::Known(Type::ErrorType),
+            Type::TypeParameter(parameter) if object_type.is_type_variable() => {
+                type_variable_member(parameter, &object_type, property_name, *property_span)
+            }
             Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
                 InferredExpression::Unknown
             }
@@ -1203,5 +1206,59 @@ pub(crate) fn optional_chain_can_short_circuit(object_type: &Type) -> bool {
             .iter()
             .any(|member| matches!(member, Type::Undefined | Type::Null | Type::Void)),
         _ => false,
+    }
+}
+
+/// A member of a type variable of the body being checked, read off its
+/// apparent type (`getApparentType`): the constraint, or `{}` without one. A
+/// constraint surge did not model whole answers only what it has.
+fn type_variable_member(
+    parameter: &surge_ts_types::TypeParameterType,
+    variable: &Type,
+    property_name: &str,
+    property_span: Option<TextSpan>,
+) -> InferredExpression {
+    const OBJECT_MEMBERS: &[&str] = &[
+        "constructor",
+        "toString",
+        "toLocaleString",
+        "valueOf",
+        "hasOwnProperty",
+        "isPrototypeOf",
+        "propertyIsEnumerable",
+    ];
+    let Some(constraint) = surge_ts_types::type_variable::active_constraint(parameter) else {
+        return InferredExpression::Unknown;
+    };
+    let missing = || InferredExpression::MissingProperty {
+        property_name: property_name.to_string(),
+        object_type: variable.clone(),
+        span: property_span,
+    };
+    let Some(constraint) = constraint else {
+        return if OBJECT_MEMBERS.contains(&property_name) { InferredExpression::Unknown } else { missing() };
+    };
+    // A reference typed by a variable with a union constraint is narrowed as
+    // that union where its members are read (tsgo's
+    // `getNarrowableTypeForReference`), which surge does not do: whatever a
+    // constituent declares may be exactly what a narrowing selected, or split
+    // by a dependent destructuring surge cannot follow through the variable.
+    if let Type::Union(union) = &constraint
+        && union
+            .types()
+            .iter()
+            .any(|member| member.get_property_access_type(property_name).is_some())
+    {
+        return InferredExpression::Unknown;
+    }
+    match constraint.get_property_access_type(property_name) {
+        Some(member) => InferredExpression::Known(member),
+        None if !constraint.is_unknown()
+            && !OBJECT_MEMBERS.contains(&property_name)
+            && !crate::checks::function::type_contains_degradation(&constraint) =>
+        {
+            missing()
+        }
+        None => InferredExpression::Unknown,
     }
 }

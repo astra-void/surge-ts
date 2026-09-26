@@ -37,12 +37,24 @@ pub(crate) fn instantiate_function_type<'a>(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Cow<'a, FunctionType> {
+    // A signature the call site knows no generic declaration for (a
+    // parameter's or a variable's annotation) may carry its own, which
+    // explicit type arguments instantiate. Inference through it is left out:
+    // without the call's contextual return it binds too little.
+    let own = (!type_arguments.is_empty()).then(|| own_generic_declaration(function_type)).flatten();
+    let (function_signature, outer_type_arguments) = match (function_signature, own) {
+        (Some(signature), _) if !signature.type_parameters.is_empty() => (Some(signature), outer_type_arguments),
+        (_, Some((signature, outer))) => (Some(signature), outer),
+        (signature, None) => (signature, outer_type_arguments),
+    };
     let Some(function_signature) = function_signature else {
-        return Cow::Borrowed(function_type);
+        return instantiate_written_type_parameters(function_type, type_arguments, symbols, ctx)
+            .map_or(Cow::Borrowed(function_type), Cow::Owned);
     };
 
     if function_signature.type_parameters.is_empty() {
-        return Cow::Borrowed(function_type);
+        return instantiate_written_type_parameters(function_type, type_arguments, symbols, ctx)
+            .map_or(Cow::Borrowed(function_type), Cow::Owned);
     }
 
     record_generic_call_inference_attempt();
@@ -482,6 +494,53 @@ fn with_declaring_scope<R>(
         ctx.set_file_name(saved);
     }
     resolved
+}
+
+/// The generic declaration a signature's handle carries. An overload fold's
+/// is only its first member's.
+fn own_generic_declaration(function_type: &FunctionType) -> Option<(&FunctionSignatureInfo, &[(String, Type)])> {
+    if function_type.overloads().is_some() {
+        return None;
+    }
+    let declaration = function_type.declaration()?;
+    if let Some(member) = declaration.downcast_ref::<DeclaredMemberSignature>() {
+        return (!member.signature.type_parameters.is_empty())
+            .then(|| (&*member.signature, member.outer_type_arguments.as_slice()));
+    }
+    declaration
+        .downcast_ref::<FunctionSignatureInfo>()
+        .filter(|signature| !signature.type_parameters.is_empty())
+        .map(|signature| (signature, &[][..]))
+}
+
+/// Explicit type arguments on a signature known only by its type (a
+/// parameter's or a variable's annotation): its own type-parameter names,
+/// read off the rendered head when that is a plain list, take the arguments.
+fn instantiate_written_type_parameters(
+    function_type: &FunctionType,
+    type_arguments: &[ParsedType],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<FunctionType> {
+    if type_arguments.is_empty() || function_type.declaration().is_some() {
+        return None;
+    }
+    let names: Vec<String> =
+        function_type.type_parameter_head()?.split(',').map(|name| name.trim().to_string()).collect();
+    let plain = |name: &String| {
+        !name.is_empty() && name.chars().all(|character| character.is_alphanumeric() || matches!(character, '_' | '$'))
+    };
+    if names.len() != type_arguments.len() || !names.iter().all(plain) {
+        return None;
+    }
+    let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+    let resolved: Vec<Type> =
+        type_arguments.iter().map(|argument| crate::infer::map_parsed_type(argument.clone(), ctx)).collect();
+    ctx.symbols = saved_symbols;
+    if resolved.iter().any(type_argument_is_unresolved) {
+        return None;
+    }
+    Some(surge_ts_types::instantiate_named_type_parameters(function_type, &names, &resolved))
 }
 
 pub(crate) fn instantiate_function_type_with_substitution<'a>(
@@ -1270,7 +1329,9 @@ fn enforce_inferred_constraints(
         let Some(candidate) = substitution.get(&type_parameter.name).cloned() else {
             continue;
         };
-        if !constraint_operand_is_settled(&candidate) {
+        // An object candidate can still be judged by the members it lacks.
+        let candidate_settled = constraint_operand_is_settled(&candidate);
+        if !candidate_settled && !matches!(candidate.peeled(), Type::Object(_)) {
             continue;
         }
         let resolved = with_declaring_scope(function_signature, ctx, |ctx| {
@@ -1289,12 +1350,22 @@ fn enforce_inferred_constraints(
         // `T extends HasLen`) is judged by the constraint's own shape: the
         // argument check reads that shape anyway, and a primitive seldom meets
         // a named constraint, so peeling it expands nothing a call would not.
-        let settled_constraint = if constraint_operand_is_settled(&resolved) {
+        let settled_constraint = if lacks_required_member(&candidate, &resolved.peeled()) {
+            Some(resolved.clone())
+        } else if !candidate_settled {
+            None
+        } else if constraint_operand_is_settled(&resolved) {
             Some(resolved.clone())
         } else if matches!(resolved, Type::Reference(_))
             && candidate_is_primitive(&candidate)
             && constraint_operand_is_settled(&resolved.peeled())
         {
+            Some(resolved.clone())
+        } else if matches!(candidate, Type::Undefined | Type::Null)
+            && matches!(resolved, Type::Reference(_) | Type::Object(_) | Type::Function(_))
+        {
+            // No object or signature shape admits `undefined`/`null` where
+            // they are not everywhere assignable, whatever its members.
             Some(resolved.clone())
         } else {
             None
@@ -1309,6 +1380,26 @@ fn enforce_inferred_constraints(
         }
         substitution.set(type_parameter.name.clone(), resolved, false);
     }
+}
+
+/// An object candidate without a member the constraint requires fails it
+/// whatever that member's type, so the constraint's members need not be
+/// settled for the verdict. A candidate with `any` members is the stand-in
+/// surge builds for a value it did not model (a class merged with a
+/// namespace), which says nothing about what the value lacks.
+fn lacks_required_member(candidate: &Type, constraint: &Type) -> bool {
+    let (Type::Object(candidate), Type::Object(constraint)) = (candidate.peeled(), constraint) else {
+        return false;
+    };
+    candidate.string_index_type.is_none()
+        && !candidate.synthetic_open_index
+        && candidate.call_signature.is_none()
+        && candidate.construct_signature.is_none()
+        && !candidate.properties.values().any(|property| matches!(property.ty, Type::Any))
+        && constraint
+            .properties
+            .iter()
+            .any(|(name, property)| !property.optional && !candidate.properties.contains_key(name))
 }
 
 fn candidate_is_primitive(ty: &Type) -> bool {

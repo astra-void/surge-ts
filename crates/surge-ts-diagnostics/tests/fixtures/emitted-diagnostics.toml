@@ -414,6 +414,13 @@ span_tests = [
   "crates/surge-ts-checker/tests/program.rs",
 ]
 
+[TS2303]
+status = "emitted"
+oracle = [
+  "alias-resolution-basic",
+]
+
+
 [TS2717]
 status = "emitted"
 fixtures = [
@@ -681,6 +688,13 @@ span_tests = [
   "crates/surge-ts-checker/tests/spans.rs",
   "crates/surge-ts-checker/tests/program.rs",
 ]
+
+[TS2714]
+status = "emitted"
+oracle = [
+  "declaration-file-ambient-grammar",
+]
+
 
 [TS2454]
 status = "emitted"
@@ -1307,8 +1321,10 @@ status = "catalog-only"
 reason = "Cataloged for future coverage"
 
 [TS7060]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "node16-module-format-checks",
+]
 
 [TS7061]
 status = "emitted"
@@ -1621,8 +1637,10 @@ oracle = [
 ]
 
 [TS18011]
-status = "catalog-only"
-reason = "A private field is not parsed, so `delete this.#x` never reaches the operand rules; the shape rule deliberately stays silent on an operand surge did not model"
+status = "emitted"
+oracle = [
+  "private-name-diagnostics",
+]
 
 [TS2358]
 status = "emitted"
@@ -3474,12 +3492,16 @@ oracle = [
 ]
 
 [TS18013]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "private-name-diagnostics",
+]
 
 [TS2560]
-status = "catalog-only"
-reason = "Cataloged for future coverage"
+status = "emitted"
+oracle = [
+  "weak-type-relations",
+]
 
 [TS2737]
 status = "catalog-only"
@@ -4600,3 +4622,159 @@ status = "emitted"
 oracle = [
   "isolated-declarations",
 ]
+
+[TS18014]
+status = "emitted"
+oracle = [
+  "private-name-diagnostics",
+]
+
+[TS2559]
+status = "emitted"
+oracle = [
+  "weak-type-relations",
+]
+
+[TS2720]
+status = "emitted"
+oracle = [
+  "weak-type-relations",
+]
+
+[TS1471]
+status = "emitted"
+oracle = [
+  "node16-module-format-checks",
+]
+
+[TS1479]
+status = "emitted"
+oracle = [
+  "node16-module-format-checks",
+]
+
+[TS1541]
+status = "emitted"
+oracle = [
+  "node16-module-format-checks",
+]
+
+[TS1309]
+status = "emitted"
+oracle = [
+  "node16-module-format-checks",
+]
+
+[TS1470]
+status = "emitted"
+oracle = [
+  "node16-module-format-checks",
+]
+
+[TS8024]
+status = "emitted"
+oracle = [
+  "jsdoc-tag-shape-checks",
+]
+
+[TS8030]
+status = "emitted"
+oracle = [
+  "jsdoc-tag-shape-checks",
+]
+
+[TS8032]
+status = "emitted"
+oracle = [
+  "jsdoc-tag-shape-checks",
+]
+
+[TS8033]
+status = "emitted"
+oracle = [
+  "jsdoc-tag-shape-checks",
+]
+
+[TS8039]
+status = "emitted"
+oracle = [
+  "jsdoc-tag-shape-checks",
+]
+
+[TS1069]
+status = "emitted"
+oracle = [
+  "jsdoc-tag-shape-checks",
+]
+
+[TS1325]
+status = "emitted"
+oracle = [
+  "import-call-argument-checks",
+]
+
+[TS1326]
+status = "emitted"
+oracle = [
+  "import-call-argument-checks",
+]
+
+[TS7036]
+status = "emitted"
+oracle = [
+  "import-call-argument-checks",
+]
+
+[TS1286]
+status = "emitted"
+oracle = [
+  "verbatim-module-syntax-commonjs",
+]
+
+[TS1287]
+status = "emitted"
+oracle = [
+  "verbatim-module-syntax-commonjs",
+]
+
+[TS1295]
+status = "emitted"
+oracle = [
+  "verbatim-module-syntax-commonjs",
+]
+
+[TS1324]
+status = "emitted"
+oracle = [
+  "import-call-module-options",
+]
+
+[TS2743]
+status = "emitted"
+oracle = [
+  "jsx-factory-and-type-argument-arity",
+]
+
+[TS2874]
+status = "emitted"
+oracle = [
+  "jsx-factory-and-type-argument-arity",
+]
+
+[TS2879]
+status = "emitted"
+oracle = [
+  "jsx-factory-and-type-argument-arity",
+]
+
+[TS18019]
+status = "catalog-only"
+reason = "The modifier walker computes it for `declare`/`abstract` on a private-named member, but oxc rejects those members first, so no preset reaches it yet (checked 2026-09-26)."
+
+[TS2712]
+status = "catalog-only"
+reason = "Emitted for a dynamic import under a lib without `Promise`, where tsgo also reports the global TS2468 that surge does not, so no preset matches yet (checked 2026-09-26)."
+
+[TS2858]
+status = "catalog-only"
+reason = "Emitted for a literal non-string import attribute value, where tsgo also reports the attribute object's TS2322 that surge does not, so no preset matches yet (checked 2026-09-26)."

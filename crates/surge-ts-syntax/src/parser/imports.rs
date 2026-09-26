@@ -70,6 +70,7 @@ fn parse_import_declaration_parts(
             module_specifier_span: Some(text_span_from_oxc_span(declaration.source.span)),
             span: Some(text_span_from_oxc_span(declaration.span)),
             resolution_mode: None,
+            inline_type_specifiers: false,
         };
         let default_name = default.local.name.to_string();
         let default_span = Some(text_span_from_oxc_span(default.local.span));
@@ -120,6 +121,7 @@ fn parse_import_declaration_parts(
             module_specifier_span: Some(text_span_from_oxc_span(declaration.source.span)),
             span: Some(text_span_from_oxc_span(declaration.span)),
             resolution_mode: None,
+            inline_type_specifiers: true,
         });
     }
     Some(parsed)
@@ -139,6 +141,7 @@ fn parse_import_declaration(
             module_specifier_span,
             span,
             resolution_mode: None,
+            inline_type_specifiers: false,
         });
     };
 
@@ -160,6 +163,7 @@ fn parse_import_declaration(
                         module_specifier_span,
                         span,
                         resolution_mode: None,
+                        inline_type_specifiers: false,
                     });
                 };
 
@@ -173,6 +177,7 @@ fn parse_import_declaration(
                         module_specifier_span,
                         span,
                         resolution_mode: None,
+                        inline_type_specifiers: false,
                     });
                 }
 
@@ -192,6 +197,7 @@ fn parse_import_declaration(
                         module_specifier_span,
                         span,
                         resolution_mode: None,
+                        inline_type_specifiers: false,
                     });
                 }
 
@@ -221,6 +227,7 @@ fn parse_import_declaration(
             module_specifier_span,
             span,
             resolution_mode: None,
+            inline_type_specifiers: false,
         });
     }
 
@@ -245,6 +252,7 @@ fn parse_import_declaration(
                 module_specifier_span,
                 span,
                 resolution_mode: None,
+                inline_type_specifiers: false,
             });
         }
 
@@ -254,6 +262,7 @@ fn parse_import_declaration(
             module_specifier_span,
             span,
             resolution_mode: None,
+            inline_type_specifiers: false,
         });
     }
 
@@ -277,6 +286,7 @@ fn parse_import_declaration(
             module_specifier_span,
             span,
             resolution_mode: None,
+            inline_type_specifiers: false,
         });
     }
 
@@ -289,6 +299,7 @@ fn parse_import_declaration(
         module_specifier_span,
         span,
         resolution_mode: None,
+        inline_type_specifiers: false,
     })
 }
 
@@ -314,6 +325,7 @@ pub(crate) fn parse_import_equals_declaration(
             module_specifier_span: span,
             span,
             resolution_mode: None,
+            inline_type_specifiers: false,
         });
     };
 
@@ -330,6 +342,7 @@ pub(crate) fn parse_import_equals_declaration(
         module_specifier_span,
         span,
         resolution_mode: None,
+        inline_type_specifiers: false,
     })
 }
 

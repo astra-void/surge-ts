@@ -699,6 +699,21 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 }
             }
             Kind::LParen => self.parse_import_expression(span, None),
+            // surge: TS1326 — tsc parses type arguments on `import` and its
+            // checker rejects the call (`checkGrammarImportCallExpression`)
+            // without checking them, so their own errors (an empty list's
+            // TS1099) are dropped with them.
+            Kind::LAngle if self.is_ts => {
+                let errors = self.errors.len();
+                let type_arguments = self.parse_type_arguments_in_expression();
+                self.errors.truncate(errors);
+                if type_arguments.is_none() || !self.at(Kind::LParen) {
+                    return self.unexpected();
+                }
+                let expression = self.parse_import_expression(span, None);
+                self.error(diagnostics::import_type_arguments(expression.span()));
+                expression
+            }
             _ => self.unexpected(),
         }
     }
@@ -1224,6 +1239,13 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // [+In] PrivateIdentifier in ShiftExpression[?Yield, ?Await]
         let lhs = if self.ctx.has_in() && self.at(Kind::PrivateIdentifier) {
             self.parse_private_in_expression(lhs_span, lhs_precedence)
+        } else if self.at(Kind::PrivateIdentifier) {
+            // surge: tsc parses a bare `#x` as a primary expression wherever it
+            // appears (a `for (#x in o)` head included) and leaves its placement
+            // to the checker; keep the file with the same placeholder operand.
+            let left = self.parse_private_identifier();
+            let right = self.ast.expression_null_literal(Span::empty(left.span.end));
+            self.ast.expression_private_in(self.end_span(lhs_span), left, right)
         } else {
             let has_pure_comment =
                 self.lexer.trivia_builder.previous_token_has_pure_comment().is_some();

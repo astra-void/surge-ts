@@ -116,6 +116,7 @@ fn nested_vars(
                             initializer: None,
                             initializer_span: None,
                             declaration_list: None,
+                            annotated_pattern: None,
                         },
                     )));
                 }
@@ -392,9 +393,10 @@ fn report_duplicate_export_specifiers(
     exported_declarations: &HashMap<&str, ExportedDeclaration>,
     ctx: &mut CheckerContext,
 ) {
+    // tsc's binder words a second `default` as TS2528, which it reports itself.
     let mut duplicated: Vec<&&str> = specifiers_by_exported_name
         .keys()
-        .filter(|name| specifiers_by_exported_name[**name].len() > 1)
+        .filter(|name| **name != "default" && specifiers_by_exported_name[**name].len() > 1)
         .collect();
     duplicated.sort_unstable();
     for exported_name in duplicated {
@@ -802,6 +804,15 @@ pub(crate) fn resolve_module_export_table(
                 resolution_mode,
                 ..
             } => {
+                report_synchronous_import_of_esm(
+                    module_specifier,
+                    *module_specifier_span,
+                    ModuleImportSyntax::Other,
+                    ParsedResolutionModeAttribute::resolution_override(*resolution_mode),
+                    resolution_mode.is_some(),
+                    parsed_files,
+                    ctx,
+                );
                 let Some((target_export_table, resolved_index)) =
                     try_resolve_module_export_table_in_mode(
                         module_specifier,
@@ -1124,6 +1135,15 @@ pub(crate) fn resolve_module_export_table(
                 module_specifier_span,
                 ..
             } => {
+                report_synchronous_import_of_esm(
+                    module_specifier,
+                    *module_specifier_span,
+                    ModuleImportSyntax::Other,
+                    None,
+                    false,
+                    parsed_files,
+                    ctx,
+                );
                 let Some((target_export_table, resolved_index)) = try_resolve_module_export_table(
                     module_specifier,
                     ctx,
@@ -1275,6 +1295,15 @@ pub(crate) fn resolve_module_export_table(
         else {
             continue;
         };
+        report_synchronous_import_of_esm(
+            module_specifier,
+            *module_specifier_span,
+            ModuleImportSyntax::Other,
+            ParsedResolutionModeAttribute::resolution_override(*resolution_mode),
+            resolution_mode.is_some(),
+            parsed_files,
+            ctx,
+        );
 
         let Some((target_export_table, _resolved_index)) = try_resolve_module_export_table_in_mode(
             module_specifier,

@@ -12,11 +12,13 @@ use oxc_syntax::scope::ScopeFlags;
 use super::spans::text_span_from_oxc_span;
 use crate::{ParsedGrammarDiagnostic, ParsedGrammarDiagnosticKind as Kind};
 
+/// `ambient`: the whole file is (a declaration file).
 pub(crate) fn collect_recovered_grammar_diagnostics(
     program: &Program<'_>,
+    ambient: bool,
     out: &mut Vec<ParsedGrammarDiagnostic>,
 ) {
-    let mut collector = RecoveredCollector { source_text: program.source_text, ambient_depth: 0, out };
+    let mut collector = RecoveredCollector { source_text: program.source_text, ambient_depth: usize::from(ambient), out };
     collector.visit_program(program);
 }
 

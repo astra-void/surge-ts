@@ -557,6 +557,15 @@ pub(crate) fn check_property_call_like(
             // contextually types.
             failed @ (crate::infer::InferredExpression::MissingProperty { .. }
             | crate::infer::InferredExpression::UnresolvedIdentifier { .. }) => {
+                if surge_ts_types::private_name::is_private_name_key(property_name) {
+                    let _ = crate::checks::expr::check_private_name_access(
+                        crate::checks::expr::PrivateNameReceiver::Error,
+                        property_name,
+                        property_span,
+                        symbols,
+                        ctx,
+                    );
+                }
                 evaluate_arguments_on_error_type(arguments, symbols, ctx);
                 return failed.flowing_type();
             }
@@ -565,6 +574,19 @@ pub(crate) fn check_property_call_like(
                 return None;
             }
         };
+
+    if surge_ts_types::private_name::is_private_name_key(property_name)
+        && let Some(ty) = crate::checks::expr::check_private_name_access(
+            crate::checks::expr::PrivateNameReceiver::Type(&object_ty),
+            property_name,
+            property_span,
+            symbols,
+            ctx,
+        )
+    {
+        evaluate_arguments_on_error_type(arguments, symbols, ctx);
+        return Some(ty);
+    }
 
     crate::checks::expr::check_member_accessibility(
         object,
@@ -767,7 +789,7 @@ pub(crate) fn check_property_call_like(
                     crate::spans::choose_span(property_span, object_span),
                 ));
                 check_error_call_operands(type_arguments, arguments, symbols, ctx);
-                return None;
+                return Some(Type::ErrorType);
             }
             if let Some(callee) = union_receiver_callee(&union_type, property_name) {
                 return super::check_callable_union_call(
@@ -851,12 +873,22 @@ pub(crate) fn check_property_call_like(
                         crate::spans::choose_span(property_span, object_span),
                     ));
                     check_error_call_operands(type_arguments, arguments, symbols, ctx);
-                    return None;
+                    return Some(Type::ErrorType);
                 };
 
                 let declared_member = property_type.clone();
                 match callable_property_signature(property_type) {
                     Type::Function(function_type) => {
+                        if super::report_type_argument_arity(
+                            &Type::Function(function_type.clone()),
+                            type_arguments,
+                            super::type_arguments_start(property_span),
+                            false,
+                            ctx,
+                        ) {
+                            evaluate_arguments_context_free(object, arguments, symbols, ctx);
+                            return None;
+                        }
                         let function_type = instantiate_declared_member_signature(
                             &function_type,
                             Some(&declared_member),
@@ -981,7 +1013,7 @@ pub(crate) fn check_property_call_like(
                     crate::spans::choose_span(property_span, object_span),
                 ));
                 check_error_call_operands(type_arguments, arguments, symbols, ctx);
-                return None;
+                return Some(Type::ErrorType);
             };
 
             // A generic namespace member is published under a qualified
@@ -1010,6 +1042,16 @@ pub(crate) fn check_property_call_like(
             let declared_member = property_type.clone();
             match callable_property_signature(property_type) {
                 Type::Function(function_type) => {
+                    if super::report_type_argument_arity(
+                        &Type::Function(function_type.clone()),
+                        type_arguments,
+                        super::type_arguments_start(property_span),
+                        false,
+                        ctx,
+                    ) {
+                        evaluate_arguments_context_free(object, arguments, symbols, ctx);
+                        return None;
+                    }
                     let function_type = instantiate_declared_member_signature(
                         &function_type,
                         Some(&declared_member),
@@ -1425,6 +1467,16 @@ pub(crate) fn check_optional_property_call(
                 let declared_member = property_type_base.clone();
                 match callable_property_signature(property_type_base) {
                     Type::Function(function_type) => {
+                        if super::report_type_argument_arity(
+                            &Type::Function(function_type.clone()),
+                            type_arguments,
+                            super::type_arguments_start(property_span),
+                            false,
+                            ctx,
+                        ) {
+                            evaluate_arguments_context_free(object, arguments, symbols, ctx);
+                            return None;
+                        }
                         let function_type = instantiate_declared_member_signature(
                             &function_type,
                             Some(&declared_member),
@@ -1541,7 +1593,7 @@ pub(crate) fn check_optional_property_call(
                     crate::spans::choose_span(property_span, object_span),
                 ));
                 check_error_call_operands(type_arguments, arguments, symbols, ctx);
-                return None;
+                return Some(Type::ErrorType);
             };
 
             let property_type_base = surge_ts_types::remove_nullish(&property_type);
@@ -1549,6 +1601,16 @@ pub(crate) fn check_optional_property_call(
             let declared_member = property_type_base.clone();
             match callable_property_signature(property_type_base) {
                 Type::Function(function_type) => {
+                    if super::report_type_argument_arity(
+                        &Type::Function(function_type.clone()),
+                        type_arguments,
+                        super::type_arguments_start(property_span),
+                        false,
+                        ctx,
+                    ) {
+                        evaluate_arguments_context_free(object, arguments, symbols, ctx);
+                        return None;
+                    }
                     let function_type = instantiate_declared_member_signature(
                         &function_type,
                         Some(&declared_member),

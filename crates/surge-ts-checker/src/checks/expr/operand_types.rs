@@ -231,6 +231,17 @@ pub(crate) fn is_definitely_not_iterable(ty: &Type, nullish_is_error: bool) -> b
             .types()
             .iter()
             .any(|member| is_definitely_not_iterable(member, nullish_is_error)),
+        // An intersection has every operand's members: one iterable operand
+        // (`T & any[]` under `Array.isArray`) makes it iterable.
+        Type::Object(_) if surge_ts_types::type_variable::is_narrowed_type_variable(ty) => {
+            let Type::Object(object) = ty else { return false };
+            object
+                .intersection_operands
+                .as_deref()
+                .is_some_and(|operands| {
+                    operands.iter().all(|operand| is_definitely_not_iterable(operand, nullish_is_error))
+                })
+        }
         Type::Object(object) => {
             object
                 .get_property(surge_ts_types::ITERATION_PROTOCOL_MEMBER)

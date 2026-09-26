@@ -114,6 +114,12 @@ pub struct CheckerOptions {
     /// `noImplicitThis`: a `this` whose type is implicitly `any` is TS2683.
     pub no_implicit_this: bool,
     pub module_emit: ModuleEmitKind,
+    /// `verbatimModuleSyntax`: module syntax is emitted as written, so a file
+    /// emitted as CommonJS cannot write ECMAScript imports and exports.
+    pub verbatim_module_syntax: bool,
+    /// `isolatedModules` as written; tsgo's `GetIsolatedModules` counts
+    /// `verbatimModuleSyntax` too.
+    pub isolated_modules: bool,
     /// tsgo's `GetUseDefineForClassFields`; off, a static `name`/`length`
     /// member collides with the constructor function's own (TS2699).
     pub use_define_for_class_fields: bool,
@@ -277,6 +283,8 @@ impl Default for CheckerOptions {
             no_implicit_any: false,
             no_implicit_this: false,
             module_emit: ModuleEmitKind::Preserve,
+            verbatim_module_syntax: false,
+            isolated_modules: false,
             use_define_for_class_fields: true,
             target_es2022: true,
             no_emit: false,

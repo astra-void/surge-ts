@@ -161,6 +161,8 @@ pub(crate) struct ModuleImportBindings {
     /// Local names whose import reaches a type-only export (`export type`
     /// upstream of a plain `import { A }`), with that declaration's kind.
     pub(crate) type_only_aliases: Vec<(Arc<str>, TypeOnlyAliasKind)>,
+    /// `import * as` bindings whose module's whole export list surge saw.
+    pub(crate) complete_namespace_imports: Vec<Arc<str>>,
 }
 
 impl ModuleImportBindings {
@@ -209,13 +211,16 @@ mod tests {
                     tsc_globals: None,
                     no_check: false,
                     is_module: parsed.is_module,
+                    commonjs_module: parsed.commonjs_module,
                     import_call_specifiers: parsed.import_call_specifiers,
+                    import_calls: parsed.import_calls,
                     file_kind: FileKind::RootSource,
                     module_reads: parsed.module_reads,
                 definite_writes: parsed.definite_writes,
                     comment_directives: parsed.comment_directives,
                     grammar_diagnostics: parsed.grammar_diagnostics,
                     parenthesized_expressions: parsed.parenthesized_expressions.into(),
+                    global_this_starts: parsed.global_this_starts.into(),
                     let_assignments: parsed.let_assignments.into(),
                     json_module_type: parsed.json_module_type,
                     jsx_factory_uses: parsed.jsx_factory_uses,

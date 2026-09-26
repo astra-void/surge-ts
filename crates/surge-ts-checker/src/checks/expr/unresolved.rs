@@ -25,6 +25,9 @@ pub(crate) enum UnresolvedNameSite {
     ShorthandProperty,
     /// The operand of a type query, `typeof name`.
     TypeQuery,
+    /// A name resolved at a node spelled otherwise (a JSX tag's factory), for
+    /// which `checkAndReportErrorForMissingPrefix` does not apply.
+    Implicit,
 }
 
 /// A class whose member bodies enclose the code being checked.
@@ -56,8 +59,18 @@ pub(crate) fn report_unresolved_value_name(
         site
     };
     let diagnostic = invalid_initializer_reference_diagnostic(name, span, site, symbols, ctx)
-        .unwrap_or_else(|| unresolved_value_name_diagnostic(name, site, symbols, ctx));
+        .unwrap_or_else(|| failed_value_name_diagnostic(name, site, None, symbols, ctx));
     ctx.push(diagnostic_with_syntax_span(diagnostic, span));
+}
+
+/// Whether an identifier read of `name` resolves, as the identifier
+/// inference looks it up: the scope chain, then the module's later bindings.
+pub(crate) fn resolves_value_name(name: &str, symbols: &SymbolTable, ctx: &CheckerContext) -> bool {
+    symbols.get(name).is_some()
+        || ctx
+            .module_value_fallback
+            .as_ref()
+            .is_some_and(|fallback| fallback.get(name).is_some())
 }
 
 /// tsc's `checkAndReportErrorForInvalidInitializer`, which the name resolver
@@ -107,14 +120,18 @@ pub(crate) fn unresolved_type_query_diagnostic(
     message.render(name, "", file_name)
 }
 
-fn unresolved_value_name_diagnostic(
+/// tsc's `onFailedToResolveSymbol` for a value: `not_found` is the resolver's
+/// `nameNotFoundMessage` when it has its own, which replaces only the plain
+/// "Cannot find name" reports.
+pub(crate) fn failed_value_name_diagnostic(
     name: &str,
     site: UnresolvedNameSite,
+    not_found: Option<Diagnostic>,
     symbols: &SymbolTable,
     ctx: &CheckerContext,
 ) -> Diagnostic {
     let file_name = ctx.file_name.clone();
-    if site != UnresolvedNameSite::TypeQuery
+    if !matches!(site, UnresolvedNameSite::TypeQuery | UnresolvedNameSite::Implicit)
         && let Some(diagnostic) = missing_member_prefix_diagnostic(name, symbols, ctx)
     {
         return diagnostic;
@@ -141,12 +158,12 @@ fn unresolved_value_name_diagnostic(
 
     let message = cannot_find_name_message(name, site, ctx);
     if let Some(lib) = suggested_lib_for_nonexistent_name(name) {
-        return message.render(name, lib, file_name);
+        return not_found.unwrap_or_else(|| message.render(name, lib, file_name));
     }
     if let Some(suggestion) = suggested_value_name(name, symbols, ctx) {
         return Diagnostic::ts2552(name, suggestion, file_name);
     }
-    message.render(name, "", file_name)
+    not_found.unwrap_or_else(|| message.render(name, "", file_name))
 }
 
 /// tsc's `checkAndReportErrorForMissingPrefix`: a static member of any

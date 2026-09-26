@@ -105,8 +105,9 @@ fn arbitrary_extension_declaration_on_disk(ctx: &CheckerContext, module_specifie
         .then(|| canonicalize_if_exists_string(Path::new(&declaration)))
 }
 
-/// tsc's `getSuggestedImportExtension`: the output extension of the file the
-/// extensionless path names directly (a directory's index gets none).
+/// tsc's `getSuggestedImportExtension`: the output extension of the first
+/// file on disk the extensionless path names directly (a directory's index
+/// gets none), in tsc's probe order.
 fn suggested_import_extension(ctx: &CheckerContext, module_specifier: &str) -> Option<&'static str> {
     let importer_dir = module_directory(&ctx.file_name);
     let specifier = normalize_path_string(module_specifier);
@@ -116,17 +117,20 @@ fn suggested_import_extension(ctx: &CheckerContext, module_specifier: &str) -> O
         normalize_path_string(&format!("{importer_dir}/{specifier}"))
     };
     [
-        (".ts", ".js"),
-        (".tsx", ".js"),
-        (".d.ts", ".js"),
         (".mts", ".mjs"),
+        (".ts", ".js"),
         (".cts", ".cjs"),
+        (".mjs", ".mjs"),
+        (".js", ".js"),
+        (".cjs", ".cjs"),
+        // tsc suggests `.jsx` here under `jsx: preserve`, which the options
+        // do not carry; only the message differs.
+        (".tsx", ".js"),
+        (".jsx", ".jsx"),
+        (".json", ".json"),
     ]
     .into_iter()
-    .find(|(source, _)| {
-        let identity = canonical_file_identity(&format!("{base}{source}"));
-        ctx.module_file_index_by_identity.contains_key(identity.as_str())
-    })
+    .find(|(source, _)| Path::new(&format!("{base}{source}")).is_file())
     .map(|(_, output)| output)
 }
 
@@ -189,6 +193,72 @@ fn push_untyped_javascript_module_diagnostic(
         ctx.push(diagnostic);
     }
     true
+}
+
+/// tsc's `resolveExternalModuleName` for an `import("…")` a checked file
+/// writes: a dynamic import (`checkImportCallExpression`), which resolves in
+/// ESM mode (`getEmitSyntaxForUsageLocation`), or an import type
+/// (`getTypeFromImportTypeNode`), which resolves in its file's. Reported at
+/// the literal like a declaration's specifier: unresolved, or a script
+/// (TS2306).
+pub(crate) fn report_unresolved_import_call(
+    ctx: &mut CheckerContext,
+    import_call: &surge_ts_syntax::ParsedImportCall,
+    program_files: &[ParsedProgramFile],
+) {
+    let specifier = import_call.specifier.as_str();
+    if ambient_module_export_table(ctx, specifier).is_some() {
+        return;
+    }
+    let resolution_mode = match import_call.kind {
+        surge_ts_syntax::ParsedImportCallKind::Expression => {
+            Some(surge_ts_syntax::ResolutionModeOverride::Import)
+        }
+        surge_ts_syntax::ParsedImportCallKind::Type => None,
+    };
+    // The loader resolved the specifier in the importer's mode, where an
+    // extensionless relative path can still find a file ESM mode does not.
+    let extensionless_esm = is_relative_specifier(specifier)
+        && relative_resolution_is_esm(&ctx.file_name, resolution_mode)
+        && is_extensionless_relative_specifier(specifier);
+    let resolved_index = resolved_module_in_mode(ctx, &ctx.file_name, specifier, resolution_mode)
+        .filter(|_| !extensionless_esm)
+        .and_then(|resolved| {
+            ctx.module_file_index_by_identity
+                .get(canonical_file_identity(resolved).as_str())
+                .copied()
+        })
+        .or_else(|| {
+            resolve_relative_module_in_mode(
+                &ctx.file_name,
+                specifier,
+                resolution_mode,
+                program_files,
+                &ctx.module_file_index_by_identity,
+            )
+            .map(|resolution| resolution.resolved_file_index)
+        });
+    if let Some(file) = resolved_index.and_then(|index| program_files.get(index)) {
+        if !file.is_module && file.file_kind != FileKind::DependencyDeclaration {
+            let diagnostic = Diagnostic::ts2306(&file.file_name, ctx.file_name.clone());
+            ctx.push(diagnostic.with_span(convert_span(import_call.specifier_span)));
+        }
+        return;
+    }
+    record_unresolved_external_module(ctx, specifier);
+    if ctx.options.stub_external_modules && is_external_specifier(specifier) {
+        return;
+    }
+    if push_untyped_javascript_module_diagnostic(
+        ctx,
+        specifier,
+        resolution_mode,
+        Some(import_call.specifier_span),
+    ) {
+        return;
+    }
+    let diagnostic = unresolved_module_diagnostic_in_mode(ctx, specifier, resolution_mode);
+    ctx.push(diagnostic.with_span(convert_span(import_call.specifier_span)));
 }
 
 /// The unresolved-module diagnostic for a specifier the program never

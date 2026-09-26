@@ -135,6 +135,10 @@ pub(crate) fn infer_object_literal(
                 Type::Object(source) => {
                     spread_source_is_open |= source.synthetic_open_index;
                     for (name, source_property) in source.properties.iter() {
+                        // `isSpreadableProperty`: a private name stays behind.
+                        if surge_ts_types::private_name::is_private_name_key(name) {
+                            continue;
+                        }
                         // An *optional* source property may not be carried at
                         // all, so an earlier property of the same name survives:
                         // tsc types the result as the union of both (with
@@ -235,7 +239,7 @@ fn merge_union_spread(source: &surge_ts_types::UnionType, merged: &mut PropertyM
     let mut names: Vec<std::sync::Arc<str>> = Vec::new();
     for member in members.iter().flatten() {
         for (name, _) in member.properties.iter() {
-            if !names.contains(name) {
+            if !names.contains(name) && !surge_ts_types::private_name::is_private_name_key(name) {
                 names.push(name.clone());
             }
         }

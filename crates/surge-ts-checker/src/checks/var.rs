@@ -13,6 +13,10 @@ use crate::symbols::{SymbolInfo, SymbolInfoHandle, SymbolKind, SymbolTable, map_
 pub(crate) struct VariableCheckOptions {
     pub(crate) report_duplicate_let_const: bool,
     pub(crate) check_initializer: bool,
+    /// Whether the declaration is being checked for its own diagnostics, so a
+    /// type literal written as its annotation gets `checkTypeLiteral`'s index
+    /// constraint check. Off where only the binding's value is collected.
+    pub(crate) check_type_literal: bool,
 }
 
 pub(crate) fn check_variable_declaration(
@@ -28,6 +32,7 @@ pub(crate) fn check_variable_declaration(
         VariableCheckOptions {
             report_duplicate_let_const: true,
             check_initializer: true,
+            check_type_literal: true,
         },
     );
 
@@ -97,14 +102,39 @@ pub(crate) fn report_initializer_mismatch(
     target_span: Option<surge_ts_syntax::TextSpan>,
     ctx: &mut CheckerContext,
 ) {
+    report_initializer_mismatch_of(inferred_initializer_type, declared_type, false, target_span, ctx);
+}
+
+/// [`report_initializer_mismatch`] for an initializer read from a binding
+/// declared `unknown`: the written keyword is a type of its own, assignable
+/// only to `unknown`, `any` and what admits `null` and `undefined` alike,
+/// where an `unknown` surge inferred is a gap it must not judge.
+pub(crate) fn report_declared_unknown_initializer(
+    declared_type: &Type,
+    target_span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) {
+    report_initializer_mismatch_of(&Type::GenuineUnknown, declared_type, true, target_span, ctx);
+}
+
+fn report_initializer_mismatch_of(
+    inferred_initializer_type: &Type,
+    declared_type: &Type,
+    declared_unknown: bool,
+    target_span: Option<surge_ts_syntax::TextSpan>,
+    ctx: &mut CheckerContext,
+) {
     let definite_mismatch = crate::checks::assign::definite_primitive_member_mismatch(
         inferred_initializer_type,
         declared_type,
     );
-    if inferred_initializer_type.is_unmodelled()
+    let source_unmodelled = !declared_unknown
+        && (inferred_initializer_type.is_unmodelled()
+            || (crate::checks::call::as_source(|| type_contains_unknown(inferred_initializer_type))
+                && !crate::checks::assign::definite_type_variable_mismatch(inferred_initializer_type, declared_type))
+            || crate::checks::call::is_open_instantiation(inferred_initializer_type));
+    if source_unmodelled
         || (type_contains_unknown(declared_type) && !definite_mismatch)
-        || crate::checks::call::as_source(|| type_contains_unknown(inferred_initializer_type))
-        || crate::checks::call::is_open_instantiation(inferred_initializer_type)
         || is_assignable_to(inferred_initializer_type, declared_type)
     {
         return;
@@ -170,10 +200,31 @@ pub(crate) fn check_variable_declaration_against_symbols(
     };
     let declared_type = variable.declared_type.map(|declared_type| {
         let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+        let literal = match &declared_type {
+            surge_ts_syntax::ParsedType::Object(literal) if options.check_type_literal => Some(literal.clone()),
+            _ => None,
+        };
         let resolved = map_parsed_type(declared_type, ctx);
         ctx.symbols = saved_symbols;
+        if let Some(literal) = literal {
+            crate::program::check_type_literal_index_constraints(&literal, &resolved, ctx);
+        }
         resolved
     });
+    if options.check_initializer
+        && let Some(annotated) = variable.annotated_pattern.as_deref()
+    {
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+        let pattern_type = map_parsed_type(annotated.declared_type.clone(), ctx);
+        ctx.symbols = saved_symbols;
+        crate::checks::function::check_binding_pattern_defaults(
+            &annotated.pattern,
+            Some(&pattern_type),
+            true,
+            symbols,
+            ctx,
+        );
+    }
 
     let symbol_kind = map_symbol_kind(variable.kind);
 
@@ -300,12 +351,26 @@ pub(crate) fn check_variable_declaration_against_symbols(
     let mut inferred_symbol_type = match &inferred_initializer {
         InferredExpression::Known(inferred_initializer_type) => {
             if let Some(declared_type) = initializer_target {
-                report_initializer_mismatch(
-                    inferred_initializer_type,
-                    declared_type,
-                    variable.name_span.or(variable.initializer_span),
-                    ctx,
-                );
+                let reads_declared_unknown = matches!(inferred_initializer_type, Type::GenuineUnknown)
+                    && matches!(
+                        variable.initializer.as_ref(),
+                        Some(surge_ts_syntax::ParsedExpression::Identifier { name, .. })
+                            if matches!(initializer_symbols.declared_type(name), Some(Type::GenuineUnknown))
+                    );
+                if reads_declared_unknown {
+                    report_declared_unknown_initializer(
+                        declared_type,
+                        variable.name_span.or(variable.initializer_span),
+                        ctx,
+                    );
+                } else {
+                    report_initializer_mismatch(
+                        inferred_initializer_type,
+                        declared_type,
+                        variable.name_span.or(variable.initializer_span),
+                        ctx,
+                    );
+                }
             }
 
             // Only the check phase publishes an error-typed binding: during

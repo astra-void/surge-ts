@@ -7,7 +7,7 @@ use crate::context::{CheckerContext, ModuleEmitKind};
 use crate::program::ParsedProgramFile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModuleFormat {
+pub(crate) enum ModuleFormat {
     CommonJs,
     Esm,
 }
@@ -16,7 +16,7 @@ enum ModuleFormat {
 /// implied format, under any other only the one its extension fixes. A
 /// package.json `"type"` is read under node resolution alone, where
 /// `esm_module_files` records it.
-fn implied_format_for_emit(ctx: &CheckerContext, file_name: &str) -> Option<ModuleFormat> {
+pub(crate) fn implied_format_for_emit(ctx: &CheckerContext, file_name: &str) -> Option<ModuleFormat> {
     let lower = file_name.to_ascii_lowercase();
     if lower.ends_with(".mts") || lower.ends_with(".mjs") {
         return Some(ModuleFormat::Esm);
@@ -91,7 +91,9 @@ pub(crate) fn can_have_synthetic_default(
     match target {
         Some(file) if !file.file_kind.is_declaration() => {
             if is_javascript_file(file) {
-                !file.is_module && !exports_es_module_marker()
+                // `ExternalModuleIndicator == nil`: no ECMAScript module
+                // syntax, which a CommonJS module has none of.
+                (!file.is_module || file.commonjs_module) && !exports_es_module_marker()
             } else {
                 // A TypeScript file is emitted with an `__esModule` marker
                 // unless it writes `export =`.

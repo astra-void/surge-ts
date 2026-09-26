@@ -121,6 +121,14 @@ message = "Duplicate identifier '{0}'."
 arity = 1
 
 [[diagnostic]]
+code = "TS2303"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Circular definition of import alias '{0}'."
+arity = 1
+
+[[diagnostic]]
 code = "TS2706"
 category = "Error"
 source = "typescript"
@@ -527,6 +535,14 @@ source = "typescript"
 support = "emitted"
 message = "Cannot redeclare block-scoped variable '{0}'."
 arity = 1
+
+[[diagnostic]]
+code = "TS2714"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The expression of an export assignment must be an identifier or qualified name in an ambient context."
+arity = 0
 
 [[diagnostic]]
 code = "TS2454"
@@ -1228,7 +1244,7 @@ arity = 0
 code = "TS7060"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "This syntax is reserved in files with the .mts or .cts extension. Add a trailing comma or explicit constraint."
 arity = 0
 
@@ -1604,7 +1620,7 @@ arity = 0
 code = "TS18011"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "The operand of a 'delete' operator cannot be a private identifier."
 arity = 0
 
@@ -3617,6 +3633,14 @@ message = "Private identifiers are not allowed outside class bodies."
 arity = 0
 
 [[diagnostic]]
+code = "TS18019"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "'{0}' modifier cannot be used with a private identifier."
+arity = 1
+
+[[diagnostic]]
 code = "TS1034"
 category = "Error"
 source = "typescript"
@@ -3892,8 +3916,16 @@ arity = 3
 code = "TS18013"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Property '{0}' is not accessible outside class '{1}' because it has a private identifier."
+arity = 2
+
+[[diagnostic]]
+code = "TS18014"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The property '{0}' cannot be accessed on type '{1}' within this class because it is shadowed by another private identifier with the same spelling."
 arity = 2
 
 [[diagnostic]]
@@ -4212,7 +4244,7 @@ arity = 2
 code = "TS2560"
 category = "Error"
 source = "typescript"
-support = "catalog-only"
+support = "emitted"
 message = "Value of type '{0}' has no properties in common with type '{1}'. Did you mean to call it?"
 arity = 2
 
@@ -5767,4 +5799,204 @@ source = "typescript"
 support = "emitted"
 message = "Computed property names on class or object literals cannot be inferred with --isolatedDeclarations."
 arity = 0
+
+[[diagnostic]]
+code = "TS2743"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "No overload expects {0} type arguments, but overloads do exist that expect either {1} or {2} type arguments."
+arity = 3
+
+[[diagnostic]]
+code = "TS2874"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This JSX tag requires '{0}' to be in scope, but it could not be found."
+arity = 1
+
+[[diagnostic]]
+code = "TS2879"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Using JSX fragments requires fragment factory '{0}' to be in scope, but it could not be found."
+arity = 1
+
+[[diagnostic]]
+code = "TS1471"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Module '{0}' cannot be imported using this construct. The specifier only resolves to an ES module, which cannot be imported with 'require'. Use an ECMAScript import instead."
+arity = 1
+
+[[diagnostic]]
+code = "TS1479"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The current file is a CommonJS module whose imports will produce 'require' calls; however, the referenced file is an ECMAScript module and cannot be imported with 'require'. Consider writing a dynamic 'import(\"{0}\")' call instead."
+arity = 1
+
+[[diagnostic]]
+code = "TS1541"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type-only import of an ECMAScript module from a CommonJS module must have a 'resolution-mode' attribute."
+arity = 0
+
+[[diagnostic]]
+code = "TS2720"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class '{0}' incorrectly implements class '{1}'. Did you mean to extend '{1}' and inherit its members as a subclass?"
+arity = 2
+
+[[diagnostic]]
+code = "TS1309"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The current file is a CommonJS module and cannot use 'await' at the top level."
+arity = 0
+
+[[diagnostic]]
+code = "TS1470"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The 'import.meta' meta-property is not allowed in files which will build into CommonJS output."
+arity = 0
+
+[[diagnostic]]
+code = "TS8024"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "JSDoc '@param' tag has name '{0}', but there is no parameter with that name."
+arity = 1
+
+[[diagnostic]]
+code = "TS8030"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A JSDoc '@type' tag on a function must have a signature with the correct number of arguments."
+arity = 0
+
+[[diagnostic]]
+code = "TS8032"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Qualified name '{0}' is not allowed without a leading '@param {object} {1}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS8033"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A JSDoc '@typedef' comment may not contain multiple '@type' tags."
+arity = 0
+
+[[diagnostic]]
+code = "TS8039"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A JSDoc '@template' tag may not follow a '@typedef', '@callback', or '@overload' tag"
+arity = 0
+
+[[diagnostic]]
+code = "TS1069"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Unexpected token. A type parameter name was expected without curly braces."
+arity = 0
+
+[[diagnostic]]
+code = "TS2559"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Type '{0}' has no properties in common with type '{1}'."
+arity = 2
+
+[[diagnostic]]
+code = "TS1286"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "ECMAScript imports and exports cannot be written in a CommonJS file under 'verbatimModuleSyntax'."
+arity = 0
+
+[[diagnostic]]
+code = "TS1287"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A top-level 'export' modifier cannot be used on value declarations in a CommonJS module when 'verbatimModuleSyntax' is enabled."
+arity = 0
+
+[[diagnostic]]
+code = "TS1295"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "ECMAScript imports and exports cannot be written in a CommonJS file under 'verbatimModuleSyntax'. Adjust the 'type' field in the nearest 'package.json' to make this file an ECMAScript module, or adjust your 'verbatimModuleSyntax', 'module', and 'moduleResolution' settings in TypeScript."
+arity = 0
+
+[[diagnostic]]
+code = "TS1324"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Dynamic imports only support a second argument when the '--module' option is set to 'esnext', 'node16', 'node18', 'node20', 'nodenext', or 'preserve'."
+arity = 0
+
+[[diagnostic]]
+code = "TS1325"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Argument of dynamic import cannot be spread element."
+arity = 0
+
+[[diagnostic]]
+code = "TS1326"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "This use of 'import' is invalid. 'import()' calls can be written, but they must have parentheses and cannot have type arguments."
+arity = 0
+
+[[diagnostic]]
+code = "TS2712"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "A dynamic import call in ES5 requires the 'Promise' constructor.  Make sure you have a declaration for the 'Promise' constructor or include 'ES2015' in your '--lib' option."
+arity = 0
+
+[[diagnostic]]
+code = "TS2858"
+category = "Error"
+source = "typescript"
+support = "catalog-only"
+message = "Import attribute values must be string literal expressions."
+arity = 0
+
+[[diagnostic]]
+code = "TS7036"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Dynamic import's specifier must be of type 'string', but here has type '{0}'."
+arity = 1
 

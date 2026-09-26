@@ -506,9 +506,29 @@ pub(super) fn narrowed_reference_type(ty: &Type, path: &[String], guard: Referen
             test,
         } if path.is_empty() => narrow_binding_by_nullish(ty, keep_matching, test),
         _ if path.is_empty() => guard.narrow_leaf(ty, false).map(|(narrowed, _)| narrowed),
+        _ if ty.is_type_variable() => narrow_type_variable_root(ty, path, guard),
         _ => narrow_property_path(ty, path, guard),
     })?;
     (narrowed != *ty).then_some(narrowed)
+}
+
+/// tsgo narrows a member reference below a type variable (`schema._zod.p`)
+/// as a reference of its own, read through the variable's constraint; surge
+/// narrows the root binding, so a bare variable becomes `T & C'` with `C'` its
+/// constraint narrowed at the path — still a `T`, and read first where members
+/// are read. A union constraint is narrowed as the union itself where tsgo
+/// reads it (`getNarrowableTypeForReference`), every earlier guard included,
+/// which one path's narrowing cannot stand in for.
+fn narrow_type_variable_root(ty: &Type, path: &[String], guard: ReferenceGuard<'_>) -> Option<Type> {
+    let Type::TypeParameter(parameter) = ty else {
+        return None;
+    };
+    let constraint = surge_ts_types::type_variable::active_constraint(parameter)??;
+    if matches!(constraint.peeled(), Type::Union(_)) {
+        return None;
+    }
+    let narrowed = narrow_property_path(&constraint, path, guard)?;
+    Some(surge_ts_types::type_variable::intersect_type_variable(ty, narrowed))
 }
 
 /// Narrows the reference `target` (an `o.p` member expression) to what an

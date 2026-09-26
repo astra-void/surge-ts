@@ -529,6 +529,8 @@ fn run_single_file_mode(
             no_implicit_any,
             no_implicit_this: no_implicit_any,
             module_emit: surge_ts_checker::ModuleEmitKind::ES2022,
+            verbatim_module_syntax: false,
+            isolated_modules: false,
             use_define_for_class_fields: true,
             target_es2022: true,
             no_emit: false,

@@ -9,7 +9,8 @@
 
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
-    ParsedInterfaceDeclaration, ParsedNamedType, ParsedType, ParsedTypeParameter, TextSpan,
+    ParsedInterfaceDeclaration, ParsedNamedType, ParsedObjectType, ParsedType, ParsedTypeParameter,
+    TextSpan,
 };
 use surge_ts_types::{ObjectType, Type, is_assignable_to, union_type};
 
@@ -44,9 +45,25 @@ impl IndexKind {
     fn applies_to(self, name: &str) -> bool {
         match self {
             IndexKind::String => true,
-            IndexKind::Number => surge_ts_types::is_numeric_key(name),
+            IndexKind::Number => is_numeric_literal_name(name),
         }
     }
+}
+
+/// tsc's `isNumericLiteralName`: the name reads back unchanged through a
+/// number (`ToString(ToNumber(name)) == name`). JavaScript writes a number
+/// outside `[1e-6, 1e21)` with an exponent, which no such name can match.
+fn is_numeric_literal_name(name: &str) -> bool {
+    if matches!(name, "Infinity" | "-Infinity" | "NaN") {
+        return true;
+    }
+    let Ok(value) = name.parse::<f64>() else {
+        return false;
+    };
+    if value == 0.0 {
+        return name == "0";
+    }
+    value.is_finite() && (1e-6..1e21).contains(&value.abs()) && format!("{value}") == name
 }
 
 /// What a declaration contributes to the check: which members it declares
@@ -123,6 +140,130 @@ pub(crate) fn check_class_index_constraints(
     check_index_constraints(&declaration, ctx);
 }
 
+/// `checkIndexConstraints(staticType, symbol, true)`: a class's own static
+/// members against its static index signatures, `prototype` excepted.
+pub(crate) fn check_class_static_index_constraints(
+    class: &surge_ts_syntax::ParsedClassDeclaration,
+    ctx: &mut CheckerContext,
+) {
+    use surge_ts_syntax::ParsedClassMember;
+    let checkpoint = ctx.diagnostics().len();
+    let indexes: Vec<(IndexKind, Type)> = [
+        (IndexKind::String, class.static_string_index_type.as_ref()),
+        (IndexKind::Number, class.static_number_index_type.as_ref()),
+    ]
+    .into_iter()
+    .filter_map(|(kind, ty)| Some((kind, map_parsed_type(ty?.clone(), ctx))))
+    .filter(|(_, value)| !crate::checks::function::type_contains_degradation(value))
+    .collect();
+    ctx.truncate_diagnostics(checkpoint);
+    if indexes.is_empty() {
+        return;
+    }
+    // `checkIndexConstraintForIndexSignature` on the static side: its own
+    // number index against its own string index, reported on the former.
+    if let [(IndexKind::String, string_value), (IndexKind::Number, number_value)] = indexes.as_slice()
+        && let Some(span) = class.static_number_index_span
+        && !is_assignable_to(number_value, string_value)
+    {
+        let diagnostic =
+            Diagnostic::ts2413("number", number_value.name(), "string", string_value.name(), ctx.file_name.clone());
+        ctx.push(diagnostic.with_span(convert_span(span)));
+    }
+    let Some(Type::Object(statics)) = ctx.symbols.get(&class.name).map(|symbol| symbol.ty.peeled()) else {
+        return;
+    };
+    for member in &class.members {
+        let (name, name_span) = match member {
+            ParsedClassMember::Property(property) if property.is_static => (&property.name, property.name_span),
+            ParsedClassMember::Method(method) if method.is_static => (&method.name, method.name_span),
+            _ => continue,
+        };
+        // A private name has no key an index signature could constrain
+        // (`getLiteralTypeFromPropertyName` is `never` for it).
+        if surge_ts_types::private_name::is_private_name_key(name) {
+            continue;
+        }
+        let Some(property) = statics.properties.get(name.as_str()) else {
+            continue;
+        };
+        if crate::checks::function::type_contains_degradation(&property.ty) {
+            continue;
+        }
+        for (kind, value) in &indexes {
+            if kind.applies_to(name) && !is_assignable_to(&property.ty, value) {
+                let diagnostic = Diagnostic::ts2411(
+                    name.as_str(),
+                    property.ty.name(),
+                    kind.key_name(),
+                    value.name(),
+                    ctx.file_name.clone(),
+                );
+                ctx.push(match name_span {
+                    Some(span) => diagnostic.with_span(convert_span(span)),
+                    None => diagnostic,
+                });
+            }
+        }
+    }
+}
+
+/// `checkTypeLiteral`'s `checkIndexConstraints`, for a type literal written as
+/// a variable's annotation and already resolved to `resolved`. Every member of
+/// a type literal is its own (`getParentOfSymbol(prop) == t.symbol`), so a
+/// property that conflicts with an index signature applying to its name is
+/// reported on the property.
+pub(crate) fn check_type_literal_index_constraints(
+    literal: &ParsedObjectType,
+    resolved: &Type,
+    ctx: &mut CheckerContext,
+) {
+    if literal.string_index_type.is_none() && literal.number_index_type.is_none() {
+        return;
+    }
+    let Type::Object(object) = resolved.peeled() else {
+        return;
+    };
+    let indexes: Vec<(IndexKind, Type)> = [IndexKind::String, IndexKind::Number]
+        .into_iter()
+        .filter_map(|kind| Some((kind, kind.value_of(&object)?)))
+        .filter(|(_, value)| !crate::checks::function::type_contains_degradation(value))
+        .collect();
+    if indexes.is_empty() {
+        return;
+    }
+    for member in &literal.properties {
+        // A computed key (`[Symbol.iterator]`) carries no span; it names no
+        // string or number the index signatures above apply to.
+        let Some(span) = member.name_span else {
+            continue;
+        };
+        let Some(property) = object.properties.get(member.name.as_str()) else {
+            continue;
+        };
+        if crate::checks::function::type_contains_degradation(&property.ty) {
+            continue;
+        }
+        let property_type = if property.optional && surge_ts_types::strict_null_checks() {
+            union_type(vec![property.ty.clone(), Type::Undefined])
+        } else {
+            property.ty.clone()
+        };
+        for (kind, value) in &indexes {
+            if kind.applies_to(&member.name) && !is_assignable_to(&property_type, value) {
+                let diagnostic = Diagnostic::ts2411(
+                    member.name.as_str(),
+                    property_type.name(),
+                    kind.key_name(),
+                    value.name(),
+                    ctx.file_name.clone(),
+                );
+                ctx.push(diagnostic.with_span(convert_span(span)));
+            }
+        }
+    }
+}
+
 pub(crate) fn check_index_constraints(declaration: &IndexConstraintDeclaration<'_>, ctx: &mut CheckerContext) {
     // A generic declaration is checked as itself instantiated over its own
     // type parameters, bound as type variables for the duration.
@@ -146,7 +287,7 @@ fn check_index_constraints_in_scope(declaration: &IndexConstraintDeclaration<'_>
     let indexes: Vec<(IndexKind, Type)> = [IndexKind::String, IndexKind::Number]
         .into_iter()
         .filter_map(|kind| Some((kind, kind.value_of(&object)?)))
-        .filter(|(_, value)| !crate::checks::assign::type_contains_unknown(value))
+        .filter(|(_, value)| !value.is_unmodelled())
         .collect();
     if indexes.is_empty() {
         return;
@@ -161,7 +302,10 @@ fn check_index_constraints_in_scope(declaration: &IndexConstraintDeclaration<'_>
 
     let mut reports = Vec::new();
     for (name, property) in object.properties.iter() {
-        if property.index_slot || name.starts_with('\u{0}') {
+        if property.index_slot
+            || name.starts_with('\u{0}')
+            || surge_ts_types::private_name::is_private_name_key(name)
+        {
             continue;
         }
         let own_member = declaration
@@ -174,7 +318,7 @@ fn check_index_constraints_in_scope(declaration: &IndexConstraintDeclaration<'_>
         } else {
             property.ty.clone()
         };
-        if crate::checks::assign::type_contains_unknown(&property_type) {
+        if property.ty.is_unmodelled() {
             continue;
         }
         for (kind, value) in &indexes {

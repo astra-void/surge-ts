@@ -26,6 +26,10 @@ pub struct ParsedSource {
     /// since it does not read JSDoc.
     pub jsdoc_parse_errors: Vec<ParserError>,
     pub is_module: bool,
+    /// A JavaScript file that is a CommonJS module (tsc's
+    /// `CommonJSModuleIndicator`), which it is only without any ECMAScript
+    /// module syntax (`ExternalModuleIndicator`).
+    pub commonjs_module: bool,
     /// Leading `/// <reference types="..." />` directives, in source order.
     pub reference_type_directives: Vec<ReferenceTypeDirective>,
     /// Every value- and type-position identifier name referenced anywhere in the
@@ -49,6 +53,10 @@ pub struct ParsedSource {
     /// They belong to the module graph exactly like declaration specifiers do,
     /// but the lossy `Parsed*` tree does not model either form.
     pub import_call_specifiers: Vec<String>,
+    /// Every `import("...")` with a literal specifier, in source order and not
+    /// deduplicated: tsc resolves each one as it checks it and reports an
+    /// unresolved module at that literal.
+    pub import_calls: Vec<ParsedImportCall>,
     /// Grammar-level findings collected in one walk of the full oxc AST (see
     /// `parser::grammar`): a `const` with no initializer, a duplicate
     /// object-literal key, an overload group with no implementation, a member
@@ -60,6 +68,11 @@ pub struct ParsedSource {
     /// parenthesized node — `(x) * 1` is the unnamed `Object is possibly
     /// 'undefined'`, anchored at the `(`. Collected with `grammar_diagnostics`.
     pub parenthesized_expressions: Vec<ParenthesizedExpressionSpan>,
+    /// Where each `this` whose container is the file's top level starts —
+    /// arrow functions looked through, as tsc's `getThisContainer` does — in a
+    /// TypeScript file without an import or export. Collected with
+    /// `grammar_diagnostics`.
+    pub global_this_starts: Vec<u32>,
     /// For a `.json` file: the type of the value it holds, and the marker that
     /// this *is* a JSON module. Nothing in a JSON file is code, so it is never
     /// parsed as TypeScript and `statements` is empty; this carries its whole
@@ -68,6 +81,24 @@ pub struct ParsedSource {
     pub json_module_type: Option<ParsedType>,
     /// See [`JsxFactoryUses`].
     pub jsx_factory_uses: JsxFactoryUses,
+}
+
+/// One [`ParsedSource::import_calls`] entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedImportCall {
+    pub specifier: String,
+    /// The string literal, quotes included: where tsc reports the module.
+    pub specifier_span: TextSpan,
+    pub kind: ParsedImportCallKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParsedImportCallKind {
+    /// A dynamic `import("m")` (`checkImportCallExpression`).
+    Expression,
+    /// An import type, `import("m").T` or `typeof import("m")`
+    /// (`getTypeFromImportTypeNode`), written without import attributes.
+    Type,
 }
 
 /// What a file's JSX refers to implicitly (tsc's `markJsxAliasReferenced`):
@@ -809,6 +840,8 @@ pub struct ParsedArrayBindingPattern {
     /// Whether each position carries a default (`[a = 1]`), parallel to
     /// `elements`.
     pub defaults: Vec<bool>,
+    /// Each position's default with its span, parallel to `elements`.
+    pub default_values: Vec<Option<(ParsedExpression, Option<TextSpan>)>>,
     /// The `...rest` binding of `[a, ...rest]`, if present.
     pub rest: Option<Box<ParsedBindingName>>,
     pub span: Option<TextSpan>,
@@ -928,6 +961,9 @@ pub struct ParsedInterfaceMember {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedClassDeclaration {
     pub is_declare: bool,
+    /// Lowered from `const X = class {}`: `X` is a constant, and writing it is
+    /// TS2588 rather than a class's TS2629.
+    pub const_binding: bool,
     /// `abstract class C {}`. A non-abstract class must implement every
     /// abstract member it inherits, and only an abstract class may declare one.
     pub is_abstract: bool,
@@ -962,6 +998,9 @@ pub struct ParsedClassDeclaration {
     /// the class value answers every other key with.
     pub static_string_index_type: Option<ParsedType>,
     pub static_number_index_type: Option<ParsedType>,
+    /// Where the static number index signature is declared, which a conflict
+    /// with the static string index is reported on (TS2413).
+    pub static_number_index_span: Option<TextSpan>,
     pub span: Option<TextSpan>,
     /// Every member's computed key (`[expr]`), with the bracketed name's span:
     /// each is checked as an expression (tsc's `checkComputedPropertyName`)
@@ -1104,6 +1143,12 @@ pub struct ParsedClassProperty {
     pub optional: bool,
     pub readonly: bool,
     pub declared_type: Option<ParsedType>,
+    /// The annotation as the initialization check (TS2564) reads it when
+    /// polymorphic `this` stands at its top — alone, as a union or
+    /// intersection member, or indexed (`this["k"]`). `this` is a type
+    /// parameter, never `any` nor `undefined`, but `declared_type` lowers it to
+    /// `any`, which would exempt the property; here it reads as `object`.
+    pub initialization_type: Option<ParsedType>,
     pub initializer: Option<ParsedExpression>,
     pub initializer_span: Option<TextSpan>,
     /// The member's whole source range, which is where a class type
@@ -1172,6 +1217,9 @@ pub struct ParsedImportDeclaration {
     pub module_specifier_span: Option<TextSpan>,
     pub span: Option<TextSpan>,
     pub resolution_mode: Option<ParsedResolutionModeAttribute>,
+    /// The `type`-marked specifiers of an import that is not itself
+    /// `import type`, split off to bind in type space alone.
+    pub inline_type_specifiers: bool,
 }
 
 /// A valid `resolution-mode` import attribute.
@@ -1365,6 +1413,10 @@ pub struct ParsedObjectType {
     /// with only this signature — modelled distinctly from a call signature so
     /// a plain function does not satisfy `T extends new (…) => …`.
     pub construct_signature: Option<Box<ParsedFunctionType>>,
+    /// Every construct signature as written, in source order, kept only when
+    /// the type literal declares more than one — the group a relation takes
+    /// member by member, as `call_signature_overloads` is for calls.
+    pub construct_signature_overloads: Vec<ParsedFunctionType>,
     /// The `object` keyword: every non-primitive. Its member surface is the
     /// empty object, but a primitive does not satisfy it, which `{}` cannot say.
     pub non_primitive: bool,
@@ -1669,6 +1721,16 @@ pub enum ParsedExpression {
     TemplateStringsArray {
         span: Option<TextSpan>,
     },
+    /// `import(specifier)` / `import(specifier, options)`: its arguments are
+    /// checked (`checkImportCallExpression`); the `Promise` of the module it
+    /// evaluates to is not modelled.
+    ImportCall {
+        specifier: Box<ParsedExpression>,
+        specifier_span: Option<TextSpan>,
+        options: Option<Box<ParsedExpression>>,
+        options_span: Option<TextSpan>,
+        span: Option<TextSpan>,
+    },
     Unknown,
 }
 
@@ -1890,6 +1952,18 @@ pub struct ParsedVariableDeclaration {
     /// The declaration list this binding was written in, shared by every
     /// binding the list declares. `None` for a declaration surge synthesized.
     pub declaration_list: Option<std::sync::Arc<ParsedDeclarationList>>,
+    /// The annotated destructuring pattern this binding was lowered from, kept
+    /// on the pattern's first binding only.
+    pub annotated_pattern: Option<std::sync::Arc<ParsedAnnotatedBindingPattern>>,
+}
+
+/// `const { a = 1 }: T = …`: tsc types each element of an annotated pattern
+/// from the annotation (`getBindingElementTypeFromParentType`) and checks the
+/// element's default against that type, which the flattened bindings lose.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedAnnotatedBindingPattern {
+    pub pattern: ParsedBindingName,
+    pub declared_type: ParsedType,
 }
 
 /// One `var`/`let`/`const`/`using` declaration list as written, for the
@@ -2506,6 +2580,12 @@ impl ParsedExpression {
                 }
             }
             ParsedExpression::ObjectRest { source, .. } => visit(source),
+            ParsedExpression::ImportCall { specifier, options, .. } => {
+                visit(specifier);
+                if let Some(options) = options {
+                    visit(options);
+                }
+            }
             ParsedExpression::Binary { left, right, .. }
             | ParsedExpression::Logical { left, right, .. }
             | ParsedExpression::NullishCoalescing { left, right, .. } => {

@@ -27,6 +27,7 @@ mod reflect_collision;
 
 thread_local! {
     static EXAMINED_MODIFIERS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    static GLOBAL_THIS_STARTS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Where every modifier the last walk judged starts. The walk is tsc's
@@ -35,6 +36,13 @@ thread_local! {
 /// for `abstract private`) is dropped.
 pub(crate) fn take_examined_modifier_starts() -> Vec<u32> {
     EXAMINED_MODIFIERS.with(|examined| std::mem::take(&mut *examined.borrow_mut()))
+}
+
+/// Where every `this` the last walk found the script's top level to own
+/// starts (`tryGetThisTypeAt` answers those with `globalThis`), in source
+/// order.
+pub(crate) fn take_global_this_starts() -> Vec<u32> {
+    GLOBAL_THIS_STARTS.with(|starts| std::mem::take(&mut *starts.borrow_mut()))
 }
 
 pub(crate) fn collect_context_grammar_diagnostics(
@@ -50,6 +58,7 @@ pub(crate) fn collect_context_grammar_diagnostics(
         with_bodies: Vec::new(),
         const_enum_names: unshadowed_const_enum_names(program),
         examined_modifiers: Vec::new(),
+        global_this_starts: Vec::new(),
     };
     collector.visit_program(program);
     let examined = std::mem::take(&mut collector.examined_modifiers);
@@ -57,6 +66,9 @@ pub(crate) fn collect_context_grammar_diagnostics(
     // tsc's `checkWithStatement` checks the object but never the body, so no
     // checker grammar error comes from inside one.
     let with_bodies = std::mem::take(&mut collector.with_bodies);
+    let mut global_this = std::mem::take(&mut collector.global_this_starts);
+    global_this.retain(|start| !with_bodies.iter().any(|body| body.start <= *start && *start < body.end));
+    GLOBAL_THIS_STARTS.with(|slot| *slot.borrow_mut() = global_this);
     if !with_bodies.is_empty() {
         collector.out.retain(|finding| {
             !with_bodies.iter().any(|body| {
@@ -104,6 +116,8 @@ struct ContextCollector<'a, 'o> {
     const_enum_names: Vec<String>,
     /// See [`take_examined_modifier_starts`].
     examined_modifiers: Vec<u32>,
+    /// See [`take_global_this_starts`].
+    global_this_starts: Vec<u32>,
 }
 
 /// The top-level `const enum` names whose every binding in the file is such a
@@ -163,6 +177,28 @@ fn is_ambient_marker(kind: &AstKind<'_>) -> bool {
         AstKind::TSEnumDeclaration(declaration) => declaration.declare,
         AstKind::TSGlobalDeclaration(_) => true,
         _ => false,
+    }
+}
+
+/// Whether an exported declaration exists at run time, where tsc's
+/// `checkGrammarModifiers` lets `export` through only on a type alias, an
+/// interface or a namespace, and `checkModuleDeclaration` then rejects it on
+/// a namespace that is instantiated (const enums count under
+/// `verbatimModuleSyntax`, which preserves them).
+fn declares_runtime_value(declaration: &oxc_ast::ast::Declaration<'_>) -> bool {
+    use oxc_ast::ast::Declaration as D;
+    match declaration {
+        D::VariableDeclaration(declaration) => !declaration.declare,
+        D::FunctionDeclaration(function) => !function.declare,
+        D::ClassDeclaration(class) => !class.declare,
+        D::TSEnumDeclaration(declaration) => !declaration.declare,
+        D::TSImportEqualsDeclaration(_) => true,
+        D::TSModuleDeclaration(module) => {
+            !module.declare
+                && matches!(module.id, oxc_ast::ast::TSModuleDeclarationName::Identifier(_))
+                && module_instance_state(module) != ModuleInstanceState::NonInstantiated
+        }
+        D::TSTypeAliasDeclaration(_) | D::TSInterfaceDeclaration(_) | D::TSGlobalDeclaration(_) => false,
     }
 }
 
@@ -399,6 +435,22 @@ impl<'a> ContextCollector<'a, '_> {
         });
     }
 
+    /// tsc's `checkGrammarTypeArguments` trailing-comma half. Every type
+    /// argument list reaches it except an import type's, which tsgo checks
+    /// through `checkTypeReferenceOrImport` alone.
+    fn check_type_argument_trailing_comma(&mut self, instantiation: &oxc_ast::ast::TSTypeParameterInstantiation<'a>) {
+        if matches!(self.stack.last(), Some(AstKind::TSImportType(_))) {
+            return;
+        }
+        let Some(last) = instantiation.params.last() else {
+            return;
+        };
+        let comma = members::skip_trivia(self.source_text, last.span().end as usize);
+        if comma < instantiation.span.end as usize && self.source_text.as_bytes()[comma] == b',' {
+            self.push(1009, Span::new(comma as u32, comma as u32 + 1), &[]);
+        }
+    }
+
     fn in_class(&self) -> bool {
         self.stack.iter().any(|kind| matches!(kind, AstKind::Class(_)))
     }
@@ -618,8 +670,11 @@ impl<'a> ContextCollector<'a, '_> {
                 // `globalThis`, and an arrow that captured it is TS7041 under
                 // `noImplicitThis`; a module's top-level `this` is `undefined`.
                 AstKind::Program(_) => {
-                    if captured_by_arrow && !self.external_module {
-                        self.push(7041, span, &[]);
+                    if !self.external_module {
+                        self.global_this_starts.push(span.start);
+                        if captured_by_arrow {
+                            self.push(7041, span, &[]);
+                        }
                     }
                     return;
                 }
@@ -1312,70 +1367,97 @@ impl<'a> ContextCollector<'a, '_> {
     /// compared only where both are a keyword, which is identity without types.
     fn check_type_parameter_lists_identical(&mut self, statements: &[Statement<'_>]) {
         type Params<'s> = Option<&'s oxc_ast::ast::TSTypeParameterDeclaration<'s>>;
-        let mut declarations: Vec<(&str, Span, Params<'_>)> = Vec::new();
-        for statement in statements {
-            let declaration = match statement {
-                Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
-                other => other.as_declaration(),
-            };
+        // A namespace's exported members merge across all of its blocks; the
+        // qualified name keys them apart from same-named members elsewhere.
+        fn collect<'s>(
+            statements: &'s [Statement<'s>],
+            prefix: &str,
+            exported_only: bool,
+            out: &mut Vec<(String, &'s str, Span, Params<'s>)>,
+        ) {
             use oxc_ast::ast::Declaration as D;
-            match declaration {
-                Some(D::TSInterfaceDeclaration(d)) => {
-                    declarations.push((d.id.name.as_str(), d.id.span, d.type_parameters.as_deref()));
-                }
-                Some(D::ClassDeclaration(d)) => {
-                    if let Some(id) = &d.id {
-                        declarations.push((id.name.as_str(), id.span, d.type_parameters.as_deref()));
+            for statement in statements {
+                let (declaration, exported) = match statement {
+                    Statement::ExportNamedDeclaration(export) => (export.declaration.as_ref(), true),
+                    other => (other.as_declaration(), false),
+                };
+                match declaration {
+                    Some(D::TSInterfaceDeclaration(d)) if exported || !exported_only => {
+                        let name = d.id.name.as_str();
+                        out.push((format!("{prefix}{name}"), name, d.id.span, d.type_parameters.as_deref()));
                     }
+                    Some(D::ClassDeclaration(d)) if exported || !exported_only => {
+                        if let Some(id) = &d.id {
+                            let name = id.name.as_str();
+                            out.push((format!("{prefix}{name}"), name, id.span, d.type_parameters.as_deref()));
+                        }
+                    }
+                    Some(D::TSModuleDeclaration(module)) if exported || !exported_only => {
+                        if let oxc_ast::ast::TSModuleDeclarationName::Identifier(id) = &module.id
+                            && let Some(oxc_ast::ast::TSModuleDeclarationBody::TSModuleBlock(block)) =
+                                module.body.as_ref()
+                        {
+                            collect(&block.body, &format!("{prefix}{}.", id.name), true, out);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
+        let mut declarations: Vec<(String, &str, Span, Params<'_>)> = Vec::new();
+        collect(statements, "", false, &mut declarations);
         let mut checked: Vec<&str> = Vec::new();
-        for (name, _, _) in &declarations {
-            if checked.contains(name) {
+        for (key, name, _, _) in &declarations {
+            if checked.contains(&key.as_str()) {
                 continue;
             }
-            checked.push(name);
-            let group: Vec<&(&str, Span, Params<'_>)> =
-                declarations.iter().filter(|(other, _, _)| other == name).collect();
+            checked.push(key.as_str());
+            let group: Vec<&(String, &str, Span, Params<'_>)> =
+                declarations.iter().filter(|(other, _, _, _)| other == key).collect();
             if group.len() < 2 {
                 continue;
             }
             // The merged type's parameters: every name in order of first
             // appearance, the first declaration of each supplying its default
             // and constraint.
-            let mut merged: Vec<(&str, bool, Option<&oxc_ast::ast::TSType<'_>>)> = Vec::new();
-            for (_, _, params) in &group {
+            type Merged<'t> = (&'t str, Option<&'t oxc_ast::ast::TSType<'t>>, Option<&'t oxc_ast::ast::TSType<'t>>);
+            let mut merged: Vec<Merged<'_>> = Vec::new();
+            for (_, _, _, params) in &group {
                 for param in params.iter().flat_map(|params| params.params.iter()) {
                     let param_name = param.name.name.as_str();
                     match merged.iter_mut().find(|(merged_name, _, _)| *merged_name == param_name) {
                         Some(entry) => {
-                            entry.1 |= param.default.is_some();
+                            if entry.1.is_none() {
+                                entry.1 = param.default.as_ref();
+                            }
                             if entry.2.is_none() {
                                 entry.2 = param.constraint.as_ref();
                             }
                         }
-                        None => merged.push((param_name, param.default.is_some(), param.constraint.as_ref())),
+                        None => merged.push((param_name, param.default.as_ref(), param.constraint.as_ref())),
                     }
                 }
             }
-            let min = merged.iter().take_while(|(_, has_default, _)| !has_default).count();
-            let identical = group.iter().all(|(_, _, params)| {
+            let min = merged.iter().take_while(|(_, default, _)| default.is_none()).count();
+            let identical = group.iter().all(|(_, _, _, params)| {
                 let params: Vec<&oxc_ast::ast::TSTypeParameter<'_>> =
                     params.iter().flat_map(|params| params.params.iter()).collect();
                 params.len() >= min
                     && params.len() <= merged.len()
-                    && params.iter().zip(&merged).all(|(param, (merged_name, _, constraint))| {
-                        param.name.name == *merged_name
-                            && match (param.constraint.as_ref(), constraint) {
+                    && params.iter().zip(&merged).all(|(param, (merged_name, default, constraint))| {
+                        let same = |own: Option<&oxc_ast::ast::TSType<'_>>, merged: &Option<&oxc_ast::ast::TSType<'_>>| {
+                            match (own, merged) {
                                 (Some(own), Some(merged)) => !keywords_differ(own, merged),
                                 _ => true,
                             }
+                        };
+                        param.name.name == *merged_name
+                            && same(param.constraint.as_ref(), constraint)
+                            && same(param.default.as_ref(), default)
                     })
             });
             if !identical {
-                for (_, span, _) in &group {
+                for (_, _, span, _) in &group {
                     self.push(2428, *span, &[name]);
                 }
             }
@@ -2061,6 +2143,44 @@ impl<'a> ContextCollector<'a, '_> {
         // The clause's span starts after its keyword.
         if let Some(start) = self.source_text[..clause.span.start as usize].rfind("with") {
             self.push(2823, Span::new(start as u32, clause.span.end), &[]);
+        }
+    }
+
+    /// ECMAScript module syntax that `verbatimModuleSyntax` rejects in a file
+    /// emitted as CommonJS; the checker decides the options and the file's
+    /// format. A dynamic import (`checkGrammarImportCallExpression`, marked
+    /// `import`: it keys on the `module` option alone) and an `export default`
+    /// expression (`checkExportAssignment`) are TS1295; a top-level `export`
+    /// on a value declaration is TS1287 (`checkGrammarModifiers`, and
+    /// `checkModuleDeclaration` for an instantiated namespace).
+    fn check_commonjs_module_syntax(&mut self, kind: &AstKind<'a>) {
+        let top_level =
+            self.ambient_depth == 0 && matches!(self.stack.last(), Some(AstKind::Program(_)));
+        match kind {
+            AstKind::ImportExpression(import) => self.push(1295, import.span, &["import"]),
+            AstKind::ExportNamedDeclaration(export)
+                if top_level && export.declaration.as_ref().is_some_and(declares_runtime_value) =>
+            {
+                let start = export.span.start;
+                self.push(1287, Span::new(start, start + 6), &[]);
+            }
+            AstKind::ExportDefaultDeclaration(export) if top_level => match &export.declaration {
+                oxc_ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                    if !function.declare {
+                        let start = export.span.start;
+                        self.push(1287, Span::new(start, start + 6), &[]);
+                    }
+                }
+                oxc_ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                    if !class.declare {
+                        let start = export.span.start;
+                        self.push(1287, Span::new(start, start + 6), &[]);
+                    }
+                }
+                oxc_ast::ast::ExportDefaultDeclarationKind::TSInterfaceDeclaration(_) => {}
+                _ => self.push(1295, export.span, &[]),
+            },
+            _ => {}
         }
     }
 
@@ -2776,6 +2896,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
     fn enter_node(&mut self, kind: AstKind<'a>) {
         self.check_declaration_position(&kind);
         self.check_member_placement(&kind);
+        self.check_commonjs_module_syntax(&kind);
         match kind {
             AstKind::BreakStatement(statement) => {
                 self.check_jump(statement.span, statement.label.as_ref().map(|l| l.name.as_str()), false);
@@ -2833,7 +2954,14 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             {
                 self.check_global_augmentation_names(&global.body.body);
             }
-            AstKind::MetaProperty(meta) => self.check_new_target(meta),
+            AstKind::MetaProperty(meta) => {
+                self.check_new_target(meta);
+                // `checkImportMetaProperty` under a node module kind; the
+                // checker keeps it for a file that is not ESM.
+                if meta.meta.name == "import" && meta.property.name == "meta" {
+                    self.push(1470, meta.span, &[]);
+                }
+            }
             AstKind::TSThisType(this_type) => self.check_this_type(this_type.span),
             AstKind::TSInferType(infer) => self.check_infer_type(infer.span),
             AstKind::TSInterfaceDeclaration(declaration) => {
@@ -3225,6 +3353,9 @@ impl<'a> ContextCollector<'a, '_> {
             AstKind::ObjectProperty(property) => self.check_object_member_modifiers(property),
             AstKind::TSTypeParameter(parameter) => self.check_type_parameter_modifiers(parameter),
             AstKind::FormalParameter(parameter) => self.check_parameter_modifiers(parameter),
+            AstKind::TSTypeParameterInstantiation(instantiation) => {
+                self.check_type_argument_trailing_comma(instantiation);
+            }
             AstKind::TSInstantiationExpression(expression) => {
                 if matches!(expression.expression, oxc_ast::ast::Expression::Super(_)) {
                     self.push(2754, expression.type_arguments.span, &[]);
@@ -3245,8 +3376,28 @@ impl<'a> ContextCollector<'a, '_> {
                 }
             }
             // `checkGrammarImportCallExpression` rejects a dynamic import
-            // under `module: es2015`; the checker gates it on the option.
-            AstKind::ImportExpression(import) if import.phase.is_none() => self.push(1323, import.span, &[]),
+            // under `module: es2015`, and a second argument under a module
+            // kind that takes none; the checker gates both on the option. The
+            // parser leaves an empty-span placeholder for a spread argument.
+            AstKind::ImportExpression(import) if import.phase.is_none() => {
+                self.push(1323, import.span, &[]);
+                if let Some(options) = &import.options
+                    && !options.span().is_empty()
+                {
+                    self.push(1324, options.span(), &[]);
+                }
+                // `checkGrammarForDisallowedTrailingComma`, marked for the same
+                // gating.
+                let bytes = self.source_text.as_bytes();
+                let last = import.options.as_ref().unwrap_or(&import.source).span();
+                let comma = members::skip_trivia(self.source_text, last.end as usize);
+                if comma < import.span.end as usize
+                    && bytes[comma] == b','
+                    && bytes.get(members::skip_trivia(self.source_text, comma + 1)) == Some(&b')')
+                {
+                    self.push(1009, Span::new(comma as u32, comma as u32 + 1), &["import"]);
+                }
+            }
             AstKind::BinaryExpression(binary) => self.check_instanceof_instantiation(binary),
             _ => {}
         }

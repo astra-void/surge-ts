@@ -161,12 +161,14 @@ fn lower_enum_declaration(
                 call_signature: None,
             call_signature_overloads: Vec::new(),
                 construct_signature: None,
+                construct_signature_overloads: Vec::new(),
                 non_primitive: false,
                 display_name: Some(format!("typeof {}", declaration.id.name)),
             }))),
             initializer: None,
             initializer_span: None,
             declaration_list: None,
+            annotated_pattern: None,
         },
     )
 }

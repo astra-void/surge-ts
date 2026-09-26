@@ -123,15 +123,36 @@ pub(crate) fn collect_hoisted_vars(body: &[ParsedFunctionBodyStatement]) -> Vec<
 /// As [`collect_hoisted_vars`]; `with_for_of_elements` also hoists a `for…of`
 /// `var`, whose element type only a type-checking walk can settle. A `for…in`
 /// key is always `string`, so it is hoisted either way.
+///
+/// A `var` declared more than once is one binding, judged by its first
+/// declaration — the symbol's `valueDeclaration`, which is what tsc's
+/// `checkIdentifier` reads its ambient flag, `!` and type from. A later
+/// `declare var` or `var x!: T` changes nothing about it.
 pub(crate) fn collect_hoisted_vars_with(
     body: &[ParsedFunctionBodyStatement],
     with_for_of_elements: bool,
 ) -> Vec<Arc<str>> {
-    fn walk(body: &[ParsedFunctionBodyStatement], elements: bool, names: &mut Vec<Arc<str>>) {
+    struct Hoisting {
+        elements: bool,
+        names: Vec<Arc<str>>,
+        declared: Vec<Arc<str>>,
+    }
+    impl Hoisting {
+        /// Whether `name` is declared here for the first time.
+        fn first_declaration(&mut self, name: &str) -> bool {
+            if self.declared.iter().any(|declared| declared.as_ref() == name) {
+                return false;
+            }
+            self.declared.push(name.into());
+            true
+        }
+    }
+    fn walk(body: &[ParsedFunctionBodyStatement], hoisting: &mut Hoisting) {
         for statement in body {
             match statement {
                 ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
                     if variable.kind == ParsedVariableKind::Var
+                        && hoisting.first_declaration(&variable.name)
                         && !variable.is_declare
                         && !variable.has_definite_assertion
                         && match &variable.declared_type {
@@ -141,49 +162,52 @@ pub(crate) fn collect_hoisted_vars_with(
                                 .as_ref()
                                 .is_some_and(initializer_is_never_undefined),
                         }
-                        && !names.iter().any(|name| name.as_ref() == variable.name)
                     {
-                        names.push(variable.name.as_str().into());
+                        hoisting.names.push(variable.name.as_str().into());
                     }
                 }
-                ParsedFunctionBodyStatement::Block(block) => walk(block, elements, names),
+                ParsedFunctionBodyStatement::Block(block) => walk(block, hoisting),
                 ParsedFunctionBodyStatement::If(if_statement) => {
-                    walk(&if_statement.then_body, elements, names);
-                    walk(&if_statement.else_body, elements, names);
+                    walk(&if_statement.then_body, hoisting);
+                    walk(&if_statement.else_body, hoisting);
                 }
                 ParsedFunctionBodyStatement::While(while_statement) => {
-                    walk(&while_statement.body, elements, names)
+                    walk(&while_statement.body, hoisting)
                 }
                 ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
                     if for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::Var
-                        && (elements || for_of_statement.keys_only)
                         && let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } =
                             &for_of_statement.binding_name
-                        && !names.iter().any(|hoisted| hoisted.as_ref() == name)
+                        && hoisting.first_declaration(name)
+                        && (hoisting.elements || for_of_statement.keys_only)
                     {
-                        names.push(name.as_str().into());
+                        hoisting.names.push(name.as_str().into());
                     }
-                    walk(&for_of_statement.body, elements, names)
+                    walk(&for_of_statement.body, hoisting)
                 }
                 ParsedFunctionBodyStatement::Switch(switch_statement) => {
                     for case in &switch_statement.cases {
-                        walk(&case.consequent, elements, names);
+                        walk(&case.consequent, hoisting);
                     }
                 }
                 ParsedFunctionBodyStatement::Try(try_statement) => {
-                    walk(&try_statement.block, elements, names);
+                    walk(&try_statement.block, hoisting);
                     if let Some(handler) = &try_statement.handler {
-                        walk(&handler.body, elements, names);
+                        walk(&handler.body, hoisting);
                     }
-                    walk(&try_statement.finalizer, elements, names);
+                    walk(&try_statement.finalizer, hoisting);
                 }
                 _ => {}
             }
         }
     }
-    let mut names = Vec::new();
-    walk(body, with_for_of_elements, &mut names);
-    names
+    let mut hoisting = Hoisting {
+        elements: with_for_of_elements,
+        names: Vec::new(),
+        declared: Vec::new(),
+    };
+    walk(body, &mut hoisting);
+    hoisting.names
 }
 
 /// An initializer whose type is never `undefined`, `any` or `unknown`, so the
@@ -285,7 +309,9 @@ pub(crate) fn annotation_admits_undefined(declared: &surge_ts_syntax::ParsedType
         | ParsedType::Void
         | ParsedType::Undefined
         | ParsedType::ErrorType => true,
-        ParsedType::Union(members) => members.iter().any(annotation_admits_undefined),
+        ParsedType::Union(members) => members
+            .iter()
+            .any(|member| !matches!(member, ParsedType::Void) && annotation_admits_undefined(member)),
         _ => false,
     }
 }

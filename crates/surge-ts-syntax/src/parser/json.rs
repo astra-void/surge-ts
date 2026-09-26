@@ -214,6 +214,7 @@ impl JsonParser<'_> {
             call_signature: None,
             call_signature_overloads: Vec::new(),
             construct_signature: None,
+            construct_signature_overloads: Vec::new(),
             non_primitive: false,
             display_name: None,
         })))

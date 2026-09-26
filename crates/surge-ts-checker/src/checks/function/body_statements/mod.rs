@@ -233,6 +233,7 @@ pub(crate) fn check_function_variable_declaration(
         VariableCheckOptions {
             report_duplicate_let_const: false,
             check_initializer: !initializer_flow_blocked,
+            check_type_literal: true,
         },
     ) {
         apply_variable_declaration_state(

@@ -20,8 +20,8 @@ use crate::infer::InferredExpression;
 /// conversion that relates neither way is the mistake. A type surge failed to
 /// model, and `any`, relate to everything and so can never be it.
 fn overlaps(source: &Type, target: &Type) -> bool {
-    if source.is_unknown()
-        || target.is_unknown()
+    if source.is_unmodelled()
+        || target.is_unmodelled()
         || matches!(source, Type::Any | Type::GenuineUnknown | Type::Never)
         || matches!(target, Type::Any | Type::GenuineUnknown | Type::Never)
     {

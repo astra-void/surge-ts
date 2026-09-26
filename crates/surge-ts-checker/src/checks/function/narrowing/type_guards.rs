@@ -441,7 +441,29 @@ pub(super) fn narrow_to_instanceof_subclass(
     }
     // Narrow only along a real subtype edge; an unrelated constructor leaves the
     // subject alone rather than replacing it with something it never was.
-    surge_ts_types::is_assignable_to(instance, ty).then(|| instance.clone())
+    if surge_ts_types::is_assignable_to(instance, ty) {
+        return Some(instance.clone());
+    }
+    // `getNarrowedType` intersects what does not relate (`X & Y`); a weak
+    // subject a class instance shares no member with is the case surge used
+    // to relate before it checked weak types, and its members are the union
+    // of both sides'.
+    if surge_ts_types::is_weak_type(ty)
+        && let (Type::Object(subject), Type::Object(candidate)) = (ty.peeled(), instance.peeled())
+        && !candidate.properties.values().any(|property| property.ty.is_unknown())
+    {
+        let mut properties = (*candidate.properties).clone();
+        for (name, property) in subject.properties.iter() {
+            if !properties.contains_key(name.as_ref()) {
+                properties.insert(name.clone(), property.clone());
+            }
+        }
+        return Some(Type::Object(crate::metrics::alloc_object_type(
+            properties,
+            candidate.string_index_type.as_deref().cloned(),
+        )));
+    }
+    None
 }
 
 /// Whether `instance` is the global `Object` or `Function` interface — the

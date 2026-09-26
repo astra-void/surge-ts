@@ -120,6 +120,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2303",
+    "category": "Error",
+    "message": "Circular definition of import alias '{0}'.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS2706",
     "category": "Error",
     "message": "Required type parameters may not follow optional type parameters.",
@@ -525,6 +533,14 @@
     "message": "Cannot redeclare block-scoped variable '{0}'.",
     "source": "typescript",
     "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2714",
+    "category": "Error",
+    "message": "The expression of an export assignment must be an identifier or qualified name in an ambient context.",
+    "source": "typescript",
+    "arity": 0,
     "support": "emitted"
   },
   {
@@ -1229,7 +1245,7 @@
     "message": "This syntax is reserved in files with the .mts or .cts extension. Add a trailing comma or explicit constraint.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS7061",
@@ -1605,7 +1621,7 @@
     "message": "The operand of a 'delete' operator cannot be a private identifier.",
     "source": "typescript",
     "arity": 0,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS1102",
@@ -3616,6 +3632,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS18019",
+    "category": "Error",
+    "message": "'{0}' modifier cannot be used with a private identifier.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "catalog-only"
+  },
+  {
     "code": "TS1034",
     "category": "Error",
     "message": "'super' must be followed by an argument list or member access.",
@@ -3893,7 +3917,15 @@
     "message": "Property '{0}' is not accessible outside class '{1}' because it has a private identifier.",
     "source": "typescript",
     "arity": 2,
-    "support": "catalog-only"
+    "support": "emitted"
+  },
+  {
+    "code": "TS18014",
+    "category": "Error",
+    "message": "The property '{0}' cannot be accessed on type '{1}' within this class because it is shadowed by another private identifier with the same spelling.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
   },
   {
     "code": "TS2673",
@@ -4213,7 +4245,7 @@
     "message": "Value of type '{0}' has no properties in common with type '{1}'. Did you mean to call it?",
     "source": "typescript",
     "arity": 2,
-    "support": "catalog-only"
+    "support": "emitted"
   },
   {
     "code": "TS7032",
@@ -5765,6 +5797,206 @@
     "message": "Computed property names on class or object literals cannot be inferred with --isolatedDeclarations.",
     "source": "typescript",
     "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2743",
+    "category": "Error",
+    "message": "No overload expects {0} type arguments, but overloads do exist that expect either {1} or {2} type arguments.",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2874",
+    "category": "Error",
+    "message": "This JSX tag requires '{0}' to be in scope, but it could not be found.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2879",
+    "category": "Error",
+    "message": "Using JSX fragments requires fragment factory '{0}' to be in scope, but it could not be found.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1471",
+    "category": "Error",
+    "message": "Module '{0}' cannot be imported using this construct. The specifier only resolves to an ES module, which cannot be imported with 'require'. Use an ECMAScript import instead.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1479",
+    "category": "Error",
+    "message": "The current file is a CommonJS module whose imports will produce 'require' calls; however, the referenced file is an ECMAScript module and cannot be imported with 'require'. Consider writing a dynamic 'import(\"{0}\")' call instead.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1541",
+    "category": "Error",
+    "message": "Type-only import of an ECMAScript module from a CommonJS module must have a 'resolution-mode' attribute.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2720",
+    "category": "Error",
+    "message": "Class '{0}' incorrectly implements class '{1}'. Did you mean to extend '{1}' and inherit its members as a subclass?",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1309",
+    "category": "Error",
+    "message": "The current file is a CommonJS module and cannot use 'await' at the top level.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1470",
+    "category": "Error",
+    "message": "The 'import.meta' meta-property is not allowed in files which will build into CommonJS output.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8024",
+    "category": "Error",
+    "message": "JSDoc '@param' tag has name '{0}', but there is no parameter with that name.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8030",
+    "category": "Error",
+    "message": "A JSDoc '@type' tag on a function must have a signature with the correct number of arguments.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8032",
+    "category": "Error",
+    "message": "Qualified name '{0}' is not allowed without a leading '@param {object} {1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8033",
+    "category": "Error",
+    "message": "A JSDoc '@typedef' comment may not contain multiple '@type' tags.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS8039",
+    "category": "Error",
+    "message": "A JSDoc '@template' tag may not follow a '@typedef', '@callback', or '@overload' tag",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1069",
+    "category": "Error",
+    "message": "Unexpected token. A type parameter name was expected without curly braces.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2559",
+    "category": "Error",
+    "message": "Type '{0}' has no properties in common with type '{1}'.",
+    "source": "typescript",
+    "arity": 2,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1286",
+    "category": "Error",
+    "message": "ECMAScript imports and exports cannot be written in a CommonJS file under 'verbatimModuleSyntax'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1287",
+    "category": "Error",
+    "message": "A top-level 'export' modifier cannot be used on value declarations in a CommonJS module when 'verbatimModuleSyntax' is enabled.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1295",
+    "category": "Error",
+    "message": "ECMAScript imports and exports cannot be written in a CommonJS file under 'verbatimModuleSyntax'. Adjust the 'type' field in the nearest 'package.json' to make this file an ECMAScript module, or adjust your 'verbatimModuleSyntax', 'module', and 'moduleResolution' settings in TypeScript.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1324",
+    "category": "Error",
+    "message": "Dynamic imports only support a second argument when the '--module' option is set to 'esnext', 'node16', 'node18', 'node20', 'nodenext', or 'preserve'.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1325",
+    "category": "Error",
+    "message": "Argument of dynamic import cannot be spread element.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1326",
+    "category": "Error",
+    "message": "This use of 'import' is invalid. 'import()' calls can be written, but they must have parentheses and cannot have type arguments.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2712",
+    "category": "Error",
+    "message": "A dynamic import call in ES5 requires the 'Promise' constructor.  Make sure you have a declaration for the 'Promise' constructor or include 'ES2015' in your '--lib' option.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS2858",
+    "category": "Error",
+    "message": "Import attribute values must be string literal expressions.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS7036",
+    "category": "Error",
+    "message": "Dynamic import's specifier must be of type 'string', but here has type '{0}'.",
+    "source": "typescript",
+    "arity": 1,
     "support": "emitted"
   }
 ]

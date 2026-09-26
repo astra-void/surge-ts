@@ -2863,18 +2863,13 @@ fn evaluate_object_literal_with_expected_type(
                 }
             }
         } else {
-            match expected_diagnostic {
-                ExpectedTypeDiagnostic::SatisfiesNotAssignable => {
-                    Diagnostic::ts1360(&source_type_name, &target_type_name, ctx.file_name.clone())
-                }
-                _ => crate::checks::expr::missing_properties_diagnostic(
-                    property_name,
-                    &missing_property_names,
-                    &source_type_name,
-                    &target_type_name,
-                    &ctx.file_name,
-                ),
-            }
+            crate::checks::expr::missing_properties_diagnostic(
+                property_name,
+                &missing_property_names,
+                &source_type_name,
+                &target_type_name,
+                &ctx.file_name,
+            )
         };
 
         ctx.push(diagnostic_with_syntax_span(
@@ -3205,11 +3200,15 @@ fn push_expected_type_mismatch(
                 ctx.file_name.clone(),
             )
         }
-        ExpectedTypeDiagnostic::SatisfiesNotAssignable => Diagnostic::ts1360(
-            &source_type_name,
-            &expected_type_name,
-            ctx.file_name.clone(),
-        ),
+        ExpectedTypeDiagnostic::SatisfiesNotAssignable => {
+            crate::checks::expr::satisfies_mismatch_diagnostic(
+                source_type,
+                &reported_target,
+                &source_type_name,
+                &expected_type_name,
+                ctx.file_name.clone(),
+            )
+        }
     };
 
     ctx.push(diagnostic_with_syntax_span(diagnostic, span));

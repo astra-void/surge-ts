@@ -169,6 +169,8 @@ pub(crate) fn missing_property_diagnostic(
     symbols: &SymbolTable,
     ctx: &CheckerContext,
 ) -> Diagnostic {
+    // A private name is reported as written, whichever class body it resolved to.
+    let property_name = surge_ts_types::private_name::display(property_name);
     let file_name = ctx.file_name.clone();
     let object_type_name = object_type.name();
     if let Some(class_name) =
@@ -332,7 +334,9 @@ pub(crate) fn property_spelling_suggestion(name: &str, object_type: &Type) -> Op
         candidates
             .iter()
             .map(String::as_str)
-            .filter(|candidate| !candidate.starts_with('[')),
+            .filter(|candidate| {
+                !candidate.starts_with('[') && !surge_ts_types::private_name::is_private_name_key(candidate)
+            }),
         0,
     )
     .map(str::to_string)

@@ -48,6 +48,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                 call_signature: None,
                 call_signature_overloads: Vec::new(),
                 construct_signature: None,
+                construct_signature_overloads: Vec::new(),
                 non_primitive: true,
                 display_name: None,
             },
@@ -87,6 +88,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                     call_signature: None,
                     call_signature_overloads: Vec::new(),
                     construct_signature: Some(Box::new(function)),
+                    construct_signature_overloads: Vec::new(),
                     non_primitive: false,
                     display_name: None,
                 }))
@@ -781,6 +783,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
     let mut call_signature: Option<Box<ParsedFunctionType>> = None;
     let mut call_signature_overloads: Vec<ParsedFunctionType> = Vec::new();
     let mut construct_signature: Option<Box<ParsedFunctionType>> = None;
+    let mut construct_signature_overloads: Vec<ParsedFunctionType> = Vec::new();
     let getters = getter_accessor_names(&type_literal.members);
 
     for member in &type_literal.members {
@@ -819,6 +822,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
                 // (a conditional branch object carrying both a construct and a
                 // call signature) uncallable.
                 if let Some(parsed) = parse_construct_signature(signature) {
+                    construct_signature_overloads.push(parsed.clone());
                     construct_signature = Some(match construct_signature.take() {
                         Some(existing) => {
                             Box::new(merge_parsed_call_signatures(&existing, &parsed))
@@ -871,6 +875,11 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
             Vec::new()
         },
         construct_signature,
+        construct_signature_overloads: if construct_signature_overloads.len() > 1 {
+            construct_signature_overloads
+        } else {
+            Vec::new()
+        },
         non_primitive: false,
         display_name: None,
     }))
@@ -1098,10 +1107,21 @@ pub(crate) fn parse_type_method_signature(
         }
         (computed_key_name(&method_signature.key)?, None)
     } else {
-        let PropertyKey::StaticIdentifier(key) = &method_signature.key else {
-            return None;
-        };
-        (key.name.to_string(), Some(text_span_from_oxc_span(key.span)))
+        // A numeric or quoted method name is a member like any other, named as
+        // a property signature's is: `6(): string` declares `6`.
+        match &method_signature.key {
+            PropertyKey::StaticIdentifier(key) => {
+                (key.name.to_string(), Some(text_span_from_oxc_span(key.span)))
+            }
+            PropertyKey::NumericLiteral(literal) => (
+                super::number_text::js_number_to_string(literal.value),
+                Some(text_span_from_oxc_span(literal.span)),
+            ),
+            PropertyKey::StringLiteral(literal) => {
+                (literal.value.to_string(), Some(text_span_from_oxc_span(literal.span)))
+            }
+            _ => return None,
+        }
     };
 
     // A `get`/`set` accessor lowers to a plain property: the getter's return

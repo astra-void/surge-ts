@@ -122,10 +122,9 @@ pub(crate) fn check_delete_operand(
         return;
     };
 
-    // An operand surge did not model arrives as `Unknown`. A private field is
-    // the case that reaches here today, and reporting a *shape* rule on it
-    // would be a false positive about syntax that is in fact a property
-    // reference — so TS18011 and TS2790 stay unreported rather than wrong.
+    // An operand surge did not model arrives as `Unknown`: reporting a
+    // *shape* rule on it would be a false positive about what may well be a
+    // property reference.
     if matches!(operand, ParsedExpression::Unknown) {
         return;
     }
@@ -141,6 +140,14 @@ pub(crate) fn check_delete_operand(
         let file_name = ctx.file_name.clone();
         ctx.push(Diagnostic::ts2703(file_name).with_span(convert_span(span)));
         return;
+    }
+    // The member is still checked: tsc goes on to the read-only and optional
+    // rules.
+    if let ParsedExpression::PropertyAccess { property_name, is_bracketed: false, .. } = operand
+        && surge_ts_types::private_name::is_private_name_key(property_name)
+    {
+        let file_name = ctx.file_name.clone();
+        ctx.push(Diagnostic::ts18011(file_name).with_span(convert_span(span)));
     }
 
     // A delete target is written through (`isDeleteTarget`): a `readonly`
@@ -320,7 +327,8 @@ pub(crate) fn report_readonly_member_write(
     }
     let file_name = ctx.file_name.clone();
     let anchor = property_name_span(target).unwrap_or(span);
-    ctx.push(Diagnostic::ts2540(&property_name, file_name).with_span(convert_span(anchor)));
+    let property_name = surge_ts_types::private_name::display(&property_name);
+    ctx.push(Diagnostic::ts2540(property_name, file_name).with_span(convert_span(anchor)));
     true
 }
 
@@ -355,11 +363,9 @@ pub(crate) fn check_update_operand(
 
     if let ParsedExpression::Identifier { name, .. } = operand {
         if let Some(symbol) = symbols.get(name) {
-            if let Some(diagnostic) = crate::checks::assign::unwritable_binding_diagnostic(
-                name,
-                &symbol,
-                ctx.file_name.clone(),
-            ) {
+            if let Some(diagnostic) =
+                crate::checks::assign::unwritable_binding_diagnostic(name, &symbol, ctx)
+            {
                 ctx.push(diagnostic.with_span(convert_span(span)));
                 return;
             }

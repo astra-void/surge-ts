@@ -15,7 +15,8 @@ impl NullishTest {
     fn selects(self, member: &Type) -> bool {
         match member {
             Type::Null => self.null,
-            Type::Undefined => self.undefined,
+            // `void`'s facts are `undefined`'s (`TypeFactsVoidFacts`).
+            Type::Undefined | Type::Void => self.undefined,
             // `T & null` (a type variable narrowed by `typeof x === "object"`)
             // has the facts of its nullish operand.
             Type::Object(object) if surge_ts_types::type_variable::is_nullish_type_variable_intersection(member) => {
@@ -119,6 +120,18 @@ pub(crate) fn narrow_binding_by_nullish(
 ) -> Option<Type> {
     if keep_matching && surge_ts_types::strict_null_checks() && is_never_nullish(ty) {
         return Some(Type::Never);
+    }
+    // `getAdjustedTypeWithFacts` reads `unknown` as `{} | null | undefined`,
+    // which a matching test leaves at the nullish values it selects.
+    if keep_matching && surge_ts_types::strict_null_checks() && matches!(ty, Type::GenuineUnknown) {
+        let mut selected = Vec::new();
+        if test.null {
+            selected.push(Type::Null);
+        }
+        if test.undefined {
+            selected.push(Type::Undefined);
+        }
+        return (!selected.is_empty()).then(|| union_type(selected));
     }
     narrow_union_by_nullish(ty, keep_matching, test)
 }

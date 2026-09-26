@@ -1955,6 +1955,11 @@ pub(crate) fn check_arrow_function_expression_anchored(
     let is_argument = std::mem::take(&mut ctx.next_arrow_is_argument);
     let context_only = std::mem::take(&mut ctx.next_arrow_context_only);
     check_type_parameter_declarations(&type_parameters, ctx);
+    // A generic arrow's, function expression's or object-literal method's own
+    // type parameters are type variables while its signature and body are
+    // checked, exactly as a declaration's are; the signature is mapped inside
+    // the scope, so it resolves over them rather than the placeholders.
+    let _type_variables = enter_body_type_variables(&type_parameters, ctx);
 
     // An arrow does not bind `this`, so it keeps whatever the enclosing function
     // established; a `function` expression and an object-literal method both
@@ -2144,7 +2149,8 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 check_binding_pattern_defaults(
                     &parameter.binding_name,
                     parameter_types.get(index),
-                    &scopes,
+                    parameter.declared_type.is_some(),
+                    scopes.visible_symbols(),
                     ctx,
                 );
             }
@@ -2182,7 +2188,9 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     ty => Some(ty),
                 };
                 let inferred_body = match return_type_for_body {
-                    None => evaluate_expression(&expression, None, &visible_symbols, ctx),
+                    // Like a `return` operand, the body anchors what its own
+                    // node has no span for (TS2352 on `() => <T>null`).
+                    None => evaluate_expression(&expression, body_span, &visible_symbols, ctx),
                     // Only an annotated return type is checked through
                     // `checkReturnExpression`; a contextual one is related by the
                     // enclosing assignment, which does not split a conditional.

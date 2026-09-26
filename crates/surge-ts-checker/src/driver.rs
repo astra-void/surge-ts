@@ -74,6 +74,9 @@ fn check_single_source(
     }
     crate::program::emit_grammar_diagnostics(&parsed.grammar_diagnostics, &mut ctx);
     ctx.parenthesized_expressions = parsed.parenthesized_expressions.into();
+    if !parsed.is_module && !crate::program::file_is_forced_module(&file_name, parsed.jsx_factory_uses.first_tag.is_some(), &ctx.options) {
+        ctx.global_this_starts = parsed.global_this_starts.into();
+    }
     ctx.let_assignments = parsed.let_assignments.into();
     ctx.jsx_factory_uses = parsed.jsx_factory_uses.clone();
     if !classify_file_kind(&file_name).is_declaration() {
@@ -224,13 +227,16 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
                 tsc_globals: None,
                 no_check: false,
                 is_module: parsed.is_module,
+                commonjs_module: parsed.commonjs_module,
                 import_call_specifiers: parsed.import_call_specifiers,
+                import_calls: Vec::new(),
                 file_kind: FileKind::GeneratedDeclaration,
                 module_reads: parsed.module_reads,
                 definite_writes: parsed.definite_writes,
                 comment_directives: parsed.comment_directives,
                 grammar_diagnostics: Vec::new(),
                 parenthesized_expressions: Default::default(),
+                global_this_starts: Default::default(),
                 let_assignments: Default::default(),
                 json_module_type: None,
                 jsx_factory_uses: parsed.jsx_factory_uses,

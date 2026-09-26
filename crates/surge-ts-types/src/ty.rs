@@ -573,6 +573,7 @@ fn object_structural_name(object: &crate::ObjectType) -> String {
                     .properties
                     .iter()
                     .flat_map(|(name, property)| {
+                        let name = crate::private_name::display(name);
                         // tsc prints a member declared with method syntax as
                         // one, overload by overload: `f(s: string): number`.
                         if property.method
@@ -1628,10 +1629,19 @@ fn narrowed_type_variable_member(object: &crate::ObjectType, name: &str) -> Opti
         return None;
     }
     let operands = object.intersection_operands.as_deref()?;
-    operands.iter().find_map(|operand| match operand {
-        Type::TypeParameter(parameter) => {
-            crate::type_variable::active_constraint(parameter)??.get_property_access_type(name)
-        }
-        other => other.get_property_access_type(name),
-    })
+    // The member tsc reads is every operand's member intersected; the type a
+    // guard narrowed to is the one that refines the variable's constraint, so
+    // it answers first.
+    operands
+        .iter()
+        .filter(|operand| !matches!(operand, Type::TypeParameter(_)))
+        .find_map(|operand| operand.get_property_access_type(name))
+        .or_else(|| {
+            operands.iter().find_map(|operand| match operand {
+                Type::TypeParameter(parameter) => {
+                    crate::type_variable::active_constraint(parameter)??.get_property_access_type(name)
+                }
+                _ => None,
+            })
+        })
 }

@@ -16,11 +16,13 @@
 
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
-    ParsedClassDeclaration, ParsedClassMember, ParsedDecoratorTarget, ParsedExportDeclaration,
-    ParsedExpression, ParsedStatement, TextSpan,
+    EXPRESSION_HERITAGE_BASE, ParsedBindingName, ParsedClassDeclaration, ParsedClassMember,
+    ParsedDecoratorTarget, ParsedExportDeclaration, ParsedExpression, ParsedFunctionBodyStatement,
+    ParsedStatement, ParsedType, TextSpan,
 };
 
 use crate::context::{CheckerContext, convert_span};
+use crate::symbols::TypeDeclarationInfo;
 use surge_ts_types::fx::FxHashMap;
 
 /// A declaration whose binding is in its temporal dead zone until evaluated.
@@ -194,6 +196,15 @@ fn for_each_statement_expression(
             }
         }
         ParsedStatement::Expression(expression) => visit(expression),
+        ParsedStatement::Call(call) => {
+            visit(&ParsedExpression::Identifier {
+                name: call.callee_name.clone(),
+                span: call.callee_span,
+            });
+            for argument in &call.arguments {
+                visit(&argument.expression);
+            }
+        }
         ParsedStatement::Assignment(assignment) => visit(&assignment.value),
         ParsedStatement::MemberAssignment(assignment) => visit(&assignment.value),
         ParsedStatement::ExportDeclaration(export) => {
@@ -361,120 +372,423 @@ fn for_each_child_expression(
     }
 }
 
-/// What a class property initializer is allowed to read off `this`, ported from
-/// `checkPropertyNotUsedBeforeDeclaration`.
-///
-/// Field initializers run in declaration order, before the constructor body, so
-/// one may only read a property whose initializer has already run. Two parts of
-/// the rule are easy to miss and both are load-bearing:
-///
-/// - A property **without an initializer** never satisfies the "declared before
-///   use" test through `this`, even when it appears earlier in the class: there
-///   is nothing to have run. Only a `!` definite assignment exempts it, and only
-///   there — a property declared *later* is unusable however it is written.
-///   This is the `declaration.Initializer() == nil` clause of
-///   `isBlockScopedNameDeclaredBeforeUse`, which sits inside its
-///   `declaration.Pos() <= usage.Pos()` branch.
-/// - An optional property is exempt outright (`isOptionalPropertyDeclaration`),
-///   because reading it as `undefined` is what its type already says.
-///
-/// A method is not a property declaration and is always available.
-struct InitializedProperty {
-    declared_at: usize,
-    has_initializer: bool,
-    optional: bool,
-    asserted: bool,
+/// A class member a property initializer or a static block can read through
+/// `this` or the class name, as `checkPropertyNotUsedBeforeDeclaration` weighs
+/// its declaration.
+#[derive(Clone, Copy)]
+enum InitializedMemberKind {
+    /// A property declaration, auto-accessors included.
+    Property {
+        has_initializer: bool,
+        /// `x!: T`.
+        asserted: bool,
+        /// Typed `any` or `unknown`, an unannotated and uninitialized property
+        /// included: `undefined` never shows in its flow type, so any static
+        /// block ahead of a read counts as initializing it
+        /// (`isPropertyInitializedInStaticBlocks`).
+        wide: bool,
+    },
+    /// A constructor parameter property.
+    ParameterProperty,
+    /// A `get`/`set` accessor.
+    Accessor,
+    /// Never reported: an optional property, whose `undefined` is what its type
+    /// already says (`isOptionalPropertyDeclaration`), or a method, which is
+    /// deferred from an instance initializer and exempt when static.
+    Exempt,
 }
 
+#[derive(Clone, Copy)]
+struct InitializedMember {
+    kind: InitializedMemberKind,
+    is_static: bool,
+    /// The declaration's source range (tsc's `declaration.Pos()` and `End()`).
+    start: usize,
+    end: usize,
+}
+
+/// Where a read runs, which is what `isUsedInFunctionOrInstanceProperty` asks
+/// of it.
+#[derive(Clone, Copy)]
+enum ReadSite {
+    Initializer { is_static: bool, initializer_start: usize },
+    StaticBlock,
+}
+
+/// Property reads that run before the property is initialized (TS2729), ported
+/// from `checkPropertyNotUsedBeforeDeclaration`: `this.<name>` or
+/// `<Class>.<name>` in a property initializer or a static block, outside any
+/// function or arrow (`isInPropertyInitializerOrClassStaticBlock`), resolved
+/// to the class's own member on the side `this` stands for there.
 pub(crate) fn check_class_property_initializers(
     class: &ParsedClassDeclaration,
     ctx: &mut CheckerContext,
 ) {
-    let mut properties: FxHashMap<String, InitializedProperty> = FxHashMap::default();
-    for member in &class.members {
-        let ParsedClassMember::Property(property) = member else {
-            continue;
-        };
-        let Some(span) = property.name_span else {
-            continue;
-        };
-        properties.insert(
-            property.name.clone(),
-            InitializedProperty {
-                declared_at: span.start,
-                has_initializer: property.initializer.is_some(),
-                optional: property.optional,
-                asserted: property.has_definite_assertion,
-            },
-        );
-    }
-    if properties.is_empty() {
+    if surge_ts_syntax::is_declaration_file_name(&ctx.file_name) {
         return;
     }
+    let members = initialized_members(class);
+    if members.is_empty() {
+        return;
+    }
+    let emit_standard_class_fields = ctx.options.emit_standard_class_fields();
+    let initialized_in_static_blocks = |name: &str, wide: bool, before: usize| {
+        class.members.iter().any(|member| {
+            matches!(member, ParsedClassMember::StaticBlock(block)
+                if block.span.is_some_and(|span| span.start <= before)
+                    && (wide || super::property_initialization::body_assigns(&block.body, name)))
+        })
+    };
 
     let mut reported = Vec::new();
-    for member in &class.members {
-        let ParsedClassMember::Property(property) = member else {
-            continue;
+    let mut check_read = |name: &str, read: TextSpan, is_static: bool, through_this: bool, site: ReadSite| {
+        let Some(member) = members.get(&(name, is_static)).copied() else {
+            return;
         };
-        let Some(initializer) = &property.initializer else {
-            continue;
-        };
-        let Some(use_span) = property.name_span else {
-            continue;
-        };
-        walk_this_reads(initializer, &class.name, &mut |name, span| {
-            let Some(target) = properties.get(name) else {
-                return;
-            };
-            if target.optional {
-                return;
+        let early = read_before_initialization(member, site, read, through_this, emit_standard_class_fields, || {
+            match (member.kind, site) {
+                (
+                    InitializedMemberKind::Property { wide, .. },
+                    ReadSite::Initializer { initializer_start, .. },
+                ) => initialized_in_static_blocks(name, wide, initializer_start),
+                _ => false,
             }
-            // The `!` and "has an initializer" exemptions belong only to the
-            // *declared-earlier* branch of `isBlockScopedNameDeclaredBeforeUse`:
-            // they say an earlier property is already usable. A property
-            // declared later is unusable however it is written.
-            if target.declared_at < use_span.start
-                && (target.has_initializer || target.asserted)
-            {
-                return;
-            }
-            reported.push((name.to_string(), span));
         });
+        if early {
+            reported.push((name.to_string(), read));
+        }
+    };
+    for member in &class.members {
+        match member {
+            ParsedClassMember::Property(property) if property.this_assignments.is_none() => {
+                let (Some(initializer), Some(initializer_span)) =
+                    (&property.initializer, property.initializer_span)
+                else {
+                    continue;
+                };
+                let site = ReadSite::Initializer {
+                    is_static: property.is_static,
+                    initializer_start: initializer_span.start,
+                };
+                walk_member_reads(initializer, &class.name, &mut |name, read, through_this| {
+                    check_read(name, read, property.is_static || !through_this, through_this, site)
+                });
+            }
+            ParsedClassMember::StaticBlock(block) => {
+                walk_statement_member_reads(&block.body, &class.name, &mut |name, read, through_this| {
+                    check_read(name, read, true, through_this, ReadSite::StaticBlock)
+                });
+            }
+            _ => {}
+        }
     }
 
+    let use_define_for_class_fields = ctx.options.use_define_for_class_fields;
     for (name, span) in reported {
-        let diagnostic = Diagnostic::ts2729(&name, ctx.file_name.clone());
+        if !use_define_for_class_fields && declared_in_ancestor_class(class, &name, ctx) {
+            continue;
+        }
+        let diagnostic = Diagnostic::ts2729(surge_ts_types::private_name::display(&name), ctx.file_name.clone());
         ctx.push(diagnostic.with_span(convert_span(span)));
     }
 }
 
-/// Visits every `this.<name>` and `<ClassName>.<name>` read in `expression`,
-/// stopping at function boundaries for the reason [`walk`] does.
-fn walk_this_reads(
+/// The class's own members by name and side; the first declaration of a name
+/// is its value declaration.
+fn initialized_members(class: &ParsedClassDeclaration) -> FxHashMap<(&str, bool), InitializedMember> {
+    fn declare<'a>(
+        members: &mut FxHashMap<(&'a str, bool), InitializedMember>,
+        name: &'a str,
+        is_static: bool,
+        span: Option<TextSpan>,
+        kind: InitializedMemberKind,
+    ) {
+        if let Some(span) = span {
+            members.entry((name, is_static)).or_insert(InitializedMember {
+                kind,
+                is_static,
+                start: span.start,
+                end: span.end,
+            });
+        }
+    }
+    let mut members = FxHashMap::default();
+    for member in &class.members {
+        match member {
+            // A JavaScript `this.x = v` declares no class element.
+            ParsedClassMember::Property(property) if property.this_assignments.is_none() => {
+                let kind = if property.optional {
+                    InitializedMemberKind::Exempt
+                } else {
+                    InitializedMemberKind::Property {
+                        has_initializer: property.initializer.is_some(),
+                        asserted: property.has_definite_assertion,
+                        wide: match &property.declared_type {
+                            Some(declared) => matches!(declared, ParsedType::Any | ParsedType::UnknownKeyword),
+                            None => property.initializer.is_none(),
+                        },
+                    }
+                };
+                declare(&mut members, &property.name, property.is_static, property.span, kind);
+            }
+            ParsedClassMember::Property(_) => {}
+            ParsedClassMember::Accessor(accessor) => {
+                declare(
+                    &mut members,
+                    &accessor.name,
+                    accessor.is_static,
+                    accessor.span,
+                    InitializedMemberKind::Accessor,
+                );
+            }
+            ParsedClassMember::Method(method) => {
+                declare(&mut members, &method.name, method.is_static, method.span, InitializedMemberKind::Exempt);
+            }
+            ParsedClassMember::Constructor(constructor) => {
+                for parameter in &constructor.parameters {
+                    if parameter.is_parameter_property
+                        && let ParsedBindingName::Identifier { name, span } = &parameter.binding_name
+                    {
+                        declare(&mut members, name, false, *span, InitializedMemberKind::ParameterProperty);
+                    }
+                }
+            }
+            ParsedClassMember::StaticBlock(_) => {}
+        }
+    }
+    members
+}
+
+/// `isBlockScopedNameDeclaredBeforeUse` for a read of a member of the class
+/// being declared, with `isUsedInFunctionOrInstanceProperty` and
+/// `isPropertyImmediatelyReferencedWithinDeclaration` answered for the two
+/// sites such a read can run from.
+///
+/// A property **without an initializer** never passes the declared-before test
+/// through `this`, even when it appears earlier in the class: there is nothing
+/// to have run. Only a `!` exempts it. This is the `declaration.Initializer()
+/// == nil` clause inside the `declaration.Pos() <= usage.Pos()` branch, and it
+/// does not apply to a read through the class name.
+fn read_before_initialization(
+    member: InitializedMember,
+    site: ReadSite,
+    read: TextSpan,
+    through_this: bool,
+    emit_standard_class_fields: bool,
+    initialized_in_static_blocks: impl FnOnce() -> bool,
+) -> bool {
+    let is_property = match member.kind {
+        InitializedMemberKind::Exempt => return false,
+        InitializedMemberKind::Property { .. } => true,
+        InitializedMemberKind::ParameterProperty | InitializedMemberKind::Accessor => false,
+    };
+    let unassigned_this_read = through_this
+        && matches!(
+            member.kind,
+            InitializedMemberKind::Property { has_initializer: false, asserted: false, .. }
+        );
+    if member.start <= read.start && !unassigned_this_read {
+        return match member.kind {
+            // Only a read inside the property's own initializer (`x = this.x`).
+            InitializedMemberKind::Property { .. } => read.end <= member.end,
+            // With [[Define]] fields a parameter property is assigned after
+            // every field initializer has run.
+            InitializedMemberKind::ParameterProperty => {
+                emit_standard_class_fields && matches!(site, ReadSite::Initializer { is_static: false, .. })
+            }
+            InitializedMemberKind::Accessor | InitializedMemberKind::Exempt => false,
+        };
+    }
+    let deferred = match site {
+        ReadSite::StaticBlock => member.start < read.start,
+        ReadSite::Initializer { is_static: false, .. } => !(is_property && !member.is_static),
+        ReadSite::Initializer { is_static: true, .. } => is_property && initialized_in_static_blocks(),
+    };
+    if !deferred {
+        return true;
+    }
+    emit_standard_class_fields
+        && (is_property || matches!(member.kind, InitializedMemberKind::ParameterProperty))
+        && read.end <= member.end
+}
+
+/// tsc's `isPropertyDeclaredInAncestorClass`: without [[Define]] fields, a
+/// member the base class already declares was initialized by its constructor.
+/// A base chain this file cannot name counts as declaring it.
+fn declared_in_ancestor_class(class: &ParsedClassDeclaration, name: &str, ctx: &CheckerContext) -> bool {
+    let Some(base) = class.extends.first() else {
+        return false;
+    };
+    let mut next = Some(base.name.clone());
+    let mut visited = Vec::new();
+    while let Some(current) = next.take() {
+        if current == EXPRESSION_HERITAGE_BASE || visited.contains(&current) {
+            return true;
+        }
+        let Some(TypeDeclarationInfo::Interface(info)) = ctx.lookup_type_declaration(&current) else {
+            return true;
+        };
+        if info.body.members.iter().any(|member| member.name == name) {
+            return true;
+        }
+        next = info.body.extends.first().map(|parent| parent.name.clone());
+        visited.push(current);
+    }
+    false
+}
+
+/// Visits every `this.<name>` and `<ClassName>.<name>` property access
+/// `expression` evaluates as it runs, saying whether it is through `this`. No
+/// function or arrow body is entered, not even an immediately invoked one:
+/// `isInPropertyInitializerOrClassStaticBlock` stops at both. A `this["name"]`
+/// element access is not a property access at all.
+fn walk_member_reads(
     expression: &ParsedExpression,
     class_name: &str,
-    visit: &mut impl FnMut(&str, TextSpan),
+    visit: &mut impl FnMut(&str, TextSpan, bool),
 ) {
     if let ParsedExpression::PropertyAccess {
         object,
         property_name,
-        property_span,
+        property_span: Some(span),
+        is_bracketed: false,
+        binding_element: false,
+        ..
+    }
+    | ParsedExpression::OptionalPropertyAccess {
+        object,
+        property_name,
+        property_span: Some(span),
+        is_bracketed: false,
+        ..
+    }
+    | ParsedExpression::PropertyCall {
+        object,
+        property_name,
+        property_span: Some(span),
+        ..
+    }
+    | ParsedExpression::OptionalPropertyCall {
+        object,
+        property_name,
+        property_span: Some(span),
         ..
     } = expression
     {
-        let reads_own_member = match object.as_ref() {
-            ParsedExpression::This { .. } => true,
-            ParsedExpression::Identifier { name, .. } => name == class_name,
-            _ => false,
-        };
-        if reads_own_member && let Some(span) = property_span {
-            visit(property_name, *span);
-            return;
+        match object.as_ref() {
+            ParsedExpression::This { .. } => visit(property_name, *span, true),
+            ParsedExpression::Identifier { name, .. } if name == class_name => {
+                visit(property_name, *span, false)
+            }
+            _ => {}
         }
     }
 
-    for_each_child_expression(expression, &mut |child| {
-        walk_this_reads(child, class_name, visit)
-    });
+    expression.for_each_child(&mut |child| walk_member_reads(child, class_name, visit));
+    match expression {
+        // A computed key runs with the literal; a method's or accessor's does
+        // not reach here, being inside the function it names.
+        ParsedExpression::ObjectLiteral { properties, .. } => {
+            for property in properties {
+                if let Some(key) = &property.computed_key {
+                    walk_member_reads(key, class_name, visit);
+                }
+                if let Some(value) = &property.unnamed_key_value {
+                    walk_member_reads(value, class_name, visit);
+                }
+            }
+        }
+        // The opening tag is read as a value; the closing tag is not checked
+        // for this (`isInPropertyInitializerOrClassStaticBlock` quits at it).
+        ParsedExpression::JsxElement { tag, .. } => {
+            if let Some(tag_expression) = &tag.expression {
+                walk_member_reads(tag_expression, class_name, visit);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// [`walk_member_reads`] over a static block's statements. A nested function
+/// or class declaration runs later, or reads its own `this`.
+fn walk_statement_member_reads(
+    statements: &[ParsedFunctionBodyStatement],
+    class_name: &str,
+    visit: &mut impl FnMut(&str, TextSpan, bool),
+) {
+    for statement in statements {
+        match statement {
+            ParsedFunctionBodyStatement::VariableDeclaration(variable) => {
+                if let Some(initializer) = &variable.initializer {
+                    walk_member_reads(initializer, class_name, visit);
+                }
+            }
+            ParsedFunctionBodyStatement::Return(statement) => {
+                if let Some(expression) = &statement.expression {
+                    walk_member_reads(expression, class_name, visit);
+                }
+            }
+            ParsedFunctionBodyStatement::Throw(statement) => {
+                walk_member_reads(&statement.expression, class_name, visit);
+            }
+            ParsedFunctionBodyStatement::Assignment(assignment) => {
+                walk_member_reads(&assignment.value, class_name, visit);
+            }
+            // The target is a property access tsc checks like any other; the
+            // same lowering carries `this["x"] = v`, an element access, whose
+            // written target ends past the key's closing quote.
+            ParsedFunctionBodyStatement::ThisPropertyAssignment(assignment) => {
+                if let (Some(property_span), Some(target_span)) =
+                    (assignment.property_span, assignment.target_span)
+                    && target_span.end == property_span.end
+                {
+                    visit(&assignment.property_name, property_span, true);
+                }
+                walk_member_reads(&assignment.value, class_name, visit);
+            }
+            ParsedFunctionBodyStatement::MemberAssignment(assignment) => {
+                walk_member_reads(&assignment.target, class_name, visit);
+                walk_member_reads(&assignment.value, class_name, visit);
+            }
+            ParsedFunctionBodyStatement::Expression(expression) => {
+                walk_member_reads(expression, class_name, visit);
+            }
+            ParsedFunctionBodyStatement::Block(block) => {
+                walk_statement_member_reads(block, class_name, visit);
+            }
+            ParsedFunctionBodyStatement::If(statement) => {
+                walk_member_reads(&statement.condition, class_name, visit);
+                walk_statement_member_reads(&statement.then_body, class_name, visit);
+                walk_statement_member_reads(&statement.else_body, class_name, visit);
+            }
+            ParsedFunctionBodyStatement::While(statement) => {
+                walk_member_reads(&statement.condition, class_name, visit);
+                walk_statement_member_reads(&statement.body, class_name, visit);
+            }
+            ParsedFunctionBodyStatement::ForOf(statement) => {
+                walk_member_reads(&statement.iterable, class_name, visit);
+                if let Some((target, _)) = &statement.head_target {
+                    walk_member_reads(target, class_name, visit);
+                }
+                walk_statement_member_reads(&statement.body, class_name, visit);
+            }
+            ParsedFunctionBodyStatement::Switch(statement) => {
+                walk_member_reads(&statement.discriminant, class_name, visit);
+                for case in &statement.cases {
+                    if let Some(test) = &case.test {
+                        walk_member_reads(test, class_name, visit);
+                    }
+                    walk_statement_member_reads(&case.consequent, class_name, visit);
+                }
+            }
+            ParsedFunctionBodyStatement::Try(statement) => {
+                walk_statement_member_reads(&statement.block, class_name, visit);
+                if let Some(handler) = &statement.handler {
+                    walk_statement_member_reads(&handler.body, class_name, visit);
+                }
+                walk_statement_member_reads(&statement.finalizer, class_name, visit);
+            }
+            _ => {}
+        }
+    }
 }

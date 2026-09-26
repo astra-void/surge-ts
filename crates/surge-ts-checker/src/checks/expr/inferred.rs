@@ -342,7 +342,7 @@ fn property_receiver_name(expression: &ParsedExpression) -> Option<String> {
         } => {
             let mut name = property_receiver_name(object)?;
             name.push('.');
-            name.push_str(property_name);
+            name.push_str(surge_ts_types::private_name::display(property_name));
             Some(name)
         }
         _ => None,

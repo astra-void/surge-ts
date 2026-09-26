@@ -627,11 +627,15 @@ pub(crate) fn apply_expando_members(
     }
 
     // Whether a name is an expando is decided by its declaration, before any
-    // member is added to it; a JavaScript variable only in its own file.
+    // member is added to it; a JavaScript variable only in its own file, and
+    // only one with an initializer (`IsExpandoInitializer`), which is what
+    // keeps the CommonJS `exports` a lowering declares from being one.
     let declared_here: std::collections::HashSet<&str> = statements
         .iter()
         .filter_map(|statement| match statement {
-            ParsedStatement::VariableDeclaration(variable) => Some(variable.name.as_str()),
+            ParsedStatement::VariableDeclaration(variable) if variable.initializer.is_some() => {
+                Some(variable.name.as_str())
+            }
             ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
                 surge_ts_syntax::ParsedExportDeclaration::Statement { declaration, .. } => {
                     match declaration.as_ref() {
@@ -1188,6 +1192,7 @@ fn hoisted_nested_vars(statements: &[ParsedStatement]) -> Vec<ParsedStatement> {
                                 initializer: None,
                                 initializer_span: None,
                                 declaration_list: None,
+                                annotated_pattern: None,
                             },
                         )));
                     }
@@ -1319,6 +1324,7 @@ pub(crate) fn statics_merged_into_symbol(
             .filter(|(name, _)| {
                 name.as_ref() != "prototype"
                     && !derived_static.properties.contains_key(name.as_ref())
+                    && !surge_ts_types::private_name::is_static(name)
             })
             .map(|(name, property)| (name.clone(), property.clone()))
             .collect();
@@ -1549,6 +1555,7 @@ pub(crate) fn collect_exportable_value_symbols_from_statement(
                 VariableCheckOptions {
                     report_duplicate_let_const: false,
                     check_initializer: check_initializers,
+                    check_type_literal: false,
                 },
             );
             let untyped = |symbol: &SymbolInfo| {
@@ -2234,6 +2241,10 @@ fn resolve_source_namespace_members(
 /// its own function so a namespace declared across multiple merged blocks (e.g.
 /// roblox-ts's `math`, declared with `noise`/`clamp` in one file and the Lua math
 /// surface in another) can be assembled into a single value object.
+/// Marks the permissive signature [`fill_namespace_value_properties`] gives a
+/// namespace function, whose written type parameters it does not keep.
+pub(crate) struct UnmodelledNamespaceFunction;
+
 pub(crate) fn fill_namespace_value_properties(
     namespace: &ParsedNamespaceDeclaration,
     properties: &mut surge_ts_types::PropertyMap,
@@ -2296,12 +2307,10 @@ pub(crate) fn fill_namespace_value_properties(
                 // reports a false TS7006 on them.
                 properties.insert(
                     function.name.as_str().into(),
-                    ObjectProperty::required(Type::Function(FunctionType::new(
-                        vec![Type::Array(Box::new(Type::Any))],
-                        Type::Any,
-                        true,
-                        0,
-                    ))),
+                    ObjectProperty::required(Type::Function(
+                        FunctionType::new(vec![Type::Array(Box::new(Type::Any))], Type::Any, true, 0)
+                            .with_declaration(std::sync::Arc::new(UnmodelledNamespaceFunction)),
+                    )),
                 );
             }
             ParsedStatement::VariableDeclaration(variable) => {

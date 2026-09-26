@@ -10,9 +10,13 @@
 use oxc_ast::ast::{Expression, ImportExpression, Program, TSImportType};
 use oxc_ast_visit::Visit;
 
+use super::spans::text_span_from_oxc_span;
+use crate::{ParsedImportCall, ParsedImportCallKind};
+
 #[derive(Default)]
 struct ImportCallCollector {
     specifiers: Vec<String>,
+    import_calls: Vec<ParsedImportCall>,
     /// A JavaScript file's `require("m")` reads a module too.
     javascript: bool,
 }
@@ -31,12 +35,37 @@ impl<'a> Visit<'a> for ImportCallCollector {
 
     fn visit_ts_import_type(&mut self, import_type: &TSImportType<'a>) {
         self.specifiers.push(import_type.source.value.to_string());
+        // Import attributes can pick another resolution mode, which the
+        // lowering does not follow either (`parse_type`). A written argument
+        // that is no string literal (`import(T)`) is recovered as an empty one,
+        // which names no module (TS1141 is the parser's).
+        if import_type.options.is_none() && !import_type.source.value.is_empty() {
+            self.import_calls.push(ParsedImportCall {
+                specifier: import_type.source.value.to_string(),
+                specifier_span: text_span_from_oxc_span(import_type.source.span),
+                kind: ParsedImportCallKind::Type,
+            });
+        }
         oxc_ast_visit::walk::walk_ts_import_type(self, import_type);
     }
 
     fn visit_import_expression(&mut self, import_expression: &ImportExpression<'a>) {
-        if let Expression::StringLiteral(literal) = &import_expression.source {
-            self.specifiers.push(literal.value.to_string());
+        // tsc's `IsStringLiteralLike`: a template without substitutions names
+        // a module as well as a string literal does.
+        let literal = match &import_expression.source {
+            Expression::StringLiteral(literal) => Some((literal.value.to_string(), literal.span)),
+            Expression::TemplateLiteral(template) => template
+                .single_quasi()
+                .map(|value| (value.to_string(), template.span)),
+            _ => None,
+        };
+        if let Some((specifier, span)) = literal {
+            self.specifiers.push(specifier.clone());
+            self.import_calls.push(ParsedImportCall {
+                specifier,
+                specifier_span: text_span_from_oxc_span(span),
+                kind: ParsedImportCallKind::Expression,
+            });
         }
         oxc_ast_visit::walk::walk_import_expression(self, import_expression);
     }
@@ -63,13 +92,15 @@ fn has_import_call(source_text: &str) -> bool {
     false
 }
 
+/// The deduplicated specifiers the loader resolves, and every
+/// [`ParsedImportCall`] in source order.
 pub(crate) fn collect_import_call_specifiers(
     program: &Program<'_>,
     source_text: &str,
     javascript: bool,
-) -> Vec<String> {
+) -> (Vec<String>, Vec<ParsedImportCall>) {
     if !has_import_call(source_text) && !(javascript && source_text.contains("require")) {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
     let mut collector = ImportCallCollector { javascript, ..ImportCallCollector::default() };
     collector.visit_program(program);
@@ -81,5 +112,5 @@ pub(crate) fn collect_import_call_specifiers(
     collector
         .specifiers
         .retain(|specifier| seen.insert(specifier.clone()));
-    collector.specifiers
+    (collector.specifiers, collector.import_calls)
 }

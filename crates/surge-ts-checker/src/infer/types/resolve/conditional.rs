@@ -2571,6 +2571,7 @@ fn interface_members_pattern(
             .construct_signatures
             .first()
             .map(|signature| Box::new(substitute_signature(signature))),
+        construct_signature_overloads: Vec::new(),
         non_primitive: false,
         display_name: None,
     }))

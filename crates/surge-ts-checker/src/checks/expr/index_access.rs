@@ -319,6 +319,13 @@ pub(super) fn evaluate_index_access(
                 InferredExpression::Known(ty) => ty,
                 _ => return InferredExpression::Unknown,
             };
+            if report_unusable_index_type(
+                &index_type,
+                choose_span(index_span, choose_span(object_span, fallback_span)),
+                ctx,
+            ) {
+                return InferredExpression::Unknown;
+            }
 
             // A literal index names a concrete property that must exist on the
             // receiver; a missing one is a real TS2339. A *non-literal* computed
@@ -542,11 +549,7 @@ fn report_non_numeric_index(
     span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) {
-    if matches!(index_type, Type::Boolean | Type::BooleanLiteral(_)) {
-        ctx.push(diagnostic_with_syntax_span(
-            Diagnostic::ts2538(index_type.name(), ctx.file_name.clone()),
-            span,
-        ));
+    if report_unusable_index_type(index_type, span, ctx) {
         return;
     }
     if !ctx.options.no_implicit_any {
@@ -556,6 +559,53 @@ fn report_non_numeric_index(
         Diagnostic::ts7015(ctx.file_name.clone()),
         span,
     ));
+}
+
+/// tsc's `getPropertyTypeForIndexType` looks a key up only when it is not
+/// nullable and is assignable to `string`, `number` or `symbol`
+/// (`isTypeAssignableToKind`). Any other key — an object, a function, a class,
+/// `bigint`, `boolean` — is TS2538 on the key whatever the receiver, and the
+/// access reads the error type. Nullish and `void` keys are left alone, and so
+/// is a key surge could not fully model.
+pub(crate) fn report_unusable_index_type(
+    index_type: &Type,
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) -> bool {
+    if !is_unusable_index_type(index_type) {
+        return false;
+    }
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts2538(index_type.name(), ctx.file_name.clone()),
+        span,
+    ));
+    true
+}
+
+fn is_unusable_index_type(index_type: &Type) -> bool {
+    match &index_type.peeled() {
+        Type::Any
+        | Type::Unknown
+        | Type::GenuineUnknown
+        | Type::ErrorType
+        | Type::TypeParameter(_)
+        | Type::Never
+        | Type::Void
+        | Type::Null
+        | Type::Undefined
+        // tsc resolves a union key one member at a time.
+        | Type::Union(_) => false,
+        // A branded key (`string & Tag1 & Tag2`) is an intersection surge
+        // relates operand by operand, which does not see its primitive.
+        Type::Object(object) if object.is_intersection => false,
+        Type::Reference(_) => false,
+        other => {
+            !crate::checks::function::type_contains_degradation(other)
+                && !is_assignable_to(other, &Type::String)
+                && !is_assignable_to(other, &Type::Number)
+                && !is_assignable_to(other, &Type::Symbol)
+        }
+    }
 }
 
 /// What `receiver[index]` reads off an object receiver, for the

@@ -34,6 +34,7 @@ mod reachability;
 mod reads;
 mod jsx_uses;
 mod number_text;
+mod private_names;
 mod reference_directives;
 mod scanner_checks;
 mod spans;
@@ -66,6 +67,16 @@ pub use jsx_uses::{JsxRuntimeOptions, entity_root as jsx_entity_root, jsx_runtim
 pub use number_text::js_number_to_string;
 
 fn parse_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {
+    let lowered = lower_statement(statement);
+    let Some(export) = commonjs::chained_module_exports_declaration(statement) else {
+        return lowered;
+    };
+    let mut statements = lowered.unwrap_or_default();
+    statements.push(export);
+    Some(statements)
+}
+
+fn lower_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {
     if let Statement::VariableDeclaration(declaration) = statement
         && let Some(imports) = commonjs::require_imports(declaration)
     {
@@ -259,6 +270,28 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                 );
             };
 
+            // `const X = class {}` declares a class under the variable's name,
+            // which is how tsc writes it; a binding that can be reassigned is
+            // left a variable.
+            if let (BindingPattern::BindingIdentifier(identifier), None, ParsedVariableKind::Const) =
+                (&declarator.id, declarator.type_annotation.as_ref(), kind)
+                && !declaration.declare
+                && let Expression::ClassExpression(class) = init.without_parentheses()
+                && class.id.as_ref().is_none_or(|id| id.name == identifier.name)
+            {
+                let name_span = match &class.id {
+                    Some(id) => id.span,
+                    None => oxc_span::Span::new(class.span.start, class.span.start + "class".len() as u32),
+                };
+                if let Some(mut parsed) = classes::parse_class_declaration_named(
+                    class,
+                    identifier.name.to_string(),
+                    text_span_from_oxc_span(name_span),
+                ) {
+                    parsed.const_binding = true;
+                    return vec![ParsedStatement::ClassDeclaration(Box::new(parsed))];
+                }
+            }
             let (initializer, initializer_span) = parse_expression(init);
             let initializer_span = Some(text_span_from_oxc_span(initializer_span));
             let initializer = match jsdoc::initializer_satisfies_at(oxc_span::GetSpan::span(init).start) {
@@ -290,15 +323,34 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                 }
                 _ => initializer,
             };
+            let annotated_pattern = match (&declarator.id, &declared_type) {
+                (BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_), Some(ty))
+                    if binding_pattern_has_default(&declarator.id) =>
+                {
+                    Some(std::sync::Arc::new(crate::ParsedAnnotatedBindingPattern {
+                        pattern: functions::parse_binding_name(&declarator.id),
+                        declared_type: ty.clone(),
+                    }))
+                }
+                _ => None,
+            };
 
-            parse_binding_pattern_declarations(
+            let mut declarations = parse_binding_pattern_declarations(
                 &declarator.id,
                 Some(initializer),
                 initializer_span,
                 declaration.declare,
                 kind,
                 declared_type,
-            )
+            );
+            if let Some(annotated_pattern) = annotated_pattern
+                && let Some(ParsedStatement::VariableDeclaration(first)) = declarations
+                    .iter_mut()
+                    .find(|statement| matches!(statement, ParsedStatement::VariableDeclaration(_)))
+            {
+                first.annotated_pattern = Some(annotated_pattern);
+            }
+            declarations
         })
         .map(|statement| match statement {
             ParsedStatement::VariableDeclaration(mut variable) => {
@@ -308,6 +360,22 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
             other => other,
         })
         .collect()
+}
+
+fn binding_pattern_has_default(pattern: &BindingPattern<'_>) -> bool {
+    match pattern {
+        BindingPattern::BindingIdentifier(_) => false,
+        BindingPattern::AssignmentPattern(_) => true,
+        BindingPattern::ObjectPattern(object) => object
+            .properties
+            .iter()
+            .any(|property| binding_pattern_has_default(&property.value)),
+        BindingPattern::ArrayPattern(array) => array
+            .elements
+            .iter()
+            .flatten()
+            .any(binding_pattern_has_default),
+    }
 }
 
 /// Each element of a pattern with no initializer is typed as the annotation
@@ -346,6 +414,7 @@ fn annotated_pattern_declarations(
                     initializer: None,
                     initializer_span: None,
                     declaration_list: None,
+                    annotated_pattern: None,
                 },
             )));
         }
@@ -850,6 +919,7 @@ fn parse_binding_pattern_declarations_with_definite(
                     initializer,
                     initializer_span,
                     declaration_list: None,
+                    annotated_pattern: None,
                 },
             ))]
         }

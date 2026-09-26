@@ -10,13 +10,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use surge_ts_syntax::{
-    ParsedExportDeclaration, ParsedExpression, ParsedFunctionBodyStatement, ParsedStatement,
-    ParsedType, ParsedVariableDeclaration, ParsedVariableKind,
+    ParsedDecoratorTarget, ParsedDefaultExportDeclaration, ParsedExportDeclaration, ParsedExpression,
+    ParsedFunctionBodyStatement, ParsedStatement, ParsedType, ParsedVariableDeclaration,
+    ParsedVariableKind,
 };
 
 use super::{
     AssignmentState, FunctionFlowState, analyze_function_body_flow, assignment_value_read,
-    is_compound_assignment,
+    is_compound_assignment, check_assignment_target_flow,
     check_expression_flow, collect_hoisted_vars_with, type_assumed_initialized,
 };
 use crate::context::CheckerContext;
@@ -34,6 +35,11 @@ pub(crate) fn check_module_definite_assignment(
     statements: &[ParsedStatement],
     ctx: &mut CheckerContext,
 ) {
+    // Everything a declaration file declares is ambient, which tsc takes as
+    // initialized and never in a temporal dead zone.
+    if surge_ts_syntax::is_declaration_file_name(&ctx.file_name) {
+        return;
+    }
     check_container(statements, DeclaredTypes::ModuleSymbols, ctx);
 }
 
@@ -62,6 +68,7 @@ fn check_container(statements: &[ParsedStatement], types: DeclaredTypes, ctx: &m
     }
 
     let mut flow = FunctionFlowState::new(true);
+    flow.shared_statement_index = true;
     flow.push_scope(future_declarations);
     for name in hoisted {
         flow.declare_current(name, AssignmentState::DeclaredUnassigned);
@@ -311,6 +318,7 @@ fn check_statement(
             declare_variable(variable, index, flow, types, ctx)
         }
         ParsedStatement::Assignment(assignment) => {
+            let _ = check_assignment_target_flow(&assignment.target_name, flow, index, ctx, assignment.target_span);
             let (read, read_span) = assignment_value_read(assignment);
             let _ = check_expression_flow_marking(read, read_span, flow, index, ctx);
             if !is_compound_assignment(&assignment.target_name, assignment.target_span, &assignment.value) {
@@ -349,6 +357,38 @@ fn check_statement(
             let _ = walk_body(block, index, flow, ctx);
         }
         ParsedStatement::ClassDeclaration(class) => walk_class(class, index, flow, ctx),
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Default { declaration, span } => match declaration {
+                ParsedDefaultExportDeclaration::Expression(expression) => {
+                    let _ = check_expression_flow_marking(expression, *span, flow, index, ctx);
+                }
+                ParsedDefaultExportDeclaration::Class(class) => walk_class(class, index, flow, ctx),
+                _ => {}
+            },
+            // `checkExportAssignment` checks the exported value's flow, but a
+            // name that `export =` exports is exempt from TS2448
+            // (`isBlockScopedNameDeclaredBeforeUse`).
+            ParsedExportDeclaration::Equals {
+                exported_name,
+                exported_name_span,
+                ..
+            } => {
+                if !matches!(
+                    flow.read_identifier(exported_name, index),
+                    super::FlowReadOutcome::UseBeforeDeclaration { .. }
+                ) {
+                    let _ = super::report_read_flow(exported_name, *exported_name_span, flow, index, ctx);
+                }
+            }
+            ParsedExportDeclaration::EqualsExpression {
+                expression,
+                expression_span,
+                ..
+            } => {
+                let _ = check_expression_flow_marking(expression, *expression_span, flow, index, ctx);
+            }
+            _ => {}
+        },
         _ => {}
     }
 }
@@ -375,6 +415,15 @@ fn declare_variable(
             flow.end_initializer(mark);
         }
     }
+    // Whether a `var` is tracked at all was settled by its first declaration
+    // (see `collect_hoisted_vars_with`); as a later one runs, only an
+    // initializer assigns it.
+    if variable.kind == ParsedVariableKind::Var {
+        if variable.initializer.is_some() {
+            flow.mark_assigned(&variable.name);
+        }
+        return;
+    }
     let assigned = variable.initializer.is_some()
         || variable.is_declare
         || variable.has_definite_assertion
@@ -385,12 +434,6 @@ fn declare_variable(
             types,
             ctx,
         );
-    if variable.kind == ParsedVariableKind::Var {
-        if assigned {
-            flow.mark_assigned(&variable.name);
-        }
-        return;
-    }
     flow.declare_current(
         variable.name.as_str(),
         if assigned {
@@ -464,6 +507,7 @@ fn walk_statement(
             true
         }
         ParsedFunctionBodyStatement::Assignment(assignment) => {
+            let _ = check_assignment_target_flow(&assignment.target_name, flow, index, ctx, assignment.target_span);
             let (read, read_span) = assignment_value_read(assignment);
             let _ = check_expression_flow_marking(read, read_span, flow, index, ctx);
             if !is_compound_assignment(&assignment.target_name, assignment.target_span, &assignment.value) {
@@ -563,7 +607,11 @@ fn walk_statement(
             for (name, _) in &for_of_statement.head_names {
                 body_flow.mark_assigned(name);
             }
-            let _ = in_block(&for_of_statement.body, index, &mut body_flow, ctx);
+            let bound = super::for_head_initializing(for_of_statement)
+                .into_iter()
+                .map(|binding| binding.name)
+                .collect();
+            let _ = in_block_binding(&for_of_statement.body, bound, index, &mut body_flow, ctx);
             true
         }
         ParsedFunctionBodyStatement::Switch(switch_statement) => {
@@ -603,7 +651,11 @@ fn walk_statement(
             if let Some(handler) = &try_statement.handler {
                 // The handler can be entered before anything in the `try` ran.
                 let mut handler_flow = entry.clone();
-                let handler_continues = in_block(&handler.body, index, &mut handler_flow, ctx);
+                let mut bound = Vec::new();
+                if let Some(binding) = &handler.binding_name {
+                    binding_names(binding, &mut bound);
+                }
+                let handler_continues = in_block_binding(&handler.body, bound, index, &mut handler_flow, ctx);
                 ends.push(handler_continues.then_some(handler_flow));
             }
             let continues = join(flow, ends.iter().map(Option::as_ref));
@@ -649,6 +701,17 @@ pub(crate) fn walk_class(
         };
         let _ = check_expression_flow_marking(&read, base.span, flow, index, ctx);
     }
+    let legacy_decorators = ctx.options.experimental_decorators;
+    for decorator in &class.decorators {
+        if !crate::program::decorator_is_checked(decorator.target, legacy_decorators) {
+            continue;
+        }
+        if decorator.target == ParsedDecoratorTarget::Class {
+            let _ = check_expression_flow(&decorator.expression, decorator.span, flow, index, ctx);
+        } else {
+            check_dead_zone_reads(&decorator.expression, index, flow, ctx);
+        }
+    }
     for member in &class.members {
         match member {
             surge_ts_syntax::ParsedClassMember::StaticBlock(block) => {
@@ -671,6 +734,35 @@ pub(crate) fn walk_class(
             }
             _ => {}
         }
+    }
+}
+
+/// A member's decorator runs with its class, but tsc checks it from the
+/// member's own flow container, where an outer binding is taken as
+/// initialized: only a read of one still in its temporal dead zone reports
+/// (TS2448).
+fn check_dead_zone_reads(
+    expression: &ParsedExpression,
+    index: usize,
+    flow: &FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    match expression {
+        ParsedExpression::Identifier { name, span } => {
+            let _ = check_assignment_target_flow(name, flow, index, ctx, *span);
+        }
+        ParsedExpression::Call {
+            callee_name,
+            callee_span,
+            arguments,
+            ..
+        } => {
+            let _ = check_assignment_target_flow(callee_name, flow, index, ctx, *callee_span);
+            for argument in arguments {
+                check_dead_zone_reads(&argument.expression, index, flow, ctx);
+            }
+        }
+        other => other.for_each_child(&mut |child| check_dead_zone_reads(child, index, flow, ctx)),
     }
 }
 
@@ -735,10 +827,62 @@ fn in_block(
     flow: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) -> bool {
+    in_block_binding(body, Vec::new(), index, flow, ctx)
+}
+
+/// [`in_block`] with `bound` — a `for…of` head's or a `catch` clause's
+/// bindings — declared in the block's scope. Those, and the functions and
+/// classes the block declares, shadow a module binding of the same name that is
+/// still in its temporal dead zone.
+fn in_block_binding(
+    body: &[ParsedFunctionBodyStatement],
+    bound: Vec<Arc<str>>,
+    index: usize,
+    flow: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) -> bool {
     flow.push_scope(HashMap::new());
+    for name in bound {
+        flow.declare_current(name, AssignmentState::Assigned);
+    }
+    for statement in body {
+        match statement {
+            ParsedFunctionBodyStatement::Function(function) => {
+                flow.declare_current(function.name.as_str(), AssignmentState::Assigned)
+            }
+            ParsedFunctionBodyStatement::Class(class) => {
+                flow.declare_current(class.name.as_str(), AssignmentState::Assigned)
+            }
+            _ => {}
+        }
+    }
     let continues = walk_body(body, index, flow, ctx);
     flow.pop_scope();
     continues
+}
+
+fn binding_names(binding: &surge_ts_syntax::ParsedBindingName, out: &mut Vec<Arc<str>>) {
+    use surge_ts_syntax::ParsedBindingName;
+    match binding {
+        ParsedBindingName::Identifier { name, .. } => out.push(name.as_str().into()),
+        ParsedBindingName::ObjectPattern(pattern) => {
+            for element in &pattern.elements {
+                binding_names(&element.binding_name, out);
+            }
+            if let Some(rest) = &pattern.rest {
+                binding_names(rest, out);
+            }
+        }
+        ParsedBindingName::ArrayPattern(pattern) => {
+            for element in pattern.elements.iter().flatten() {
+                binding_names(element, out);
+            }
+            if let Some(rest) = &pattern.rest {
+                binding_names(rest, out);
+            }
+        }
+        ParsedBindingName::Unsupported { .. } => {}
+    }
 }
 
 /// A block entered on `condition`'s `when` edge, which carries what the edge
@@ -754,6 +898,13 @@ fn in_edge_block(
 ) -> bool {
     let unreachable = super::condition_never_takes(condition, when);
     super::mark_condition_defined(condition, when, flow, ctx);
+    if when {
+        for assignment in super::condition_true_assignments(condition) {
+            if let ParsedExpression::Assignment { target_name, .. } = assignment {
+                flow.mark_assigned(target_name);
+            }
+        }
+    }
     flow.enter_unreachable(unreachable);
     let continues = in_block(body, index, flow, ctx);
     flow.exit_unreachable(unreachable);

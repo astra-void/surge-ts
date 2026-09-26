@@ -106,10 +106,14 @@ pub(crate) fn evaluate_logical_expression(
     // operand union avoids false assignability errors like
     // `string | undefined || "x"` being treated as `boolean`.
     let result = match operator {
-        surge_ts_syntax::ParsedLogicalOperator::Or => surge_ts_types::union_type(vec![
-            crate::infer::truthy_part(left_ty),
-            right_ty.clone(),
-        ]),
+        // A left that is never falsy is the whole result.
+        surge_ts_syntax::ParsedLogicalOperator::Or => {
+            if matches!(crate::infer::falsy_part(left_ty), Type::Never) {
+                left_ty.clone()
+            } else {
+                surge_ts_types::union_type(vec![crate::infer::truthy_part(left_ty), right_ty.clone()])
+            }
+        }
         // tsc's `checkBinaryLikeExpression`: the falsy part comes from the
         // left under `strictNullChecks` and from the right's base type
         // without it, and a left that is never truthy is the whole result.
@@ -445,7 +449,8 @@ fn maybe_bigint_like(ty: &Type) -> bool {
 /// variable meets through its constraint.
 fn is_valid_arithmetic_operand(ty: &Type) -> bool {
     match ty {
-        Type::Any | Type::BigInt => true,
+        // `never` is assignable to `number | bigint` like to anything.
+        Type::Any | Type::BigInt | Type::Never => true,
         Type::Union(union) => union.types().iter().all(is_valid_arithmetic_operand),
         Type::TypeParameter(_) => {
             surge_ts_types::is_assignable_to(ty, &union_type(vec![Type::Number, Type::BigInt]))

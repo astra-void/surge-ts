@@ -694,6 +694,9 @@ impl Relater {
             let prototype_member;
             let source_property = match source.properties.get(name.as_ref()) {
                 Some(property) => property,
+                // `getUnmatchedProperties` passes over a static private name
+                // the source lacks.
+                None if crate::private_name::is_static(name) => continue,
                 None => match crate::object_prototype_member_type(name) {
                     Some(member) => {
                         prototype_member = ObjectProperty::required(member).with_method(true);

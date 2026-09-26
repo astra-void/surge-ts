@@ -522,6 +522,12 @@ pub(crate) struct CheckerContext {
     pub(crate) file_import_names: FxHashSet<Arc<str>>,
     /// The subset of `file_import_names` bound by `import * as`.
     pub(crate) file_namespace_import_names: FxHashSet<Arc<str>>,
+    /// The subset of `file_namespace_import_names` whose module's whole export
+    /// list surge saw, so a member missing from it is the source's error.
+    pub(crate) file_complete_namespace_import_names: FxHashSet<Arc<str>>,
+    /// Top-level classes the file under check binds through `const X = class
+    /// {}`. Per-file: cleared by `begin_file_check`.
+    pub(crate) file_const_class_names: FxHashSet<Arc<str>>,
     pub(crate) file_type_only_import_names_owner: Option<String>,
     /// Function names the authoritative check pass has already registered in the
     /// file under check. The first registration *replaces* the signature the
@@ -580,6 +586,10 @@ pub(crate) struct CheckerContext {
     /// `getJsxNamespaceAt`), keyed by the file it was resolved for. Per-file:
     /// reset by [`Self::begin_file_check`].
     pub(crate) jsx_namespace: Option<(Arc<str>, crate::checks::jsx::JsxNamespace)>,
+    /// tsc's per-file `jsxFragmentType`: the fragment factory is resolved,
+    /// and a failure reported, at the file's first fragment only. Per-file:
+    /// reset by [`Self::begin_file_check`].
+    pub(crate) jsx_fragment_factory_resolved: bool,
     pub(crate) type_parameter_scopes: Vec<HashMap<String, Type>>,
     /// The current file's definite-assignment targets
     /// ([`surge_ts_syntax::ParsedSource::definite_writes`]).
@@ -783,6 +793,10 @@ pub(crate) struct CheckerContext {
     /// [`surge_ts_syntax::ParsedSource::parenthesized_expressions`]). Per-file:
     /// cleared by `begin_file_check`, set when the file's check starts.
     pub(crate) parenthesized_expressions: Arc<[surge_ts_syntax::ParenthesizedExpressionSpan]>,
+    /// Where each `this` the current script file's top level owns starts
+    /// (see [`surge_ts_syntax::ParsedSource::global_this_starts`]); empty for
+    /// a module. Per-file: cleared by `begin_file_check`.
+    pub(crate) global_this_starts: Arc<[u32]>,
     /// The receiver of a `push`/`unshift`/`length`/`x[n] = v` about to be
     /// evaluated: an evolving array read there is typed `any[]` and is not a
     /// read tsc reports.
@@ -916,6 +930,8 @@ impl CheckerContext {
             file_type_only_alias_names: FxHashMap::default(),
             file_import_names: FxHashSet::default(),
             file_namespace_import_names: FxHashSet::default(),
+            file_complete_namespace_import_names: FxHashSet::default(),
+            file_const_class_names: FxHashSet::default(),
             checked_function_declaration_names: FxHashSet::default(),
             file_type_only_import_names_owner: None,
             ambient_global_type_declarations: Arc::new(TypeDeclarationTable::new()),
@@ -928,6 +944,7 @@ impl CheckerContext {
             jsx_namespace_modules: Default::default(),
             jsx_factory_uses: Default::default(),
             jsx_namespace: None,
+            jsx_fragment_factory_resolved: false,
             type_parameter_scopes: Vec::new(),
             type_parameter_constraint_scopes: Vec::new(),
             timings: None,
@@ -971,6 +988,7 @@ impl CheckerContext {
             constructor_local_outer_bindings: Vec::new(),
             nested_function_scope: None,
             parenthesized_expressions: Arc::from([]),
+            global_this_starts: Arc::from([]),
             evolving_array_operation_target: None,
             auto_arrays_declared: false,
             let_assignments: Arc::from([]),
@@ -1107,6 +1125,8 @@ impl CheckerContext {
             file_type_only_alias_names: FxHashMap::default(),
             file_import_names: FxHashSet::default(),
             file_namespace_import_names: FxHashSet::default(),
+            file_complete_namespace_import_names: FxHashSet::default(),
+            file_const_class_names: FxHashSet::default(),
             checked_function_declaration_names: FxHashSet::default(),
             file_type_only_import_names_owner: None,
             ambient_global_type_declarations: data.ambient_global_type_declarations.clone(),
@@ -1119,6 +1139,7 @@ impl CheckerContext {
             jsx_namespace_modules: data.jsx_namespace_modules.clone(),
             jsx_factory_uses: Default::default(),
             jsx_namespace: None,
+            jsx_fragment_factory_resolved: false,
             type_parameter_scopes: data.type_parameter_scopes.clone(),
             type_parameter_constraint_scopes: data.type_parameter_constraint_scopes.clone(),
             timings: data.timings.clone(),
@@ -1162,6 +1183,7 @@ impl CheckerContext {
             constructor_local_outer_bindings: Vec::new(),
             nested_function_scope: None,
             parenthesized_expressions: Arc::from([]),
+            global_this_starts: Arc::from([]),
             evolving_array_operation_target: None,
             auto_arrays_declared: false,
             let_assignments: Arc::from([]),
@@ -1658,6 +1680,20 @@ impl CheckerContext {
             && self.file_namespace_import_names.contains(name)
     }
 
+    pub(crate) fn is_complete_namespace_import_binding(&self, name: &str) -> bool {
+        self.file_type_only_import_names_owner.as_deref() == Some(self.file_name.as_str())
+            && self.file_complete_namespace_import_names.contains(name)
+    }
+
+    pub(crate) fn set_file_complete_namespace_import_names<'a>(
+        &mut self,
+        names: impl IntoIterator<Item = &'a Arc<str>>,
+    ) {
+        self.file_complete_namespace_import_names.clear();
+        self.file_complete_namespace_import_names
+            .extend(names.into_iter().cloned());
+    }
+
     pub(crate) fn set_file_import_names<'a>(
         &mut self,
         names: impl IntoIterator<Item = &'a str>,
@@ -1782,8 +1818,11 @@ impl CheckerContext {
         self.never_returning_calls.clear();
         self.nested_function_scope = None;
         self.parenthesized_expressions = Default::default();
+        self.global_this_starts = Default::default();
+        self.file_const_class_names.clear();
         self.jsx_factory_uses = Default::default();
         self.jsx_namespace = None;
+        self.jsx_fragment_factory_resolved = false;
         self.evolving_array_operation_target = None;
         self.auto_arrays_declared = false;
         self.let_assignments = Default::default();

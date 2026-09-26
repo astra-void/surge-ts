@@ -234,6 +234,12 @@ pub(crate) struct FunctionFlowState {
     /// namespace function), walked for definite assignment alone: its own
     /// annotated `let`s are tracked from their written types.
     pub(crate) detached: bool,
+    /// Every nested block is walked at the index of the top-level statement
+    /// that holds it (the module-level pass), so a declaration still pending in
+    /// an enclosing scope is compared against that index directly: a read of it
+    /// from a nested block or a class static block is in its temporal dead
+    /// zone too.
+    pub(crate) shared_statement_index: bool,
     /// Locals a guard on the way to the expression being walked proves are
     /// not `undefined` (`x` in `typeof x === "string" && x`; see `guards`).
     guarded_defined: std::cell::RefCell<Vec<Arc<str>>>,
@@ -283,6 +289,7 @@ impl Clone for FunctionFlowState {
             discriminant_aliases: self.discriminant_aliases.clone(),
             constraint_exempt: self.constraint_exempt.clone(),
             detached: self.detached,
+            shared_statement_index: self.shared_statement_index,
             guarded_defined: self.guarded_defined.clone(),
             unreachable_depth: self.unreachable_depth.clone(),
             enum_objects: self.enum_objects.clone(),
@@ -380,6 +387,7 @@ impl FunctionFlowState {
             discriminant_aliases: HashMap::new(),
             constraint_exempt: std::collections::HashSet::new(),
             detached: false,
+            shared_statement_index: false,
             guarded_defined: std::cell::RefCell::new(Vec::new()),
             unreachable_depth: std::cell::Cell::new(0),
             enum_objects: HashMap::new(),
@@ -843,6 +851,18 @@ impl FunctionFlowState {
             if let Some(state) = scope.locals.get(name).copied() {
                 record_flow_read_lookup_count(lookup_steps);
                 return FlowReadOutcome::Declared(state);
+            }
+            if self.shared_statement_index
+                && scope
+                    .future_block_scoped_declarations
+                    .get(name)
+                    .is_some_and(|declaration_index| statement_index < *declaration_index)
+            {
+                record_flow_read_lookup_count(lookup_steps);
+                return FlowReadOutcome::UseBeforeDeclaration {
+                    unassigned: true,
+                    circular_at: None,
+                };
             }
         }
 

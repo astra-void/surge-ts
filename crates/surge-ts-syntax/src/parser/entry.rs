@@ -64,7 +64,7 @@ fn checker_grammar_code(error: &crate::ParserError) -> Option<u32> {
         (1206, "Decorators are not valid here.")
         | (1275, "'accessor' modifier cannot be used here.")
         | (1200, "Line terminator not permitted before arrow") => error.code,
-        (code @ (1021 | 1096), _) => Some(code),
+        (code @ (1021 | 1096 | 1325 | 1326), _) => Some(code),
         _ => None,
     }
 }
@@ -377,6 +377,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             parser_errors: Vec::new(),
             parse_aborted: false,
             is_module: true,
+            commonjs_module: false,
             reference_type_directives: Vec::new(),
             module_reads: Vec::new(),
             jsdoc_link_names: Vec::new(),
@@ -384,8 +385,10 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             let_assignments: Vec::new(),
             comment_directives: Vec::new(),
             import_call_specifiers: Vec::new(),
+            import_calls: Vec::new(),
             grammar_diagnostics: Vec::new(),
             parenthesized_expressions: Vec::new(),
+            global_this_starts: Vec::new(),
             // A `.json` file that does not parse still *is* a JSON module —
             // reporting its importer as unresolved would be a worse answer than
             // an unmodelled value, and surge does not report JSON syntax errors.
@@ -406,15 +409,17 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         super::suppressions::collect_comment_directives(source_text, &parsed.program.comments);
 
     let collect_statements = || -> Vec<crate::ParsedStatement> {
-        let mut statements: Vec<crate::ParsedStatement> = parsed
-            .program
-            .body
-            .iter()
-            .filter_map(super::parse_statement)
-            .flatten()
-            .collect();
-        super::enums::merge_lowered_enum_declarations(&mut statements);
-        statements
+        super::private_names::with_file(file_name, || {
+            let mut statements: Vec<crate::ParsedStatement> = parsed
+                .program
+                .body
+                .iter()
+                .filter_map(super::parse_statement)
+                .flatten()
+                .collect();
+            super::enums::merge_lowered_enum_declarations(&mut statements);
+            statements
+        })
     };
 
     // Declaration files never participate in noUnusedLocals, and `declare`
@@ -427,6 +432,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     let jsdoc_index = javascript
         .then(|| std::rc::Rc::new(super::jsdoc::build_jsdoc_index(&parsed.program, source_text)));
     let mut commonjs_findings = Vec::new();
+    let mut commonjs_own_specifier = None;
     let (mut module_reads, statements) = if is_declaration_file_name(file_name) {
         (Vec::new(), collect_statements())
     } else {
@@ -453,7 +459,10 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
                         // export beside it.
                         let exported = is_module && !commonjs.exports_assigned();
                         statements.extend(super::jsdoc::alias_statements(exported));
-                        statements.extend(super::commonjs::module_variables(&parsed.program, commonjs));
+                        let (variables, own_specifier) =
+                            super::commonjs::module_variables(&parsed.program, commonjs, file_name);
+                        statements.extend(variables);
+                        commonjs_own_specifier = own_specifier;
                         commonjs_findings = super::commonjs::take_findings();
                     }
                     (reads, statements)
@@ -545,11 +554,25 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
             )
         });
 
-    let import_call_specifiers =
+    let (mut import_call_specifiers, import_calls) =
         super::import_calls::collect_import_call_specifiers(&parsed.program, source_text, javascript);
+    // `module` and `exports` read the module's own export through its own
+    // specifier, which resolves as any other import type's.
+    if let Some(specifier) = commonjs_own_specifier
+        && !import_call_specifiers.contains(&specifier)
+    {
+        import_call_specifiers.push(specifier);
+    }
+    if let Some(index) = &jsdoc_index {
+        for specifier in super::jsdoc::import_type_specifiers(index) {
+            if !import_call_specifiers.contains(specifier) {
+                import_call_specifiers.push(specifier.clone());
+            }
+        }
+    }
 
-    // A declaration file gets just the top-level `declare` requirement of the
-    // grammar findings (which `skipLibCheck` then suppresses).
+    // A declaration file gets the grammar findings whose answer is that every
+    // node in it is ambient (which `skipLibCheck` then suppresses).
     let (grammar_diagnostics, parenthesized_expressions) = if collects_grammar_diagnostics(file_name) {
         super::grammar::collect_grammar_diagnostics(&parsed.program)
     } else if javascript {
@@ -567,6 +590,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     } else if is_declaration_file_name(file_name) {
         let mut diagnostics = Vec::new();
         super::grammar_modifiers::collect_declaration_file_diagnostics(&parsed.program, &mut diagnostics);
+        super::grammar_recovered::collect_recovered_grammar_diagnostics(&parsed.program, true, &mut diagnostics);
         (diagnostics, Vec::new())
     } else {
         (Vec::new(), Vec::new())
@@ -579,6 +603,9 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
     // walk cannot see it.
     let collects = collects_grammar_diagnostics(file_name) || javascript;
     let examined_modifiers = super::grammar_context::take_examined_modifier_starts();
+    // A CommonJS module has no `ExternalModuleIndicator` either, so its
+    // top-level `this` is `globalThis` as a script's is (`tryGetThisTypeAtEx`).
+    let global_this_starts = super::grammar_context::take_global_this_starts();
     parser_errors.retain(|error| {
         if error.code == Some(1029)
             && error.span.is_some_and(|span| examined_modifiers.contains(&(span.start as u32)))
@@ -612,6 +639,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         parser_errors,
         parse_aborted: parsed.panicked,
         is_module,
+        commonjs_module: commonjs.as_ref().is_some_and(|commonjs| commonjs.module),
         reference_type_directives,
         module_reads,
         jsdoc_link_names,
@@ -619,8 +647,10 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         let_assignments,
         comment_directives,
         import_call_specifiers,
+        import_calls,
         grammar_diagnostics,
         parenthesized_expressions,
+        global_this_starts,
         json_module_type: None,
         jsx_factory_uses,
     }

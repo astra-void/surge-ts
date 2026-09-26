@@ -342,6 +342,11 @@ pub(crate) fn narrow_by_literal_equality(
     literal: &Type,
     keep_matching: bool,
 ) -> Option<Type> {
+    // `narrowTypeByEquality`: an `unknown` that equals a primitive value is
+    // that value's type.
+    if matches!(ty, Type::GenuineUnknown) && keep_matching {
+        return Some(literal.clone());
+    }
     if !literal_equality_applies(ty) {
         return None;
     }

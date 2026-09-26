@@ -620,7 +620,22 @@ pub(crate) fn resolve_object_type(
         );
         had_error |= resolved.had_error;
         if let Type::Function(function_type) = resolved.ty {
-            resolved_object = resolved_object.with_construct_signature(function_type);
+            // A group relates member by member (`signaturesRelatedTo`), as a
+            // call signature group and an interface's construct group do.
+            let mut overloads = Vec::with_capacity(object_type.construct_signature_overloads.len());
+            for overload in &object_type.construct_signature_overloads {
+                let resolved = resolve_parsed_type(
+                    ParsedType::Function(std::sync::Arc::new(overload.clone())),
+                    ctx,
+                    resolving,
+                    substitution,
+                );
+                had_error |= resolved.had_error;
+                if let Type::Function(overload) = resolved.ty {
+                    overloads.push(overload);
+                }
+            }
+            resolved_object = resolved_object.with_construct_signature(function_type.with_overloads(overloads));
         }
     }
     ctx.type_literal_member_frames.pop();

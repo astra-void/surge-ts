@@ -3025,13 +3025,16 @@ fn parse_import_equals_require_unsupported_no_panic() {
 }
 
 #[test]
-fn parse_dynamic_import_expression_unsupported_no_panic() {
+fn parse_dynamic_import_expression() {
     let parsed = parse_source("import(\"./user\");", "example.ts");
     assert!(parsed.parser_errors.is_empty());
-    assert!(matches!(
-        parsed.statements.first(),
-        Some(ParsedStatement::Expression(expression)) if matches!(expression.as_ref(), ParsedExpression::Unknown)
-    ));
+    let Some(ParsedStatement::Expression(expression)) = parsed.statements.first() else {
+        panic!("expected an expression statement");
+    };
+    let ParsedExpression::ImportCall { specifier, options: None, .. } = expression.as_ref() else {
+        panic!("expected an import call");
+    };
+    assert!(matches!(specifier.as_ref(), ParsedExpression::StringLiteral(value) if value == "./user"));
 }
 
 #[test]

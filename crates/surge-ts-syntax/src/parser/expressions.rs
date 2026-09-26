@@ -5,8 +5,8 @@ use oxc_ast::ast::{
     JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXElementName,
     JSXExpressionContainer, JSXFragment, JSXMemberExpression, JSXMemberExpressionObject,
     LogicalExpression, LogicalOperator, NewExpression, ObjectExpression, ObjectPropertyKind,
-    PropertyKey, PropertyKind, SimpleAssignmentTarget, StaticMemberExpression, UnaryExpression,
-    UnaryOperator, UpdateExpression,
+    PrivateFieldExpression, PropertyKey, PropertyKind, SimpleAssignmentTarget,
+    StaticMemberExpression, UnaryExpression, UnaryOperator, UpdateExpression,
 };
 use oxc_span::{GetSpan, Span};
 
@@ -216,6 +216,9 @@ fn parse_expression_unannotated(expression: &Expression<'_>) -> (ParsedExpressio
         Expression::ComputedMemberExpression(member_expression) => {
             parse_computed_member_expression(member_expression).unwrap_or(ParsedExpression::Unknown)
         }
+        Expression::PrivateFieldExpression(member_expression) => {
+            parse_private_field_expression(member_expression)
+        }
         Expression::TSAsExpression(as_expression) => lower_type_assertion(
             &as_expression.expression,
             &as_expression.type_annotation,
@@ -289,10 +292,39 @@ fn parse_expression_unannotated(expression: &Expression<'_>) -> (ParsedExpressio
         Expression::AssignmentExpression(assignment) => {
             parse_assignment_value(assignment).unwrap_or(ParsedExpression::Unknown)
         }
+        Expression::ImportExpression(import) => parse_import_call(import),
         _ => ParsedExpression::Unknown,
     };
 
     (parsed_expression, expression.span())
+}
+
+/// `import(specifier, options)`. The parser recovers `import()` and a spread
+/// argument with an empty-span placeholder: tsc checks no argument of the
+/// former, and a spread specifier is not checked as one.
+fn parse_import_call(import: &oxc_ast::ast::ImportExpression<'_>) -> ParsedExpression {
+    fn is_placeholder(expression: &Expression<'_>) -> bool {
+        matches!(expression, Expression::NullLiteral(literal) if literal.span.is_empty())
+    }
+    if is_placeholder(&import.source) {
+        return ParsedExpression::Unknown;
+    }
+    let (specifier, specifier_span) = parse_expression(&import.source);
+    let (options, options_span) =
+        match import.options.as_ref().filter(|options| !is_placeholder(options)) {
+            Some(options) => {
+                let (options, span) = parse_expression(options);
+                (Some(Box::new(options)), Some(text_span_from_oxc_span(span)))
+            }
+            None => (None, None),
+        };
+    ParsedExpression::ImportCall {
+        specifier: Box::new(specifier),
+        specifier_span: Some(text_span_from_oxc_span(specifier_span)),
+        options,
+        options_span,
+        span: Some(text_span_from_oxc_span(import.span)),
+    }
 }
 
 /// `` tag`a${x}b` `` is a call of `tag` (tsc's `resolveTaggedTemplateExpression`):
@@ -764,6 +796,36 @@ fn parse_call_expression_expression(
                 })
             }
         }
+        Expression::PrivateFieldExpression(member_expression) => {
+            let (object, object_span) = parse_expression(&member_expression.object);
+            let object = Box::new(object);
+            let object_span = Some(text_span_from_oxc_span(object_span));
+            let property_name =
+                super::private_names::access_key(member_expression.field.name.as_str());
+            let property_span = Some(text_span_from_oxc_span(member_expression.field.span));
+            let call_span = Some(text_span_from_oxc_span(call_expression.span));
+            if member_expression.optional {
+                Some(ParsedExpression::OptionalPropertyCall {
+                    object,
+                    object_span,
+                    property_name,
+                    property_span,
+                    call_span,
+                    type_arguments,
+                    arguments,
+                })
+            } else {
+                Some(ParsedExpression::PropertyCall {
+                    object,
+                    object_span,
+                    property_name,
+                    property_span,
+                    call_span,
+                    type_arguments,
+                    arguments,
+                })
+            }
+        }
         Expression::Super(super_keyword) => Some(ParsedExpression::ExpressionCall {
             callee: Box::new(ParsedExpression::Identifier {
                 name: "super".to_string(),
@@ -852,12 +914,12 @@ fn parse_new_expression(new_expression: &NewExpression<'_>) -> Option<ParsedExpr
 fn parse_instantiation_expression(
     instantiation_expression: &oxc_ast::ast::TSInstantiationExpression<'_>,
 ) -> Option<ParsedExpression> {
-    let type_arguments = parse_type_arguments(&instantiation_expression.type_arguments)?;
+    parse_type_arguments(&instantiation_expression.type_arguments)?;
 
     match &instantiation_expression.expression {
-        Expression::CallExpression(call_expression) => {
-            parse_call_expression_expression_with_type_arguments(call_expression, type_arguments)
-        }
+        // `h()<T>` instantiates what the call returns; the call keeps its own
+        // type arguments.
+        Expression::CallExpression(call_expression) => parse_call_expression_expression(call_expression),
         // `f<T>` / `ns.f<T>` with no argument list is an instantiation
         // expression, not a call — it denotes the function value with its type
         // arguments already applied. Lowering it to a zero-argument call
@@ -872,95 +934,6 @@ fn parse_instantiation_expression(
             span: Some(text_span_from_oxc_span(identifier.span)),
         }),
         _ => None,
-    }
-}
-
-fn parse_call_expression_expression_with_type_arguments(
-    call_expression: &oxc_ast::ast::CallExpression<'_>,
-    type_arguments: Vec<crate::ParsedType>,
-) -> Option<ParsedExpression> {
-    let arguments = call_expression
-        .arguments
-        .iter()
-        .map(parse_call_argument)
-        .collect::<Vec<_>>();
-
-    if call_expression.optional {
-        match &call_expression.callee {
-            Expression::StaticMemberExpression(member_expression) => {
-                let (object, object_span) = parse_expression(&member_expression.object);
-                return Some(ParsedExpression::OptionalPropertyCall {
-                    object: Box::new(object),
-                    object_span: Some(text_span_from_oxc_span(object_span)),
-                    property_name: member_expression.property.name.to_string(),
-                    property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
-                    call_span: Some(text_span_from_oxc_span(call_expression.span)),
-                    type_arguments,
-                    arguments,
-                });
-            }
-            _ => {
-                let (callee, callee_span) = parse_expression(&call_expression.callee);
-                return Some(ParsedExpression::OptionalCall {
-                    callee: Box::new(callee),
-                    callee_span: Some(text_span_from_oxc_span(callee_span)),
-                    type_arguments,
-                    arguments,
-                });
-            }
-        }
-    }
-
-    match &call_expression.callee {
-        Expression::Identifier(callee) if callee.name != "undefined" => Some(ParsedExpression::Call {
-            callee_name: callee.name.to_string(),
-            callee_span: Some(text_span_from_oxc_span(callee.span)),
-            type_arguments,
-            arguments,
-        }),
-        Expression::StaticMemberExpression(member_expression) => {
-            let (object, object_span) = parse_expression(&member_expression.object);
-
-            if member_expression.optional {
-                Some(ParsedExpression::OptionalPropertyCall {
-                    object: Box::new(object),
-                    object_span: Some(text_span_from_oxc_span(object_span)),
-                    property_name: member_expression.property.name.to_string(),
-                    property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
-                    call_span: Some(text_span_from_oxc_span(call_expression.span)),
-                    type_arguments,
-                    arguments,
-                })
-            } else {
-                Some(ParsedExpression::PropertyCall {
-                    object: Box::new(object),
-                    object_span: Some(text_span_from_oxc_span(object_span)),
-                    property_name: member_expression.property.name.to_string(),
-                    property_span: Some(text_span_from_oxc_span(member_expression.property.span)),
-                    call_span: Some(text_span_from_oxc_span(call_expression.span)),
-                    type_arguments,
-                    arguments,
-                })
-            }
-        }
-        Expression::Super(super_keyword) => Some(ParsedExpression::ExpressionCall {
-            callee: Box::new(ParsedExpression::Identifier {
-                name: "super".to_string(),
-                span: Some(text_span_from_oxc_span(super_keyword.span)),
-            }),
-            callee_span: Some(text_span_from_oxc_span(super_keyword.span)),
-            type_arguments,
-            arguments,
-        }),
-        _ => {
-            let (callee, callee_span) = parse_expression(&call_expression.callee);
-            Some(ParsedExpression::ExpressionCall {
-                callee: Box::new(callee),
-                callee_span: Some(text_span_from_oxc_span(callee_span)),
-                type_arguments,
-                arguments,
-            })
-        }
     }
 }
 
@@ -1749,6 +1722,9 @@ pub(crate) fn parse_update_expression(
             parse_computed_member_expression(member)?,
             member.span,
         ),
+        SimpleAssignmentTarget::PrivateFieldExpression(member) => {
+            (parse_private_field_expression(member), member.span)
+        }
         // The parser keeps an operand tsc rejects (TS2357/TS2777) in a non-null
         // wrapper spanning exactly that operand; tsc still checks it as an
         // arithmetic operand.
@@ -1796,6 +1772,34 @@ pub(crate) fn parse_static_member_expression(
     })
 }
 
+/// `o.#x`: a member access whose key is the private name as the enclosing
+/// class bodies resolve it (see `private_names`).
+pub(crate) fn parse_private_field_expression(member_expression: &PrivateFieldExpression<'_>) -> ParsedExpression {
+    let (object, object_span) = parse_expression(&member_expression.object);
+    let object = Box::new(object);
+    let object_span = Some(text_span_from_oxc_span(object_span));
+    let property_name = super::private_names::access_key(member_expression.field.name.as_str());
+    let property_span = Some(text_span_from_oxc_span(member_expression.field.span));
+    if member_expression.optional {
+        ParsedExpression::OptionalPropertyAccess {
+            object,
+            object_span,
+            property_name,
+            property_span,
+            is_bracketed: false,
+        }
+    } else {
+        ParsedExpression::PropertyAccess {
+            object,
+            object_span,
+            property_name,
+            property_span,
+            is_bracketed: false,
+            binding_element: false,
+        }
+    }
+}
+
 fn set_in_optional_chain(expr: &mut ParsedExpression) {
     match expr {
         ParsedExpression::NonNullAssertion {
@@ -1826,6 +1830,9 @@ fn parse_chain_expression(chain_expression: &ChainExpression<'_>) -> Option<Pars
         }
         ChainElement::ComputedMemberExpression(member_expression) => {
             parse_computed_member_expression(member_expression)
+        }
+        ChainElement::PrivateFieldExpression(member_expression) => {
+            Some(parse_private_field_expression(member_expression))
         }
         ChainElement::TSNonNullExpression(non_null_expression) => {
             let (expression, _expression_span) = parse_expression(&non_null_expression.expression);
@@ -1972,6 +1979,9 @@ fn parse_assignment_value(
 ) -> Option<ParsedExpression> {
     if let Some(rejected) = parse_rejected_assignment(assignment) {
         return Some(rejected);
+    }
+    if let Some(value) = super::commonjs::export_assignment_value(assignment) {
+        return Some(value);
     }
     let oxc_ast::ast::AssignmentTarget::AssignmentTargetIdentifier(identifier) = &assignment.left
     else {

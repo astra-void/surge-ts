@@ -259,6 +259,8 @@ pub(crate) struct JsDocParameterTag {
     name_span: TextSpan,
     bracketed: bool,
     type_expression: Option<JsDocTypeExpression>,
+    /// Written `@param name {T}` or without a type (`IsNameFirst`).
+    name_first: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -364,6 +366,7 @@ pub(crate) fn parse_jsdoc_comment(source_text: &str, start: usize, end: usize) -
             full_start: start + 3,
         },
         diagnostics: Vec::new(),
+        child_tag_name_span: None,
     };
     let tags = parser.parse_comment_worker(initial_indent);
     Some(JsDocComment { tags, diagnostics: parser.diagnostics })
@@ -372,11 +375,26 @@ pub(crate) fn parse_jsdoc_comment(source_text: &str, start: usize, end: usize) -
 struct TagParser<'s> {
     s: Scanner<'s>,
     diagnostics: Vec<crate::ParsedGrammarDiagnostic>,
+    /// The name of the child tag [`TagParser::try_parse_child_tag`] parsed
+    /// last, where tsc reports a child that may not follow its parent.
+    child_tag_name_span: Option<TextSpan>,
 }
 
 impl<'s> TagParser<'s> {
     fn token(&self) -> Token {
         self.s.token
+    }
+
+    /// `parseErrorAtRange` over the last child tag's name: a `@template`
+    /// under a `@typedef`, `@callback` or `@overload` (TS8039).
+    fn report_misplaced_template(&mut self) {
+        if let Some(span) = self.child_tag_name_span {
+            self.diagnostics.push(crate::ParsedGrammarDiagnostic {
+                kind: crate::ParsedGrammarDiagnosticKind::Ts(8039),
+                span,
+                name: None,
+            });
+        }
     }
 
     /// `parseErrorAtCurrentToken`.
@@ -927,7 +945,7 @@ impl<'s> TagParser<'s> {
                 }
             }
         }
-        Some(JsDocParameterTag { name, name_span, bracketed, type_expression })
+        Some(JsDocParameterTag { name, name_span, bracketed, type_expression, name_first: is_name_first })
     }
 
     fn at_jsdoc_link(&mut self) -> bool {
@@ -949,6 +967,7 @@ impl<'s> TagParser<'s> {
             let state = self.s.mark();
             match self.parse_child_parameter_or_property_tag(target, indent, Some(name)) {
                 Some(JsDocTag::Parameter(child) | JsDocTag::Property(child)) => children.push(child),
+                Some(JsDocTag::Template { .. }) => self.report_misplaced_template(),
                 Some(_) => {}
                 None => {
                     self.s.rewind(state);
@@ -1004,7 +1023,9 @@ impl<'s> TagParser<'s> {
     fn try_parse_child_tag(&mut self, target: PropertyLikeParse, indent: isize) -> Option<JsDocTag> {
         let start = self.s.token_start;
         self.next_token_jsdoc();
-        let tag_name = self.parse_jsdoc_identifier_name().map(|(name, _)| name).unwrap_or_default();
+        let (tag_name, tag_name_span) = self.parse_jsdoc_identifier_name().unzip();
+        self.child_tag_name_span = tag_name_span;
+        let tag_name = tag_name.unwrap_or_default();
         let indent_text = self.skip_whitespace_or_asterisk();
         let accepts: u8 = match tag_name.as_str() {
             "type" => {
@@ -1077,7 +1098,11 @@ impl<'s> TagParser<'s> {
             self.s.rewind(state);
             break;
         }
-        let (name, name_span) = self.parse_jsdoc_identifier_name()?;
+        // `parseJSDocIdentifierName` with the template tag's own message.
+        let Some((name, name_span)) = self.parse_jsdoc_identifier_name() else {
+            self.error_at_current_token(1069, None);
+            return None;
+        };
         let mut default_type = None;
         if is_bracketed {
             self.skip_whitespace();
@@ -1086,9 +1111,13 @@ impl<'s> TagParser<'s> {
                 self.s.pos = parsed.end.max(self.s.pos);
                 default_type = Some(parsed.ty);
                 self.next_token();
+            } else {
+                self.error_at_current_token(1005, Some("="));
             }
             if self.token() == Token::CloseBracket {
                 self.next_token();
+            } else {
+                self.error_at_current_token(1005, Some("]"));
             }
         }
         Some(JsDocTemplateParameter {
@@ -1202,6 +1231,7 @@ impl<'s> TagParser<'s> {
             module_specifier_span: Some(TextSpan { start: literal_start, end: value_end + 1 }),
             span: Some(TextSpan { start, end: value_end + 1 }),
             resolution_mode: None,
+            inline_type_specifiers: false,
         })
     }
 
@@ -1239,6 +1269,7 @@ impl<'s> TagParser<'s> {
         if object_like {
             let mut properties = Vec::new();
             let mut child_type: Option<JsDocType> = None;
+            let mut seen_type_tag = false;
             let mut has_children = false;
             loop {
                 let state = self.s.mark();
@@ -1249,9 +1280,16 @@ impl<'s> TagParser<'s> {
                     }
                     Some(JsDocTag::Type(ty)) => {
                         has_children = true;
-                        if child_type.is_none() {
+                        if seen_type_tag {
+                            self.error_at_current_token(8033, None);
+                        } else {
+                            seen_type_tag = true;
                             child_type = ty;
                         }
+                    }
+                    Some(JsDocTag::Template { .. }) => {
+                        has_children = true;
+                        self.report_misplaced_template();
                     }
                     Some(_) => has_children = true,
                     None => {
@@ -1301,6 +1339,7 @@ impl<'s> TagParser<'s> {
             match self.parse_child_parameter_or_property_tag(PropertyLikeParse::CallbackParameter, indent, None) {
                 Some(JsDocTag::Parameter(parameter)) => parameters.push(parameter),
                 Some(JsDocTag::This(ty)) => this_type = ty,
+                Some(JsDocTag::Template { .. }) => self.report_misplaced_template(),
                 Some(_) => {}
                 None => {
                     self.s.rewind(state);
@@ -1367,6 +1406,9 @@ fn parse_type_text(text: &str, start: usize) -> ParsedTypeText {
     };
     let span = ty.span();
     let (object_like, is_array) = object_or_object_array(&ty);
+    let mut import_types = ImportTypeSpecifiers(Vec::new());
+    import_types.visit_ts_type(&ty);
+    IMPORT_TYPE_SPECIFIERS.with(|specifiers| specifiers.borrow_mut().extend(import_types.0));
     IntendedTypes { ast: AstBuilder::new(&allocator) }.visit_ts_type(&mut ty);
     let lowered = super::types::parse_type(&ty);
     ParsedTypeText {
@@ -1379,6 +1421,18 @@ fn parse_type_text(text: &str, start: usize) -> ParsedTypeText {
             is_array,
         },
         end,
+    }
+}
+
+/// The modules a JSDoc type names with `import("…")`, which belong to the
+/// program's module graph as a written import type's do
+/// (`ForEachDynamicImportOrRequireCall` with `includeTypeSpaceImports`).
+struct ImportTypeSpecifiers(Vec<String>);
+
+impl<'a> Visit<'a> for ImportTypeSpecifiers {
+    fn visit_ts_import_type(&mut self, it: &oxc_ast::ast::TSImportType<'a>) {
+        self.0.push(it.source.value.to_string());
+        walk::walk_ts_import_type(self, it);
     }
 }
 
@@ -1478,6 +1532,7 @@ fn type_of_expression(expression: &JsDocTypeExpression) -> Option<ParsedType> {
                 call_signature: None,
                 call_signature_overloads: Vec::new(),
                 construct_signature: None,
+                construct_signature_overloads: Vec::new(),
                 non_primitive: false,
                 display_name: None,
             }));
@@ -1611,6 +1666,8 @@ pub(crate) struct JsDocIndex {
     aliases: Vec<ParsedTypeAliasDeclaration>,
     /// `@import` declarations.
     imports: Vec<crate::ParsedImportDeclaration>,
+    /// Every `import("…")` specifier the file's JSDoc types name.
+    import_type_specifiers: Vec<String>,
     /// A class member's JSDoc modifiers, by the member's start (a `this.x = e`
     /// member's by the assignment's).
     member_modifiers: std::collections::HashMap<u32, Vec<(JsDocModifier, TextSpan)>>,
@@ -1618,6 +1675,14 @@ pub(crate) struct JsDocIndex {
 
 thread_local! {
     static INDEX: RefCell<Option<std::rc::Rc<JsDocIndex>>> = const { RefCell::new(None) };
+    /// See [`JsDocIndex::import_type_specifiers`], gathered while the index
+    /// is built.
+    static IMPORT_TYPE_SPECIFIERS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The `import("…")` specifiers `index`'s JSDoc types name.
+pub(crate) fn import_type_specifiers(index: &JsDocIndex) -> &[String] {
+    &index.import_type_specifiers
 }
 
 /// Makes `index` readable to the lowering for the duration of `f`.
@@ -1808,6 +1873,7 @@ pub(crate) fn alias_statements(is_module: bool) -> Vec<ParsedStatement> {
 
 /// Build the index for a JavaScript program.
 pub(crate) fn build_jsdoc_index(program: &Program<'_>, source_text: &str) -> JsDocIndex {
+    IMPORT_TYPE_SPECIFIERS.with(|specifiers| specifiers.borrow_mut().clear());
     let mut builder = IndexBuilder {
         source_text,
         comments: &program.comments,
@@ -1816,6 +1882,8 @@ pub(crate) fn build_jsdoc_index(program: &Program<'_>, source_text: &str) -> JsD
         index: JsDocIndex::default(),
     };
     builder.visit_program(program);
+    builder.index.import_type_specifiers =
+        IMPORT_TYPE_SPECIFIERS.with(|specifiers| std::mem::take(&mut *specifiers.borrow_mut()));
     builder.index
 }
 
@@ -1869,6 +1937,62 @@ impl<'n, 'a> FunctionHost<'n, 'a> {
             Self::Function(function) => function.this_param.is_some(),
             Self::Arrow(_) => false,
         }
+    }
+
+    /// tsc's `containsArgumentsReference`: the body names `arguments` outside
+    /// any nested function.
+    fn reads_arguments(self) -> bool {
+        struct Arguments(bool);
+        impl<'a> Visit<'a> for Arguments {
+            fn visit_identifier_reference(&mut self, it: &oxc_ast::ast::IdentifierReference<'a>) {
+                self.0 |= it.name == "arguments";
+            }
+            fn visit_function(&mut self, _: &Function<'a>, _: ScopeFlags) {}
+            fn visit_arrow_function_expression(&mut self, _: &ArrowFunctionExpression<'a>) {}
+        }
+        let mut visitor = Arguments(false);
+        match self {
+            Self::Function(function) => {
+                if let Some(body) = &function.body {
+                    visitor.visit_function_body(body);
+                }
+            }
+            Self::Arrow(arrow) => visitor.visit_function_body(&arrow.body),
+        }
+        visitor.0
+    }
+}
+
+/// Whether some call signature of a written type takes `required`
+/// arguments (`isAritySmaller`); `None` when the type's signatures are not
+/// written out.
+fn signature_takes(ty: &ParsedType, required: usize) -> Option<bool> {
+    let fits = |function: &crate::ParsedFunctionType| {
+        let parameters = function.parameters.iter().filter(|parameter| !parameter.is_this);
+        let (count, rest) = parameters.fold((0, false), |(count, rest), parameter| (count + 1, rest || parameter.rest));
+        rest || count >= required
+    };
+    match ty {
+        ParsedType::Function(function) => Some(fits(function)),
+        ParsedType::Object(object) => match &object.call_signature {
+            Some(signature) => Some(fits(signature)),
+            None => Some(false),
+        },
+        ParsedType::String
+        | ParsedType::Number
+        | ParsedType::Boolean
+        | ParsedType::BigInt
+        | ParsedType::Symbol
+        | ParsedType::Undefined
+        | ParsedType::Null
+        | ParsedType::Void
+        | ParsedType::Never
+        | ParsedType::StringLiteral(_)
+        | ParsedType::NumberLiteral(_)
+        | ParsedType::BooleanLiteral(_)
+        | ParsedType::Array(_)
+        | ParsedType::Tuple(_) => Some(false),
+        _ => None,
     }
 }
 
@@ -1952,16 +2076,15 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
             match tag {
                 JsDocTag::Typedef { name, name_span, type_expression: Some(type_expression), .. } => {
                     check_non_identifier_name(name, *name_span, &mut self.index.parse_errors);
-                    let Some(alias_name) = name.last().filter(|name| !name.is_empty()) else {
-                        continue;
-                    };
-                    if name.len() != 1 {
+                    if name.last().is_none_or(|name| name.is_empty()) {
                         continue;
                     }
+                    // `@typedef {T} A.B` declares `B` in a namespace `A`, which
+                    // the type table keys by the qualified name.
                     let ty = type_of_expression(type_expression).unwrap_or(ParsedType::Unknown);
                     self.index.aliases.push(ParsedTypeAliasDeclaration {
                         is_declare: false,
-                        name: alias_name.clone(),
+                        name: name.join("."),
                         name_span: Some(*name_span),
                         type_parameters: template_parameters(&comment.tags, true),
                         ty,
@@ -2006,7 +2129,11 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
                 JsDocTag::Parameter(parameter_tag) => {
                     let tag_index = parameter_tag_index;
                     parameter_tag_index += 1;
-                    if let Some(parameter_start) = matching_parameter(host.params(), parameter_tag, tag_index) {
+                    let matched = matching_parameter(host.params(), parameter_tag, tag_index);
+                    if matched.is_none() {
+                        self.report_unmatched_parameter_tag(host, parameter_tag);
+                    }
+                    if let Some(parameter_start) = matched {
                         let entry = self.index.parameters.entry(parameter_start).or_default();
                         if entry.ty.is_none() {
                             if let Some(type_expression) = &parameter_tag.type_expression {
@@ -2040,6 +2167,65 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
                 _ => {}
             }
         }
+    }
+
+    /// `reparseHosted` gives a function's own `@type` to it as its full
+    /// signature when nothing of the signature is written, and
+    /// `checkFunctionOrMethodDeclaration` reports TS8030 on that type when no
+    /// call signature of it takes the function's required parameters
+    /// (`getContextualCallSignature`).
+    fn check_full_signature(&mut self, host: FunctionHost<'_, '_>, comment: &JsDocComment) {
+        let Some(tag) = Self::type_tag(comment) else {
+            return;
+        };
+        let params = host.params();
+        if host.has_type_parameters()
+            || host.has_return_type()
+            || params.items.iter().any(|parameter| parameter.type_annotation.is_some())
+            || params.rest.as_ref().is_some_and(|rest| rest.type_annotation.is_some())
+        {
+            return;
+        }
+        let required = params
+            .items
+            .iter()
+            .take_while(|parameter| {
+                !parameter.optional
+                    && parameter.initializer.is_none()
+                    && !self.index.parameters.get(&parameter.span.start).is_some_and(|entry| entry.optional)
+            })
+            .count();
+        if tag.ty.as_ref().and_then(|ty| signature_takes(ty, required)) == Some(false) {
+            self.index.diagnostics.push(crate::ParsedGrammarDiagnostic {
+                kind: crate::ParsedGrammarDiagnosticKind::Ts(8030),
+                span: tag.span,
+                name: None,
+            });
+        }
+    }
+
+    /// tsc's `checkUnmatchedJSDocParameters` for a `@param` naming no
+    /// parameter: TS8032 for a qualified name, TS8024 for a plain one written
+    /// type first. A function that reads `arguments` may take its parameters
+    /// that way.
+    fn report_unmatched_parameter_tag(&mut self, host: FunctionHost<'_, '_>, tag: &JsDocParameterTag) {
+        if tag.name.first().is_none_or(|name| name.is_empty()) || host.reads_arguments() {
+            return;
+        }
+        let (code, arguments) = match tag.name.as_slice() {
+            [name] if !tag.name_first => (8024, name.clone()),
+            [_] => return,
+            [.., _] => {
+                let left = tag.name[..tag.name.len() - 1].join(".");
+                (8032, format!("{}\0{left}", tag.name.join(".")))
+            }
+            [] => return,
+        };
+        self.index.diagnostics.push(crate::ParsedGrammarDiagnostic {
+            kind: crate::ParsedGrammarDiagnosticKind::Ts(code),
+            span: tag.name_span,
+            name: Some(arguments),
+        });
     }
 
     fn mark_typed(&mut self, host: FunctionHost<'_, '_>) {
@@ -2182,6 +2368,9 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
         if let Some(comment) = self.last_comment(it.span.start, false) {
             self.host_modifiers(it.span.start, &comment);
             self.host_function(FunctionHost::Function(&it.value), &comment);
+            if it.kind != MethodDefinitionKind::Get {
+                self.check_full_signature(FunctionHost::Function(&it.value), &comment);
+            }
             if it.kind == MethodDefinitionKind::Get && it.value.return_type.is_none() {
                 if let Some(ty) = Self::type_tag(&comment) {
                     let parsed = lowered(ty);
@@ -2213,6 +2402,11 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
             if !it.shorthand {
                 if let Some(host) = function_of_expression(&it.value) {
                     self.host_function(host, &comment);
+                    // A method is its own host; a property's `@type` types the
+                    // property.
+                    if it.method || it.kind == oxc_ast::ast::PropertyKind::Set {
+                        self.check_full_signature(host, &comment);
+                    }
                 }
             }
         }
@@ -2289,6 +2483,7 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
             match &it.declaration {
                 ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
                     self.host_function(FunctionHost::Function(function), &comment);
+                    self.check_full_signature(FunctionHost::Function(function), &comment);
                 }
                 ExportDefaultDeclarationKind::ClassDeclaration(class) => self.host_class(class, &comment),
                 other => {
@@ -2311,6 +2506,7 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
             Some(Declaration::FunctionDeclaration(function)) => {
                 if let Some(comment) = self.last_comment(start, false) {
                     self.host_function(FunctionHost::Function(function), &comment);
+                    self.check_full_signature(FunctionHost::Function(function), &comment);
                 }
             }
             Some(Declaration::ClassDeclaration(class)) => {
@@ -2346,11 +2542,17 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
             .filter(|comment| comment.is_block())
             .map(|comment| (comment.span.start, comment.span.end))
             .collect();
+        // tsc parses a comment after the last statement as the end-of-file
+        // token's JSDoc, so its parse errors are the file's.
+        let code_end = it.body.last().map_or(0, |statement| statement.span().end);
         for (start, end) in comments {
             if self.parsed.contains_key(&start) {
                 continue;
             }
             if let Some(parsed) = parse_jsdoc_comment(self.source_text, start as usize, end as usize) {
+                if start >= code_end {
+                    self.index.diagnostics.extend(parsed.diagnostics.iter().cloned());
+                }
                 self.reparse_unhosted(start, &parsed);
             }
         }

@@ -11,18 +11,18 @@
 //! any statement that cannot complete.
 
 use surge_ts_syntax::{
-    ParsedClassDeclaration, ParsedClassMember, ParsedFunctionBodyStatement, ParsedType,
+    ParsedClassDeclaration, ParsedClassMember, ParsedExpression, ParsedFunctionBodyStatement, ParsedType,
 };
 use surge_ts_types::Type;
 
 use surge_ts_diagnostics::Diagnostic;
 
 use crate::context::{CheckerContext, convert_span};
-use crate::flow::analyze_function_body_flow;
+use crate::flow::{analyze_function_body_flow, condition_never_takes};
 use crate::infer::map_parsed_type;
 
 /// Whether `body` assigns `this.<name>` on every path that reaches its end.
-fn body_assigns(body: &[ParsedFunctionBodyStatement], name: &str) -> bool {
+pub(super) fn body_assigns(body: &[ParsedFunctionBodyStatement], name: &str) -> bool {
     for statement in body {
         if statement_assigns(statement, name) {
             return true;
@@ -41,6 +41,15 @@ fn statement_assigns(statement: &ParsedFunctionBodyStatement, name: &str) -> boo
         ParsedFunctionBodyStatement::ThisPropertyAssignment(assignment) => {
             assignment.property_name == name
         }
+        // `this[k] = v` writes the member a computed name `[k]` declares when
+        // `k` spells the same entity name: tsc matches the two references by
+        // the name that expression resolves to (`getAccessedPropertyName`).
+        ParsedFunctionBodyStatement::MemberAssignment(assignment) => matches!(
+            &assignment.target,
+            ParsedExpression::ElementAccess { object, index, .. }
+                if matches!(object.as_ref(), ParsedExpression::This { .. })
+                    && entity_name_path(index).is_some_and(|path| format!("[{path}]") == name)
+        ),
         ParsedFunctionBodyStatement::Block(body) => body_assigns(body, name),
         ParsedFunctionBodyStatement::If(if_statement) => {
             // A branch that cannot complete leaves the other one as the only
@@ -65,12 +74,81 @@ fn statement_assigns(statement: &ParsedFunctionBodyStatement, name: &str) -> boo
     }
 }
 
+/// The dotted name `expression` spells (`a`, `E.A`), as a computed member name
+/// writes it between its brackets.
+fn entity_name_path(expression: &ParsedExpression) -> Option<String> {
+    match expression {
+        ParsedExpression::Identifier { name, .. } => Some(name.clone()),
+        ParsedExpression::PropertyAccess {
+            object,
+            property_name,
+            is_bracketed: false,
+            ..
+        } => Some(format!("{}.{property_name}", entity_name_path(object)?)),
+        _ => None,
+    }
+}
+
 fn statement_guarantees_exit(statement: &ParsedFunctionBodyStatement) -> bool {
     analyze_function_body_flow(std::slice::from_ref(statement)).guarantees_exit
 }
 
 fn body_guarantees_exit(body: &[ParsedFunctionBodyStatement]) -> bool {
     body.iter().any(statement_guarantees_exit)
+}
+
+/// Whether some `return` in `body` runs before `this.<name>` is assigned. tsc
+/// reads the property at the constructor's `ReturnFlowNode`, which a `return`
+/// reaches as well as the end of the body, so one taken early leaves it
+/// unassigned there.
+fn returns_before_assignment(body: &[ParsedFunctionBodyStatement], name: &str) -> bool {
+    for statement in body {
+        if statement_returns_before_assignment(statement, name) {
+            return true;
+        }
+        if statement_assigns(statement, name) || statement_guarantees_exit(statement) {
+            return false;
+        }
+    }
+    false
+}
+
+fn statement_returns_before_assignment(statement: &ParsedFunctionBodyStatement, name: &str) -> bool {
+    match statement {
+        ParsedFunctionBodyStatement::Return(_) => true,
+        ParsedFunctionBodyStatement::Block(body) => returns_before_assignment(body, name),
+        // A branch a literal condition never takes is unreachable.
+        ParsedFunctionBodyStatement::If(if_statement) => {
+            (!condition_never_takes(&if_statement.condition, true)
+                && returns_before_assignment(&if_statement.then_body, name))
+                || (!condition_never_takes(&if_statement.condition, false)
+                    && returns_before_assignment(&if_statement.else_body, name))
+        }
+        ParsedFunctionBodyStatement::While(while_statement) => {
+            (while_statement.runs_at_least_once || !condition_never_takes(&while_statement.condition, true))
+                && returns_before_assignment(&while_statement.body, name)
+        }
+        ParsedFunctionBodyStatement::ForOf(for_of_statement) => {
+            returns_before_assignment(&for_of_statement.body, name)
+        }
+        // Every case can be entered straight from the discriminant.
+        ParsedFunctionBodyStatement::Switch(switch_statement) => switch_statement
+            .cases
+            .iter()
+            .any(|case| returns_before_assignment(&case.consequent, name)),
+        // A `return` in the `try` block or the handler runs the `finally` on
+        // its way out.
+        ParsedFunctionBodyStatement::Try(try_statement) => {
+            (!body_assigns(&try_statement.finalizer, name)
+                && (returns_before_assignment(&try_statement.block, name)
+                    || try_statement
+                        .handler
+                        .as_ref()
+                        .is_some_and(|handler| returns_before_assignment(&handler.body, name))))
+                || returns_before_assignment(&try_statement.finalizer, name)
+        }
+        _ => false,
+    }
 }
 
 /// The constructor that carries a body. Overload signatures declare no
@@ -96,6 +174,15 @@ fn type_exempts_initialization(declared: &ParsedType, ctx: &mut CheckerContext) 
     if let ParsedType::Named(named) = declared
         && named.type_arguments.is_empty()
         && ctx.type_parameter_in_scope(&named.name)
+    {
+        return false;
+    }
+    // Nor is a conditional type over one, which `getConditionalType` defers
+    // whatever its branches are.
+    if let ParsedType::Conditional(conditional) = declared
+        && let ParsedType::Named(checked) = conditional.check_type.as_ref()
+        && checked.type_arguments.is_empty()
+        && ctx.type_parameter_in_scope(&checked.name)
     {
         return false;
     }
@@ -161,17 +248,22 @@ fn check_declared_properties(
         }
         // An unannotated property has no declared type to inspect; surge types
         // it `any`, which is exempt in tsc for the same reason.
-        let Some(declared) = property.declared_type.as_ref() else {
+        let Some(declared) = property.initialization_type.as_ref().or(property.declared_type.as_ref()) else {
             continue;
         };
         if type_exempts_initialization(declared, ctx) {
             continue;
         }
-        if constructor.is_some_and(|body| body_assigns(body, &property.name)) {
+        if constructor.is_some_and(|body| {
+            body_assigns(body, &property.name) && !returns_before_assignment(body, &property.name)
+        }) {
             continue;
         }
 
-        let diagnostic = Diagnostic::ts2564(&property.name, ctx.file_name.clone());
+        let diagnostic = Diagnostic::ts2564(
+            surge_ts_types::private_name::display(&property.name),
+            ctx.file_name.clone(),
+        );
         ctx.push(match property.name_span {
             Some(span) => diagnostic.with_span(convert_span(span)),
             None => diagnostic,

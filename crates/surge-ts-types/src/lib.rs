@@ -8,6 +8,7 @@ pub mod leaf_probe;
 mod name_memo;
 pub use name_memo::clear_name_intern_table;
 mod object;
+pub mod private_name;
 mod reference;
 mod store;
 mod identity;

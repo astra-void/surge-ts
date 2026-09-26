@@ -354,8 +354,31 @@ pub(crate) fn resolve_parsed_type(
             // a miss consult the module's full value table (the same forward-ref
             // fallback used when checking expressions); genuinely-missing names
             // still report TS2304.
+            // The file's own declaration shadows a global of the same name
+            // (`resolveName` meets module locals first), including while the
+            // query is resolved before the declaration is bound in `ctx.symbols`
+            // and the global is all `ctx.symbols` has.
+            let module_own = || {
+                ctx.module_value_fallback
+                    .as_ref()
+                    .and_then(|table| table.get(&type_of.name).cloned())
+                    .or_else(|| {
+                        ctx.module_local_values_for_file(&ctx.file_name)
+                            .and_then(|table| table.get(&type_of.name).cloned())
+                    })
+            };
+            let visible = ctx.symbols.get(&type_of.name).cloned().and_then(|symbol| {
+                let is_global = ctx
+                    .ambient_global_symbols
+                    .get(&type_of.name)
+                    .is_some_and(|global| global.ty == symbol.ty);
+                match is_global.then(module_own).flatten() {
+                    Some(own) => Some(own),
+                    None => Some(symbol),
+                }
+            });
             let symbol = declaring_module_symbol
-                .or_else(|| ctx.symbols.get(&type_of.name).cloned())
+                .or(visible)
                 .or_else(|| {
                     ctx.signature_parameter_bindings
                         .iter()
@@ -367,7 +390,10 @@ pub(crate) fn resolve_parsed_type(
                             function_signature: None,
                         })
                 })
-                .or_else(|| ctx.ambient_global_symbols.get(&type_of.name).cloned())
+                // `resolveName` meets the module's own declarations before the
+                // globals: `typeof stop` for a module's `const stop` is that
+                // const, not lib.dom's global `stop()`, even when the query is
+                // resolved before the const is bound in `ctx.symbols`.
                 .or_else(|| {
                     ctx.module_value_fallback
                         .as_ref()
@@ -383,7 +409,8 @@ pub(crate) fn resolve_parsed_type(
                     let file_name = ctx.file_name.clone();
                     ctx.module_local_values_for_file(&file_name)
                         .and_then(|table| table.get(&type_of.name).cloned())
-                });
+                })
+                .or_else(|| ctx.ambient_global_symbols.get(&type_of.name).cloned());
 
             // `undefined` is a global value like any other to a type query:
             // `var x: typeof undefined`. Its type is the widening `undefined`,

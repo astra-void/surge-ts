@@ -106,6 +106,10 @@ pub(crate) fn check_function_assignment(
 fn declared_reference_type(object: &ParsedExpression, symbols: &SymbolTable) -> Option<Type> {
     match object {
         ParsedExpression::Identifier { name, .. } => symbols.declared_type(name).cloned(),
+        ParsedExpression::This { .. } => symbols
+            .declared_type("this")
+            .cloned()
+            .or_else(|| symbols.get("this").map(|symbol| symbol.ty.clone())),
         ParsedExpression::PropertyAccess {
             object,
             property_name,
@@ -302,7 +306,10 @@ fn report_readonly_property_write(
         return false;
     }
 
-    let diagnostic = Diagnostic::ts2540(property_name, ctx.file_name.clone());
+    let diagnostic = Diagnostic::ts2540(
+        surge_ts_types::private_name::display(property_name),
+        ctx.file_name.clone(),
+    );
     ctx.push(match span {
         Some(span) => diagnostic.with_span(convert_span(span)),
         None => diagnostic,
@@ -586,6 +593,14 @@ fn check_element_assignment(
     ) else {
         return;
     };
+    if crate::checks::expr::report_unusable_index_type(
+        &index_type,
+        index_span.or(assignment.target_span),
+        ctx,
+    ) {
+        check_value_without_target(assignment, None, &visible_symbols, ctx);
+        return;
+    }
 
     // A write is checked against the *declared* element type, not whatever the
     // enclosing branch narrowed the receiver to.
@@ -755,33 +770,53 @@ fn check_assigned_value(
     None
 }
 
-/// `exports.foo = …` / `module.exports = …` in a JavaScript file is a CommonJS
-/// export *declaration*, which tsc's binder turns into one
-/// (`getAssignmentDeclarationKind`) rather than a write to an undeclared
-/// `exports`. Checking it as a write reported a false TS2304 on the receiver.
-fn is_commonjs_export_declaration(target: &ParsedExpression, ctx: &CheckerContext) -> bool {
-    let lower = ctx.file_name.to_ascii_lowercase();
-    if !(lower.ends_with(".js")
-        || lower.ends_with(".jsx")
-        || lower.ends_with(".mjs")
-        || lower.ends_with(".cjs"))
-    {
+/// `exports.foo = …` / `module.exports.foo = …` in a CommonJS module is an
+/// export *declaration* (`getAssignmentDeclarationKind`): the export's type
+/// is what its writes assign, so the write never mismatches it. The lowering
+/// declares such exports itself and leaves `exports` and `module` `any`.
+/// Once `module.exports` is replaced they are typed by the replacement and
+/// the write is an ordinary one, while `module.exports = …` always declares
+/// the replacement (`bindModuleExportsAssignment`). A root that resolves to
+/// nothing is checked as well: the file is no CommonJS module, and tsc
+/// reports the missing `exports` or `module` on it.
+fn is_commonjs_export_declaration(
+    target: &ParsedExpression,
+    scopes: &ScopeStack,
+    ctx: &CheckerContext,
+) -> bool {
+    if !surge_ts_syntax::is_javascript_file_name(&ctx.file_name) {
         return false;
+    }
+    if is_module_exports_reference(target) {
+        return true;
     }
 
     let mut root = target;
-    loop {
+    let name = loop {
         match root {
             ParsedExpression::PropertyAccess { object, .. }
             | ParsedExpression::ElementAccess { object, .. } => root = object,
-            ParsedExpression::Identifier { name, .. } => {
-                return name == "exports" || name == "module";
-            }
-            ParsedExpression::IndexAccess { object_name, .. } => {
-                return object_name == "exports" || object_name == "module";
-            }
+            ParsedExpression::Identifier { name, .. } => break name.as_str(),
+            ParsedExpression::IndexAccess { object_name, .. } => break object_name.as_str(),
             _ => return false,
         }
+    };
+    (name == "exports" || name == "module")
+        && scopes.resolve(name).is_some_and(|symbol| matches!(symbol.ty, Type::Any))
+}
+
+/// `module.exports` / `module["exports"]`.
+fn is_module_exports_reference(target: &ParsedExpression) -> bool {
+    match target {
+        ParsedExpression::PropertyAccess { object, property_name, .. } => {
+            property_name == "exports"
+                && matches!(object.as_ref(), ParsedExpression::Identifier { name, .. } if name == "module")
+        }
+        ParsedExpression::IndexAccess { object_name, index, .. } => {
+            object_name == "module"
+                && matches!(index.as_ref(), ParsedExpression::StringLiteral(key) if key == "exports")
+        }
+        _ => false,
     }
 }
 
@@ -932,7 +967,13 @@ fn check_member_assignment_itself(
     scopes: &mut ScopeStack,
     ctx: &mut CheckerContext,
 ) {
-    if is_commonjs_export_declaration(&assignment.target, ctx) {
+    // A private name is never a CommonJS export.
+    let writes_private_name = matches!(
+        &assignment.target,
+        ParsedExpression::PropertyAccess { property_name, is_bracketed: false, .. }
+            if surge_ts_types::private_name::is_private_name_key(property_name)
+    );
+    if !writes_private_name && is_commonjs_export_declaration(&assignment.target, scopes, ctx) {
         return;
     }
 
@@ -1028,6 +1069,18 @@ fn check_member_assignment_itself(
     ) {
         InferredExpression::Known(ty) => ty,
         receiver => {
+            if !*is_bracketed
+                && surge_ts_types::private_name::is_private_name_key(property_name)
+                && let Some(private_receiver) = crate::checks::expr::PrivateNameReceiver::of(&receiver)
+            {
+                let _ = crate::checks::expr::check_private_name_access(
+                    private_receiver,
+                    property_name,
+                    *property_span,
+                    &visible_symbols,
+                    ctx,
+                );
+            }
             check_value_without_target(&assignment, receiver.flowing_type().as_ref(), &visible_symbols, ctx);
             return;
         }
@@ -1043,6 +1096,19 @@ fn check_member_assignment_itself(
         ctx,
     );
     let _ = object_span;
+    if !*is_bracketed
+        && surge_ts_types::private_name::is_private_name_key(property_name)
+        && let Some(ty) = crate::checks::expr::check_private_name_access(
+            crate::checks::expr::PrivateNameReceiver::Type(&object_type),
+            property_name,
+            *property_span,
+            &visible_symbols,
+            ctx,
+        )
+    {
+        check_value_without_target(&assignment, Some(&ty), &visible_symbols, ctx);
+        return;
+    }
     if !*is_bracketed {
         crate::checks::expr::check_member_accessibility(
             object,
@@ -1108,7 +1174,8 @@ fn check_member_assignment_itself(
             return;
         }
         let receiver = receiver.clone();
-        if let Type::Union(union) = &receiver
+        if !*is_bracketed
+            && let Type::Union(union) = &receiver
             && union.types().iter().all(|member| {
                 matches!(member.peeled(), Type::Object(_))
                     && !crate::checks::expr::carries_leaked_type_parameter(member, ctx)
@@ -1125,12 +1192,20 @@ fn check_member_assignment_itself(
                 Some(span) => diagnostic.with_span(convert_span(span)),
                 None => diagnostic,
             });
-        } else if !*is_bracketed
-            && let InferredExpression::MissingProperty {
-                property_name,
-                object_type,
-                span,
-            } = crate::infer::infer_expression(&assignment.target, &visible_symbols, ctx)
+        } else if *is_bracketed {
+            // tsc's `checkElementAccessExpression` resolves a written element
+            // through `getPropertyTypeForIndexType` exactly as it resolves a read
+            // one, union receivers included: a key neither a member nor an index
+            // signature answers is the implicit `any` the read reports (TS7053,
+            // TS7052 naming `set`), not TS2339.
+            let _ = crate::checks::expr::with_element_write_target(|| {
+                evaluate_expression(&assignment.target, assignment.target_span, &visible_symbols, ctx)
+            });
+        } else if let InferredExpression::MissingProperty {
+            property_name,
+            object_type,
+            span,
+        } = crate::infer::infer_expression(&assignment.target, &visible_symbols, ctx)
         {
             // Any other receiver reports a missing member exactly as a read of
             // it does, gated by the same modelling checks the read applies.
@@ -1222,6 +1297,49 @@ fn check_member_assignment_itself(
     );
 }
 
+/// A write to a member `this` does not declare is TS2339 in a `.ts` file (only
+/// JS binds `this.x = …` as a declaration), reported exactly where a read of
+/// it would be.
+fn report_missing_this_member(
+    assignment: &ParsedThisPropertyAssignment,
+    this_span: Option<surge_ts_syntax::TextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let read = ParsedExpression::PropertyAccess {
+        object: Box::new(ParsedExpression::This { span: this_span }),
+        object_span: this_span,
+        property_name: assignment.property_name.clone(),
+        property_span: assignment.property_span,
+        is_bracketed: false,
+        binding_element: false,
+    };
+    if let InferredExpression::MissingProperty {
+        property_name,
+        object_type,
+        span,
+    } = crate::infer::infer_expression(&read, symbols, ctx)
+        && let Some(span) = span.or(assignment.property_span)
+    {
+        let diagnostic = match crate::checks::expr::global_this_missing_member(
+            &property_name,
+            &object_type,
+            ctx,
+        ) {
+            Some(diagnostic) => diagnostic,
+            None => Some(crate::checks::expr::missing_property_diagnostic(
+                &property_name,
+                &object_type,
+                symbols,
+                ctx,
+            )),
+        };
+        if let Some(diagnostic) = diagnostic {
+            ctx.push(diagnostic.with_span(convert_span(span)));
+        }
+    }
+}
+
 /// Checks a `this.<property> = <value>` assignment against the instance
 /// property's declared type. The `this` symbol is bound to the class instance
 /// type for the duration of the method/constructor body. When `this` or the
@@ -1235,8 +1353,39 @@ pub(crate) fn check_this_property_assignment(
     let visible_symbols = visible_symbols(scopes);
 
     let Some(this_symbol) = visible_symbols.get("this") else {
+        // tsc's `tryGetThisTypeAt`: where a script's top level (arrows looked
+        // through) owns `this` it is `globalThis`, and a member that lacks is
+        // reported as a read of it would be.
+        let this_span = assignment.target_span.map(|span| surge_ts_syntax::TextSpan {
+            start: span.start,
+            end: span.start + "this".len(),
+        });
+        report_missing_this_member(&assignment, this_span, visible_symbols, ctx);
         return;
     };
+
+    if surge_ts_types::private_name::is_private_name_key(&assignment.property_name) {
+        let receiver = visible_symbols
+            .declared_type("this")
+            .cloned()
+            .unwrap_or_else(|| this_symbol.ty.clone());
+        if crate::checks::expr::check_private_name_access(
+            crate::checks::expr::PrivateNameReceiver::Type(&receiver),
+            &assignment.property_name,
+            assignment.property_span,
+            &visible_symbols,
+            ctx,
+        )
+        .is_some()
+        {
+            // The value is still checked, as against tsc's error type: nothing
+            // it holds is contextually typed by the missing member.
+            ctx.degraded_expected_type_depth += 1;
+            let _ = evaluate_expression(&assignment.value, assignment.value_span, &visible_symbols, ctx);
+            ctx.degraded_expected_type_depth -= 1;
+            return;
+        }
+    }
 
     // A write checks against the property's *declared* type, as
     // `check_member_assignment` does for `o.p = …`: inside
@@ -1252,41 +1401,7 @@ pub(crate) fn check_this_property_assignment(
                 .get_property_access_type(&assignment.property_name)
         })
     else {
-        // A write to a member `this` does not declare is TS2339 in a `.ts`
-        // file (only JS binds `this.x = …` as a declaration), reported exactly
-        // where a read of it would be.
-        let read = ParsedExpression::PropertyAccess {
-            object: Box::new(ParsedExpression::This { span: None }),
-            object_span: None,
-            property_name: assignment.property_name.clone(),
-            property_span: assignment.property_span,
-            is_bracketed: false,
-            binding_element: false,
-        };
-        if let InferredExpression::MissingProperty {
-            property_name,
-            object_type,
-            span,
-        } = crate::infer::infer_expression(&read, &visible_symbols, ctx)
-            && let Some(span) = span.or(assignment.property_span)
-        {
-            let diagnostic = match crate::checks::expr::global_this_missing_member(
-                &property_name,
-                &object_type,
-                ctx,
-            ) {
-                Some(diagnostic) => diagnostic,
-                None => Some(crate::checks::expr::missing_property_diagnostic(
-                    &property_name,
-                    &object_type,
-                    &visible_symbols,
-                    ctx,
-                )),
-            };
-            if let Some(diagnostic) = diagnostic {
-                ctx.push(diagnostic.with_span(convert_span(span)));
-            }
-        }
+        report_missing_this_member(&assignment, None, visible_symbols, ctx);
         return;
     };
 

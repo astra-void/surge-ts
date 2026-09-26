@@ -47,9 +47,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
         let has_in = self.ctx.has_in();
         self.ctx = self.ctx.and_in(true);
-        let expression = self.parse_assignment_expression_or_higher();
+        let expression = self.parse_import_argument();
         let arguments = if self.eat(Kind::Comma) && !self.at(Kind::RParen) {
-            Some(self.parse_assignment_expression_or_higher())
+            Some(self.parse_import_argument())
         } else {
             None
         };
@@ -58,7 +58,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         if arguments.is_some() && !self.at(Kind::RParen) && !self.at(Kind::Eof) {
             self.error(diagnostics::import_arguments(self.end_span(span)));
             loop {
-                self.parse_assignment_expression_or_higher();
+                self.parse_import_argument();
                 if !self.eat(Kind::Comma) || self.at(Kind::RParen) {
                     break;
                 }
@@ -73,6 +73,21 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             self.ast.alloc_import_expression(self.end_span(span), expression, arguments, phase);
         self.module_record_builder.visit_import_expression(&expr);
         Expression::ImportExpression(expr)
+    }
+
+    /// surge: TS1325 — tsc parses the arguments of `import(…)` like a call's,
+    /// where a spread is allowed, and its checker rejects the spread; keep the
+    /// file, with an empty-span placeholder in the spread's place.
+    fn parse_import_argument(&mut self) -> Expression<'a> {
+        if !self.at(Kind::Dot3) {
+            return self.parse_assignment_expression_or_higher();
+        }
+        let span = self.start_span();
+        self.bump_any();
+        self.parse_assignment_expression_or_higher();
+        let span = self.end_span(span);
+        self.error(diagnostics::import_argument_spread(span));
+        self.ast.expression_null_literal(Span::empty(span.end))
     }
 
     /// Section 16.2.2 Import Declaration
@@ -402,10 +417,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             _ => ImportAttributeKey::Identifier(self.parse_identifier_name()),
         };
         self.expect(Kind::Colon);
+        // surge: TS2858 — tsc parses any expression as the value and its checker
+        // rejects all but a string literal; keep the file, with an empty
+        // placeholder literal where the expression was.
         if !self.at(Kind::Str) {
-            return self.fatal_error(diagnostics::import_attribute_value_must_be_string_literal(
-                self.cur_token().span(),
-            ));
+            let expression = self.parse_assignment_expression_or_higher();
+            let value_span = expression.span();
+            self.error(diagnostics::import_attribute_value_must_be_string_literal(value_span));
+            let value = self.ast.string_literal(value_span, "", None);
+            return self.ast.import_attribute(self.end_span(span), key, value);
         }
         let value = self.parse_literal_string();
         self.ast.import_attribute(self.end_span(span), key, value)

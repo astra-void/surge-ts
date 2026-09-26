@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use surge_ts_diagnostics::Diagnostic;
 
@@ -159,12 +159,14 @@ pub(super) fn tsc_file_errors(
 
 /// tsc's `initializeChecker` merge of every file's global declarations: two
 /// files' declarations that cannot share a name are reported where each is
-/// declared, as the binder reports them within one file.
-pub(super) fn report_global_merge_conflicts(parsed_files: &mut [ParsedProgramFile]) {
+/// declared, as the binder reports them within one file. The merge resolves
+/// aliases as tsc's does (`resolveAlias`), and so does checking a file's
+/// aliases: one whose resolution comes back to itself is TS2303.
+pub(super) fn report_global_merge_conflicts(parsed_files: &mut [ParsedProgramFile], ctx: &CheckerContext) {
     let contributing: Vec<usize> = (0..parsed_files.len())
         .filter(|&index| parsed_files[index].tsc_globals.is_some())
         .collect();
-    if contributing.len() < 2 {
+    if contributing.is_empty() {
         return;
     }
     let globals: Vec<std::sync::Arc<surge_ts_tsc_syntax::FileGlobals>> = contributing
@@ -175,7 +177,40 @@ pub(super) fn report_global_merge_conflicts(parsed_files: &mut [ParsedProgramFil
         .iter()
         .map(|globals| surge_ts_tsc_syntax::GlobalsInput { globals, plain_js: false })
         .collect();
-    let report = surge_ts_tsc_syntax::merge_globals_report(&inputs);
+    let report = {
+        let files: &[ParsedProgramFile] = parsed_files;
+        let input_of: HashMap<usize, u32> =
+            contributing.iter().enumerate().map(|(input, &index)| (index, input as u32)).collect();
+        let resolve_module = |input: u32, specifier: &str| -> Option<u32> {
+            let importer = files[contributing[input as usize]].file_name.as_str();
+            let resolved = ctx
+                .options
+                .resolved_module_for(importer, specifier)
+                .and_then(|resolved| {
+                    ctx.module_file_index_by_identity
+                        .get(crate::modules::canonical_file_identity(resolved).as_str())
+                        .copied()
+                })
+                .or_else(|| {
+                    crate::modules::resolve_relative_module(
+                        importer,
+                        specifier,
+                        files,
+                        &ctx.module_file_index_by_identity,
+                    )
+                    .map(|resolution| resolution.resolved_file_index)
+                })?;
+            input_of.get(&resolved).copied()
+        };
+        // tsc checks neither a `// @ts-nocheck` file nor, under
+        // `skipLibCheck`, a declaration file, so it resolves their aliases
+        // only as others reach them.
+        let is_checked = |input: u32| {
+            let file = &files[contributing[input as usize]];
+            !file.no_check && !(ctx.options.skip_lib_check && file.file_kind.is_declaration())
+        };
+        surge_ts_tsc_syntax::merge_globals_report_with(&inputs, &resolve_module, &is_checked)
+    };
     for ((&index, reports), shared) in contributing
         .iter()
         .zip(report.diagnostics)

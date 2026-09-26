@@ -372,6 +372,13 @@ pub(super) fn parse_member_assignment(
             super::expressions::parse_computed_member_expression(member)?,
             member.span,
         ),
+        AssignmentTarget::PrivateFieldExpression(member) => {
+            let target = super::expressions::parse_private_field_expression(member);
+            if matches!(&target, ParsedExpression::PropertyAccess { object, .. } if **object == ParsedExpression::Unknown) {
+                return None;
+            }
+            (target, member.span)
+        }
         _ => return None,
     };
 
@@ -419,6 +426,13 @@ fn parse_this_property_assignment(
             };
             (&member.object, key.value.to_string(), key.span, member.span, true)
         }
+        AssignmentTarget::PrivateFieldExpression(member) => (
+            &member.object,
+            super::private_names::access_key(member.field.name.as_str()),
+            member.field.span,
+            member.span,
+            false,
+        ),
         _ => return None,
     };
 
@@ -1107,6 +1121,17 @@ fn parse_array_binding_pattern(
             .elements
             .iter()
             .map(|element| matches!(element, Some(BindingPattern::AssignmentPattern(_))))
+            .collect(),
+        default_values: array_pattern
+            .elements
+            .iter()
+            .map(|element| match element {
+                Some(BindingPattern::AssignmentPattern(assignment)) => {
+                    let (value, span) = parse_expression(&assignment.right);
+                    Some((value, Some(text_span_from_oxc_span(span))))
+                }
+                _ => None,
+            })
             .collect(),
         rest: array_pattern
             .rest

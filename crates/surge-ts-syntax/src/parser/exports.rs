@@ -110,7 +110,19 @@ pub(crate) fn parse_export_default_declaration(
             ParsedDefaultExportDeclaration::Function(function)
         }
         ExportDefaultDeclarationKind::ClassDeclaration(class) => {
-            match super::classes::parse_class_declaration(class) {
+            // An anonymous `export default class {}` binds as `default`.
+            let parsed = match &class.id {
+                Some(_) => super::classes::parse_class_declaration(class),
+                None => super::classes::parse_class_declaration_named(
+                    class,
+                    "default".to_string(),
+                    text_span_from_oxc_span(oxc_span::Span::new(
+                        class.span.start,
+                        class.span.start + "class".len() as u32,
+                    )),
+                ),
+            };
+            match parsed {
                 Some(class) => ParsedDefaultExportDeclaration::Class(class),
                 None => ParsedDefaultExportDeclaration::Unsupported {
                     span: Some(text_span_from_oxc_span(declaration.span)),
@@ -206,6 +218,37 @@ pub(crate) fn parse_export_default_declaration(
         other if other.is_expression() => {
             let (parsed_expression, _) = parse_expression(other.to_expression());
             ParsedDefaultExportDeclaration::Expression(parsed_expression)
+        }
+        // `export default interface A {}` declares `A` in the module and
+        // exports it as `default`, as `interface A {}; export { A as default }`.
+        ExportDefaultDeclarationKind::TSInterfaceDeclaration(interface) => {
+            let Some(parsed) = parse_interface_declaration(interface) else {
+                return Some(vec![ParsedStatement::ExportDeclaration(Box::new(
+                    ParsedExportDeclaration::Default {
+                        declaration: ParsedDefaultExportDeclaration::Unsupported { span },
+                        span,
+                    },
+                ))]);
+            };
+            let name_span = Some(text_span_from_oxc_span(interface.id.span));
+            let local_name = parsed.name.clone();
+            return Some(vec![
+                ParsedStatement::InterfaceDeclaration(Box::new(parsed)),
+                ParsedStatement::ExportDeclaration(Box::new(ParsedExportDeclaration::Named {
+                    is_type_only: false,
+                    specifiers: vec![ParsedExportSpecifier {
+                        local_name,
+                        exported_name: "default".to_string(),
+                        name_span,
+                        exported_name_span: name_span,
+                        is_type_only: false,
+                    }],
+                    module_specifier: None,
+                    module_specifier_span: None,
+                    span,
+                    resolution_mode: None,
+                })),
+            ]);
         }
         _ => {
             return Some(vec![ParsedStatement::ExportDeclaration(Box::new(

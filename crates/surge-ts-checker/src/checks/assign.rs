@@ -18,12 +18,14 @@ use crate::symbols::{SymbolKind, SymbolTable};
 pub(crate) fn unwritable_binding_diagnostic(
     name: &str,
     symbol: &crate::symbols::SymbolInfo,
-    file_name: String,
+    ctx: &CheckerContext,
 ) -> Option<Diagnostic> {
+    let file_name = ctx.file_name.clone();
     match symbol.kind {
         SymbolKind::Function => Some(Diagnostic::ts2630(name, file_name)),
         SymbolKind::Const => {
             if let surge_ts_types::Type::Object(object) = &symbol.ty
+                && !ctx.file_const_class_names.contains(name)
                 && object.alias_name.as_deref() == Some(format!("typeof {name}").as_str())
             {
                 return Some(if object.construct_signature.is_some() {
@@ -118,7 +120,7 @@ pub(crate) fn check_assignment_with_symbols(
     }
 
     if let Some(diagnostic) =
-        unwritable_binding_diagnostic(&assignment.target_name, &target, ctx.file_name.clone())
+        unwritable_binding_diagnostic(&assignment.target_name, &target, ctx)
     {
         ctx.push(diagnostic.with_span(convert_span(target_span)));
         return false;
@@ -155,7 +157,8 @@ pub(crate) fn check_assignment_with_symbols(
                         type_contains_unknown(&inferred_value_type)
                     }))
                     || definite_unit_member_mismatch(&inferred_value_type, &target_type)
-                    || definite_primitive_member_mismatch(&inferred_value_type, &target_type))
+                    || definite_primitive_member_mismatch(&inferred_value_type, &target_type)
+                    || definite_type_variable_mismatch(&inferred_value_type, &target_type))
                 && !with_dts_expansion_reason(DtsExpansionReason::Assignability, || {
                     is_assignable_to(&inferred_value_type, &target_type)
                 })
@@ -330,6 +333,33 @@ pub(crate) fn definite_unit_member_mismatch(
                 .get(name)
                 .is_some_and(|actual| is_unit(&actual.ty) && actual.ty != expected.ty)
     })
+}
+
+/// Whether a source with structure of its own is related to a type variable
+/// of the body being checked. Only `any`, `never`, the variable itself or a
+/// type built on it is, so the verdict does not depend on how well surge
+/// modelled the source's members.
+pub(crate) fn definite_type_variable_mismatch(
+    source: &surge_ts_types::Type,
+    target: &surge_ts_types::Type,
+) -> bool {
+    use surge_ts_types::Type;
+    target.is_type_variable()
+        && match source.peeled() {
+            Type::Object(object) => object.intersection_operands.is_none(),
+            Type::Function(_)
+            | Type::Array(_)
+            | Type::Tuple(_)
+            | Type::String
+            | Type::Number
+            | Type::Boolean
+            | Type::BigInt
+            | Type::Symbol
+            | Type::StringLiteral(_)
+            | Type::NumberLiteral(_)
+            | Type::BooleanLiteral(_) => true,
+            _ => false,
+        }
 }
 
 /// Whether a `number`, `boolean` or `bigint` source is related to an object

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::ast::{self, NodeId};
 use crate::flags::NodeFlags;
 use crate::kind::Kind;
-use crate::merge::{FileGlobals, GlobalDeclaration, GlobalSymbol};
+use crate::merge::{AliasDeclaration, AliasTarget, FileGlobals, GlobalDeclaration, GlobalScope, GlobalSymbol, SymbolLink};
 use crate::messages as diagnostics;
 use crate::parser::ParsedFile;
 use crate::scanner::{self, Scanner};
@@ -142,6 +142,15 @@ enum Table {
     Members(SymbolId),
 }
 
+/// The containers a name written in an alias declaration resolves through.
+struct AliasScopes {
+    /// Each container's number.
+    index: HashMap<NodeId, u32>,
+    /// Each container, with the number of the one enclosing it.
+    containers: Vec<(NodeId, Option<u32>)>,
+    has_entity_aliases: bool,
+}
+
 /// Binds the file: what the binder reports and what [`Binder::finish`] and
 /// the unused-identifier check read back.
 pub(crate) fn bind<'a>(file: &'a ParsedFile, text: &'a str) -> Binder<'a> {
@@ -159,6 +168,7 @@ pub(crate) fn bind<'a>(file: &'a ParsedFile, text: &'a str) -> Binder<'a> {
         diagnostics: Vec::new(),
     };
     binder.bind(Some(file.root));
+    binder.check_external_module_exports();
     binder
 }
 
@@ -1032,56 +1042,196 @@ impl<'a> Binder<'a> {
 
     /// What the checker's `initializeChecker` merges into the global symbol
     /// table from this file: a script's locals, or a module's augmentations
-    /// (top-level `declare global` and `declare module "…"` blocks).
+    /// (top-level `declare global` and `declare module "…"` blocks) and
+    /// `export as namespace` declarations. With them, what resolving the
+    /// file's aliases reads: a module's exports, and the containers a name an
+    /// alias declaration writes resolves through.
     fn globals(&self) -> FileGlobals {
         let mut out = FileGlobals::default();
         let mut ids = HashMap::new();
+        let scopes = self.alias_scopes();
         if !self.file.external_module {
             out.is_script = true;
-            out.locals = self.export_table(Table::Locals(self.file.root), &mut out, &mut ids);
-            return out;
-        }
-        let mut global_augmentations = Vec::new();
-        let mut module_augmentations: Vec<(String, SymbolId)> = Vec::new();
-        for statement in self.statements(self.file.root) {
-            if !self.is_ambient_module(statement)
-                || !(self.has_modifier(statement, Kind::DeclareKeyword) || self.file.is_declaration_file)
-            {
-                continue;
-            }
-            let Some(symbol) = self.symbol_of(statement) else { continue };
-            if self.is_global_scope_augmentation(statement) {
-                if !global_augmentations.contains(&symbol) {
-                    global_augmentations.push(symbol);
+            out.locals = self.export_table(Table::Locals(self.file.root), true, &scopes, &mut out, &mut ids);
+        } else {
+            let mut global_augmentations = Vec::new();
+            let mut module_augmentations: Vec<(String, SymbolId)> = Vec::new();
+            for statement in self.statements(self.file.root) {
+                if !self.is_ambient_module(statement)
+                    || !(self.has_modifier(statement, Kind::DeclareKeyword) || self.file.is_declaration_file)
+                {
+                    continue;
                 }
-            } else if !module_augmentations.iter().any(|&(_, s)| s == symbol) {
-                let name = self.name_of(statement).map(|n| self.node_text(n)).unwrap_or_default();
-                module_augmentations.push((name, symbol));
+                let Some(symbol) = self.symbol_of(statement) else { continue };
+                if self.is_global_scope_augmentation(statement) {
+                    if !global_augmentations.contains(&symbol) {
+                        global_augmentations.push(symbol);
+                    }
+                } else if !module_augmentations.iter().any(|&(_, s)| s == symbol) {
+                    let name = self.name_of(statement).map(|n| self.node_text(n)).unwrap_or_default();
+                    module_augmentations.push((name, symbol));
+                }
+            }
+            for symbol in global_augmentations {
+                let exports = self.export_table(Table::Exports(symbol), true, &scopes, &mut out, &mut ids);
+                out.augmentations.push(exports);
+            }
+            for (module_name, symbol) in module_augmentations {
+                let name = format!("\"{module_name}\"");
+                let id = self.export_symbol(&name, symbol, true, &scopes, &mut out, &mut ids);
+                out.module_augmentations.push((module_name, id));
+            }
+            let module_symbol = self
+                .symbol_of(self.file.root)
+                .map(|module| self.export_symbol("", module, false, &scopes, &mut out, &mut ids));
+            out.module_symbol = module_symbol;
+            if self.file.is_declaration_file {
+                self.global_exports(&mut out);
             }
         }
-        for symbol in global_augmentations {
-            let exports = self.export_table(Table::Exports(symbol), &mut out, &mut ids);
-            out.augmentations.push(exports);
+        if scopes.has_entity_aliases {
+            for &(container, parent) in &scopes.containers {
+                let is_source_file = container == self.file.root;
+                let is_global_source_file = is_source_file && !self.file.external_module;
+                let locals = if is_global_source_file {
+                    Vec::new()
+                } else {
+                    self.export_table(Table::Locals(container), false, &scopes, &mut out, &mut ids)
+                };
+                let symbol = if is_source_file {
+                    out.module_symbol
+                } else {
+                    self.symbol_of(container)
+                        .map(|symbol| self.export_symbol("", symbol, false, &scopes, &mut out, &mut ids))
+                };
+                out.scopes.push(GlobalScope {
+                    parent,
+                    locals,
+                    symbol,
+                    is_module_root: if is_source_file {
+                        self.file.external_module
+                    } else {
+                        self.flags(container).has(NodeFlags::Ambient) && !self.is_global_scope_augmentation(container)
+                    },
+                    is_global_source_file,
+                });
+            }
         }
-        for (module_name, symbol) in module_augmentations {
-            let name = format!("\"{module_name}\"");
-            let id = self.export_symbol(&name, symbol, &mut out, &mut ids);
-            out.module_augmentations.push((module_name, id));
-        }
+        out.collect_checked_aliases();
         out
     }
 
-    fn export_table(&self, table: Table, out: &mut FileGlobals, ids: &mut HashMap<SymbolId, u32>) -> Vec<u32> {
+    /// `bindNamespaceExportDeclaration`'s `file.GlobalExports`: each
+    /// `export as namespace` at the top of a declaration module, the first of
+    /// a name.
+    fn global_exports(&self, out: &mut FileGlobals) {
+        for statement in self.statements(self.file.root) {
+            if self.kind(statement) != Kind::NamespaceExportDeclaration {
+                continue;
+            }
+            let Some(name) = self.name_of(statement) else { continue };
+            let text = self.node_text(name);
+            if out.global_exports.iter().any(|&id| out.symbols[id as usize].name == text) {
+                continue;
+            }
+            let id = out.symbols.len() as u32;
+            out.symbols.push(GlobalSymbol {
+                name: text.clone(),
+                flags: sf::Alias,
+                declarations: vec![GlobalDeclaration {
+                    name_range: self.error_range_for_node(name),
+                    node_range: self.error_range_for_node(statement),
+                    is_type_declaration: false,
+                    type_parameters_range: None,
+                }],
+                members: None,
+                exports: None,
+                link: Some(Box::new(SymbolLink::Alias(AliasDeclaration {
+                    declaration: 0,
+                    display_name: text,
+                    is_export_specifier: false,
+                    target: AliasTarget::FileModule,
+                }))),
+            });
+            out.global_exports.push(id);
+        }
+    }
+
+    /// The source file and every module declaration in its module blocks,
+    /// numbered in document order, and whether any alias declaration among
+    /// their statements names its target by an entity name.
+    fn alias_scopes(&self) -> AliasScopes {
+        let mut scopes = AliasScopes { index: HashMap::new(), containers: Vec::new(), has_entity_aliases: false };
+        self.collect_alias_scopes(self.file.root, None, &mut scopes);
+        scopes
+    }
+
+    fn collect_alias_scopes(&self, container: NodeId, parent: Option<u32>, scopes: &mut AliasScopes) {
+        let index = scopes.containers.len() as u32;
+        scopes.index.insert(container, index);
+        scopes.containers.push((container, parent));
+        let statements = match self.kind(container) {
+            Kind::ModuleDeclaration => match self.file.node(container).body {
+                Some(body) if self.kind(body) == Kind::ModuleBlock => self.statements(body),
+                Some(body) => vec![body],
+                None => Vec::new(),
+            },
+            _ => self.statements(container),
+        };
+        for statement in statements {
+            if self.kind(statement) == Kind::ModuleDeclaration {
+                self.collect_alias_scopes(statement, Some(index), scopes);
+            } else if self.names_entity_alias(statement) {
+                scopes.has_entity_aliases = true;
+            }
+        }
+    }
+
+    /// An `export =`/`export default` of an entity name, a local
+    /// `export { … }`, or an `import x = N.M`.
+    fn names_entity_alias(&self, statement: NodeId) -> bool {
+        let node = self.file.node(statement);
+        let child = |index: usize| node.children.get(index).copied().flatten();
+        match node.kind {
+            Kind::ExportAssignment => node.expression.is_some_and(|expression| self.is_entity_name_expression(expression)),
+            Kind::ExportDeclaration => {
+                child(1).is_none() && child(0).is_some_and(|clause| self.kind(clause) == Kind::NamedExports)
+            }
+            Kind::ImportEqualsDeclaration => {
+                child(0).is_some_and(|reference| self.kind(reference) != Kind::ExternalModuleReference)
+            }
+            _ => false,
+        }
+    }
+
+    fn export_table(
+        &self,
+        table: Table,
+        full: bool,
+        scopes: &AliasScopes,
+        out: &mut FileGlobals,
+        ids: &mut HashMap<SymbolId, u32>,
+    ) -> Vec<u32> {
         let Some(entries) = self.tables.get(&table) else { return Vec::new() };
         let mut entries: Vec<(&String, SymbolId)> = entries.iter().map(|(name, &symbol)| (name, symbol)).collect();
         entries.sort_by_key(|&(name, symbol)| {
             let first = self.symbols[symbol].declarations.first().map_or(usize::MAX, |&d| self.file.node(d).pos);
             (first, name.clone())
         });
-        entries.into_iter().map(|(name, symbol)| self.export_symbol(name, symbol, out, ids)).collect()
+        entries.into_iter().map(|(name, symbol)| self.export_symbol(name, symbol, full, scopes, out, ids)).collect()
     }
 
-    fn export_symbol(&self, name: &str, symbol: SymbolId, out: &mut FileGlobals, ids: &mut HashMap<SymbolId, u32>) -> u32 {
+    /// One symbol, with its members and exports when `full`; otherwise with
+    /// only a module's or namespace's exports, all resolving an alias reads.
+    fn export_symbol(
+        &self,
+        name: &str,
+        symbol: SymbolId,
+        full: bool,
+        scopes: &AliasScopes,
+        out: &mut FileGlobals,
+        ids: &mut HashMap<SymbolId, u32>,
+    ) -> u32 {
         if let Some(&id) = ids.get(&symbol) {
             return id;
         }
@@ -1104,17 +1254,172 @@ impl<'a> Binder<'a> {
                     .map(|list| self.range_of_type_parameters(list)),
             })
             .collect();
-        let members = self
-            .tables
-            .contains_key(&Table::Members(symbol))
-            .then(|| self.export_table(Table::Members(symbol), out, ids));
-        let exports = self
-            .tables
-            .contains_key(&Table::Exports(symbol))
-            .then(|| self.export_table(Table::Exports(symbol), out, ids));
-        out.symbols[id as usize] =
-            GlobalSymbol { name: name.to_string(), flags: self.symbols[symbol].flags, declarations, members, exports };
+        let flags = self.symbols[symbol].flags;
+        let members = (full && self.tables.contains_key(&Table::Members(symbol)))
+            .then(|| self.export_table(Table::Members(symbol), full, scopes, out, ids));
+        let exports = ((full || flags & (sf::ValueModule | sf::NamespaceModule) != 0)
+            && self.tables.contains_key(&Table::Exports(symbol)))
+        .then(|| self.export_table(Table::Exports(symbol), full, scopes, out, ids));
+        let link = self.symbol_link(symbol, name, scopes);
+        out.symbols[id as usize] = GlobalSymbol { name: name.to_string(), flags, declarations, members, exports, link };
         id
+    }
+
+    /// What an alias or `__export` symbol stands for.
+    fn symbol_link(&self, symbol: SymbolId, name: &str, scopes: &AliasScopes) -> Option<Box<SymbolLink>> {
+        let s = &self.symbols[symbol];
+        if s.flags & sf::ExportStar != 0 {
+            let specifiers = s.declarations.iter().filter_map(|&declaration| self.module_specifier(declaration)).collect();
+            return Some(Box::new(SymbolLink::ExportStar(specifiers)));
+        }
+        if s.flags & sf::Alias == 0 {
+            return None;
+        }
+        let (index, &declaration) =
+            s.declarations.iter().enumerate().rev().find(|&(_, &declaration)| self.is_alias_declaration(declaration))?;
+        Some(Box::new(SymbolLink::Alias(AliasDeclaration {
+            declaration: index,
+            display_name: self.alias_display_name(declaration, name),
+            is_export_specifier: matches!(self.kind(declaration), Kind::ExportSpecifier | Kind::NamespaceExport),
+            target: self.alias_target(declaration, scopes),
+        })))
+    }
+
+    /// `ast.IsAliasSymbolDeclaration` for the declarations of a TypeScript
+    /// file.
+    fn is_alias_declaration(&self, node: NodeId) -> bool {
+        match self.kind(node) {
+            Kind::ImportEqualsDeclaration
+            | Kind::NamespaceExportDeclaration
+            | Kind::NamespaceImport
+            | Kind::NamespaceExport
+            | Kind::ImportSpecifier
+            | Kind::ExportSpecifier => true,
+            Kind::ImportClause => self.name_of(node).is_some(),
+            Kind::ExportAssignment => self
+                .file
+                .node(node)
+                .expression
+                .is_some_and(|e| self.is_entity_name_expression(e) || self.kind(e) == Kind::ClassExpression),
+            _ => false,
+        }
+    }
+
+    /// `symbolToString` of an alias: an `export =`'s identifier, otherwise
+    /// its name.
+    fn alias_display_name(&self, declaration: NodeId, name: &str) -> String {
+        match self.name_of_declaration(declaration) {
+            Some(written) if self.kind(declaration) == Kind::ExportAssignment => self.node_text(written),
+            _ => name.to_string(),
+        }
+    }
+
+    /// What an alias declaration names, as `getTargetOfAliasDeclaration`
+    /// reads it.
+    fn alias_target(&self, declaration: NodeId, scopes: &AliasScopes) -> AliasTarget {
+        let node = self.file.node(declaration);
+        let child = |index: usize| node.children.get(index).copied().flatten();
+        let scope = || scopes.index.get(&self.alias_container(declaration)).copied().unwrap_or(0);
+        match node.kind {
+            Kind::ImportEqualsDeclaration => match child(0) {
+                Some(reference) if self.kind(reference) == Kind::ExternalModuleReference => {
+                    match self.file.node(reference).expression.and_then(|specifier| self.string_literal_text(specifier)) {
+                        Some(specifier) => AliasTarget::ExternalModule(specifier),
+                        None => AliasTarget::Unresolved,
+                    }
+                }
+                Some(reference) => match self.entity_name_path(reference) {
+                    Some(path) => AliasTarget::ImportEntity { scope: scope(), path },
+                    None => AliasTarget::Unresolved,
+                },
+                None => AliasTarget::Unresolved,
+            },
+            Kind::NamespaceImport => {
+                let import = self.parent(declaration).and_then(|clause| self.parent(clause));
+                match import.and_then(|import| self.module_specifier(import)) {
+                    Some(specifier) => AliasTarget::Namespace(specifier),
+                    None => AliasTarget::Unresolved,
+                }
+            }
+            Kind::NamespaceExport => match self.parent(declaration).and_then(|export| self.module_specifier(export)) {
+                Some(specifier) => AliasTarget::Namespace(specifier),
+                None => AliasTarget::Unresolved,
+            },
+            Kind::ImportSpecifier | Kind::ExportSpecifier => {
+                let Some(name) = child(0).or(node.name) else { return AliasTarget::Unresolved };
+                let text = self.node_text(name);
+                // An import specifier sits in named imports in an import
+                // clause; an export specifier in named exports.
+                let statement = if node.kind == Kind::ImportSpecifier {
+                    self.parent(declaration).and_then(|named| self.parent(named)).and_then(|clause| self.parent(clause))
+                } else {
+                    self.parent(declaration).and_then(|named| self.parent(named))
+                };
+                match statement.and_then(|statement| self.module_specifier(statement)) {
+                    // port: a module's default export (`getTargetOfModuleDefault`) needs its type.
+                    Some(_) if text == DEFAULT => AliasTarget::Unresolved,
+                    Some(specifier) => AliasTarget::ModuleMember { specifier, name: text },
+                    None if node.kind == Kind::ExportSpecifier && self.kind(name) == Kind::Identifier => {
+                        AliasTarget::Entity { scope: scope(), path: vec![text] }
+                    }
+                    None => AliasTarget::Unresolved,
+                }
+            }
+            Kind::ExportAssignment => match node.expression.and_then(|expression| self.entity_name_path(expression)) {
+                Some(path) => AliasTarget::Entity { scope: scope(), path },
+                None => AliasTarget::Unresolved,
+            },
+            _ => AliasTarget::Unresolved,
+        }
+    }
+
+    /// The source file or module declaration a declaration is written in.
+    fn alias_container(&self, node: NodeId) -> NodeId {
+        let mut current = self.parent(node);
+        while let Some(id) = current {
+            if matches!(self.kind(id), Kind::SourceFile | Kind::ModuleDeclaration) {
+                return id;
+            }
+            current = self.parent(id);
+        }
+        self.file.root
+    }
+
+    /// The identifiers of an entity name or entity name expression, left to
+    /// right.
+    fn entity_name_path(&self, node: NodeId) -> Option<Vec<String>> {
+        let n = self.file.node(node);
+        match n.kind {
+            Kind::Identifier => Some(vec![self.node_text(node)]),
+            Kind::QualifiedName => {
+                let mut path = self.entity_name_path(n.children.first().copied().flatten()?)?;
+                path.push(self.node_text(n.children.get(1).copied().flatten()?));
+                Some(path)
+            }
+            Kind::PropertyAccessExpression => {
+                let name = n.name.filter(|&name| self.kind(name) == Kind::Identifier)?;
+                let mut path = self.entity_name_path(n.expression?)?;
+                path.push(self.node_text(name));
+                Some(path)
+            }
+            _ => None,
+        }
+    }
+
+    /// The module specifier of an import or export declaration.
+    fn module_specifier(&self, node: NodeId) -> Option<String> {
+        let n = self.file.node(node);
+        let specifier = match n.kind {
+            Kind::ImportDeclaration => n.children.first().copied().flatten(),
+            Kind::ExportDeclaration => n.children.get(1).copied().flatten(),
+            _ => None,
+        }?;
+        self.string_literal_text(specifier)
+    }
+
+    fn string_literal_text(&self, node: NodeId) -> Option<String> {
+        matches!(self.kind(node), Kind::StringLiteral | Kind::NoSubstitutionTemplateLiteral)
+            .then(|| self.node_text(node))
     }
 
     /// `ast.IsTypeDeclaration`.
@@ -1263,6 +1568,64 @@ impl<'a> Binder<'a> {
         } else {
             self.declare_symbol_and_add_to_symbol_table(node, flags, excludes);
         }
+    }
+
+    /// The checker's `checkExternalModuleExports` over the file's own
+    /// exports: a name more than one declaration exports, where the
+    /// declarations do not merge as namespaces, enums, overloads, accessors,
+    /// interfaces or a type alias beside one value do, is TS2323 at each.
+    fn check_external_module_exports(&mut self) {
+        let Some(module) = self.file.external_module.then(|| self.symbol_of(self.file.root)).flatten() else {
+            return;
+        };
+        let Some(exports) = self.tables.get(&Table::Exports(module)) else { return };
+        let mut exports: Vec<(String, SymbolId)> = exports
+            .iter()
+            .filter(|(name, _)| name.as_str() != EXPORT_EQUALS && !name.starts_with(INTERNAL_PREFIX))
+            .map(|(name, &symbol)| (name.clone(), symbol))
+            .collect();
+        exports.sort_by_key(|&(_, symbol)| symbol);
+        for (name, symbol) in exports {
+            let symbol = &self.symbols[symbol];
+            if symbol.flags & sf::Namespace != 0 {
+                continue;
+            }
+            let declarations = symbol.declarations.clone();
+            let counted = declarations
+                .iter()
+                .filter(|&&declaration| {
+                    self.is_not_overload(declaration)
+                        && !matches!(
+                            self.kind(declaration),
+                            Kind::GetAccessor | Kind::SetAccessor | Kind::InterfaceDeclaration
+                        )
+                })
+                .count();
+            if symbol.flags & sf::TypeAlias != 0 && counted <= 2 {
+                continue;
+            }
+            // `exports.x = …` assignments of a CommonJS file only widen one export.
+            // An export specifier's conflict is the checker's export table's to
+            // report (`report_duplicate_export_specifiers`), with its TS2484.
+            if counted < 2
+                || declarations.iter().all(|&declaration| self.kind(declaration) == Kind::BinaryExpression)
+                || declarations.iter().any(|&declaration| self.kind(declaration) == Kind::ExportSpecifier)
+            {
+                continue;
+            }
+            for declaration in declarations {
+                if self.is_not_overload(declaration) {
+                    self.error_on_node(declaration, diagnostics::Cannot_redeclare_exported_variable_0, vec![name.clone()]);
+                }
+            }
+        }
+    }
+
+    /// `isNotOverload`: anything but a function or method declared without a
+    /// body.
+    fn is_not_overload(&self, node: NodeId) -> bool {
+        !matches!(self.kind(node), Kind::FunctionDeclaration | Kind::MethodDeclaration)
+            || self.file.node(node).body.is_some()
     }
 
     fn bind_source_file_if_external_module(&mut self) {

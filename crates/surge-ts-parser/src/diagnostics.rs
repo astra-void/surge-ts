@@ -843,6 +843,22 @@ pub fn import_requires_a_specifier(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error("import() requires a specifier.").with_label(span)
 }
 
+// surge: TS1325 — a spread argument of `import(…)`, at the spread.
+#[cold]
+pub fn import_argument_spread(span: Span) -> OxcDiagnostic {
+    ts_error("1325", "Argument of dynamic import cannot be spread element.").with_label(span)
+}
+
+// surge: TS1326 — type arguments on `import(…)`, at the whole call.
+#[cold]
+pub fn import_type_arguments(span: Span) -> OxcDiagnostic {
+    ts_error(
+        "1326",
+        "This use of 'import' is invalid. 'import()' calls can be written, but they must have parentheses and cannot have type arguments.",
+    )
+    .with_label(span)
+}
+
 /// surge: TS1275 — `accessor` before an import or export.
 #[cold]
 pub fn accessor_modifier_cannot_be_used_here(span: Span) -> OxcDiagnostic {
@@ -1295,11 +1311,10 @@ pub fn jsx_attribute_value_empty_expression(span: Span) -> OxcDiagnostic {
         .with_label(span)
 }
 
+// surge: TS2858 — tsc's code and wording, at the value expression.
 #[cold]
 pub fn import_attribute_value_must_be_string_literal(span: Span) -> OxcDiagnostic {
-    OxcDiagnostic::error("Only string literals are allowed as module attribute values.")
-        .with_label(span)
-        .with_help("Wrap this with quotes")
+    ts_error("2858", "Import attribute values must be string literal expressions.").with_label(span)
 }
 
 // TS18058

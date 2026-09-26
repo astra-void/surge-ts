@@ -3,7 +3,25 @@
 // reference `crate::program::record_*` / `ProgramTimings` keep resolving and so
 // the bare `record_*` calls throughout this file stay in scope.
 
-use crate::context::FileKind;
+use crate::context::{CheckerOptions, FileKind};
+
+/// tsc's module detection past an import or export: `moduleDetection: force`
+/// makes every file a module, and under `auto` so does one whose format
+/// forces it (`isFileForcedToBeModuleByFormat`: `.mts`/`.cts`/`.mjs`/`.cjs`,
+/// or an ESM-format file) and, under `jsx: react-jsx`, one with a JSX tag.
+pub(crate) fn file_is_forced_module(file_name: &str, has_jsx_tag: bool, options: &CheckerOptions) -> bool {
+    let detection = &options.module_detection;
+    if detection.legacy {
+        return false;
+    }
+    if detection.force {
+        return true;
+    }
+    let lower = file_name.to_ascii_lowercase();
+    [".mts", ".cts", ".mjs", ".cjs"].iter().any(|extension| lower.ends_with(extension))
+        || options.esm_module_files.contains(file_name)
+        || (options.jsx_automatic_runtime && has_jsx_tag)
+}
 
 /// Whether the file NAME classifies as a trusted library/dependency
 /// declaration file. Unlike `CheckerContext::is_library_scoped_file` this is

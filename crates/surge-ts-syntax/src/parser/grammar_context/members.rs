@@ -681,7 +681,7 @@ fn span_contains(outer: Span, inner: Span) -> bool {
 
 /// The offset of the first character after whitespace and comments at
 /// `position`.
-fn skip_trivia(text: &str, mut position: usize) -> usize {
+pub(super) fn skip_trivia(text: &str, mut position: usize) -> usize {
     loop {
         let rest = &text[position..];
         let trimmed = rest.trim_start();

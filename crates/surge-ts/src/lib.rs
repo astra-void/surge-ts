@@ -662,6 +662,8 @@ impl Project {
             no_implicit_any: loaded.compiler_options.no_implicit_any,
             no_implicit_this: loaded.compiler_options.no_implicit_this,
             module_emit: checker_module_emit(loaded.compiler_options.emit_module),
+            verbatim_module_syntax: loaded.compiler_options.verbatim_module_syntax,
+            isolated_modules: loaded.compiler_options.isolated_modules,
             use_define_for_class_fields: loaded.compiler_options.use_define_for_class_fields,
             target_es2022: loaded.compiler_options.target >= ScriptTarget::ES2022,
             no_emit: loaded.compiler_options.no_emit,

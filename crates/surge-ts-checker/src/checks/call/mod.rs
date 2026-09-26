@@ -154,6 +154,12 @@ pub(crate) fn check_call_like_with_expected_type(
         evaluate_arguments_under_degraded_callee(callee_name, arguments, symbols, ctx);
         return None;
     }
+    // `resolveCallExpression` resolves a call on the error type as an untyped
+    // call, whose result is the error type again.
+    if matches!(symbol.ty, Type::ErrorType) {
+        property::evaluate_arguments_on_error_type(arguments, symbols, ctx);
+        return Some(Type::ErrorType);
+    }
     // A type variable narrowed to `T & X` is called through its constraint's
     // signatures in tsc; surge does not model those, so it is called like the
     // bare variable.
@@ -265,6 +271,33 @@ pub(crate) fn check_call_like_with_expected_type(
                 }
             }
         }
+    }
+
+    let kept_signature_checked = symbol.function_signature.as_deref().is_some_and(|signature| {
+        !signature.overloaded && matches!(&callee_ty, Type::Function(function) if function.overloads().is_none())
+    });
+    // A declared function's own declarations say how many type arguments it
+    // takes; its value type may be a merge (`function f` + `namespace f`) or
+    // an overload fold that no longer does.
+    let arity_reported = !kept_signature_checked
+        && match symbol.function_signature.as_deref() {
+            Some(signature) => {
+                let mut arities = vec![declared_type_argument_arity(&signature.type_parameters)];
+                if signature.overloaded {
+                    arities.extend(
+                        signature
+                            .overload_alternatives
+                            .iter()
+                            .map(|overload| declared_type_argument_arity(&overload.type_parameters)),
+                    );
+                }
+                report_type_argument_arities(&arities, type_arguments, type_arguments_start(callee_span), ctx)
+            }
+            None => report_type_argument_arity(&callee_ty, type_arguments, type_arguments_start(callee_span), true, ctx),
+        };
+    if arity_reported {
+        evaluate_arguments_under_degraded_callee(callee_name, arguments, symbols, ctx);
+        return None;
     }
 
     // A generic call signature on an interface (`interface $Fetch { <T, R
@@ -465,6 +498,7 @@ impl DeclaredMemberSignature {
             .collect();
         let merged = crate::infer::types::merged_type_parameter_substitution(ctx, substitution);
         let mut outer_type_arguments = Vec::new();
+        let mut open: Vec<String> = Vec::new();
         for (name, ty) in merged.iter() {
             if own.contains(&name.as_ref()) {
                 continue;
@@ -474,9 +508,30 @@ impl DeclaredMemberSignature {
             // builder whose `TContext` surge could not model), and whatever
             // does read it stays at the sentinel.
             if merged.is_placeholder(name) || matches!(ty, Type::TypeParameter(_)) {
-                return None;
+                open.push(name.to_string());
+                continue;
             }
             outer_type_arguments.push((name.to_string(), ty.clone()));
+        }
+        // A non-generic predicate that names none of the open bindings reads
+        // the same however they end up bound (`#isNum(x: unknown): x is number`
+        // on a generic class, called as `this.#isNum(v)` in its own body).
+        if !open.is_empty() {
+            let open: Vec<&str> = open.iter().map(String::as_str).collect();
+            let ParsedType::Predicate(predicate) = function_type.return_type.as_ref() else {
+                return None;
+            };
+            let mentions_open = predicate
+                .ty
+                .as_ref()
+                .is_none_or(|ty| parsed_type_mentions_any(ty, &open))
+                || function_type
+                    .parameters
+                    .iter()
+                    .any(|parameter| parsed_type_mentions_any(&parameter.ty, &open));
+            if !own.is_empty() || mentions_open {
+                return None;
+            }
         }
         let mut signature =
             (*crate::checks::function::function_type_signature_info(function_type, &ctx.file_name))
@@ -2305,6 +2360,65 @@ pub(crate) fn check_optional_call_like(
 /// the first excess argument through the last supplied argument. Returns `None`
 /// when the relevant argument spans are unavailable so the caller can fall back
 /// to the call/callee span.
+/// tsc's `getEffectiveCallArguments` as far as the argument count goes: a
+/// spread of an array literal or of a fixed tuple stands for one argument per
+/// element. `None` when a spread supplies no fixed count — an array, a
+/// tuple's variable part, or a type surge did not settle — which
+/// `hasCorrectArity` judges by where the spread begins instead.
+struct EffectiveSpreadArguments {
+    count: usize,
+    /// The written argument each effective position comes from.
+    sources: Vec<usize>,
+}
+
+impl EffectiveSpreadArguments {
+    fn source_of(&self, position: usize) -> Option<usize> {
+        self.sources.get(position).copied()
+    }
+}
+
+fn effective_spread_arguments(
+    arguments: &[ParsedCallArgument],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<EffectiveSpreadArguments> {
+    let mut sources = Vec::with_capacity(arguments.len());
+    for (index, argument) in arguments.iter().enumerate() {
+        let count = if !argument.spread {
+            1
+        } else {
+            match &argument.expression {
+                ParsedExpression::ArrayLiteral { elements, .. }
+                    if elements.iter().all(|element| !element.spread) =>
+                {
+                    elements.len()
+                }
+                expression => {
+                    let diagnostics_before = ctx.diagnostics().len();
+                    let spread = evaluate_expression(expression, argument.span, symbols, ctx);
+                    ctx.truncate_diagnostics(diagnostics_before);
+                    match spread {
+                        InferredExpression::Known(ty) => match ty.peeled() {
+                            Type::Tuple(elements)
+                                if !elements.iter().any(type_contains_unknown) =>
+                            {
+                                elements.len()
+                            }
+                            _ => return None,
+                        },
+                        _ => return None,
+                    }
+                }
+            }
+        };
+        sources.extend(std::iter::repeat_n(index, count));
+    }
+    Some(EffectiveSpreadArguments {
+        count: sources.len(),
+        sources,
+    })
+}
+
 fn excess_argument_span(
     arguments: &[ParsedCallArgument],
     expected: usize,
@@ -2487,6 +2601,156 @@ fn first_accepting_overload<'a>(
     picked.unwrap_or(candidates[0])
 }
 
+/// Where tsc anchors a type-argument error: the first type argument, just
+/// past the `<` that follows the callee.
+pub(crate) fn type_arguments_start(callee_span: Option<SyntaxTextSpan>) -> Option<SyntaxTextSpan> {
+    callee_span.map(|span| SyntaxTextSpan { start: span.end + 1, end: span.end + 1 })
+}
+
+/// tsc's `reportCallResolutionErrors` when no candidate signature takes the
+/// written type arguments (`hasCorrectTypeArgumentArity`): TS2558, or TS2743
+/// when overloads exist on both sides of the count. `false` when some
+/// signature takes them or when surge cannot tell how many type parameters a
+/// signature declares; the call then proceeds.
+pub(crate) fn report_type_argument_arity(
+    callee: &Type,
+    type_arguments: &[ParsedType],
+    span: Option<SyntaxTextSpan>,
+    shape_decides: bool,
+    ctx: &mut CheckerContext,
+) -> bool {
+    if type_arguments.is_empty() {
+        return false;
+    }
+    let signatures: Vec<FunctionType> = match callee {
+        Type::Function(function) => function.overloads().map_or_else(|| vec![function.clone()], |members| members.to_vec()),
+        Type::Object(object) => match object.call_signature() {
+            Some(signature) => signature.overloads().map_or_else(|| vec![signature.clone()], |members| members.to_vec()),
+            None => return false,
+        },
+        _ => return false,
+    };
+    let mut arities = Vec::with_capacity(signatures.len());
+    for signature in &signatures {
+        let Some(arity) = signature_type_argument_arity(signature, shape_decides) else {
+            return false;
+        };
+        arities.push(arity);
+    }
+    report_type_argument_arities(&arities, type_arguments, span, ctx)
+}
+
+/// How many type arguments a declaration's type parameters take: (without
+/// defaults, all).
+fn declared_type_argument_arity(parameters: &[surge_ts_syntax::ParsedTypeParameter]) -> (usize, usize) {
+    let minimum = parameters.iter().filter(|parameter| parameter.default_type.is_none()).count();
+    (minimum, parameters.len())
+}
+
+/// TS2558/TS2743 when no signature of `arities` takes the written count.
+fn report_type_argument_arities(
+    arities: &[(usize, usize)],
+    type_arguments: &[ParsedType],
+    span: Option<SyntaxTextSpan>,
+    ctx: &mut CheckerContext,
+) -> bool {
+    if type_arguments.is_empty() || arities.is_empty() {
+        return false;
+    }
+    let count = type_arguments.len();
+    if arities.iter().any(|&(minimum, maximum)| count >= minimum && count <= maximum) {
+        return false;
+    }
+    let diagnostic = if let [(minimum, maximum)] = *arities {
+        let expected = if minimum < maximum { format!("{minimum}-{maximum}") } else { minimum.to_string() };
+        Diagnostic::ts2558(expected, count, ctx.file_name.clone())
+    } else {
+        let below = arities.iter().filter(|&&(_, maximum)| maximum < count).map(|&(_, maximum)| maximum).max();
+        let above = arities.iter().filter(|&&(minimum, _)| minimum > count).map(|&(minimum, _)| minimum).min();
+        match (below, above) {
+            (Some(below), Some(above)) => Diagnostic::ts2743(count, below, above, ctx.file_name.clone()),
+            (below, above) => Diagnostic::ts2558(below.or(above).unwrap_or(0).to_string(), count, ctx.file_name.clone()),
+        }
+    };
+    ctx.push(diagnostic_with_syntax_span(diagnostic, span));
+    true
+}
+
+/// How many type arguments a signature takes, (without defaults, all): from
+/// its declaration when the handle carries one, else from its rendered
+/// type-parameter list. A signature with neither is generic only if its
+/// shape still has holes, which leaves the count unknown — and only a value's
+/// own type (`shape_decides`) is read that way: a member of an instantiated
+/// or synthesized object may have lost the list it was declared with.
+fn signature_type_argument_arity(function: &FunctionType, shape_decides: bool) -> Option<(usize, usize)> {
+    if let Some(declaration) = function.declaration() {
+        let parameters = if let Some(member) = declaration.downcast_ref::<DeclaredMemberSignature>() {
+            &member.signature.type_parameters
+        } else if let Some(signature) = declaration.downcast_ref::<crate::symbols::FunctionSignatureInfo>() {
+            &signature.type_parameters
+        } else {
+            return None;
+        };
+        return Some(declared_type_argument_arity(parameters));
+    }
+    if let Some(head) = function.type_parameter_head() {
+        let segments = split_top_level_commas(head);
+        let minimum = segments.iter().filter(|segment| !has_top_level_default(segment)).count();
+        return Some((minimum, segments.len()));
+    }
+    if !shape_decides || type_contains_degradation(&Type::Function(function.clone())) {
+        return None;
+    }
+    // `(…args: any[]) => any` is the permissive stand-in surge gives a value
+    // it did not model, whatever the declaration's type parameters were.
+    let any_like = |ty: &Type| match ty {
+        Type::Any => true,
+        Type::Array(element) => matches!(**element, Type::Any),
+        _ => false,
+    };
+    if matches!(function.return_type(), Type::Any) && function.parameters().iter().all(any_like) {
+        return None;
+    }
+    Some((0, 0))
+}
+
+fn split_top_level_commas(text: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let (mut depth, mut start) = (0i32, 0usize);
+    for (index, character) in text.char_indices() {
+        match character {
+            '<' | '(' | '[' | '{' => depth += 1,
+            '>' if !text[..index].ends_with('=') => depth -= 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                segments.push(text[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    segments.push(text[start..].trim());
+    segments.retain(|segment| !segment.is_empty());
+    segments
+}
+
+fn has_top_level_default(segment: &str) -> bool {
+    let mut depth = 0i32;
+    let bytes = segment.as_bytes();
+    for (index, &byte) in bytes.iter().enumerate() {
+        match byte {
+            b'<' | b'(' | b'[' | b'{' => depth += 1,
+            b'>' if index == 0 || bytes[index - 1] != b'=' => depth -= 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'=' if depth == 0 && bytes.get(index + 1) != Some(&b'>') && bytes.get(index + 1) != Some(&b'=') => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 fn overload_arity_fits(candidate: &FunctionType, argument_count: usize) -> bool {
     let parameters = candidate.parameters();
     let mut required = candidate.required_parameter_count();
@@ -2636,24 +2900,20 @@ pub(crate) fn check_function_type_call(
     // tsc's `getEffectiveCallArguments` expands into one argument per element.
     // Only the too-few bound is checked for it, since an excess element has no
     // argument node of its own to anchor the error on.
-    let literal_spread_count = arguments
-        .iter()
-        .map(|argument| match &argument.expression {
-            _ if !argument.spread => Some(1),
-            ParsedExpression::ArrayLiteral { elements, .. }
-                if elements.iter().all(|element| !element.spread) =>
-            {
-                Some(elements.len())
-            }
-            _ => None,
-        })
-        .sum::<Option<usize>>();
     let has_spread_argument = arguments.iter().any(|argument| argument.spread);
-    let (actual, too_many) = match literal_spread_count {
-        Some(count) if has_spread_argument => (count, false),
-        _ => (actual, !function_type.is_variadic() && actual > expected),
+    let effective = if has_spread_argument {
+        effective_spread_arguments(arguments, symbols, ctx)
+    } else {
+        None
     };
-    let arity_known = !has_spread_argument || literal_spread_count.is_some();
+    let (actual, too_many) = match &effective {
+        Some(effective) => (
+            effective.count,
+            !function_type.is_variadic() && effective.count > expected,
+        ),
+        None => (actual, !function_type.is_variadic() && actual > expected),
+    };
+    let arity_known = !has_spread_argument || effective.is_some();
     if arity_known && (actual < required || too_many) {
         let expected_count = if actual < required {
             required
@@ -2663,7 +2923,11 @@ pub(crate) fn check_function_type_call(
         // tsc anchors a too-many-arguments error on the excess arguments (from the
         // first excess argument through the last), not on the call expression.
         let span = if too_many {
-            excess_argument_span(arguments, expected)
+            let first_excess = effective
+                .as_ref()
+                .and_then(|effective| effective.source_of(expected))
+                .unwrap_or(expected);
+            excess_argument_span(arguments, first_excess)
                 .or(call_span)
                 .or(callee_span)
         } else {
@@ -2740,34 +3004,48 @@ pub(crate) fn check_function_type_call(
                 ctx,
             );
             argument_types.push(ArgumentShape::wildcard());
-            let spread_elements: Vec<Type> = match &spread_result {
+            // Each element the spread supplies, and whether it is a variable
+            // run (an array, or a tuple's `...T[]` part) rather than one fixed
+            // argument.
+            let spread_elements: Vec<(Type, bool)> = match &spread_result {
                 InferredExpression::Known(spread) => match spread.peeled() {
-                    Type::Tuple(elements) => elements,
+                    Type::Tuple(elements) => elements.into_iter().map(|element| (element, false)).collect(),
+                    // A tuple's variable part is only judged by the parameter
+                    // it lands on: surge's own rest modelling of the callee
+                    // (an IIFE's `...rest` included) is not reliable enough to
+                    // call its position out of range.
+                    Type::OpenTuple(tuple) => tuple
+                        .leading
+                        .iter()
+                        .map(|element| (element.clone(), false))
+                        .chain(std::iter::once((tuple.rest.as_ref().clone(), false)))
+                        .chain(tuple.trailing.iter().map(|element| (element.clone(), false)))
+                        .collect(),
                     other => {
                         let element = crate::checks::function::for_of_element_type(&other);
-                        // `hasCorrectArity`: an array spread may only begin
-                        // where every required parameter is already supplied
-                        // and a parameter is still there to receive it.
-                        if matches!(other, Type::Array(_))
-                            && !type_contains_unknown(&element)
-                            && !matches!(element, Type::Any)
-                            && !mismatch_reported
-                            && function_type.overloads().is_none()
-                            && (i < function_type.required_parameter_count()
-                                || (!function_type.is_variadic() && i >= expected))
-                        {
-                            ctx.push(diagnostic_with_syntax_span(
-                                Diagnostic::ts2556(ctx.file_name.clone()),
-                                argument.span,
-                            ));
-                            mismatch_reported = true;
-                        }
-                        vec![element]
+                        vec![(element, matches!(other, Type::Array(_)))]
                     }
                 },
-                _ => vec![Type::Unknown],
+                _ => vec![(Type::Unknown, false)],
             };
-            for element in spread_elements {
+            for (element, variable) in spread_elements {
+                // `hasCorrectArity`: a variable run may only begin where every
+                // required parameter is already supplied and a parameter is
+                // still there to receive it.
+                if variable
+                    && !type_contains_unknown(&element)
+                    && !matches!(element, Type::Any)
+                    && !mismatch_reported
+                    && function_type.overloads().is_none()
+                    && (i < function_type.required_parameter_count()
+                        || (!function_type.is_variadic() && i >= expected))
+                {
+                    ctx.push(diagnostic_with_syntax_span(
+                        Diagnostic::ts2556(ctx.file_name.clone()),
+                        argument.span,
+                    ));
+                    mismatch_reported = true;
+                }
                 if !mismatch_reported
                     && !element.is_unknown()
                     && !matches!(element, Type::Any)
@@ -3231,7 +3509,11 @@ fn choose_overload_return_type(
     let mut instantiated: Vec<Option<FunctionType>> = vec![None; overloads.len()];
     for relation in overload_relations(overloads) {
         for (index, candidate) in overloads.iter().enumerate() {
-            if names_open_parameter(&Type::Function(candidate.clone())) && instantiated[index].is_none() {
+            // Written type arguments replace what a member was resolved with,
+            // its type parameters' defaults included.
+            if (!type_arguments.is_empty() || names_open_parameter(&Type::Function(candidate.clone())))
+                && instantiated[index].is_none()
+            {
                 let diagnostics_before = ctx.diagnostics.len();
                 instantiated[index] = Some(
                     property::instantiate_declared_member_signature(

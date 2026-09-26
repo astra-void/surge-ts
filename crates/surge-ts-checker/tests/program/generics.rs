@@ -1070,6 +1070,8 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             no_implicit_any: true,
             no_implicit_this: true,
             module_emit: Default::default(),
+            verbatim_module_syntax: false,
+            isolated_modules: false,
             use_define_for_class_fields: true,
             target_es2022: true,
             no_emit: false,

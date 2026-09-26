@@ -97,6 +97,7 @@ pub(crate) fn check_jsx_factory_reference(
     fragment: bool,
     location_span: Option<SyntaxTextSpan>,
     fallback_span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
     if !ctx.options.jsx_classic_react
@@ -114,14 +115,47 @@ pub(crate) fn check_jsx_factory_reference(
     let namespace = jsx_factory_namespace_name(fragment, ctx);
     // `jsxFragmentFactory: "null"` names no binding.
     if !(fragment && namespace == "null") {
-        crate::checks::emit_value_position_reference_diagnostic(&namespace, span, ctx);
+        report_jsx_factory_reference(&namespace, span, Diagnostic::ts2874(&namespace, ctx.file_name.clone()), symbols, ctx);
+        // tsc's `getJSXFragmentType` resolves the fragment factory again, with
+        // its own message, once per file.
+        if fragment && !ctx.jsx_fragment_factory_resolved {
+            ctx.jsx_fragment_factory_resolved = true;
+            let not_found = Diagnostic::ts2879(&namespace, ctx.file_name.clone());
+            report_jsx_factory_reference(&namespace, span, not_found, symbols, ctx);
+        }
     }
     if fragment {
         let element_namespace = jsx_factory_namespace_name(false, ctx);
         if element_namespace != namespace {
-            crate::checks::emit_value_position_reference_diagnostic(&element_namespace, span, ctx);
+            let not_found = Diagnostic::ts2874(&element_namespace, ctx.file_name.clone());
+            report_jsx_factory_reference(&element_namespace, span, not_found, symbols, ctx);
         }
     }
+}
+
+/// `resolveName` of the factory namespace as a value: when nothing answers
+/// it, `onFailedToResolveSymbol` with the JSX message standing in for "Cannot
+/// find name".
+fn report_jsx_factory_reference(
+    name: &str,
+    span: Option<SyntaxTextSpan>,
+    not_found: Diagnostic,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    if crate::checks::emit_value_position_reference_diagnostic(name, span, ctx)
+        || crate::checks::expr::resolves_value_name(name, symbols, ctx)
+    {
+        return;
+    }
+    let diagnostic = crate::checks::expr::failed_value_name_diagnostic(
+        name,
+        crate::checks::expr::UnresolvedNameSite::Implicit,
+        Some(not_found),
+        symbols,
+        ctx,
+    );
+    ctx.push(diagnostic_with_syntax_span(diagnostic, span));
 }
 
 /// tsc's `checkJsxPreconditions`: with no `jsx` option at all, every opening
@@ -501,7 +535,10 @@ pub(crate) fn check_jsx_element(
             symbols,
             ctx,
         ),
-        None => intrinsic_element_props(tag_name, tag.span.or(fallback_span), ctx),
+        None => {
+            check_intrinsic_type_arguments(tag, ctx);
+            intrinsic_element_props(tag_name, tag.span.or(fallback_span), ctx)
+        }
     };
     let (contextual, candidates, unmodelled_props) = match resolution {
         PropsResolution::Props { .. } | PropsResolution::Unmodelled if children_unmodelled => {
@@ -693,6 +730,22 @@ fn resolve_component_props(
         contextual,
         candidates,
     }
+}
+
+/// `resolveJsxOpeningLikeElement` on an intrinsic tag: its type arguments are
+/// checked for what they name, and any at all are one too many.
+fn check_intrinsic_type_arguments(tag: &ParsedJsxTag, ctx: &mut CheckerContext) {
+    if tag.type_arguments.is_empty() {
+        return;
+    }
+    for type_argument in &tag.type_arguments {
+        let _ = map_parsed_type(type_argument.clone(), ctx);
+    }
+    let span = tag.type_arguments_span.map(|span| SyntaxTextSpan { start: span.start + 1, end: span.end - 1 });
+    ctx.push(diagnostic_with_syntax_span(
+        Diagnostic::ts2558("0".to_string(), tag.type_arguments.len(), ctx.file_name.clone()),
+        span,
+    ));
 }
 
 /// tsc's `inferJsxTypeArguments`: a generic component's type arguments are

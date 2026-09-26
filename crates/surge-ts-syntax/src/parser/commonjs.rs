@@ -15,8 +15,8 @@ use oxc_span::GetSpan;
 use super::spans::text_span_from_oxc_span;
 use crate::{
     ParsedExportDeclaration, ParsedExportSpecifier, ParsedExpression, ParsedImportDeclaration,
-    ParsedImportKind, ParsedImportSpecifier, ParsedStatement, ParsedType, ParsedTypeOfType,
-    ParsedVariableDeclaration, ParsedVariableKind,
+    ParsedImportKind, ParsedImportSpecifier, ParsedObjectType, ParsedObjectTypeProperty,
+    ParsedStatement, ParsedType, ParsedTypeOfType, ParsedVariableDeclaration, ParsedVariableKind,
 };
 
 #[derive(Clone, Default)]
@@ -94,8 +94,24 @@ pub(crate) fn scan(program: &Program<'_>) -> CommonJs {
         }
         _ => false,
     });
-    let mut scanner = IndicatorScanner { indicator: false, exports_assigned: false };
+    let mut scanner =
+        IndicatorScanner { indicator: false, exports_assigned: false, export_assignment: None, exports_property: false };
     scanner.visit_program(program);
+    // tsc's `checkExternalModuleExports`: the binder declares every
+    // `module.exports = e` as the file's `export=` and every exports property
+    // beside it, wherever they are written.
+    if !has_module_syntax
+        && scanner.exports_property
+        && let Some(span) = scanner.export_assignment
+    {
+        FINDINGS.with(|findings| {
+            findings.borrow_mut().push(crate::ParsedGrammarDiagnostic {
+                kind: crate::ParsedGrammarDiagnosticKind::Ts(2309),
+                span: text_span_from_oxc_span(span),
+                name: None,
+            })
+        });
+    }
     let mut nullable: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
     for statement in &program.body {
         if let Statement::ExpressionStatement(statement) = statement {
@@ -155,12 +171,21 @@ fn is_nullable_value(value: &Expression<'_>) -> bool {
 struct IndicatorScanner {
     indicator: bool,
     exports_assigned: bool,
+    /// The first `module.exports = e`, the file's `export=` declaration.
+    export_assignment: Option<oxc_span::Span>,
+    /// An `exports.x`/`module.exports.x` assignment or an
+    /// `Object.defineProperty(exports, …)` declared a value export.
+    exports_property: bool,
 }
 
 impl<'a> Visit<'a> for IndicatorScanner {
     fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
-        if is_require_call(it, false) || is_define_property_of_exports(it) {
+        if is_require_call(it, false) {
             self.indicator = true;
+        }
+        if is_define_property_of_exports(it) {
+            self.indicator = true;
+            self.exports_property = true;
         }
         walk::walk_call_expression(self, it);
     }
@@ -171,8 +196,12 @@ impl<'a> Visit<'a> for IndicatorScanner {
                 Some(ExportTarget::ModuleExports) if !is_exports_identifier(&it.right) => {
                     self.indicator = true;
                     self.exports_assigned = true;
+                    self.export_assignment.get_or_insert(it.span);
                 }
-                Some(ExportTarget::Property(_)) => self.indicator = true,
+                Some(ExportTarget::Property(_)) => {
+                    self.indicator = true;
+                    self.exports_property = true;
+                }
                 _ => {}
             }
         }
@@ -348,6 +377,7 @@ pub(crate) fn require_imports(declaration: &VariableDeclaration<'_>) -> Option<V
             module_specifier_span: Some(text_span_from_oxc_span(specifier_span)),
             span: Some(text_span_from_oxc_span(declarator.span)),
             resolution_mode: None,
+            inline_type_specifiers: false,
         })));
     }
     Some(imports)
@@ -371,29 +401,7 @@ pub(crate) fn export_statement(statement: &ExpressionStatement<'_>) -> Option<Ve
     }
     match export_target(&assignment.left)? {
         ExportTarget::ModuleExports => {
-            if is_exports_identifier(&assignment.right)
-                || !EXPORTED.with(|exported| exported.borrow_mut().insert("\u{0}module.exports".to_string()))
-            {
-                return None;
-            }
-            let span = Some(text_span_from_oxc_span(statement.span));
-            let export = match &assignment.right {
-                Expression::Identifier(identifier) => ParsedExportDeclaration::Equals {
-                    exported_name: identifier.name.to_string(),
-                    exported_name_span: Some(text_span_from_oxc_span(identifier.span)),
-                    span,
-                },
-                right => {
-                    let (expression, expression_span) = super::expressions::parse_expression(right);
-                    ParsedExportDeclaration::EqualsExpression {
-                        expression: Box::new(expression),
-                        expression_span: Some(text_span_from_oxc_span(expression_span)),
-                        entity_name: None,
-                        span,
-                    }
-                }
-            };
-            Some(vec![ParsedStatement::ExportDeclaration(Box::new(export))])
+            module_exports_declaration(assignment, statement.span).map(|export| vec![export])
         }
         ExportTarget::Property(_) if !commonjs.exports_assigned => {
             let (names, Some(value)) = export_property_chain(&statement.expression) else {
@@ -436,6 +444,105 @@ pub(crate) fn export_statement(statement: &ExpressionStatement<'_>) -> Option<Ve
         }
         ExportTarget::Property(_) => None,
     }
+}
+
+/// `module.exports = e`: the module's `export =`, the first one the top level
+/// writes. `module.exports = exports` declares nothing.
+fn module_exports_declaration(
+    assignment: &oxc_ast::ast::AssignmentExpression<'_>,
+    statement_span: oxc_span::Span,
+) -> Option<ParsedStatement> {
+    if is_exports_identifier(&assignment.right)
+        || !EXPORTED.with(|exported| exported.borrow_mut().insert("\u{0}module.exports".to_string()))
+    {
+        return None;
+    }
+    let span = Some(text_span_from_oxc_span(statement_span));
+    let export = match &assignment.right {
+        Expression::Identifier(identifier) => ParsedExportDeclaration::Equals {
+            exported_name: identifier.name.to_string(),
+            exported_name_span: Some(text_span_from_oxc_span(identifier.span)),
+            span,
+        },
+        right => {
+            let (expression, expression_span) = super::expressions::parse_expression(right);
+            ParsedExportDeclaration::EqualsExpression {
+                expression: Box::new(expression),
+                expression_span: Some(text_span_from_oxc_span(expression_span)),
+                entity_name: None,
+                span,
+            }
+        }
+    };
+    Some(ParsedStatement::ExportDeclaration(Box::new(export)))
+}
+
+/// A top-level statement that replaces `module.exports` inside an assignment
+/// chain (`var log = module.exports = new EE()`, `exports = module.exports =
+/// C`). The binder declares every `module.exports = e` as the module's
+/// `export =` wherever it is written (`bindModuleExportsAssignment`), beside
+/// what the statement itself declares.
+pub(crate) fn chained_module_exports_declaration(statement: &Statement<'_>) -> Option<ParsedStatement> {
+    current().filter(|commonjs| commonjs.module)?;
+    let (link, span) = match statement {
+        Statement::VariableDeclaration(declaration) => (
+            declaration
+                .declarations
+                .iter()
+                .filter_map(|declarator| declarator.init.as_ref())
+                .find_map(|init| module_exports_link(init))?,
+            declaration.span,
+        ),
+        // `module.exports = e` itself is `export_statement`'s.
+        Statement::ExpressionStatement(expression_statement) => match &expression_statement.expression {
+            Expression::AssignmentExpression(assignment)
+                if assignment.operator == oxc_syntax::operator::AssignmentOperator::Assign
+                    && !matches!(export_target(&assignment.left), Some(ExportTarget::ModuleExports)) =>
+            {
+                (module_exports_link(&assignment.right)?, expression_statement.span)
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    module_exports_declaration(link, span)
+}
+
+/// The `module.exports = e` link of an assignment chain `a = b = … = e`.
+fn module_exports_link<'e, 'a>(
+    mut value: &'e Expression<'a>,
+) -> Option<&'e oxc_ast::ast::AssignmentExpression<'a>> {
+    while let Expression::AssignmentExpression(assignment) = value.without_parentheses() {
+        if assignment.operator != oxc_syntax::operator::AssignmentOperator::Assign {
+            return None;
+        }
+        if matches!(export_target(&assignment.left), Some(ExportTarget::ModuleExports)) {
+            return Some(&**assignment);
+        }
+        value = &assignment.right;
+    }
+    None
+}
+
+/// A `module.exports = e` or `exports.x = e` whose value is read
+/// (`var log = module.exports = new EE()`): the assignment's value is `e`'s,
+/// which takes no contextual type from a CommonJS target
+/// (`getContextualTypeForBinaryOperand`). Kept apart from a plain `e` so the
+/// variable it initializes is no expando (`IsExpandoInitializer`).
+pub(crate) fn export_assignment_value(
+    assignment: &oxc_ast::ast::AssignmentExpression<'_>,
+) -> Option<ParsedExpression> {
+    if !super::spans::lowering_javascript()
+        || assignment.operator != oxc_syntax::operator::AssignmentOperator::Assign
+        || current().is_none_or(|commonjs| !commonjs.module)
+        || export_target(&assignment.left).is_none()
+    {
+        return None;
+    }
+    let (value, value_span) = super::expressions::parse_expression(&assignment.right);
+    Some(ParsedExpression::Sequence {
+        expressions: vec![(value, Some(text_span_from_oxc_span(value_span)))],
+    })
 }
 
 /// `Object.defineProperty(exports, "name", descriptor)`: an export typed by
@@ -534,6 +641,7 @@ fn declared_export(
                     initializer: Some(value),
                     initializer_span: value_span,
                     declaration_list: None,
+                    annotated_pattern: None,
                 })),
                 ParsedStatement::ExportDeclaration(Box::new(ParsedExportDeclaration::Named {
                     is_type_only: false,
@@ -553,11 +661,27 @@ fn declared_export(
 }
 
 /// `declareCommonJSVariable`: `module` and `exports` in a CommonJS module
-/// that does not declare them itself.
-pub(crate) fn module_variables(program: &Program<'_>, commonjs: &CommonJs) -> Vec<ParsedStatement> {
+/// that does not declare them itself, with the specifier of the file's own
+/// module when they are typed by it.
+///
+/// Both read the module's own symbol (`resolveExternalModuleSymbol`), which
+/// surge types only once `module.exports` is replaced: the module is then
+/// that value, and an `exports.x = e` beside it writes to the value instead
+/// of declaring an export. Without the replacement they stay `any`, as the
+/// exports surge declares type only the first write of each name.
+pub(crate) fn module_variables(
+    program: &Program<'_>,
+    commonjs: &CommonJs,
+    file_name: &str,
+) -> (Vec<ParsedStatement>, Option<String>) {
     if !commonjs.module {
-        return Vec::new();
+        return (Vec::new(), None);
     }
+    let own_specifier = EXPORTED
+        .with(|exported| exported.borrow().contains("\u{0}module.exports"))
+        .then(|| std::path::Path::new(file_name).file_name()?.to_str())
+        .flatten()
+        .map(|name| format!("./{name}"));
     let declares = |name: &str| {
         program.body.iter().any(|statement| match statement {
             Statement::VariableDeclaration(declaration) => declaration.declarations.iter().any(|declarator| {
@@ -570,10 +694,14 @@ pub(crate) fn module_variables(program: &Program<'_>, commonjs: &CommonJs) -> Ve
                 .is_some_and(|declaration| matches!(declaration, Declaration::TSEnumDeclaration(e) if e.id.name == name)),
         })
     };
-    ["module", "exports"]
+    let variables = ["module", "exports"]
         .into_iter()
         .filter(|name| !declares(name))
         .map(|name| {
+            let declared_type = match &own_specifier {
+                Some(specifier) => own_module_variable_type(name, specifier),
+                None => ParsedType::Any,
+            };
             ParsedStatement::VariableDeclaration(Box::new(ParsedVariableDeclaration {
                 is_declare: true,
                 kind: ParsedVariableKind::Var,
@@ -584,11 +712,48 @@ pub(crate) fn module_variables(program: &Program<'_>, commonjs: &CommonJs) -> Ve
                 array_rest_start: None,
                 name: name.to_string(),
                 name_span: None,
-                declared_type: Some(ParsedType::Any),
+                declared_type: Some(declared_type),
                 initializer: None,
                 initializer_span: None,
                 declaration_list: None,
+                annotated_pattern: None,
             }))
         })
-        .collect()
+        .collect();
+    (variables, own_specifier)
+}
+
+/// `exports` is the module itself, `typeof import("./self")`, and `module`
+/// the object holding it (`{ exports: typeof import("./self") }`).
+fn own_module_variable_type(name: &str, specifier: &str) -> ParsedType {
+    let module = ParsedType::TypeOf(std::sync::Arc::new(ParsedTypeOfType {
+        name: format!("import(\"{specifier}\")"),
+        name_span: None,
+        members: Vec::new(),
+        import_specifier: Some(specifier.to_string()),
+        member_spans: Vec::new(),
+        type_arguments: Vec::new(),
+    }));
+    if name == "exports" {
+        return module;
+    }
+    ParsedType::Object(std::sync::Arc::new(ParsedObjectType {
+        properties: vec![ParsedObjectTypeProperty {
+            name: "exports".to_string(),
+            name_span: None,
+            ty: module,
+            optional: false,
+            is_method: false,
+            readonly: false,
+            write_ty: None,
+        }],
+        string_index_type: None,
+        number_index_type: None,
+        call_signature: None,
+        call_signature_overloads: Vec::new(),
+        construct_signature: None,
+        construct_signature_overloads: Vec::new(),
+        non_primitive: false,
+        display_name: None,
+    }))
 }

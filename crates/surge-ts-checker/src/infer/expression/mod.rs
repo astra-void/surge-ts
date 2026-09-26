@@ -224,14 +224,22 @@ fn infer_expression_unsettled(
             }
             symbols
                 .get("this")
+                .or_else(|| {
+                    // tsc's `tryGetThisTypeAt`: a script's top level (arrows
+                    // looked through) owns `this`, which is `globalThis`.
+                    let start = u32::try_from(span.as_ref()?.start).ok()?;
+                    ctx.global_this_starts.contains(&start).then_some(())?;
+                    symbols.get("globalThis")
+                })
                 .map(|symbol| {
                     InferredExpression::Known(clone_type_with_metrics(
                         &symbol.ty,
                         CopySource::Identifier,
                     ))
                 })
-                // Outside a class body `this` has no instance type here; stay
-                // conservative rather than emitting an unresolved-identifier error.
+                // Anywhere else outside a class body `this` has no instance type
+                // here; stay conservative rather than emitting an
+                // unresolved-identifier error.
                 .unwrap_or(InferredExpression::Unknown)
         }
         ParsedExpression::ObjectLiteral { properties, .. } => {
@@ -613,7 +621,7 @@ fn infer_expression_unsettled(
                 None => InferredExpression::Unknown,
             }
         }
-        ParsedExpression::Unknown => InferredExpression::Unknown,
+        ParsedExpression::ImportCall { .. } | ParsedExpression::Unknown => InferredExpression::Unknown,
     };
     record_program_timing(ctx.timings.as_ref(), |timings| {
         timings.type_inference += infer_start.elapsed()

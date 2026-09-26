@@ -182,6 +182,33 @@ pub(crate) fn check_expression_flow_impl(
         ParsedExpression::ObjectRest { source, .. } => {
             check_expression_flow_impl(source, fallback_span, flow_state, statement_index, ctx)
         }
+        ParsedExpression::ImportCall {
+            specifier,
+            specifier_span,
+            options,
+            options_span,
+            ..
+        } => {
+            blocked |= check_expression_flow_impl(
+                specifier,
+                specifier_span.or(fallback_span),
+                flow_state,
+                statement_index,
+                ctx,
+            )
+            .is_blocked();
+            if let Some(options) = options {
+                blocked |= check_expression_flow_impl(
+                    options,
+                    options_span.or(fallback_span),
+                    flow_state,
+                    statement_index,
+                    ctx,
+                )
+                .is_blocked();
+            }
+            FlowCheck::Clear
+        }
         ParsedExpression::Sequence { expressions } => {
             // Operands run in order: each sees what the earlier ones assigned.
             let mark = flow_state.push_guarded_defined(&[]);
@@ -244,7 +271,11 @@ pub(crate) fn check_expression_flow_impl(
             // The right operand runs on the left's true edge for `&&`, its
             // false edge for `||`, after the left's assignments.
             let edge = matches!(operator, surge_ts_syntax::ParsedLogicalOperator::And);
-            let mark = flow_state.push_guarded_defined(&certainly_assigned_names(left));
+            let mut assigned = certainly_assigned_names(left);
+            if edge {
+                assigned.extend(condition_true_assigned_names(left));
+            }
+            let mark = flow_state.push_guarded_defined(&assigned);
             let result = check_on_edge(left, edge, right, right_span.or(fallback_span), flow_state, statement_index, ctx);
             flow_state.restore_guarded_defined(mark);
             result
@@ -267,6 +298,7 @@ pub(crate) fn check_expression_flow_impl(
             ).is_blocked();
 
             let mark = flow_state.push_guarded_defined(&certainly_assigned_names(condition));
+            let true_mark = flow_state.push_guarded_defined(&condition_true_assigned_names(condition));
             blocked |= check_on_edge(
                 condition,
                 true,
@@ -277,6 +309,7 @@ pub(crate) fn check_expression_flow_impl(
                 ctx,
             )
             .is_blocked();
+            flow_state.restore_guarded_defined(true_mark);
 
             let result = check_on_edge(
                 condition,
@@ -657,12 +690,18 @@ pub(crate) fn apply_variable_declaration_state(
 pub(crate) fn type_assumed_initialized(ty: &surge_ts_types::Type, ctx: &CheckerContext) -> bool {
     use surge_ts_types::Type;
     match ty {
-        Type::Any | Type::Undefined | Type::Unknown | Type::GenuineUnknown | Type::Void => true,
+        // tsc's `errorType` is an `any`.
+        Type::Any | Type::ErrorType | Type::Undefined | Type::Unknown | Type::GenuineUnknown | Type::Void => true,
         // tsc's gate looks at `T` itself, not its constraint, so a bare type
         // parameter is analyzed; the reads that see its constraint instead are
         // `FunctionFlowState::constraint_exempt`'s business.
         Type::TypeParameter(_) => false,
-        Type::Union(union) => union.types().iter().any(|member| type_assumed_initialized(member, ctx)),
+        // A union's gate is `containsUndefinedType`, which a `void` member does
+        // not pass; only the union type itself being `void` does.
+        Type::Union(union) => union
+            .types()
+            .iter()
+            .any(|member| !matches!(member, Type::Void) && type_assumed_initialized(member, ctx)),
         _ => false,
     }
 }
@@ -811,6 +850,25 @@ pub(crate) fn expression_assignments(expression: &ParsedExpression) -> Vec<(&Par
                 collect(when_true, true, found);
                 collect(when_false, true, found);
             }
+            // What an optional chain evaluates after `?.` runs only when the
+            // object is not nullish (`bindOptionalChain`).
+            ParsedExpression::OptionalIndexAccess { object, index, .. } => {
+                collect(object, conditional, found);
+                collect(index, true, found);
+            }
+            ParsedExpression::OptionalCall {
+                callee: object,
+                arguments,
+                ..
+            }
+            | ParsedExpression::OptionalPropertyCall {
+                object, arguments, ..
+            } => {
+                collect(object, conditional, found);
+                for argument in arguments {
+                    collect(&argument.expression, true, found);
+                }
+            }
             _ => {
                 expression.for_each_child(&mut |child| collect(child, conditional, found));
                 if matches!(expression, ParsedExpression::Assignment { .. }) {
@@ -840,12 +898,54 @@ pub(crate) fn condition_true_assignments(condition: &ParsedExpression) -> Vec<&P
             found.extend(condition_true_assignments(right));
             found
         }
-        _ => expression_assignments(condition)
-            .into_iter()
-            .filter(|(_, conditional)| !conditional)
-            .map(|(assignment, _)| assignment)
-            .collect(),
+        ParsedExpression::OptionalIndexAccess { .. }
+        | ParsedExpression::OptionalCall { .. }
+        | ParsedExpression::OptionalPropertyCall { .. } => chain_ran_assignments(condition),
+        _ => certain_assignments(condition),
     }
+}
+
+fn certain_assignments(expression: &ParsedExpression) -> Vec<&ParsedExpression> {
+    expression_assignments(expression)
+        .into_iter()
+        .filter(|(_, conditional)| !conditional)
+        .map(|(assignment, _)| assignment)
+        .collect()
+}
+
+/// The assignments an optional chain has certainly run once it produced a
+/// value: tsc binds what follows each `?.` on the chain's true edge
+/// (`bindOptionalChain`), so a truthy chain ran all of it.
+fn chain_ran_assignments(expression: &ParsedExpression) -> Vec<&ParsedExpression> {
+    let (object, rest): (&ParsedExpression, Vec<&ParsedExpression>) = match expression {
+        ParsedExpression::OptionalIndexAccess { object, index, .. } => (&**object, vec![&**index]),
+        ParsedExpression::OptionalCall {
+            callee: object,
+            arguments,
+            ..
+        }
+        | ParsedExpression::OptionalPropertyCall {
+            object, arguments, ..
+        } => (&**object, arguments.iter().map(|argument| &argument.expression).collect()),
+        ParsedExpression::OptionalPropertyAccess { object, .. } => (&**object, Vec::new()),
+        _ => return certain_assignments(expression),
+    };
+    let mut found = chain_ran_assignments(object);
+    for part in rest {
+        found.extend(certain_assignments(part));
+    }
+    found
+}
+
+/// The bindings [`condition_true_assignments`] writes.
+fn condition_true_assigned_names(condition: &ParsedExpression) -> Vec<&str> {
+    condition_true_assignments(condition)
+        .into_iter()
+        .filter_map(|assignment| match assignment {
+            ParsedExpression::Assignment { target_name, .. } => Some(target_name.as_str()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The bindings `expression` assigns on every path through it: both branches
@@ -869,6 +969,12 @@ pub(crate) fn certainly_assigned_names(expression: &ParsedExpression) -> Vec<&st
         }
         ParsedExpression::Logical { left, .. } | ParsedExpression::NullishCoalescing { left, .. } => {
             names.extend(certainly_assigned_names(left));
+        }
+        // What follows `?.` runs only when the object is not nullish.
+        ParsedExpression::OptionalIndexAccess { object, .. }
+        | ParsedExpression::OptionalCall { callee: object, .. }
+        | ParsedExpression::OptionalPropertyCall { object, .. } => {
+            names.extend(certainly_assigned_names(object));
         }
         ParsedExpression::Conditional {
             condition,

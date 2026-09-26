@@ -122,10 +122,15 @@ pub(crate) fn emit_unresolved_qualified_type_head(
     if let Some((qualified_head, _)) = ctx.namespace_info(head) {
         return emit_missing_namespace_member(named_type, &qualified_head, ctx);
     }
+    if ctx.is_complete_namespace_import_binding(head) {
+        return emit_missing_module_namespace_member(named_type, head, member, ctx);
+    }
+    // `globalThis` and a UMD global are namespaces whose members surge does
+    // not resolve here.
     if is_namespace_like(head, ctx)
         || ctx.is_import_binding(head)
-        || ctx.is_umd_global_value_reference(head)
-        || names_plain_value(head, ctx)
+        || head == "globalThis"
+        || ctx.umd_global_names.contains_key(head)
         || ctx
             .namespace_member_prefix_stack
             .iter()
@@ -254,6 +259,106 @@ fn emit_missing_namespace_member(
         return true;
     }
     false
+}
+
+/// `resolveQualifiedName` past a namespace import (`import * as ts from "m"`)
+/// of a module whose whole export list surge saw: the first member is
+/// neither an exported type or namespace nor, where tsc's `canSuggestTypeof`
+/// looks, a value. The namespace is named by its module's quoted path.
+fn emit_missing_module_namespace_member(
+    named_type: &ParsedNamedType,
+    head: &str,
+    member: &str,
+    ctx: &mut CheckerContext,
+) -> bool {
+    let qualified = format!("{head}.{member}");
+    if ctx.lookup_type_declaration(&qualified).is_some() || is_namespace_like(&qualified, ctx) {
+        return false;
+    }
+    let Some(surge_ts_types::Type::Object(namespace)) =
+        ctx.symbols.get(head).map(|symbol| symbol.ty.clone())
+    else {
+        return false;
+    };
+    let Some(module_path) = namespace
+        .alias_name
+        .as_deref()
+        .and_then(|alias| alias.strip_prefix("typeof import(\""))
+        .and_then(|rest| rest.strip_suffix("\")"))
+    else {
+        return false;
+    };
+    let namespace_name = format!("\"{module_path}\"");
+    let file_name = ctx.file_name.clone();
+    let is_last = named_type.name.split('.').count() == 2;
+    let member_span = named_type.span.map(|span| TextSpan {
+        start: span.start + head.len() + 1,
+        end: span.start + head.len() + 1 + member.len(),
+    });
+    let is_value = namespace.properties.get(member).is_some();
+    // A value read past it (`core.published.Widget`) may be an exported
+    // import alias of a namespace, whose members this table does not key.
+    if is_value && !is_last {
+        return false;
+    }
+    let (diagnostic, span) = if is_value && is_last {
+        let span = named_type.span.map(|span| TextSpan {
+            start: span.start,
+            end: span.start + qualified.len(),
+        });
+        (Diagnostic::ts2749(&qualified, file_name), span)
+    } else {
+        let exported_names = module_namespace_export_names(head, &namespace, ctx);
+        match crate::checks::expr::spelling_suggestion(
+            member,
+            exported_names.iter().map(String::as_str),
+            0,
+        ) {
+            Some(suggestion) => (
+                Diagnostic::ts2724(&namespace_name, member, suggestion, file_name),
+                member_span,
+            ),
+            None => (
+                Diagnostic::ts2694(&namespace_name, member, file_name),
+                member_span,
+            ),
+        }
+    };
+    let diagnostic = match span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    };
+    ctx.push_utility_diagnostic_once(diagnostic);
+    true
+}
+
+/// A namespace import's exports as tsc's `getExportsOfModuleAsArray` lists
+/// them for a spelling suggestion: the module object's values and the types
+/// its alias layer keys under `head.`.
+fn module_namespace_export_names(
+    head: &str,
+    namespace: &surge_ts_types::ObjectType,
+    ctx: &CheckerContext,
+) -> Vec<String> {
+    let prefix = format!("{head}.");
+    let mut names: Vec<String> = namespace
+        .properties
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
+    if let Some(scope) = ctx.type_declaration_scope.as_ref() {
+        for layer in scope.layers() {
+            for (key, _) in layer.iter() {
+                if let Some(name) = key.strip_prefix(prefix.as_str()) {
+                    let name = name.split('.').next().unwrap_or(name);
+                    if !names.iter().any(|existing| existing == name) {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    names
 }
 
 /// Whether a qualified name is one written in a type position, where a

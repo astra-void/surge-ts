@@ -33,7 +33,7 @@ pub(crate) fn collect_grammar_diagnostics(
     collector.visit_program(program);
     super::grammar_context::collect_context_grammar_diagnostics(program, &mut collector.diagnostics);
     super::reachability::collect_unreachable_code(program, &mut collector.diagnostics);
-    super::grammar_recovered::collect_recovered_grammar_diagnostics(program, &mut collector.diagnostics);
+    super::grammar_recovered::collect_recovered_grammar_diagnostics(program, false, &mut collector.diagnostics);
     let mut parenthesized = collector.parenthesized_expressions;
     parenthesized.sort_unstable_by_key(|span| (span.inner.start, span.inner.end));
     (collector.diagnostics, parenthesized)
@@ -65,6 +65,9 @@ struct GrammarCollector {
     /// Block and namespace nesting; a computed type member name is answered
     /// only outside both, where the file's top-level scope is the one it reads.
     nested_scope_depth: usize,
+    /// Class bodies and namespaces enclosing the node: with `function_async`,
+    /// what tsc's `IsInTopLevelContext` looks past.
+    this_container_depth: usize,
     /// Every name the file binds, with where; a computed type member name any
     /// of them could answer — a value, a type parameter — is left alone.
     binding_names: Vec<(String, Span)>,
@@ -734,6 +737,12 @@ impl GrammarCollector {
         self.push(Kind::AsyncReturnTypeNotPromise, span, Some(&text));
     }
 
+    /// tsc's `IsInTopLevelContext`: no function, class body or namespace
+    /// encloses the node.
+    fn in_top_level_context(&self) -> bool {
+        self.function_async.is_empty() && self.this_container_depth == 0
+    }
+
     fn push(&mut self, kind: Kind, span: Span, name: Option<&str>) {
         self.diagnostics.push(ParsedGrammarDiagnostic {
             kind,
@@ -1301,7 +1310,7 @@ impl GrammarCollector {
         let (assigned_instance, assigned_static) = assigned_property_names(class);
         for element in &class.body.body {
             // An auto-accessor is declared like a property and judged like one.
-            let (key, is_typed, is_static) = match element {
+            let (key, is_typed, is_static, accessibility) = match element {
                 ClassElement::PropertyDefinition(property) => (
                     &property.key,
                     property.type_annotation.is_some()
@@ -1309,15 +1318,25 @@ impl GrammarCollector {
                         || property.computed
                         || super::jsdoc::declared_type_at(property.span.start).is_some(),
                     property.r#static,
+                    property.accessibility,
                 ),
                 ClassElement::AccessorProperty(property) => (
                     &property.key,
                     property.type_annotation.is_some() || property.value.is_some() || property.computed,
                     property.r#static,
+                    property.accessibility,
                 ),
                 _ => continue,
             };
             if is_typed {
+                continue;
+            }
+            // `declarationBelongsToPrivateAmbientMember`: an ambient class's
+            // private member reports no implicit `any`.
+            if ambient
+                && (accessibility == Some(oxc_ast::ast::TSAccessibility::Private)
+                    || matches!(key, PropertyKey::PrivateIdentifier(_)))
+            {
                 continue;
             }
             let Some(name) = property_key_name(key) else {
@@ -1610,6 +1629,14 @@ impl GrammarCollector {
                         const_like,
                         declarator.type_annotation.is_some(),
                     );
+                } else if declarator.type_annotation.is_none()
+                    && let oxc_ast::ast::BindingPattern::BindingIdentifier(identifier) = &declarator.id
+                {
+                    // `widenTypeForVariableLikeDeclaration`: nothing types an
+                    // ambient variable written with neither, so it is an
+                    // implicit `any`, reported under `noImplicitAny`.
+                    let payload = format!("{}\0any", identifier.name.as_str());
+                    self.push(Kind::Ts(7005), identifier.span, Some(&payload));
                 }
             }
             return;
@@ -2303,6 +2330,7 @@ impl<'a> Visit<'a> for GrammarCollector {
     fn visit_ts_module_declaration(&mut self, declaration: &TSModuleDeclaration<'a>) {
         let ambient = declaration.declare || self.is_ambient();
         self.nested_scope_depth += 1;
+        self.this_container_depth += 1;
         if ambient {
             self.ambient_depth += 1;
         }
@@ -2317,6 +2345,7 @@ impl<'a> Visit<'a> for GrammarCollector {
         if ambient {
             self.ambient_depth -= 1;
         }
+        self.this_container_depth -= 1;
         self.nested_scope_depth -= 1;
     }
 
@@ -2431,6 +2460,15 @@ impl<'a> Visit<'a> for GrammarCollector {
         if arrow.r#async {
             self.check_async_return_type(arrow.return_type.as_deref());
         }
+        // `checkGrammarArrowFunction`: `<T>() => …` reads as a JSX tag in a
+        // `.mts`/`.cts` file; the checker keeps it for those extensions.
+        if let Some(type_parameters) = &arrow.type_parameters
+            && let [parameter] = type_parameters.params.as_slice()
+            && parameter.constraint.is_none()
+            && !self.source_text[parameter.span.end as usize..type_parameters.span.end as usize].contains(',')
+        {
+            self.push(Kind::Ts(7060), parameter.span, None);
+        }
         self.function_async.push(arrow.r#async);
         oxc_ast_visit::walk::walk_arrow_function_expression(self, arrow);
         self.function_async.pop();
@@ -2439,11 +2477,21 @@ impl<'a> Visit<'a> for GrammarCollector {
     /// tsc's `checkGrammarAwaitOrAwaitUsing`: `await` inside a function that
     /// is not `async` — TS1308.
     fn visit_await_expression(&mut self, expression: &oxc_ast::ast::AwaitExpression<'a>) {
+        let keyword = Span::new(expression.span.start, expression.span.start + 5);
         if self.function_async.last() == Some(&false) {
-            let keyword = Span::new(expression.span.start, expression.span.start + 5);
             self.push(Kind::AwaitOutsideAsyncFunction, keyword, None);
+        } else if self.in_top_level_context() {
+            // `checkGrammarAwaitOrAwaitUsing` under a node module kind; the
+            // checker keeps it for a CommonJS-format file.
+            self.push(Kind::Ts(1309), keyword, None);
         }
         oxc_ast_visit::walk::walk_await_expression(self, expression);
+    }
+
+    fn visit_class_body(&mut self, body: &oxc_ast::ast::ClassBody<'a>) {
+        self.this_container_depth += 1;
+        oxc_ast_visit::walk::walk_class_body(self, body);
+        self.this_container_depth -= 1;
     }
 
     fn visit_ts_type_parameter_declaration(
@@ -2588,6 +2636,13 @@ impl<'a> Visit<'a> for GrammarCollector {
     // A `for (const x of xs)` binding is initialized by the loop, not by an
     // initializer, so its declaration must not reach the const check.
     fn visit_for_of_statement(&mut self, statement: &ForOfStatement<'a>) {
+        if statement.r#await
+            && self.in_top_level_context()
+            && let Some(offset) = self.source_text[statement.span.start as usize..].find("await")
+        {
+            let start = statement.span.start + offset as u32;
+            self.push(Kind::Ts(1309), Span::new(start, start + 5), None);
+        }
         self.visit_expression(&statement.right);
         self.visit_statement(&statement.body);
     }

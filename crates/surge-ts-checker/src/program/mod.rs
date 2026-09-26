@@ -46,7 +46,9 @@ pub(crate) use check_files::{
 pub(crate) use classes::*;
 pub(crate) use diagnostics::*;
 pub(crate) use file_classify::*;
+pub(crate) use forward_references::decorator_is_checked;
 pub(crate) use globals::*;
+pub(crate) use index_constraints::check_type_literal_index_constraints;
 pub(crate) use namespaces::{
     MEANING_NAMESPACE, MEANING_TYPE, MEANING_VALUE, NamespaceInfo, NamespaceRegistry,
     is_instantiated_namespace,
@@ -99,9 +101,13 @@ pub(crate) struct ParsedProgramFile {
     /// `// @ts-nocheck`: tsc reports nothing of the file's but its syntax.
     pub(crate) no_check: bool,
     pub(crate) is_module: bool,
+    /// See [`surge_ts_syntax::ParsedSource::commonjs_module`].
+    pub(crate) commonjs_module: bool,
     /// Specifiers written as `import("…")` in type positions (see
     /// [`surge_ts_syntax::ParsedSource::import_call_specifiers`]).
     pub(crate) import_call_specifiers: Vec<String>,
+    /// See [`surge_ts_syntax::ParsedSource::import_calls`].
+    pub(crate) import_calls: Vec<surge_ts_syntax::ParsedImportCall>,
     pub(crate) file_kind: FileKind,
     /// Module-wide identifier reads (see [`surge_ts_syntax::ParsedSource`]),
     /// retained only when `noUnusedLocals` is enabled; empty otherwise.
@@ -117,6 +123,8 @@ pub(crate) struct ParsedProgramFile {
     /// See [`surge_ts_syntax::ParsedSource::parenthesized_expressions`]; handed
     /// to the context for the file's check.
     pub(crate) parenthesized_expressions: std::sync::Arc<[surge_ts_syntax::ParenthesizedExpressionSpan]>,
+    /// See [`surge_ts_syntax::ParsedSource::global_this_starts`].
+    pub(crate) global_this_starts: std::sync::Arc<[u32]>,
     /// See [`surge_ts_syntax::ParsedSource::let_assignments`].
     pub(crate) let_assignments: std::sync::Arc<[surge_ts_syntax::LetAssignmentSummary]>,
     /// See [`surge_ts_syntax::ParsedSource::json_module_type`]. Set for every
@@ -352,7 +360,7 @@ fn check_program_with_stats_and_jobs_inner(
             }
         }
     } else {
-        diagnostics::report_global_merge_conflicts(&mut parsed_files);
+        diagnostics::report_global_merge_conflicts(&mut parsed_files, &ctx);
     }
     for file in &mut parsed_files {
         file.tsc_globals = None;
@@ -1467,6 +1475,7 @@ fn run_check_phase(
         ctx.ambient_global_symbols
             .clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
     ));
+    report_import_call_resolutions(parsed_files.as_slice(), ctx);
     set_check_phase(true);
     let file_results = if worker_count <= 1 {
         check_program_files_serial(parsed_files, shared_state, &ctx, timings.clone())
@@ -1492,6 +1501,28 @@ fn run_check_phase(
             result.stats.suppressed_rust_only_diagnostics_total;
     }
     diagnostics::drop_suppressed_program_diagnostics(&mut ctx.diagnostics, parsed_files);
+}
+
+/// tsc resolves each `import("…")` as it checks the call or the import type
+/// that writes it. The `Parsed*` tree keeps neither form, so the specifiers
+/// are resolved once here, ahead of the per-file checks. A package's files
+/// are never checked (its JavaScript is a `RootSource` by name alone), and a
+/// declaration file's reports go with `skipLibCheck` in `push`.
+fn report_import_call_resolutions(parsed_files: &[ParsedProgramFile], ctx: &mut CheckerContext) {
+    let saved_file_name = ctx.file_name.clone();
+    for parsed_file in parsed_files {
+        if parsed_file.import_calls.is_empty()
+            || !matches!(parsed_file.file_kind, FileKind::RootSource | FileKind::RootDeclaration)
+            || file_classify::contains_path_segment(&parsed_file.file_name, "node_modules")
+        {
+            continue;
+        }
+        ctx.set_file_name(parsed_file.file_name.clone());
+        for import_call in &parsed_file.import_calls {
+            crate::modules::report_unresolved_import_call(ctx, import_call, parsed_files);
+        }
+    }
+    ctx.set_file_name(saved_file_name);
 }
 
 fn finish_program_run(

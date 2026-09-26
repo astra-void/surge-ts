@@ -628,6 +628,10 @@ pub(super) fn resolve_legacy_entrypoint_in_directory(
         for field in ["types", "typings", "module", "main"] {
             if let Some(value) = json.get(field).and_then(|t| t.as_str()) {
                 try_candidate!(&pkg_dir.join(value));
+                // tsc loads the field's path as a file, then as a directory
+                // (`nodeLoadModuleByRelativeName`): `"main": "./lib"` is
+                // `lib/index.d.ts`.
+                try_candidate!(&pkg_dir.join(value).join("index"));
             }
         }
 

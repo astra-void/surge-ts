@@ -163,6 +163,19 @@ fn presence_possible(ty: &Type, property: &str) -> bool {
 
 /// An object that learned `property` is present, typed `unknown`.
 fn with_unknown_property(member: &Type, property: &str) -> Option<Type> {
+    // `narrowTypeByInKeyword`: a type variable that declares no such property
+    // is intersected with `Record<property, unknown>`, staying a `T`.
+    if member.is_type_variable() {
+        let mut properties = surge_ts_types::PropertyMap::default();
+        properties.insert(
+            std::sync::Arc::from(property),
+            surge_ts_types::ObjectProperty::required(Type::GenuineUnknown),
+        );
+        return Some(surge_ts_types::type_variable::intersect_type_variable(
+            member,
+            Type::Object(crate::metrics::alloc_object_type(properties, None)),
+        ));
+    }
     let Type::Object(object) = member.peeled() else {
         return None;
     };

@@ -413,6 +413,9 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
     {
         return true;
     }
+    if current_relation() == Relation::Assignable && has_no_common_properties(from, to) {
+        return false;
+    }
 
     // An intersection relates when some constituent does
     // (`someTypeRelatedToType`). A merged intersection keeps only its object
@@ -962,7 +965,10 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
                     .iter()
                     .zip(to_ref.arguments.iter())
                     .all(|(from_arg, to_arg)| {
-                        matches!(from_arg, Type::Any | Type::Unknown | Type::ErrorType | Type::GenuineUnknown | Type::TypeParameter(_))
+                        // A type variable of the body being checked is a type,
+                        // not a gap: `Foo<U>` is no `Foo<T>` unless `U` is a `T`.
+                        matches!(from_arg, Type::Any | Type::Unknown | Type::ErrorType | Type::GenuineUnknown)
+                            || (matches!(from_arg, Type::TypeParameter(_)) && !from_arg.is_type_variable())
                             || matches!(to_arg, Type::Any)
                             || is_assignable_to(from_arg, to_arg)
                     });
@@ -1538,7 +1544,7 @@ fn with_parameter_optionality(
     let optional = |index: usize, parameter: &Type| {
         index >= required
             && Some(index) != rest_index
-            && !parameter.is_unknown()
+            && !parameter.is_unmodelled()
             && !matches!(parameter, Type::Any)
             && !type_includes_undefined(parameter)
     };
@@ -1687,8 +1693,18 @@ fn is_function_assignable_to(source: &FunctionType, target: &FunctionType) -> bo
     if current_relation() == Relation::Comparable {
         return is_signature_assignable_to(source, target, false);
     }
-    if let Some(opaque_target) = opaque_generic_target(source, target) {
-        return is_signature_assignable_to(source, &opaque_target, false);
+    // `signaturesRelatedTo` relates an overload group member by member with
+    // every signature's type parameters erased too; the fold surge holds in
+    // its place is related the same erased way.
+    if source.overloads().is_some() || target.overloads().is_some() {
+        return is_signature_assignable_to(source, target, false);
+    }
+    // `compareSignaturesRelated`: a generic target keeps its own type
+    // parameters (`getCanonicalSignature`), and a generic source is
+    // instantiated in the context of that canonical signature.
+    if let Some(canonical_target) = opaque_generic_target(target) {
+        let instantiated = generic_source_in_context_of(source, &canonical_target);
+        return is_signature_assignable_to(instantiated.as_ref().unwrap_or(source), &canonical_target, false);
     }
     if let Some(instantiated) = generic_source_in_context_of(source, target) {
         return is_signature_assignable_to(&instantiated, target, false);
@@ -1717,31 +1733,76 @@ pub fn generic_source_in_context_of(source: &FunctionType, target: &FunctionType
     if names.is_empty() {
         return None;
     }
-    let mut candidates: Vec<(String, Vec<Type>)> =
-        names.iter().map(|name| (name.clone(), Vec::new())).collect();
+    let mut candidates: Vec<InferenceCandidates> = names
+        .iter()
+        .map(|name| InferenceCandidates {
+            name: name.clone(),
+            covariant: Vec::new(),
+            contravariant: Vec::new(),
+        })
+        .collect();
+    // `getTypeAtPosition` reads an optional parameter with its `undefined`.
+    let with_optionality = |function: &FunctionType, index: usize, ty: Type| {
+        if crate::strict_null_checks()
+            && index >= function.required_parameter_count()
+            && !(function.is_variadic() && index + 1 >= function.parameters().len())
+            && !ty.is_unmodelled()
+            && !type_includes_undefined(&ty)
+        {
+            crate::union_type(vec![ty, Type::Undefined])
+        } else {
+            ty
+        }
+    };
     for index in 0..source.parameters().len() {
         let (Some(source_parameter), Some(target_parameter)) =
             (parameter_type_at(source, index), parameter_type_at(target, index))
         else {
             continue;
         };
-        infer_to_type_parameters(&source_parameter, &target_parameter, &mut candidates, 0);
+        let source_parameter = with_optionality(source, index, source_parameter);
+        let target_parameter = with_optionality(target, index, target_parameter);
+        infer_to_type_parameters(&source_parameter, &target_parameter, &mut candidates, false, 0);
     }
     let inferred = |name: &str| -> Type {
-        let found = candidates
-            .iter()
-            .find(|(candidate, _)| candidate == name)
-            .map(|(_, types)| types.as_slice())
-            .unwrap_or(&[]);
+        let Some(inference) = candidates.iter().find(|inference| inference.name == name) else {
+            return Type::type_parameter(name);
+        };
+        // `getCovariantInference` widens literal candidates of a parameter the
+        // return type does not expose at its top level.
+        let widened: Vec<Type>;
+        let covariant = if type_parameter_at_top_level(source.return_type(), name) {
+            inference.covariant.as_slice()
+        } else {
+            widened = inference.covariant.iter().map(widen_literal_candidate).collect();
+            widened.as_slice()
+        };
         // The leftmost candidate every other one is assignable to, as
         // `getCommonSupertype` picks; with none, the first stands and the
         // comparison reports the disagreement.
-        found
+        let supertype = covariant
             .iter()
-            .find(|candidate| found.iter().all(|other| is_assignable_to(other, candidate)))
-            .or_else(|| found.first())
-            .cloned()
-            .unwrap_or_else(|| Type::type_parameter(name))
+            .find(|candidate| covariant.iter().all(|other| is_assignable_to(other, candidate)))
+            .or_else(|| covariant.first());
+        // `getCommonSubtype`: the leftmost candidate no later one is a subtype of.
+        let subtype = inference.contravariant.iter().fold(None::<&Type>, |subtype, candidate| match subtype {
+            Some(subtype) if !is_assignable_to(candidate, subtype) => Some(subtype),
+            _ => Some(candidate),
+        });
+        // `getInferredType` keeps the covariant inference only when it fits
+        // some contravariant candidate.
+        let prefer_covariant = |supertype: &Type| {
+            !matches!(supertype, Type::Never | Type::Any)
+                && inference
+                    .contravariant
+                    .iter()
+                    .any(|candidate| is_assignable_to(supertype, candidate))
+        };
+        match (supertype, subtype) {
+            (Some(supertype), Some(subtype)) if !prefer_covariant(supertype) => subtype.clone(),
+            (Some(inferred), _) | (None, Some(inferred)) => inferred.clone(),
+            (None, None) => Type::type_parameter(name),
+        }
     };
     let mut changed = false;
     let parameters: Vec<Type> = source
@@ -1750,7 +1811,9 @@ pub fn generic_source_in_context_of(source: &FunctionType, target: &FunctionType
         .map(|parameter| substitute_type_parameters(parameter, &names, &inferred, &mut changed))
         .collect();
     let return_type = substitute_type_parameters(source.return_type(), &names, &inferred, &mut changed);
-    let resolved_any = candidates.iter().any(|(_, types)| !types.is_empty());
+    let resolved_any = candidates
+        .iter()
+        .any(|inference| !inference.covariant.is_empty() || !inference.contravariant.is_empty());
     (changed && resolved_any).then(|| {
         FunctionType::new(
             parameters,
@@ -1759,6 +1822,27 @@ pub fn generic_source_in_context_of(source: &FunctionType, target: &FunctionType
             source.required_parameter_count(),
         )
     })
+}
+
+/// `isTypeParameterAtTopLevel`: the type is the parameter or a union with it
+/// as a member.
+fn type_parameter_at_top_level(ty: &Type, name: &str) -> bool {
+    match ty {
+        Type::TypeParameter(parameter) => *parameter.name == *name && !ty.is_type_variable(),
+        Type::Union(union) => union.types().iter().any(|member| type_parameter_at_top_level(member, name)),
+        _ => false,
+    }
+}
+
+/// `getWidenedLiteralType` of an inference candidate.
+fn widen_literal_candidate(ty: &Type) -> Type {
+    match ty {
+        Type::StringLiteral(_) => Type::String,
+        Type::NumberLiteral(_) => Type::Number,
+        Type::BooleanLiteral(_) => Type::Boolean,
+        Type::Union(union) => crate::union_type(union.types().iter().map(widen_literal_candidate).collect()),
+        other => other.clone(),
+    }
 }
 
 /// tsc's `getTypeAtPosition`: a rest parameter answers for every position it
@@ -1784,68 +1868,180 @@ fn parameter_type_at(function: &FunctionType, index: usize) -> Option<Type> {
     }
 }
 
+/// What one named type parameter of a generic source has been inferred from,
+/// split by the variance of the position (`InferenceInfo.candidates` and
+/// `contraCandidates`).
+struct InferenceCandidates {
+    name: String,
+    covariant: Vec<Type>,
+    contravariant: Vec<Type>,
+}
+
 /// Collects, for each named type parameter, the target types standing where
-/// the source writes it.
+/// the source writes it. A parameter position of a nested signature flips the
+/// variance (`inferFromContravariantTypesIfStrictFunctionTypes`).
 fn infer_to_type_parameters(
     source: &Type,
     target: &Type,
-    candidates: &mut Vec<(String, Vec<Type>)>,
+    candidates: &mut Vec<InferenceCandidates>,
+    contravariant: bool,
     depth: usize,
 ) {
     if depth > 8 {
         return;
     }
     match (source, target) {
-        (Type::TypeParameter(parameter), target) => {
-            if target.is_unknown() || matches!(target, Type::Any) {
+        (Type::TypeParameter(parameter), target) if !source.is_type_variable() => {
+            if target.is_unmodelled() || matches!(target, Type::Any) {
                 return;
             }
-            if let Some((_, types)) = candidates
+            if let Some(inference) = candidates
                 .iter_mut()
-                .find(|(name, _)| **name == *parameter.name)
-                && !types.contains(target)
+                .find(|inference| *inference.name == *parameter.name)
             {
-                types.push(target.clone());
+                let types = if contravariant {
+                    &mut inference.contravariant
+                } else {
+                    &mut inference.covariant
+                };
+                if !types.contains(target) {
+                    types.push(target.clone());
+                }
             }
         }
         (Type::Array(source), Type::Array(target)) => {
-            infer_to_type_parameters(source, target, candidates, depth + 1);
+            infer_to_type_parameters(source, target, candidates, contravariant, depth + 1);
         }
         (Type::Tuple(source), Type::Tuple(target)) => {
             for (source, target) in source.iter().zip(target) {
-                infer_to_type_parameters(source, target, candidates, depth + 1);
+                infer_to_type_parameters(source, target, candidates, contravariant, depth + 1);
             }
         }
-        (Type::Function(source), Type::Function(target)) => {
+        // A nested signature that declares one of the names itself shadows it
+        // (`getErasedSignature` leaves nothing there to infer to).
+        (Type::Function(source), Type::Function(target))
+            if !source
+                .type_parameter_names()
+                .iter()
+                .any(|own| candidates.iter().any(|inference| inference.name == *own)) =>
+        {
             for (source, target) in source.parameters().iter().zip(target.parameters()) {
-                infer_to_type_parameters(source, target, candidates, depth + 1);
+                infer_to_type_parameters(source, target, candidates, !contravariant, depth + 1);
             }
-            infer_to_type_parameters(source.return_type(), target.return_type(), candidates, depth + 1);
+            infer_to_type_parameters(source.return_type(), target.return_type(), candidates, contravariant, depth + 1);
         }
         (Type::Reference(source), Type::Reference(target))
             if source.id == target.id && source.arguments.len() == target.arguments.len() =>
         {
             for (source, target) in source.arguments.iter().zip(target.arguments.iter()) {
-                infer_to_type_parameters(source, target, candidates, depth + 1);
+                infer_to_type_parameters(source, target, candidates, contravariant, depth + 1);
+            }
+        }
+        (Type::Object(source), Type::Object(target)) => {
+            infer_from_object_members(source, target, candidates, contravariant, depth + 1);
+        }
+        // `inferFromMatchingTypes`: members both unions share are matched
+        // off, and what remains of the target infers to the source's naked
+        // type parameter.
+        (Type::Union(source_union), target) => {
+            let target_members: Vec<Type> = match target {
+                Type::Union(target_union) => target_union.types().to_vec(),
+                other => vec![other.clone()],
+            };
+            let (naked, fixed): (Vec<&Type>, Vec<&Type>) = source_union
+                .types()
+                .iter()
+                .partition(|member| matches!(member, Type::TypeParameter(_)) && !member.is_type_variable());
+            let [naked] = naked.as_slice() else {
+                return;
+            };
+            let remaining: Vec<Type> =
+                target_members.into_iter().filter(|member| !fixed.iter().any(|fixed| *fixed == member)).collect();
+            if !remaining.is_empty() {
+                infer_to_type_parameters(naked, &crate::union_type(remaining), candidates, contravariant, depth + 1);
             }
         }
         _ => {}
     }
 }
 
-/// tsc's `compareSignaturesRelated` instantiates a *generic source* in the
-/// context of the target, but a generic target compared with a non-generic
-/// source keeps its type parameters as they are: `T` in `<T>(x: T) => T[]`
-/// is a type of its own that `number` does not satisfy, so
-/// `(x: number) => number[]` is not assignable to it. surge's type-parameter
-/// placeholders relate like `unknown`, so for this comparison each of the
-/// target's parameters is replaced with an opaque type only it can inhabit.
-/// Constrained parameters are left alone: the head is display text and does
-/// not carry a resolved constraint to relate through.
-fn opaque_generic_target(source: &FunctionType, target: &FunctionType) -> Option<FunctionType> {
-    if source.type_parameter_head().is_some() {
-        return None;
+/// `inferFromObjectTypes` between two object types: same-named properties,
+/// then call and construct signatures, then index signatures — unless each
+/// declares a required property the other lacks (`typesDefinitelyUnrelated`).
+fn infer_from_object_members(
+    source: &ObjectType,
+    target: &ObjectType,
+    candidates: &mut Vec<InferenceCandidates>,
+    contravariant: bool,
+    depth: usize,
+) {
+    let lacks_required_member_of = |object: &ObjectType, other: &ObjectType| {
+        other
+            .properties
+            .iter()
+            .any(|(name, property)| !property.optional && !object.properties.contains_key(name.as_ref()))
+    };
+    if lacks_required_member_of(source, target) && lacks_required_member_of(target, source) {
+        return;
     }
+    // `getTypeOfSymbol` reads an optional property with its `undefined`.
+    let property_type = |property: &crate::ObjectProperty| {
+        if property.optional
+            && crate::strict_null_checks()
+            && !property.ty.is_unmodelled()
+            && !type_includes_undefined(&property.ty)
+        {
+            crate::union_type(vec![property.ty.clone(), Type::Undefined])
+        } else {
+            property.ty.clone()
+        }
+    };
+    for (name, source_property) in source.properties.iter() {
+        if let Some(target_property) = target.properties.get(name.as_ref()) {
+            infer_to_type_parameters(
+                &property_type(source_property),
+                &property_type(target_property),
+                candidates,
+                contravariant,
+                depth,
+            );
+        }
+    }
+    for (source_signature, target_signature) in [
+        (source.call_signature(), target.call_signature()),
+        (source.construct_signature(), target.construct_signature()),
+    ] {
+        if let (Some(source_signature), Some(target_signature)) = (source_signature, target_signature) {
+            infer_to_type_parameters(
+                &Type::Function(source_signature.clone()),
+                &Type::Function(target_signature.clone()),
+                candidates,
+                contravariant,
+                depth,
+            );
+        }
+    }
+    if let (Some(source_index), Some(target_index)) =
+        (source.string_index_type.as_deref(), target.string_index_type.as_deref())
+    {
+        infer_to_type_parameters(source_index, target_index, candidates, contravariant, depth);
+    }
+    if let (Some(source_index), Some(target_index)) =
+        (source.number_index_type.as_deref(), target.applicable_index_type(true))
+    {
+        infer_to_type_parameters(source_index, target_index, candidates, contravariant, depth);
+    }
+}
+
+/// tsc's `getCanonicalSignature`: a generic target keeps its type parameters
+/// as they are, whatever the source: `T` in `<T>(x: T) => T[]` is a type of
+/// its own that `number` does not satisfy, so neither `(x: number) =>
+/// number[]` nor `<U>(x: U) => string[]` is assignable to it. surge's
+/// type-parameter placeholders relate like `unknown`, so for this comparison
+/// each of the target's parameters is replaced with an opaque type only it
+/// can inhabit. Constrained parameters are left alone: the head is display
+/// text and does not carry a resolved constraint to relate through.
+fn opaque_generic_target(target: &FunctionType) -> Option<FunctionType> {
     let head = target.type_parameter_head()?;
     let mut names = Vec::new();
     for segment in head.split(',') {
@@ -1881,6 +2077,37 @@ fn opaque_generic_target(source: &FunctionType, target: &FunctionType) -> Option
     })
 }
 
+/// `getSignatureInstantiation` for a signature whose own type parameters are
+/// known only by name: each placeholder named in `names` is replaced by the
+/// type at the same position.
+pub fn instantiate_named_type_parameters(function: &FunctionType, names: &[String], types: &[Type]) -> FunctionType {
+    // The signature's own parameters shadow any outer one of the same name,
+    // bound as a type variable or not.
+    fn replace(ty: &Type, names: &[String], types: &[Type]) -> Type {
+        match ty {
+            Type::TypeParameter(parameter) => names
+                .iter()
+                .position(|name| **name == *parameter.name)
+                .and_then(|index| types.get(index).cloned())
+                .unwrap_or_else(|| ty.clone()),
+            Type::Array(element) => Type::Array(Box::new(replace(element, names, types))),
+            Type::Tuple(elements) => Type::Tuple(elements.iter().map(|element| replace(element, names, types)).collect()),
+            Type::Union(union) => crate::union_type(union.types().iter().map(|member| replace(member, names, types)).collect()),
+            Type::Function(function) => Type::Function(replace_in_signature(function, names, types)),
+            other => other.clone(),
+        }
+    }
+    fn replace_in_signature(function: &FunctionType, names: &[String], types: &[Type]) -> FunctionType {
+        FunctionType::new(
+            function.parameters().iter().map(|parameter| replace(parameter, names, types)).collect(),
+            replace(function.return_type(), names, types),
+            function.is_variadic(),
+            function.required_parameter_count(),
+        )
+    }
+    replace_in_signature(function, names, types)
+}
+
 fn substitute_type_parameters(
     ty: &Type,
     names: &[String],
@@ -1888,7 +2115,9 @@ fn substitute_type_parameters(
     changed: &mut bool,
 ) -> Type {
     match ty {
-        Type::TypeParameter(parameter) if names.iter().any(|name| **name == *parameter.name) => {
+        Type::TypeParameter(parameter)
+            if !ty.is_type_variable() && names.iter().any(|name| **name == *parameter.name) =>
+        {
             *changed = true;
             opaque(&parameter.name)
         }
@@ -1906,16 +2135,72 @@ fn substitute_type_parameters(
                 .map(|member| substitute_type_parameters(member, names, opaque, changed))
                 .collect(),
         ),
-        Type::Function(function) => Type::Function(FunctionType::new(
-            function
-                .parameters()
+        Type::Function(function) => {
+            // A nested generic signature's own type parameters shadow the
+            // outer ones of the same name.
+            let own = function.type_parameter_names();
+            let unshadowed: Vec<String>;
+            let names = if own.is_empty() {
+                names
+            } else {
+                unshadowed = names.iter().filter(|name| !own.contains(name)).cloned().collect();
+                unshadowed.as_slice()
+            };
+            Type::Function(FunctionType::new(
+                function
+                    .parameters()
+                    .iter()
+                    .map(|parameter| substitute_type_parameters(parameter, names, opaque, changed))
+                    .collect(),
+                substitute_type_parameters(function.return_type(), names, opaque, changed),
+                function.is_variadic(),
+                function.required_parameter_count(),
+            ))
+        }
+        // A written object type (`{ a: T; b: T }`). An intersection surface,
+        // an open one, a nominal declaration or the `object` keyword is left
+        // as it is: rebuilding it here would drop what makes it that.
+        Type::Object(object)
+            if object.alias_id.is_none()
+                && !object.is_intersection
+                && !object.synthetic_open_index
+                && !object.non_primitive
+                && object.intersection_operands.is_none() =>
+        {
+            let mut object_changed = false;
+            let properties: crate::PropertyMap = object
+                .properties
                 .iter()
-                .map(|parameter| substitute_type_parameters(parameter, names, opaque, changed))
-                .collect(),
-            substitute_type_parameters(function.return_type(), names, opaque, changed),
-            function.is_variadic(),
-            function.required_parameter_count(),
-        )),
+                .map(|(name, property)| {
+                    let mut property = property.clone();
+                    property.ty = substitute_type_parameters(&property.ty, names, opaque, &mut object_changed);
+                    (name.clone(), property)
+                })
+                .collect();
+            let string_index = object
+                .string_index_type
+                .as_deref()
+                .map(|index| substitute_type_parameters(index, names, opaque, &mut object_changed));
+            let number_index = object
+                .number_index_type
+                .as_deref()
+                .map(|index| substitute_type_parameters(index, names, opaque, &mut object_changed));
+            if !object_changed {
+                return ty.clone();
+            }
+            *changed = true;
+            let mut substituted = ObjectType::new(properties, string_index).with_number_index_type(number_index);
+            if object.without_inferable_index {
+                substituted = substituted.with_nominal_declaration_marker();
+            }
+            if let Some(signature) = object.call_signature() {
+                substituted = substituted.with_call_signature(signature.clone());
+            }
+            if let Some(signature) = object.construct_signature() {
+                substituted = substituted.with_construct_signature(signature.clone());
+            }
+            Type::Object(substituted)
+        }
         other => other.clone(),
     }
 }
@@ -2004,6 +2289,97 @@ fn is_signature_assignable_to(
         || is_assignable_to(source.return_type(), target.return_type());
 
     parameters_compatible && return_compatible
+}
+
+/// tsc's `isWeakType`: an object whose members are all optional, with at
+/// least one, and no call, construct or index signature.
+pub fn is_weak_type(ty: &Type) -> bool {
+    match ty.peeled() {
+        Type::Object(object) => {
+            !object.properties.is_empty()
+                && object.properties.values().all(|property| property.optional)
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none()
+                && object.call_signature.is_none()
+                && object.construct_signature.is_none()
+                && !object.synthetic_open_index
+        }
+        _ => false,
+    }
+}
+
+/// The source of a weak-type failure whose first call or construct
+/// signature returns something the target accepts: tsc then asks "Did you
+/// mean to call it?" (TS2560).
+pub fn weak_type_source_returns_target(source: &Type, target: &Type) -> bool {
+    let signature = match source.peeled() {
+        Type::Function(function) => Some(function),
+        Type::Object(object) => object
+            .call_signature()
+            .or_else(|| object.construct_signature())
+            .cloned(),
+        _ => None,
+    };
+    signature.is_some_and(|signature| is_assignable_to(signature.return_type(), target))
+}
+
+/// The weak-type check of relater.go `isRelatedTo`: a source with members of
+/// its own (or signatures), none of which the weak target declares, relates
+/// to nothing but itself. A source surge did not model whole is not judged.
+pub fn has_no_common_properties(source: &Type, target: &Type) -> bool {
+    if !is_weak_type(target) || is_global_object_type(source) {
+        return false;
+    }
+    let Type::Object(target) = target.peeled() else {
+        return false;
+    };
+    match source.peeled() {
+        Type::Object(source) => {
+            !source.synthetic_open_index
+                && !source.is_intersection
+                && source.string_index_type.as_deref().is_none_or(|index| !index.is_unknown())
+                && (!source.properties.is_empty()
+                    || source.call_signature.is_some()
+                    || source.construct_signature.is_some())
+                && !source.properties.values().any(|property| property.ty.is_unknown())
+                && !source.properties.keys().any(|name| target.properties.contains_key(name.as_ref()))
+        }
+        // A function type has signatures and no properties of its own.
+        Type::Function(_) => true,
+        // A primitive's properties are its apparent type's.
+        primitive @ (Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)) => {
+            !target.properties.keys().any(|name| primitive.get_property_access_type(name).is_some())
+        }
+        _ => false,
+    }
+}
+
+/// tsc's `globalObjectType`, which `isRelatedTo` exempts from the
+/// common-property check: the lib's `Object` interface.
+fn is_global_object_type(ty: &Type) -> bool {
+    const OBJECT_MEMBERS: [&str; 7] = [
+        "constructor",
+        "toString",
+        "toLocaleString",
+        "valueOf",
+        "hasOwnProperty",
+        "isPrototypeOf",
+        "propertyIsEnumerable",
+    ];
+    let named_object = match ty {
+        Type::Reference(reference) => reference.id.split('\u{0}').next_back() == Some("Object"),
+        Type::Object(object) => object.alias_name.as_deref() == Some("Object"),
+        _ => false,
+    };
+    matches!(ty.peeled(), Type::Object(object)
+        if OBJECT_MEMBERS.iter().all(|member| object.properties.contains_key(*member))
+            && (named_object || object.properties.len() == OBJECT_MEMBERS.len()))
 }
 
 fn object_assignable(from_obj: &ObjectType, to_obj: &ObjectType, from: &Type, to: &Type) -> bool {
@@ -2265,6 +2641,8 @@ pub fn tuple_target_missing_property(source: &Type, elements: &[Type]) -> Option
 /// index at all. Only an object or type literal has that implicit signature
 /// (`isObjectTypeWithInferableIndex`): an interface, a class instance or a
 /// callable object answers with a signature it declares, or not at all.
+/// A type variable of the body being checked is a type here like anywhere
+/// else; only what surge could not model relates unconditionally.
 fn index_signatures_related(source: &ObjectType, target: &ObjectType) -> bool {
     if target.synthetic_open_index || source.synthetic_open_index {
         return true;
@@ -2272,11 +2650,11 @@ fn index_signatures_related(source: &ObjectType, target: &ObjectType) -> bool {
     let target_has_string_index = target.string_index_type.is_some();
     let exempt = |value: &Type| target_has_string_index && matches!(value, Type::Any);
     let related = |value: &Type, numeric_only: bool| {
-        if exempt(value) || value.is_unknown() {
+        if exempt(value) || value.is_unmodelled() {
             return true;
         }
         if let Some(source_index) = source.applicable_index_type(numeric_only) {
-            return source_index.is_unknown() || is_assignable_to(source_index, value);
+            return source_index.is_unmodelled() || is_assignable_to(source_index, value);
         }
         if source.without_inferable_index
             || source.call_signature().is_some()
@@ -2288,7 +2666,7 @@ fn index_signatures_related(source: &ObjectType, target: &ObjectType) -> bool {
         // covers keys a string signature answers (`membersRelatedToIndexer`).
         if !numeric_only
             && let Some(number_index) = source.number_index_type.as_deref()
-            && !number_index.is_unknown()
+            && !number_index.is_unmodelled()
             && !is_assignable_to(number_index, value)
         {
             return false;
@@ -2297,7 +2675,7 @@ fn index_signatures_related(source: &ObjectType, target: &ObjectType) -> bool {
             .properties
             .iter()
             .filter(|(name, _)| !numeric_only || crate::object::is_numeric_key(name.as_ref()))
-            .all(|(_, property)| property.ty.is_unknown() || is_assignable_to(&property.ty, value))
+            .all(|(_, property)| property.ty.is_unmodelled() || is_assignable_to(&property.ty, value))
     };
     target
         .string_index_type
@@ -2324,20 +2702,6 @@ fn signatures_of_kind_related(source: Option<&FunctionType>, target: Option<&Fun
     let Some(source) = source else {
         return false;
     };
-    // Two shapes are left unjudged, as they were before signatures were
-    // related at all. A generic signature on either side is instantiated by
-    // tsc with inferences drawn from the *return* type as well, which surge's
-    // in-context instantiation does not model. And an overload group surge
-    // folded into one signature stands at the degradation sentinel wherever
-    // its members disagreed, which says nothing about any one of them.
-    let unmodelled = |signature: &FunctionType| {
-        signature.type_parameter_head().is_some()
-            || signature.parameters().iter().any(|parameter| matches!(parameter, Type::Unknown))
-            || matches!(signature.return_type(), Type::Unknown)
-    };
-    if unmodelled(source) || unmodelled(target) {
-        return true;
-    }
     let overloads = |signature: &FunctionType| -> Vec<FunctionType> {
         match signature.overloads() {
             Some(members) if !members.is_empty() => members.to_vec(),
@@ -2345,10 +2709,26 @@ fn signatures_of_kind_related(source: Option<&FunctionType>, target: Option<&Fun
         }
     };
     let sources = overloads(source);
-    overloads(target).iter().all(|target_signature| {
+    let targets = overloads(target);
+    // A member surge could not type says nothing about the group.
+    let unmodelled = |signature: &FunctionType| {
+        signature.parameters().iter().any(|parameter| matches!(parameter, Type::Unknown))
+            || matches!(signature.return_type(), Type::Unknown)
+    };
+    if sources.iter().any(unmodelled) || targets.iter().any(unmodelled) {
+        return true;
+    }
+    // relater.go `signaturesRelatedTo`: a single pair instantiates a generic
+    // source in the target's context; with an overload group on either side
+    // every signature's type parameters are erased, and each target member
+    // needs some source member.
+    if let ([source_signature], [target_signature]) = (sources.as_slice(), targets.as_slice()) {
+        return is_function_assignable_to(source_signature, target_signature);
+    }
+    targets.iter().all(|target_signature| {
         sources
             .iter()
-            .any(|source_signature| is_function_assignable_to(source_signature, target_signature))
+            .any(|source_signature| is_signature_assignable_to(source_signature, target_signature, false))
     })
 }
 
@@ -2510,7 +2890,9 @@ pub fn object_assignability_failure(
             .or_else(|| object_prototype_member(property_name.as_ref()));
 
         let Some(source_property_ty) = source_property_ty.as_ref() else {
-            if target_property.is_optional() {
+            // `getUnmatchedProperties` passes over a static private name the
+            // source lacks.
+            if target_property.is_optional() || crate::private_name::is_static(property_name) {
                 continue;
             }
 

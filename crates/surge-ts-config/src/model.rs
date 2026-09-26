@@ -42,6 +42,10 @@ pub struct NormalizedCompilerOptions {
     pub composite: bool,
     /// `compilerOptions.isolatedDeclarations`.
     pub isolated_declarations: bool,
+    /// `compilerOptions.isolatedModules`.
+    pub isolated_modules: bool,
+    /// `compilerOptions.verbatimModuleSyntax`.
+    pub verbatim_module_syntax: bool,
     /// `compilerOptions.noPropertyAccessFromIndexSignature`. Independent of `strict`; defaults off.
     pub no_property_access_from_index_signature: bool,
     /// `compilerOptions.noUncheckedIndexedAccess`. Independent of `strict`; defaults off.
@@ -154,6 +158,8 @@ impl Default for NormalizedCompilerOptions {
             declaration: false,
             composite: false,
             isolated_declarations: false,
+            isolated_modules: false,
+            verbatim_module_syntax: false,
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
             allow_importing_ts_extensions: false,

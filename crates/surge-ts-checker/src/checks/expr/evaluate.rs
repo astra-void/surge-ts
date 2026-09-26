@@ -607,6 +607,22 @@ fn evaluate_expression_unsettled(
                 other => other,
             }
         }
+        ParsedExpression::ImportCall {
+            specifier,
+            specifier_span,
+            options,
+            options_span,
+            span,
+        } => evaluate_import_call(
+            specifier,
+            specifier_span.or(fallback_span),
+            options
+                .as_deref()
+                .map(|options| (options, options_span.or(fallback_span))),
+            span.or(fallback_span),
+            symbols,
+            ctx,
+        ),
         ParsedExpression::Conditional {
             condition,
             condition_span,
@@ -769,6 +785,7 @@ fn evaluate_expression_unsettled(
                 false,
                 tag.name_span,
                 fallback_span,
+                symbols,
                 ctx,
             );
             crate::checks::jsx::check_jsx_element(
@@ -785,7 +802,7 @@ fn evaluate_expression_unsettled(
         }
         ParsedExpression::JsxFragment { children, span } => {
             crate::checks::jsx::check_jsx_preconditions(*span, fallback_span, ctx);
-            crate::checks::jsx::check_jsx_factory_reference(true, *span, fallback_span, ctx);
+            crate::checks::jsx::check_jsx_factory_reference(true, *span, fallback_span, symbols, ctx);
             for child in children {
                 evaluate_jsx_child(child, fallback_span, symbols, ctx);
             }
@@ -834,6 +851,15 @@ fn evaluate_expression_unsettled(
                     ctx,
                 );
                 return InferredExpression::Known(Type::Undefined);
+            }
+            if let InferredExpression::Known(index_type) = infer_expression(index, symbols, ctx)
+                && super::index_access::report_unusable_index_type(
+                    &index_type,
+                    index_span.or(*object_span).or(fallback_span),
+                    ctx,
+                )
+            {
+                return InferredExpression::Unknown;
             }
             let inferred_expression = infer_expression(expression, symbols, ctx);
             report_inferred_expression(
@@ -1371,6 +1397,57 @@ fn evaluate_yield_expression(
     InferredExpression::Known(Type::Any)
 }
 
+/// tsc's `checkImportCallExpression`: the specifier must be a `string` — a
+/// bare `null` or `undefined` never is (TS7036) — the options an
+/// `ImportCallOptions`, and the call needs the global `Promise` constructor
+/// (`createPromiseReturnType`, TS2712). The call's own type is not modelled.
+fn evaluate_import_call(
+    specifier: &ParsedExpression,
+    specifier_span: Option<SyntaxTextSpan>,
+    options: Option<(&ParsedExpression, Option<SyntaxTextSpan>)>,
+    span: Option<SyntaxTextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let specifier_result = evaluate_expression(specifier, specifier_span, symbols, ctx);
+    let options_result = options.map(|(options, options_span)| {
+        (evaluate_expression(options, options_span, symbols, ctx), options_span)
+    });
+    if let InferredExpression::Known(specifier_type) = &specifier_result
+        && (matches!(specifier_type, Type::Undefined | Type::Null)
+            || !(specifier_type.is_unmodelled()
+                || crate::checks::assign::type_contains_unknown(specifier_type)
+                || is_assignable_to(specifier_type, &Type::String)))
+    {
+        let diagnostic = Diagnostic::ts7036(specifier_type.name(), ctx.file_name.clone());
+        ctx.push(diagnostic_with_syntax_span(diagnostic, specifier_span));
+    }
+    if let Some((InferredExpression::Known(options_type), options_span)) = &options_result
+        && ctx.lookup_type_declaration("ImportCallOptions").is_some()
+    {
+        let import_call_options = crate::infer::map_parsed_type(
+            ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+                name: "ImportCallOptions".to_string(),
+                span: None,
+                type_arguments: Vec::new(),
+            })),
+            ctx,
+        );
+        let target = union_type(vec![import_call_options, Type::Undefined]);
+        crate::checks::var::report_initializer_mismatch(options_type, &target, *options_span, ctx);
+    }
+    // `getGlobalPromiseConstructorSymbol`: the lib declares the `Promise`
+    // interface from ES5 on, and its constructor from ES2015.
+    if ctx.lookup_type_declaration("Promise").is_some()
+        && symbols.get("Promise").is_none()
+        && ctx.ambient_global_symbols.get("Promise").is_none()
+    {
+        let diagnostic = Diagnostic::ts2712(ctx.file_name.clone());
+        ctx.push(diagnostic_with_syntax_span(diagnostic, span));
+    }
+    InferredExpression::Unknown
+}
+
 /// The element type a `yield*` operand iterates: an array's or tuple's
 /// elements, or the yield type argument of a lib iterable or generator.
 fn iterated_element_type(iterable: &Type) -> Option<Type> {
@@ -1538,7 +1615,9 @@ fn evaluate_satisfies_expression(
                 top_level_failed = true;
                 let actual_type_name = actual_type.name();
                 let target_type_name = resolved_target_type.name();
-                let diagnostic = surge_ts_diagnostics::Diagnostic::ts1360(
+                let diagnostic = crate::checks::expr::satisfies_mismatch_diagnostic(
+                    actual_type,
+                    &resolved_target_type,
                     &actual_type_name,
                     &target_type_name,
                     ctx.file_name.clone(),
@@ -1685,9 +1764,13 @@ fn evaluate_type_assertion(
             // `issue as errors.$ZodStringFormatIssues`) that produced 54 false
             // positives against a project that was otherwise diagnostic-exact.
             // Between primitives and their literals no expansion is involved.
+            // A `null` or `undefined` operand has no structure to expand, so
+            // any fully modelled target is judged.
             if let InferredExpression::Known(source_type) = &source
-                && is_primitive_assertion_side(source_type)
-                && is_primitive_assertion_side(&resolved_type)
+                && ((is_primitive_assertion_side(source_type) && is_primitive_assertion_side(&resolved_type))
+                    || (surge_ts_types::strict_null_checks()
+                        && matches!(source_type, Type::Null | Type::Undefined)
+                        && !crate::checks::function::type_contains_degradation(&resolved_type)))
             {
                 super::assertion::check_assertion_overlap(&source, &resolved_type, fallback_span, ctx);
             }
@@ -1752,6 +1835,16 @@ fn evaluate_property_access(
     // types the access but reports none of that.
     let receiver = evaluate_expression(object, object_span.or(fallback_span), symbols, ctx);
     check_property_receiver(object, &receiver, *object_span, fallback_span, symbols, ctx);
+    if !*is_bracketed && surge_ts_types::private_name::is_private_name_key(property_name) {
+        let Some(private_receiver) = super::PrivateNameReceiver::of(&receiver) else {
+            return InferredExpression::Unknown;
+        };
+        if let Some(ty) =
+            super::check_private_name_access(private_receiver, property_name, *property_span, symbols, ctx)
+        {
+            return InferredExpression::Known(ty);
+        }
+    }
     if !*is_bracketed && matches!(receiver, InferredExpression::Known(Type::GenuineUnknown)) {
         if !surge_ts_types::strict_null_checks() {
             report_property_of_unknown(property_name, "unknown", *property_span, ctx);

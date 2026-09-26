@@ -372,6 +372,16 @@ impl ObjectType {
             return Some(property.ty.clone());
         }
 
+        // No index signature and no `Object` member answers a private name
+        // (tsc reads it with `getPropertyOfType` alone). Surge's own openness
+        // marker still does: it stands for members it could not enumerate.
+        if crate::private_name::is_private_name_key(name) {
+            return self
+                .synthetic_open_index
+                .then(|| self.string_index_type.as_deref().cloned())
+                .flatten();
+        }
+
         // A numeric member name is answered by the numeric index signature
         // first — `record[1]` on `{ [k: number]: T }` — and by the string one
         // otherwise, exactly as `findApplicableIndexInfo` orders them.
@@ -390,14 +400,16 @@ impl ObjectType {
 
     pub fn contains_property(&self, name: &str) -> bool {
         self.properties.contains_key(name)
-            || self.applicable_index_type(is_numeric_key(name)).is_some()
+            || (!crate::private_name::is_private_name_key(name)
+                && self.applicable_index_type(is_numeric_key(name)).is_some())
     }
 
     /// Like [`Self::contains_property`], but counts only members the SOURCE
     /// declared — a checker-injected openness index does not make every name a
     /// known property. See [`Self::declares_string_index_access`].
     pub fn declares_property(&self, name: &str) -> bool {
-        self.properties.contains_key(name) || self.declares_string_index_access()
+        self.properties.contains_key(name)
+            || (!crate::private_name::is_private_name_key(name) && self.declares_string_index_access())
     }
 
     pub fn allows_string_index_access(&self) -> bool {

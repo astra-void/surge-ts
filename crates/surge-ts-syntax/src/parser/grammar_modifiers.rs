@@ -557,4 +557,280 @@ pub(crate) fn collect_declaration_file_diagnostics(
             name: None,
         });
     }
+    report_statements_in_ambient_context(&program.body, program.source_text, out);
+    report_ambient_declarations(&program.body, None, program.source_text, out);
+}
+
+/// What tsc's checker reports on a declaration file's declarations, every
+/// one of which is ambient: a `declare` modifier on a declaration in a
+/// namespace or module body (TS1038, `checkGrammarModifiers`), a namespace
+/// declared with the `module` keyword (TS1540, `checkModuleDeclaration`), a
+/// function declaration's body (TS1183, `checkBlock`), an export assignment
+/// of anything but an entity name (TS2714, `checkExportAssignment`), and an
+/// untyped variable (TS7005). `module_block` is whether `statements` are a
+/// module body, and whether a namespace's.
+fn report_ambient_declarations(
+    statements: &[Statement<'_>],
+    module_block: Option<bool>,
+    text: &str,
+    out: &mut Vec<ParsedGrammarDiagnostic>,
+) {
+    use oxc_ast::ast::{Declaration, ExportDefaultDeclarationKind};
+    // A namespace body takes no export assignment (TS1063, TS1319), and
+    // `checkExportAssignment` stops there.
+    let exports_assignable = module_block != Some(true);
+    for statement in statements {
+        if let Statement::TSExportAssignment(assignment) = statement {
+            if exports_assignable {
+                report_ambient_export_assignment(&assignment.expression, out);
+            }
+            continue;
+        }
+        if let Statement::ExportDefaultDeclaration(export) = statement {
+            match &export.declaration {
+                ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                    report_ambient_function_body(function, out);
+                }
+                ExportDefaultDeclarationKind::ClassDeclaration(_)
+                | ExportDefaultDeclarationKind::TSInterfaceDeclaration(_) => {}
+                other => {
+                    if exports_assignable && let Some(expression) = other.as_expression() {
+                        report_ambient_export_assignment(expression, out);
+                    }
+                }
+            }
+            continue;
+        }
+        let declaration = match statement {
+            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            other => other.as_declaration(),
+        };
+        let Some(declaration) = declaration else { continue };
+        if let Some(namespace) = module_block {
+            report_redundant_declare(statement, declaration, namespace, text, out);
+        }
+        match declaration {
+            Declaration::VariableDeclaration(variable) => report_ambient_implicit_any(variable, out),
+            Declaration::FunctionDeclaration(function) => report_ambient_function_body(function, out),
+            Declaration::TSModuleDeclaration(module) => report_ambient_module(module, text, out),
+            Declaration::TSGlobalDeclaration(global) => {
+                report_ambient_declarations(&global.body.body, Some(false), text, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn report_ambient_module(
+    module: &oxc_ast::ast::TSModuleDeclaration<'_>,
+    text: &str,
+    out: &mut Vec<ParsedGrammarDiagnostic>,
+) {
+    use oxc_ast::ast::{TSModuleDeclarationBody, TSModuleDeclarationKind, TSModuleDeclarationName};
+    let namespace = match &module.id {
+        TSModuleDeclarationName::Identifier(name) => {
+            if module.kind == TSModuleDeclarationKind::Module {
+                out.push(ParsedGrammarDiagnostic {
+                    kind: Kind::Ts(1540),
+                    span: text_span_from_oxc_span(name.span),
+                    name: None,
+                });
+            }
+            true
+        }
+        TSModuleDeclarationName::StringLiteral(_) => false,
+    };
+    match &module.body {
+        Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
+            report_ambient_declarations(&block.body, Some(namespace), text, out);
+        }
+        Some(TSModuleDeclarationBody::TSModuleDeclaration(nested)) => report_ambient_module(nested, text, out),
+        None => {}
+    }
+}
+
+/// TS1038 where `checkGrammarModifiers` reaches it on a declaration in a
+/// module body: the first modifier error it reports there.
+fn report_redundant_declare(
+    statement: &Statement<'_>,
+    declaration: &oxc_ast::ast::Declaration<'_>,
+    namespace: bool,
+    text: &str,
+    out: &mut Vec<ParsedGrammarDiagnostic>,
+) {
+    use oxc_ast::ast::Declaration;
+    let node = match declaration {
+        Declaration::VariableDeclaration(_) => NodeKind::VariableStatement,
+        Declaration::FunctionDeclaration(_) => NodeKind::FunctionDeclaration,
+        Declaration::ClassDeclaration(_) => NodeKind::ClassDeclaration,
+        Declaration::TSTypeAliasDeclaration(_) => NodeKind::TypeAliasDeclaration,
+        Declaration::TSInterfaceDeclaration(_) => NodeKind::InterfaceDeclaration,
+        Declaration::TSEnumDeclaration(_) => NodeKind::EnumDeclaration,
+        Declaration::TSModuleDeclaration(_) | Declaration::TSGlobalDeclaration(_) => NodeKind::ModuleDeclaration,
+        Declaration::TSImportEqualsDeclaration(_) => return,
+    };
+    let Some(modifiers) =
+        scan_modifiers(text, statement.span().start, declaration.span().end, node != NodeKind::VariableStatement)
+    else {
+        return;
+    };
+    let context = ModifierContext {
+        node,
+        parent: Parent::ModuleBlock { namespace },
+        parent_ambient: true,
+        name_is_private: false,
+        type_parameter_owner: TypeParameterOwner::Other,
+    };
+    if let Some(error) = first_modifier_error(&modifiers, &context)
+        && error.code == 1038
+    {
+        out.push(ParsedGrammarDiagnostic {
+            kind: Kind::Ts(1038),
+            span: text_span_from_oxc_span(error.span),
+            name: None,
+        });
+    }
+}
+
+/// `widenTypeForVariableLikeDeclaration`: an ambient variable written with
+/// neither a type nor an initializer is an implicit `any` (TS7005, reported
+/// under `noImplicitAny`).
+fn report_ambient_implicit_any(
+    declaration: &oxc_ast::ast::VariableDeclaration<'_>,
+    out: &mut Vec<ParsedGrammarDiagnostic>,
+) {
+    for declarator in &declaration.declarations {
+        if declarator.init.is_none()
+            && declarator.type_annotation.is_none()
+            && let oxc_ast::ast::BindingPattern::BindingIdentifier(identifier) = &declarator.id
+        {
+            out.push(ParsedGrammarDiagnostic {
+                kind: Kind::Ts(7005),
+                span: text_span_from_oxc_span(identifier.span),
+                name: Some(format!("{}\0any", identifier.name.as_str())),
+            });
+        }
+    }
+}
+
+/// TS2714 on an export assignment's expression that is not an entity name.
+fn report_ambient_export_assignment(expression: &oxc_ast::ast::Expression<'_>, out: &mut Vec<ParsedGrammarDiagnostic>) {
+    if !is_entity_name_expression(expression) {
+        out.push(ParsedGrammarDiagnostic {
+            kind: Kind::Ts(2714),
+            span: text_span_from_oxc_span(expression.span()),
+            name: None,
+        });
+    }
+}
+
+/// `ast.IsEntityNameExpression`: an identifier, or a property access on one.
+fn is_entity_name_expression(expression: &oxc_ast::ast::Expression<'_>) -> bool {
+    use oxc_ast::ast::Expression;
+    match expression {
+        Expression::Identifier(_) => true,
+        Expression::StaticMemberExpression(member) => is_entity_name_expression(&member.object),
+        _ => false,
+    }
+}
+
+/// `checkBlock`'s TS1183 on a function declaration's body, at its `{`. oxc
+/// reports it itself on a `declare function`.
+fn report_ambient_function_body(function: &oxc_ast::ast::Function<'_>, out: &mut Vec<ParsedGrammarDiagnostic>) {
+    if function.declare {
+        return;
+    }
+    if let Some(body) = &function.body {
+        out.push(ParsedGrammarDiagnostic {
+            kind: Kind::Ts(1183),
+            span: text_span_from_oxc_span(Span::new(body.span.start, body.span.start + 1)),
+            name: None,
+        });
+    }
+}
+
+/// tsc's `checkGrammarStatementInAmbientContext` over a declaration file,
+/// every statement of which is ambient: TS1036 on the first token of the first
+/// statement that is not a declaration in each block — the file, a namespace
+/// body, or a block, wherever it is nested.
+fn report_statements_in_ambient_context(
+    statements: &[Statement<'_>],
+    text: &str,
+    out: &mut Vec<ParsedGrammarDiagnostic>,
+) {
+    let offending = statements.iter().find(|statement| {
+        matches!(
+            statement,
+            Statement::BlockStatement(_)
+                | Statement::IfStatement(_)
+                | Statement::DoWhileStatement(_)
+                | Statement::WhileStatement(_)
+                | Statement::ForStatement(_)
+                | Statement::ForInStatement(_)
+                | Statement::ForOfStatement(_)
+                | Statement::BreakStatement(_)
+                | Statement::ContinueStatement(_)
+                | Statement::ReturnStatement(_)
+                | Statement::WithStatement(_)
+                | Statement::SwitchStatement(_)
+                | Statement::LabeledStatement(_)
+                | Statement::ThrowStatement(_)
+                | Statement::TryStatement(_)
+                | Statement::ExpressionStatement(_)
+                | Statement::EmptyStatement(_)
+                | Statement::DebuggerStatement(_)
+        )
+    });
+    if let Some(statement) = offending {
+        let start = statement.span().start;
+        let end = super::grammar_context::first_token_end(text, start as usize) as u32;
+        out.push(ParsedGrammarDiagnostic {
+            kind: Kind::Ts(1036),
+            span: text_span_from_oxc_span(Span::new(start, end)),
+            name: None,
+        });
+    }
+    for statement in statements {
+        visit_nested_blocks(statement, text, out);
+    }
+}
+
+fn visit_nested_blocks(statement: &Statement<'_>, text: &str, out: &mut Vec<ParsedGrammarDiagnostic>) {
+    use oxc_ast::ast::{Declaration, TSModuleDeclarationBody};
+    let module_block = |declaration: &oxc_ast::ast::TSModuleDeclaration<'_>, out: &mut Vec<ParsedGrammarDiagnostic>| {
+        if let Some(TSModuleDeclarationBody::TSModuleBlock(block)) = &declaration.body {
+            report_statements_in_ambient_context(&block.body, text, out);
+        }
+    };
+    match statement {
+        Statement::BlockStatement(block) => report_statements_in_ambient_context(&block.body, text, out),
+        Statement::TSModuleDeclaration(declaration) => module_block(declaration, out),
+        Statement::ExportNamedDeclaration(export) => {
+            if let Some(Declaration::TSModuleDeclaration(declaration)) = &export.declaration {
+                module_block(declaration, out);
+            }
+        }
+        Statement::IfStatement(statement) => {
+            visit_nested_blocks(&statement.consequent, text, out);
+            if let Some(alternate) = &statement.alternate {
+                visit_nested_blocks(alternate, text, out);
+            }
+        }
+        Statement::DoWhileStatement(statement) => visit_nested_blocks(&statement.body, text, out),
+        Statement::WhileStatement(statement) => visit_nested_blocks(&statement.body, text, out),
+        Statement::ForStatement(statement) => visit_nested_blocks(&statement.body, text, out),
+        Statement::ForInStatement(statement) => visit_nested_blocks(&statement.body, text, out),
+        Statement::ForOfStatement(statement) => visit_nested_blocks(&statement.body, text, out),
+        Statement::LabeledStatement(statement) => visit_nested_blocks(&statement.body, text, out),
+        Statement::TryStatement(statement) => {
+            report_statements_in_ambient_context(&statement.block.body, text, out);
+            if let Some(handler) = &statement.handler {
+                report_statements_in_ambient_context(&handler.body.body, text, out);
+            }
+            if let Some(finalizer) = &statement.finalizer {
+                report_statements_in_ambient_context(&finalizer.body, text, out);
+            }
+        }
+        _ => {}
+    }
 }

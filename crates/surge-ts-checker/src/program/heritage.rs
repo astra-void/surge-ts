@@ -210,6 +210,68 @@ fn report_incompatible_heritage_members_in_scope(
     true
 }
 
+/// The index half of tsc's `checkTypeAssignableTo(typeWithThis, baseWithThis)`
+/// for a class declaring an index signature of its own (an inherited one is
+/// the base's and relates): the broad diagnostic `report` builds from the two
+/// displays, at the class name. Returns whether it reported.
+pub(crate) fn report_incompatible_index_signatures(
+    class: &ParsedClassDeclaration,
+    base: &ParsedNamedType,
+    report: impl FnOnce(&str, &str, String) -> Diagnostic,
+    ctx: &mut CheckerContext,
+) -> bool {
+    if class.is_declare || (class.string_index_type.is_none() && class.number_index_type.is_none()) {
+        return false;
+    }
+    let _type_variables = crate::checks::function::enter_body_type_variables(&class.type_parameters, ctx);
+    let failed = crate::checks::function::with_type_parameter_scope(&class.type_parameters, ctx, |ctx| {
+        let own_arguments: Vec<ParsedType> =
+            class.type_parameters.iter().map(|parameter| named_type(&parameter.name, None)).collect();
+        let checkpoint = ctx.diagnostics().len();
+        let own_type = map_parsed_type(named_type_with(&class.name, class.name_span, own_arguments), ctx);
+        let base_type = crate::program::with_dts_expansion_reason(
+            crate::program::DtsExpansionReason::InterfaceHeritageResolution,
+            || map_parsed_type(named_type_with(&base.name, None, base.type_arguments.clone()), ctx),
+        );
+        ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+        let (Type::Object(own), Type::Object(base_object)) = (own_type.peeled(), base_type.peeled()) else {
+            return None;
+        };
+        if own.synthetic_open_index || base_object.synthetic_open_index {
+            return None;
+        }
+        let modelled = |ty: &Type| !crate::checks::function::type_contains_degradation(ty);
+        let unrelated = |own_index: Option<&Type>, base_index: Option<&Type>| match (own_index, base_index) {
+            (Some(own_index), Some(base_index)) => {
+                modelled(own_index) && modelled(base_index) && !is_assignable_to(own_index, base_index)
+            }
+            _ => false,
+        };
+        let own_numeric = own.number_index_type.as_deref().or(own.string_index_type.as_deref());
+        let incompatible = unrelated(own.string_index_type.as_deref(), base_object.string_index_type.as_deref())
+            || unrelated(own_numeric, base_object.number_index_type.as_deref());
+        incompatible.then(|| base_type.name())
+    });
+    let Some(base_display) = failed else {
+        return false;
+    };
+    let base_display = if base.type_arguments.is_empty() && ctx.lookup_type_declaration(&base.name).is_some() {
+        base.name.clone()
+    } else {
+        base_display
+    };
+    let own_display = type_display(
+        &class.name,
+        &class.type_parameters.iter().map(|parameter| parameter.name.clone()).collect::<Vec<_>>(),
+    );
+    let diagnostic = report(&own_display, &base_display, ctx.file_name.clone());
+    ctx.push(match class.name_span {
+        Some(span) => diagnostic.with_span(convert_span(span)),
+        None => diagnostic,
+    });
+    true
+}
+
 /// tsc's base-type circularity: a class whose `extends` chain leads back to
 /// itself cannot resolve its base constructor (`getBaseConstructorTypeOfClass`,
 /// TS2506), and an interface's base types cannot resolve at all
@@ -326,7 +388,10 @@ fn check_interface_heritage_in_scope(interface: &ParsedInterfaceDeclaration, ctx
         return;
     }
     for (display, base_type) in &bases {
-        if incompatible_members(&members, &own_type, base_type).is_empty() {
+        if incompatible_members(&members, &own_type, base_type).is_empty()
+            && !redeclares_restricted_member(&members, base_type)
+            && !declared_index_signatures_incompatible(interface, &own_type, base_type)
+        {
             continue;
         }
         let diagnostic = Diagnostic::ts2430(&own_display, display, ctx.file_name.clone());
@@ -335,6 +400,51 @@ fn check_interface_heritage_in_scope(interface: &ParsedInterfaceDeclaration, ctx
             None => diagnostic,
         });
     }
+}
+
+/// `propertyRelatedTo`'s modifier rules for a member the interface redeclares
+/// over a class it extends: a private base member relates only to its own
+/// declaration, and a protected one only to a member of a derived class,
+/// which an interface member never is.
+fn redeclares_restricted_member(members: &[DeclaredMember], base_type: &Type) -> bool {
+    let Type::Object(base) = base_type.peeled() else {
+        return false;
+    };
+    members.iter().any(|member| {
+        base.properties
+            .get(member.name.as_str())
+            .is_some_and(|property| property.restriction.is_some())
+    })
+}
+
+/// The index half of the interface's `checkTypeAssignableTo` against a base
+/// (`indexSignaturesRelatedTo`): a numeric target index reads the source's
+/// number index, else its string one. Only an index the interface declares
+/// can fail — an inherited one is the base's own.
+fn declared_index_signatures_incompatible(
+    interface: &ParsedInterfaceDeclaration,
+    own_type: &Type,
+    base_type: &Type,
+) -> bool {
+    if interface.string_index_type.is_none() && interface.number_index_type.is_none() {
+        return false;
+    }
+    let (Type::Object(own), Type::Object(base)) = (own_type.peeled(), base_type.peeled()) else {
+        return false;
+    };
+    if own.synthetic_open_index || base.synthetic_open_index {
+        return false;
+    }
+    let modelled = |ty: &Type| !crate::checks::function::type_contains_degradation(ty);
+    let unrelated = |own_index: Option<&Type>, base_index: Option<&Type>| match (own_index, base_index) {
+        (Some(own_index), Some(base_index)) => {
+            modelled(own_index) && modelled(base_index) && !is_assignable_to(own_index, base_index)
+        }
+        _ => false,
+    };
+    let own_numeric = own.number_index_type.as_deref().or(own.string_index_type.as_deref());
+    unrelated(own.string_index_type.as_deref(), base.string_index_type.as_deref())
+        || unrelated(own_numeric, base.number_index_type.as_deref())
 }
 
 /// `checkInheritedPropertiesAreIdentical`: a member the interface does not

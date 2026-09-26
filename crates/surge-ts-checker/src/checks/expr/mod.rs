@@ -12,6 +12,7 @@ mod inferred;
 mod lib_features;
 mod operand_types;
 mod operand_writes;
+mod private_names;
 mod unresolved;
 
 pub(crate) use accessibility::{
@@ -24,7 +25,7 @@ pub(crate) use evaluate::*;
 pub(crate) use guarded_unknown::downgrade_guarded_genuine_unknown;
 use guarded_unknown::downgrade_predicate_guarded_genuine_unknown;
 use index_access::*;
-pub(crate) use index_access::object_element_read;
+pub(crate) use index_access::{object_element_read, report_unusable_index_type};
 pub(crate) use inferred::*;
 pub(crate) use lib_features::{lib_feature_of_missing_member, suggested_lib_for_nonexistent_name};
 pub(crate) use operand_types::{
@@ -35,10 +36,11 @@ pub(crate) use operand_types::{
 pub(crate) use operand_writes::{
     check_delete_operand, check_update_operand, report_readonly_member_write, update_result_type,
 };
+pub(crate) use private_names::{PrivateNameReceiver, check_private_name_access};
 pub(crate) use unresolved::{
     EnclosingClassMembers, UnresolvedNameSite, cannot_find_name_message,
-    export_assignment_target_is_exempt, is_es2015_or_later_constructor_name, is_primitive_type_name,
-    report_unresolved_value_name, unresolved_type_query_diagnostic,
+    export_assignment_target_is_exempt, failed_value_name_diagnostic, is_es2015_or_later_constructor_name,
+    is_primitive_type_name, report_unresolved_value_name, resolves_value_name, unresolved_type_query_diagnostic,
 };
 
 use std::time::Instant;
@@ -130,10 +132,29 @@ pub(crate) fn argument_not_assignable_diagnostic(
     if readonly_to_mutable_mismatch(source, target) {
         return surge_ts_diagnostics::Diagnostic::ts4104(source_name, target_name, file_name);
     }
+    if surge_ts_types::has_no_common_properties(source, target) {
+        return weak_type_diagnostic(source, target, source_name, target_name, file_name);
+    }
     missing_properties_report(source, target, source_name, target_name, &file_name)
         .unwrap_or_else(|| {
             surge_ts_diagnostics::Diagnostic::ts2345(source_name, target_name, file_name)
         })
+}
+
+/// A weak-type failure: TS2559, or TS2560 when calling the source would give
+/// what the target accepts.
+fn weak_type_diagnostic(
+    source: &Type,
+    target: &Type,
+    source_name: &str,
+    target_name: &str,
+    file_name: String,
+) -> surge_ts_diagnostics::Diagnostic {
+    if surge_ts_types::weak_type_source_returns_target(source, target) {
+        surge_ts_diagnostics::Diagnostic::ts2560(source_name, target_name, file_name)
+    } else {
+        surge_ts_diagnostics::Diagnostic::ts2559(source_name, target_name, file_name)
+    }
 }
 
 /// tsc's `reportRelationError` suppresses its own head (TS2322, TS2345) when
@@ -256,12 +277,30 @@ fn missing_required_properties(source: &Type, target: &Type) -> Option<Vec<Strin
         Type::Array(_) | Type::Tuple(_) => {}
         _ => return None,
     }
-    let missing: Vec<String> = target_object
+    // `getUnmatchedProperties` passes over a static private name.
+    let missing: Vec<&str> = target_object
         .required_properties()
-        .filter(|(name, _)| !has_property(name))
-        .map(|(name, _)| name.to_string())
+        .map(|(name, _)| name.as_ref())
+        .filter(|name| !surge_ts_types::private_name::is_static(name) && !has_property(name))
         .collect();
-    (!missing.is_empty()).then_some(missing)
+    let first = missing.first()?;
+    // `reportUnmatchedProperty`: a private name the source declares under the
+    // same spelling is another class's member, reported beneath the head.
+    if surge_ts_types::private_name::declaring_class(first).is_some()
+        && let Type::Object(source_object) = &source
+        && source_object.properties.keys().any(|name| {
+            surge_ts_types::private_name::is_private_name_key(name)
+                && surge_ts_types::private_name::display(name) == surge_ts_types::private_name::display(first)
+        })
+    {
+        return None;
+    }
+    Some(
+        missing
+            .into_iter()
+            .map(|name| surge_ts_types::private_name::display(name).to_string())
+            .collect(),
+    )
 }
 
 /// tsc names *every* missing required property, and picks the code by how many
@@ -278,15 +317,27 @@ pub(crate) fn missing_properties_diagnostic(
     const LISTED_WHEN_TRUNCATED: usize = 4;
     const MAX_LISTED: usize = 5;
 
+    let listed = |names: &[String]| {
+        names
+            .iter()
+            .map(|name| surge_ts_types::private_name::display(name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     match missing.len() {
-        0 | 1 => Diagnostic::ts2741(first_missing, source_type_name, target_type_name, file_name),
+        0 | 1 => Diagnostic::ts2741(
+            surge_ts_types::private_name::display(first_missing),
+            source_type_name,
+            target_type_name,
+            file_name,
+        ),
         count if count <= MAX_LISTED => {
-            Diagnostic::ts2739(source_type_name, target_type_name, missing.join(", "), file_name)
+            Diagnostic::ts2739(source_type_name, target_type_name, listed(missing), file_name)
         }
         count => Diagnostic::ts2740(
             source_type_name,
             target_type_name,
-            missing[..LISTED_WHEN_TRUNCATED].join(", "),
+            listed(&missing[..LISTED_WHEN_TRUNCATED]),
             count - LISTED_WHEN_TRUNCATED,
             file_name,
         ),
@@ -297,6 +348,29 @@ pub(crate) fn missing_properties_diagnostic(
 /// message): TS2322, or TS2820 when a string literal missed a union by a typo
 /// of one of its string-literal members, unless TS4104 replaces it (see
 /// [`readonly_to_mutable_mismatch`]).
+/// A `satisfies` mismatch (TS1360), except where the relation fails on a
+/// missing property: tsgo's `reportRelationError` drops any head message but a
+/// conversion's or an implementation's when the elaboration it would head is a
+/// missing-property one for the same pair, so that elaboration is the error.
+pub(crate) fn satisfies_mismatch_diagnostic(
+    source: &Type,
+    target: &Type,
+    source_name: &str,
+    target_name: &str,
+    file_name: impl Into<String>,
+) -> surge_ts_diagnostics::Diagnostic {
+    let file_name = file_name.into();
+    let relation = type_not_assignable_diagnostic(source, target, source_name, target_name, file_name.clone());
+    if matches!(
+        relation.code,
+        surge_ts_diagnostics::DiagnosticCode::TypeScript(2739 | 2740 | 2741)
+    ) {
+        relation
+    } else {
+        surge_ts_diagnostics::Diagnostic::ts1360(source_name, target_name, file_name)
+    }
+}
+
 pub(crate) fn type_not_assignable_diagnostic(
     source: &Type,
     target: &Type,
@@ -307,6 +381,9 @@ pub(crate) fn type_not_assignable_diagnostic(
     let file_name = file_name.into();
     if readonly_to_mutable_mismatch(source, target) {
         return surge_ts_diagnostics::Diagnostic::ts4104(source_name, target_name, file_name);
+    }
+    if surge_ts_types::has_no_common_properties(source, target) {
+        return weak_type_diagnostic(source, target, source_name, target_name, file_name);
     }
     if let Some(diagnostic) =
         missing_properties_report(source, target, source_name, target_name, &file_name)

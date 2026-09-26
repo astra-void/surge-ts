@@ -21,7 +21,35 @@ use super::types::{parse_type_annotation, parse_type_arguments};
 
 pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDeclaration> {
     let id = class.id.as_ref()?;
+    parse_class_declaration_named(class, id.name.to_string(), text_span_from_oxc_span(id.span))
+}
 
+/// A class under a name it may not write itself: an anonymous class
+/// expression takes its variable's (`getNameOfSymbolAsWritten`) and an
+/// anonymous default export is `default`. `name_span` is where tsc reports
+/// the class, its name or else its first token.
+pub(crate) fn parse_class_declaration_named(
+    class: &Class<'_>,
+    name: String,
+    name_span: crate::TextSpan,
+) -> Option<ParsedClassDeclaration> {
+    // The class's own decorators name private names from outside its body
+    // (`getContainingClassExcludingClassDecorators`); everything else lowers
+    // inside it.
+    let decorators = class_decorators(class);
+    let scope_name = name.clone();
+    super::private_names::with_class(class, &scope_name, || {
+        parse_class_body(class, name, name_span, decorators)
+    })
+}
+
+fn parse_class_body(
+    class: &Class<'_>,
+    name: String,
+    name_span: crate::TextSpan,
+    mut decorators: Vec<ParsedDecorator>,
+) -> Option<ParsedClassDeclaration> {
+    decorators.extend(member_decorators(class));
     let mut members = merge_class_accessors(
         class
             .body
@@ -66,7 +94,7 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
     let (string_index_type, string_index_span) = index_signature_of(false, false).unzip();
     let (number_index_type, number_index_span) = index_signature_of(true, false).unzip();
     let static_string_index_type = index_signature_of(false, true).map(|(ty, _)| ty);
-    let static_number_index_type = index_signature_of(true, true).map(|(ty, _)| ty);
+    let (static_number_index_type, static_number_index_span) = index_signature_of(true, true).unzip();
 
     Some(ParsedClassDeclaration {
         string_index_type,
@@ -75,10 +103,12 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
         number_index_span,
         static_string_index_type,
         static_number_index_type,
+        static_number_index_span,
         is_declare: class.declare,
+        const_binding: false,
         is_abstract: class.r#abstract,
-        name: id.name.to_string(),
-        name_span: Some(text_span_from_oxc_span(id.span)),
+        name,
+        name_span: Some(name_span),
         type_parameters: super::jsdoc::written_or_jsdoc_type_parameters(
             class.type_parameters.as_deref(),
             class.span.start,
@@ -141,26 +171,36 @@ pub(crate) fn parse_class_declaration(class: &Class<'_>) -> Option<ParsedClassDe
                 ))
             })
             .collect(),
-        decorators: class_decorators(class),
+        decorators,
     })
 }
 
+fn lower_decorators(
+    decorators: &[oxc_ast::ast::Decorator<'_>],
+    target: ParsedDecoratorTarget,
+) -> Vec<ParsedDecorator> {
+    decorators
+        .iter()
+        .map(|decorator| ParsedDecorator {
+            expression: parse_expression(&decorator.expression).0,
+            span: Some(text_span_from_oxc_span(decorator.expression.span())),
+            target,
+            needs_parentheses: decorator_needs_parentheses(&decorator.expression),
+            decorator_span: Some(text_span_from_oxc_span(decorator.span)),
+            expression_text: super::spans::source_text_of(decorator.expression.span()),
+            is_parenthesized: matches!(decorator.expression, Expression::ParenthesizedExpression(_)),
+        })
+        .collect()
+}
+
 fn class_decorators(class: &Class<'_>) -> Vec<ParsedDecorator> {
-    let lower = |decorators: &[oxc_ast::ast::Decorator<'_>], target: ParsedDecoratorTarget| {
-        decorators
-            .iter()
-            .map(|decorator| ParsedDecorator {
-                expression: parse_expression(&decorator.expression).0,
-                span: Some(text_span_from_oxc_span(decorator.expression.span())),
-                target,
-                needs_parentheses: decorator_needs_parentheses(&decorator.expression),
-                decorator_span: Some(text_span_from_oxc_span(decorator.span)),
-                expression_text: super::spans::source_text_of(decorator.expression.span()),
-                is_parenthesized: matches!(decorator.expression, Expression::ParenthesizedExpression(_)),
-            })
-            .collect::<Vec<_>>()
-    };
-    let mut out = lower(&class.decorators, ParsedDecoratorTarget::Class);
+    lower_decorators(&class.decorators, ParsedDecoratorTarget::Class)
+}
+
+/// The decorators on the class's members and their parameters, in source
+/// order.
+fn member_decorators(class: &Class<'_>) -> Vec<ParsedDecorator> {
+    let mut out = Vec::new();
     for element in &class.body.body {
         match element {
             ClassElement::MethodDefinition(method) => {
@@ -168,10 +208,10 @@ fn class_decorators(class: &Class<'_>) -> Vec<ParsedDecorator> {
                     has_body: method.value.body.is_some(),
                     private_name: matches!(method.key, PropertyKey::PrivateIdentifier(_)),
                 };
-                out.extend(lower(&method.decorators, target));
+                out.extend(lower_decorators(&method.decorators, target));
                 if method.value.body.is_some() && method.kind != MethodDefinitionKind::Get {
                     for parameter in &method.value.params.items {
-                        out.extend(lower(&parameter.decorators, ParsedDecoratorTarget::Parameter));
+                        out.extend(lower_decorators(&parameter.decorators, ParsedDecoratorTarget::Parameter));
                     }
                 }
             }
@@ -182,7 +222,7 @@ fn class_decorators(class: &Class<'_>) -> Vec<ParsedDecorator> {
                     private_name: matches!(property.key, PropertyKey::PrivateIdentifier(_)),
                     is_auto_accessor: false,
                 };
-                out.extend(lower(&property.decorators, target));
+                out.extend(lower_decorators(&property.decorators, target));
             }
             ClassElement::AccessorProperty(accessor) => {
                 let target = ParsedDecoratorTarget::Property {
@@ -191,7 +231,7 @@ fn class_decorators(class: &Class<'_>) -> Vec<ParsedDecorator> {
                     private_name: matches!(accessor.key, PropertyKey::PrivateIdentifier(_)),
                     is_auto_accessor: true,
                 };
-                out.extend(lower(&accessor.decorators, target));
+                out.extend(lower_decorators(&accessor.decorators, target));
             }
             _ => {}
         }
@@ -463,6 +503,10 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                     } else {
                         match &method.key {
                             PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+                            PropertyKey::PrivateIdentifier(key) => (
+                                super::private_names::member_key(key.name.as_str(), method.r#static),
+                                key.span,
+                            ),
                             // `1: T` and `"a": T` name members as their computed forms do.
                             key => (super::types::computed_key_name(key)?, key.span()),
                         }
@@ -514,6 +558,10 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                     } else {
                         match &method.key {
                             PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+                            PropertyKey::PrivateIdentifier(key) => (
+                                super::private_names::member_key(key.name.as_str(), method.r#static),
+                                key.span,
+                            ),
                             // `1: T` and `"a": T` name members as their computed forms do.
                             key => (super::types::computed_key_name(key)?, key.span()),
                         }
@@ -579,6 +627,10 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             } else {
                 match &property.key {
                     PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+                    PropertyKey::PrivateIdentifier(key) => (
+                        super::private_names::member_key(key.name.as_str(), property.r#static),
+                        key.span,
+                    ),
                     // `1: T` and `"a": T` name members as their computed forms do.
                     key => (super::types::computed_key_name(key)?, key.span()),
                 }
@@ -589,6 +641,10 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 .as_ref()
                 .and_then(|annotation| parse_type_annotation(annotation))
                 .or_else(|| super::jsdoc::declared_type_at(property.span.start).map(|(ty, _)| ty));
+            let initialization_type = property
+                .type_annotation
+                .as_ref()
+                .and_then(|annotation| this_as_object(&annotation.type_annotation));
             let (initializer, initializer_span) = match property.value.as_ref() {
                 Some(value) => {
                     let (expression, span) = parse_expression(value);
@@ -617,6 +673,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                         super::jsdoc::JsDocModifier::Readonly,
                     ),
                 declared_type,
+                initialization_type,
                 initializer,
                 initializer_span,
                 this_assignments: None,
@@ -639,6 +696,10 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             } else {
                 match &property.key {
                     PropertyKey::StaticIdentifier(key) => (key.name.to_string(), key.span),
+                    PropertyKey::PrivateIdentifier(key) => (
+                        super::private_names::member_key(key.name.as_str(), property.r#static),
+                        key.span,
+                    ),
                     key => (super::types::computed_key_name(key)?, key.span()),
                 }
             };
@@ -646,6 +707,10 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 .type_annotation
                 .as_ref()
                 .and_then(|annotation| parse_type_annotation(annotation));
+            let initialization_type = property
+                .type_annotation
+                .as_ref()
+                .and_then(|annotation| this_as_object(&annotation.type_annotation));
             let (initializer, initializer_span) = match property.value.as_ref() {
                 Some(value) => {
                     let (expression, span) = parse_expression(value);
@@ -669,6 +734,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 optional: false,
                 readonly: false,
                 declared_type,
+                initialization_type,
                 initializer,
                 initializer_span,
                 this_assignments: None,
@@ -676,6 +742,56 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
         }
         // Index signatures are not part of this slice.
         ClassElement::TSIndexSignature(_) => None,
+    }
+}
+
+/// A property annotation with polymorphic `this` at its top — alone, as a
+/// union or intersection member, or indexed — with that `this` read as
+/// `object`, for [`ParsedClassProperty::initialization_type`]. `None` when no
+/// such `this` is written.
+fn this_as_object(annotation: &oxc_ast::ast::TSType<'_>) -> Option<crate::ParsedType> {
+    use oxc_ast::ast::TSType;
+    fn is_this(ty: &TSType<'_>) -> bool {
+        match ty {
+            TSType::TSThisType(_) => true,
+            TSType::TSParenthesizedType(parenthesized) => is_this(&parenthesized.type_annotation),
+            TSType::TSIndexedAccessType(indexed) => is_this(&indexed.object_type),
+            _ => false,
+        }
+    }
+    fn members(types: &[TSType<'_>]) -> Option<Vec<crate::ParsedType>> {
+        let mut found = false;
+        let mut parsed = Vec::with_capacity(types.len());
+        for ty in types {
+            match this_as_object(ty) {
+                Some(lowered) => {
+                    found = true;
+                    parsed.push(lowered);
+                }
+                None => parsed.push(super::types::parse_type(ty)?),
+            }
+        }
+        found.then_some(parsed)
+    }
+    match annotation {
+        _ if is_this(annotation) => Some(crate::ParsedType::Object(std::sync::Arc::new(crate::ParsedObjectType {
+            properties: Vec::new(),
+            string_index_type: None,
+            number_index_type: None,
+            call_signature: None,
+            call_signature_overloads: Vec::new(),
+            construct_signature: None,
+            construct_signature_overloads: Vec::new(),
+            non_primitive: true,
+            display_name: None,
+        }))),
+        TSType::TSParenthesizedType(parenthesized) => this_as_object(&parenthesized.type_annotation),
+        TSType::TSUnionType(union) => {
+            members(&union.types).map(|types| crate::ParsedType::Union(std::sync::Arc::new(types)))
+        }
+        TSType::TSIntersectionType(intersection) => members(&intersection.types)
+            .map(|types| crate::ParsedType::Intersection(std::sync::Arc::new(types))),
+        _ => None,
     }
 }
 
@@ -799,6 +915,7 @@ fn javascript_this_members(
                 super::jsdoc::member_has_modifier(assignment.start, super::jsdoc::JsDocModifier::Readonly)
             }),
             declared_type: None,
+            initialization_type: None,
             initializer: None,
             initializer_span: None,
             this_assignments: Some(crate::ParsedThisAssignments { values, in_constructor }),

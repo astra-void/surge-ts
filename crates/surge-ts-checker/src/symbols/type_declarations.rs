@@ -450,6 +450,8 @@ pub(crate) fn merge_interface_infos(
         .cloned()
         .collect();
     Arc::make_mut(&mut merged_info.body).member_fragments = member_fragments;
+    // The merged symbol keeps tsc's `SymbolFlagsClass` when either side is one.
+    merged_info.is_class_instance = existing.is_class_instance || incoming.is_class_instance;
     let mut fragment_scopes = existing.body.fragment_scopes.clone();
     for entry in &incoming.body.fragment_scopes {
         if !fragment_scopes

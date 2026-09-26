@@ -123,7 +123,11 @@ pub(crate) fn infer_logical_expression(
             // `ops::evaluate_logical_expression`.
             let result = match operator {
                 surge_ts_syntax::ParsedLogicalOperator::Or => {
-                    union_type(vec![truthy_part(&left_ty), right_ty])
+                    if matches!(falsy_part(&left_ty), Type::Never) {
+                        left_ty
+                    } else {
+                        union_type(vec![truthy_part(&left_ty), right_ty])
+                    }
                 }
                 // `a && b` is `b` when `a` is truthy and `a` otherwise, so
                 // only `a`'s falsy part survives (`Box | undefined` contributes
