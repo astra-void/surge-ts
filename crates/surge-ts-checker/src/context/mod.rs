@@ -134,6 +134,26 @@ pub(crate) struct ReturnedForm {
     pub(crate) fresh: bool,
 }
 
+/// The scope pushed for a declaration without type parameters, shared so a
+/// push allocates nothing.
+pub(crate) fn empty_type_parameter_scope() -> Arc<HashMap<String, Type>> {
+    static EMPTY: std::sync::OnceLock<Arc<HashMap<String, Type>>> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(Arc::default).clone()
+}
+
+pub(crate) fn empty_constraint_scope() -> Arc<HashMap<String, ParsedType>> {
+    static EMPTY: std::sync::OnceLock<Arc<HashMap<String, ParsedType>>> =
+        std::sync::OnceLock::new();
+    EMPTY.get_or_init(Arc::default).clone()
+}
+
+fn shared_scope<T>(
+    scope: HashMap<String, T>,
+    empty: fn() -> Arc<HashMap<String, T>>,
+) -> Arc<HashMap<String, T>> {
+    if scope.is_empty() { empty() } else { Arc::new(scope) }
+}
+
 impl CheckerContext {
     /// Opens a frame for a block body checked against an unannotated contextual
     /// return type. Returns whether one was opened, for the caller to pair with
@@ -617,7 +637,10 @@ pub(crate) struct CheckerContext {
     /// and a failure reported, at the file's first fragment only. Per-file:
     /// reset by [`Self::begin_file_check`].
     pub(crate) jsx_fragment_factory_resolved: bool,
-    pub(crate) type_parameter_scopes: Vec<HashMap<String, Type>>,
+    /// Each scope is shared, never edited in place: a declaration environment
+    /// captures the stack by cloning the `Arc`s, where a deep copy of every map
+    /// (and of every constraint's parsed type) cost ~1 KB per environment.
+    pub(crate) type_parameter_scopes: Vec<Arc<HashMap<String, Type>>>,
     /// The current file's definite-assignment targets
     /// ([`surge_ts_syntax::ParsedSource::definite_writes`]).
     pub(crate) definite_writes: Arc<HashSet<String>>,
@@ -641,7 +664,7 @@ pub(crate) struct CheckerContext {
     // Parallel to `type_parameter_scopes`: the declared constraint (if any) for
     // each in-scope type parameter, used to recognize `K extends keyof T` so a
     // generic `T[K]` is not falsely reported as an invalid index (TS2536).
-    pub(crate) type_parameter_constraint_scopes: Vec<HashMap<String, ParsedType>>,
+    pub(crate) type_parameter_constraint_scopes: Vec<Arc<HashMap<String, ParsedType>>>,
     pub(crate) timings: Option<std::sync::Arc<std::sync::Mutex<ProgramTimings>>>,
     /// Nonzero while resolving the body of a namespace-qualified type member
     /// (e.g. `React.ComponentProps`). Unresolved names encountered here are
@@ -1493,8 +1516,9 @@ impl CheckerContext {
                 constraint_scope.insert(type_parameter.name.clone(), constraint);
             }
         }
-        self.type_parameter_scopes.push(scope);
-        self.type_parameter_constraint_scopes.push(constraint_scope);
+        self.type_parameter_scopes.push(shared_scope(scope, empty_type_parameter_scope));
+        self.type_parameter_constraint_scopes
+            .push(shared_scope(constraint_scope, empty_constraint_scope));
     }
 
     pub(crate) fn pop_type_parameter_scope(&mut self) {
@@ -1523,8 +1547,9 @@ impl CheckerContext {
                 constraint_scope.insert(type_parameter.name.clone(), constraint);
             }
         }
-        self.type_parameter_scopes.push(HashMap::new());
-        self.type_parameter_constraint_scopes.push(constraint_scope);
+        self.type_parameter_scopes.push(empty_type_parameter_scope());
+        self.type_parameter_constraint_scopes
+            .push(shared_scope(constraint_scope, empty_constraint_scope));
     }
 
     /// When the in-scope type parameter `name` is declared as `name extends keyof X`,

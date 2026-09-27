@@ -610,9 +610,9 @@ pub(crate) fn instantiated_body_return(
         &mut ctx.type_declaration_scope,
         crate::program::program_module_scope_for_file(&file_name),
     );
-    ctx.type_parameter_scopes.push(bindings);
+    ctx.type_parameter_scopes.push(std::sync::Arc::new(bindings));
     ctx.type_parameter_constraint_scopes
-        .push(std::collections::HashMap::new());
+        .push(crate::context::empty_constraint_scope());
     // The type-parameter scopes are the whole environment the body is read in
     // beyond its own module; a constraint scope in play is not captured by
     // them, and only the check phase's answer is final.

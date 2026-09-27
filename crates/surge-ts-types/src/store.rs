@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
 
 use crate::function::record_function_type_payload_alloc_count;
@@ -73,11 +73,14 @@ pub struct ProgramTypeStoreStats {
 // Bucket entries hold `Weak` payload references so an interned payload lives
 // exactly as long as its consumers: a canonical type produced by a transient
 // pass (preliminary analysis, per-file inference) frees with that pass instead
-// of accumulating in the store for the whole program. Dead entries are swept
-// from a bucket whenever the bucket is next scanned. IDs are monotonic and
-// never reused, so a re-interned equal payload getting a fresh ID cannot
-// collide with identity fast-paths that compared the dead one — no live value
-// can hold a dead ID.
+// of accumulating in the store for the whole program. A `Weak` still keeps the
+// payload's allocation, so dead entries must leave the store too: a bucket
+// drops them whenever it is next scanned, and since most fingerprints are never
+// interned again, a whole shard is swept once it has doubled since its last
+// sweep (on tRPC, 9 in 10 function payloads were dead by the end of the check
+// phase). IDs are monotonic and never reused, so a re-interned equal payload
+// getting a fresh ID cannot collide with identity fast-paths that compared the
+// dead one — no live value can hold a dead ID.
 #[derive(Debug)]
 struct ListEntry {
     id: TypeListId,
@@ -147,7 +150,56 @@ pub struct ProgramTypeStore {
     >; STORE_SHARDS],
     unions: [Mutex<PrehashedU64Map<Vec<UnionEntry>>>; STORE_SHARDS],
     property_maps: [Mutex<PrehashedU64Map<Vec<PropertyMapEntry>>>; STORE_SHARDS],
+    sweep_due: SweepThresholds,
     counters: StoreCounters,
+}
+
+/// Per shard, the length at which the shard is next swept of dead entries.
+/// Each threshold is only read and written under its shard's lock.
+#[derive(Debug)]
+struct SweepThresholds {
+    parameter_lists: [AtomicUsize; STORE_SHARDS],
+    functions: [AtomicUsize; STORE_SHARDS],
+    overload_merges: [AtomicUsize; STORE_SHARDS],
+    unions: [AtomicUsize; STORE_SHARDS],
+    property_maps: [AtomicUsize; STORE_SHARDS],
+}
+
+const MIN_SWEEP_LEN: usize = 1024;
+
+impl Default for SweepThresholds {
+    fn default() -> Self {
+        let due = || std::array::from_fn(|_| AtomicUsize::new(MIN_SWEEP_LEN));
+        Self {
+            parameter_lists: due(),
+            functions: due(),
+            overload_merges: due(),
+            unions: due(),
+            property_maps: due(),
+        }
+    }
+}
+
+/// Drops the entries `live` rejects once `map` has doubled since its last
+/// sweep, which keeps the sweeps amortized O(1) per insertion.
+fn sweep_if_due<K, V, S>(
+    map: &mut std::collections::HashMap<K, V, S>,
+    due: &AtomicUsize,
+    live: impl FnMut(&K, &mut V) -> bool,
+) {
+    if map.len() < due.load(Ordering::Relaxed) {
+        return;
+    }
+    map.retain(live);
+    due.store(
+        map.len().saturating_mul(2).max(MIN_SWEEP_LEN),
+        Ordering::Relaxed,
+    );
+}
+
+fn retain_live_entries<E>(bucket: &mut Vec<E>, live: impl Fn(&E) -> bool) -> bool {
+    bucket.retain(live);
+    !bucket.is_empty()
 }
 
 impl ProgramTypeStore {
@@ -167,6 +219,7 @@ impl ProgramTypeStore {
             overload_merges: std::array::from_fn(|_| Mutex::new(FxHashMap::default())),
             unions: std::array::from_fn(|_| Mutex::new(PrehashedU64Map::default())),
             property_maps: std::array::from_fn(|_| Mutex::new(PrehashedU64Map::default())),
+            sweep_due: SweepThresholds::default(),
             counters: StoreCounters::default(),
         })
     }
@@ -196,7 +249,8 @@ impl ProgramTypeStore {
             is_variadic,
             required_parameter_count,
         ));
-        let mut functions = self.lock_shard(&self.functions[shard_index(key)]);
+        let shard = shard_index(key);
+        let mut functions = self.lock_shard(&self.functions[shard]);
         let bucket = functions.entry(key).or_default();
         let mut hit = None;
         bucket.retain(|entry| {
@@ -236,6 +290,9 @@ impl ProgramTypeStore {
         bucket.push(FunctionEntry {
             id,
             value: Arc::downgrade(&payload),
+        });
+        sweep_if_due(&mut *functions, &self.sweep_due.functions[shard], |_, bucket| {
+            retain_live_entries(bucket, |entry| entry.value.strong_count() > 0)
         });
         self.counters
             .function_misses
@@ -290,14 +347,17 @@ impl ProgramTypeStore {
             return merged;
         };
         let key = (left, right);
-        let hash = hash_key(&key);
-        let mut merges = self.lock_shard(&self.overload_merges[shard_index(hash)]);
+        let shard = shard_index(hash_key(&key));
+        let mut merges = self.lock_shard(&self.overload_merges[shard]);
         if let Some((existing_id, existing)) = merges.get(&key)
             && let Some(payload) = existing.upgrade()
         {
             return FunctionType::from_canonical_parts(payload, *existing_id);
         }
         merges.insert(key, (id, Arc::downgrade(&merged.payload)));
+        sweep_if_due(&mut *merges, &self.sweep_due.overload_merges[shard], |_, (_, payload)| {
+            payload.strong_count() > 0
+        });
         merged
     }
 
@@ -308,7 +368,8 @@ impl ProgramTypeStore {
         self.counters
             .parameter_list_input_elements
             .fetch_add(parameters.len() as u64, Ordering::Relaxed);
-        let mut lists = self.lock_shard(&self.parameter_lists[shard_index(key)]);
+        let shard = shard_index(key);
+        let mut lists = self.lock_shard(&self.parameter_lists[shard]);
         let bucket = lists.entry(key).or_default();
         let mut hit = None;
         bucket.retain(|entry| {
@@ -342,6 +403,9 @@ impl ProgramTypeStore {
             id,
             value: Arc::downgrade(&value),
         });
+        sweep_if_due(&mut *lists, &self.sweep_due.parameter_lists[shard], |_, bucket| {
+            retain_live_entries(bucket, |entry| entry.value.strong_count() > 0)
+        });
         self.counters
             .parameter_list_misses
             .fetch_add(1, Ordering::Relaxed);
@@ -360,7 +424,8 @@ impl ProgramTypeStore {
         let Some(key) = fingerprint_types(&types, &mut budget) else {
             return Err(types);
         };
-        let mut unions = self.lock_shard(&self.unions[shard_index(key)]);
+        let shard = shard_index(key);
+        let mut unions = self.lock_shard(&self.unions[shard]);
         let bucket = unions.entry(key).or_default();
         let mut hit = None;
         bucket.retain(|entry| {
@@ -393,6 +458,9 @@ impl ProgramTypeStore {
         bucket.push(UnionEntry {
             id,
             value: Arc::downgrade(&payload),
+        });
+        sweep_if_due(&mut *unions, &self.sweep_due.unions[shard], |_, bucket| {
+            retain_live_entries(bucket, |entry| entry.value.strong_count() > 0)
         });
         self.counters.union_misses.fetch_add(1, Ordering::Relaxed);
         Ok((payload, id))
@@ -458,7 +526,8 @@ impl ProgramTypeStore {
             fingerprint.hash(&mut hasher);
         }
         let key = hasher.finish();
-        let mut maps = self.lock_shard(&self.property_maps[shard_index(key)]);
+        let shard = shard_index(key);
+        let mut maps = self.lock_shard(&self.property_maps[shard]);
         let bucket = maps.entry(key).or_default();
         let mut hit = None;
         bucket.retain(|entry| {
@@ -487,10 +556,17 @@ impl ProgramTypeStore {
             self.owner,
             self.next_property_map.fetch_add(1, Ordering::Relaxed),
         );
+        let mut properties = properties;
+        // A stored map lives as long as its consumers; the capacity it grew
+        // through while its members were collected would live with it.
+        properties.shrink_to_fit();
         let value = Arc::new(properties);
         bucket.push(PropertyMapEntry {
             id,
             value: Arc::downgrade(&value),
+        });
+        sweep_if_due(&mut *maps, &self.sweep_due.property_maps[shard], |_, bucket| {
+            retain_live_entries(bucket, |entry| entry.value.strong_count() > 0)
         });
         self.counters
             .property_map_misses

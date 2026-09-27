@@ -371,7 +371,7 @@ pub(crate) fn merged_type_parameter_substitution(
     let mut merged = TypeParameterSubstitution::new();
 
     for scope in &ctx.type_parameter_scopes {
-        for (name, ty) in scope {
+        for (name, ty) in scope.iter() {
             // A scope holds a declaration's own type variables (or the sentinel)
             // while it is resolved or checked; any other type is a call's type
             // argument its body is read under (`instantiated_body_return`).

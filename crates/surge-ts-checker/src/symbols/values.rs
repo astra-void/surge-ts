@@ -337,10 +337,11 @@ impl SymbolTable {
     /// table's next `record_declaration_span` into a full copy-on-write copy.
     pub(crate) fn clone_for_environment_capture(&self) -> Self {
         record_symbol_table_clone_count();
+        let empty = Self::empty_for_environment_capture();
         Self {
             symbols: Arc::clone(&self.symbols),
-            declaration_spans: Arc::new(HashMap::default()),
-            function_implementations: Arc::new(HashSet::default()),
+            declaration_spans: empty.declaration_spans,
+            function_implementations: empty.function_implementations,
             declared_types: self.declared_types.clone(),
             alias_conditions: self.alias_conditions.clone(),
             tuple_destructures: self.tuple_destructures.clone(),
@@ -349,6 +350,13 @@ impl SymbolTable {
             parent: self.parent.clone(),
             declaration_scope_root: self.declaration_scope_root,
         }
+    }
+
+    /// An empty table whose maps are shared by every environment capture, so a
+    /// capture allocates none (tRPC interns ~74k environments).
+    pub(crate) fn empty_for_environment_capture() -> Self {
+        static EMPTY: std::sync::OnceLock<SymbolTable> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(SymbolTable::default).clone()
     }
 
     /// Build a lookup-only scope whose own map is empty and whose misses fall

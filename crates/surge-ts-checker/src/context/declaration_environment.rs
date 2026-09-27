@@ -212,8 +212,8 @@ pub(super) struct DeclarationEnvironmentData {
     pub(super) module_scope_by_file: Arc<FxHashMap<Arc<str>, Arc<TypeDeclarationScope>>>,
     pub(super) module_local_values_by_file: Arc<FxHashMap<Arc<str>, Arc<SymbolTable>>>,
     pub(super) jsx_namespace_modules: Arc<crate::checks::jsx::JsxNamespaceModules>,
-    pub(super) type_parameter_scopes: Vec<HashMap<String, Type>>,
-    pub(super) type_parameter_constraint_scopes: Vec<HashMap<String, ParsedType>>,
+    pub(super) type_parameter_scopes: Vec<Arc<HashMap<String, Type>>>,
+    pub(super) type_parameter_constraint_scopes: Vec<Arc<HashMap<String, ParsedType>>>,
     pub(super) timings: Option<Arc<Mutex<ProgramTimings>>>,
     pub(super) file_kinds: Arc<FxHashMap<String, FileKind>>,
     pub(super) module_value_fallback: Option<Arc<SymbolTable>>,
@@ -447,12 +447,12 @@ impl DeclarationEnvironmentStore {
             let type_parameter_scope_entries = data
                 .type_parameter_scopes
                 .iter()
-                .map(HashMap::len)
+                .map(|scope| scope.len())
                 .sum::<usize>()
                 + data
                     .type_parameter_constraint_scopes
                     .iter()
-                    .map(HashMap::len)
+                    .map(|scope| scope.len())
                     .sum::<usize>();
             f(
                 &data.file_name,
@@ -514,7 +514,7 @@ impl DeclarationEnvironmentData {
             // EXPERIMENT(env-symbols): drop the working value-table capture;
             // typeof falls back to ambient globals / module_value_fallback /
             // module_local_values_by_file.
-            symbols: SymbolTable::new(),
+            symbols: SymbolTable::empty_for_environment_capture(),
             type_declarations,
             type_declaration_scope: ctx.type_declaration_scope.clone(),
             program_type_store: ctx.program_type_store.clone(),

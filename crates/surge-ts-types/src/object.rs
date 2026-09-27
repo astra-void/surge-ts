@@ -227,15 +227,19 @@ impl ObjectProperty {
 
 impl ObjectType {
     pub fn new(properties: PropertyMap, string_index_type: Option<Type>) -> Self {
+        let owned = |mut properties: PropertyMap| {
+            properties.shrink_to_fit();
+            Arc::new(properties)
+        };
         let (properties, property_map_id) = if canonical_property_map_store_enabled()
             && let Some(store) = current_program_type_store()
         {
             match store.intern_property_map(properties) {
                 Ok((map, id)) => (map, Some(id)),
-                Err(properties) => (Arc::new(properties), None),
+                Err(properties) => (owned(properties), None),
             }
         } else {
-            (Arc::new(properties), None)
+            (owned(properties), None)
         };
         Self {
             properties,
