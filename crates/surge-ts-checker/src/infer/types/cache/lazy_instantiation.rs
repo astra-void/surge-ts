@@ -393,7 +393,7 @@ impl ResolveReference for LazyInstantiation {
 /// expansion when forced.
 pub(crate) fn make_lazy_type_reference(
     ctx: &mut CheckerContext,
-    reference_id: &str,
+    reference_id: &Arc<str>,
     display: &str,
     decl: crate::symbols::TypeDeclarationHandle,
     decl_key: DeclarationResolutionKey,
@@ -405,9 +405,10 @@ pub(crate) fn make_lazy_type_reference(
     let environment = ctx.declaration_environment();
     let creation_scope = ctx.type_declaration_scope.clone();
     let declared_variances = decl.get().declared_variances();
+    let display: Arc<str> = Arc::from(display);
     Type::Reference(TypeReference::new(
-        reference_id.to_string(),
-        display.to_string(),
+        reference_id.clone(),
+        display.clone(),
         resolved_arguments.clone(),
         Arc::new(LazyInstantiation {
             environment,
@@ -417,7 +418,7 @@ pub(crate) fn make_lazy_type_reference(
             type_arguments,
             resolved_arguments,
             substitution,
-            display: Arc::from(display),
+            display,
             memo: std::sync::OnceLock::new(),
             degraded_memo: std::sync::OnceLock::new(),
         }),
@@ -447,7 +448,7 @@ pub(crate) fn make_recursive_cycle_reference(
     pre_resolved_arguments: Option<&[Type]>,
     substitution: &TypeParameterSubstitution,
 ) -> Type {
-    let reference_id = format!("{}\u{0}{}", decl_key.file_name, decl_key.name);
+    let reference_id: Arc<str> = Arc::from(format!("{}\u{0}{}", decl_key.file_name, decl_key.name));
     let resolved_arguments = pre_resolved_arguments
         .map(<[Type]>::to_vec)
         .unwrap_or_default();
