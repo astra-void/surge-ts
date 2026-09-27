@@ -357,7 +357,8 @@ pub(crate) fn collect_ambient_global_types(
             std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
         let collect_start = Instant::now();
         collect_type_declarations(&parsed_file.statements, ctx);
-        let ambient_td = std::mem::take(&mut ctx.type_declarations);
+        let ambient_td =
+            crate::symbols::attach_global_declaration_scope(&std::mem::take(&mut ctx.type_declarations));
         let lowered_type_declarations = ambient_td.len() as u64;
         let collect_duration = collect_start.elapsed();
         record_program_file_timing(timings, &parsed_file.file_name, |metrics| {

@@ -282,12 +282,27 @@ pub(crate) fn collect_global_augmentations(
             &parsed_file.statements,
             ctx,
             |block_statements, enclosing_statements, ctx| {
-                block_tables.push(collect_global_augmentation_block_types(
+                let block_table = collect_global_augmentation_block_types(
                     block_statements,
                     enclosing_statements,
                     &parsed_file.statements,
                     ctx,
-                ));
+                );
+                let block_table = if enclosing_statements.is_none() {
+                    crate::symbols::attach_global_declaration_scope(&block_table)
+                } else {
+                    block_table
+                };
+                // Its interfaces merge into the global declarations but resolve
+                // where they are written: under the module's scope, or the
+                // ambient module block's with the block's own imports (`import {
+                // URL as _URL } from "url"` inside `declare module "url"`). Both
+                // exist only once modules are bound.
+                block_tables.push(if parsed_file.is_module || enclosing_statements.is_some() {
+                    crate::symbols::mark_module_global_fragments(&block_table)
+                } else {
+                    block_table
+                });
             },
         );
     }

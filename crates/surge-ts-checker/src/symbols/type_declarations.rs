@@ -140,6 +140,15 @@ pub(crate) struct InterfaceBody {
     pub(crate) construct_signatures: Vec<ParsedFunctionType>,
     pub(crate) declaration_fragments: Vec<InterfaceDeclarationFragmentId>,
     pub(crate) member_fragments: Vec<InterfaceDeclarationFragmentId>,
+    /// The fragment each `extends` entry was written in, parallel to `extends`.
+    pub(crate) extends_fragments: Vec<InterfaceDeclarationFragmentId>,
+    /// Fragments written in a `declare global` block of a module or of an
+    /// ambient module declaration. They merge into the global declaration but
+    /// resolve where they are written, under that file's module scope:
+    /// `@types/node` reopens the global `EventTarget` with `extends
+    /// __EventTarget`, a module-local alias, and `URL` with `extends _URL`, an
+    /// import inside `declare module "url"`.
+    pub(crate) module_global_fragments: Vec<InterfaceDeclarationFragmentId>,
     /// Resolution scopes for fragments written in another file — a `declare
     /// module` augmentation. The merged declaration resolves under the
     /// *augmented* file's scope, where a name the augmenting file declared
@@ -169,20 +178,10 @@ pub(crate) struct ClassMemberSymbol {
 }
 
 impl InterfaceBody {
-    /// The scope a member's own declaration fragment resolves under, when that
-    /// fragment came from a `declare module` augmentation in another file.
-    pub(crate) fn member_scope(
-        &self,
-        member_index: usize,
-    ) -> Option<(&Arc<TypeDeclarationScope>, &Arc<str>)> {
-        if self.fragment_scopes.is_empty() {
-            return None;
-        }
-        let fragment = self.member_fragments.get(member_index)?;
-        self.fragment_scopes
-            .iter()
-            .find(|(candidate, _)| candidate == fragment)
-            .map(|(fragment, scope)| (scope, &fragment.file_name))
+    /// Whether some fragment resolves under a scope other than the merged
+    /// declaration's own.
+    pub(crate) fn has_foreign_fragments(&self) -> bool {
+        !self.fragment_scopes.is_empty() || !self.module_global_fragments.is_empty()
     }
 }
 
@@ -211,6 +210,8 @@ impl Clone for InterfaceBody {
             construct_signatures: self.construct_signatures.clone(),
             declaration_fragments: self.declaration_fragments.clone(),
             member_fragments: self.member_fragments.clone(),
+            extends_fragments: self.extends_fragments.clone(),
+            module_global_fragments: self.module_global_fragments.clone(),
             fragment_scopes: self.fragment_scopes.clone(),
             restricted_members: self.restricted_members.clone(),
             class_members: self.class_members.clone(),
@@ -291,6 +292,7 @@ impl InterfaceInfo {
             declaration_start: name_span.map_or(0, |span| span.start),
         };
         let member_fragments = vec![declaration_fragment.clone(); members.len()];
+        let extends_fragments = vec![declaration_fragment.clone(); extends.len()];
         Self {
             name: name.into(),
             declared_name: None,
@@ -315,6 +317,8 @@ impl InterfaceInfo {
                 construct_signatures,
                 declaration_fragments: vec![declaration_fragment],
                 member_fragments,
+                extends_fragments,
+                module_global_fragments: Vec::new(),
                 fragment_scopes: Vec::new(),
                 restricted_members: Vec::new(),
                 class_members: Vec::new(),
@@ -524,6 +528,20 @@ pub(crate) fn merge_interface_infos(
         .cloned()
         .collect();
     Arc::make_mut(&mut merged_info.body).member_fragments = member_fragments;
+    Arc::make_mut(&mut merged_info.body).extends_fragments = existing
+        .body
+        .extends_fragments
+        .iter()
+        .chain(incoming.body.extends_fragments.iter())
+        .cloned()
+        .collect();
+    let mut module_global_fragments = existing.body.module_global_fragments.clone();
+    for fragment in &incoming.body.module_global_fragments {
+        if !module_global_fragments.contains(fragment) {
+            module_global_fragments.push(fragment.clone());
+        }
+    }
+    Arc::make_mut(&mut merged_info.body).module_global_fragments = module_global_fragments;
     // Each index signature keeps the modifier of the declaration it came from.
     {
         let body = Arc::make_mut(&mut merged_info.body);
@@ -608,6 +626,64 @@ fn merge_type_parameters(
         known.is_in |= parameter.is_in;
         known.is_out |= parameter.is_out;
     }
+}
+
+/// The scope a global declaration resolves under. It has nothing of its own, so
+/// a name falls through to the globals — the lexical scope tsc gives a global
+/// declaration — instead of to whichever module's scope the reference that
+/// reached the declaration was written in: a module's local
+/// `IteratorYieldResult` must not become the lib's `IteratorResult` member.
+pub(crate) fn global_declaration_scope() -> Arc<TypeDeclarationScope> {
+    GLOBAL_DECLARATION_SCOPE
+        .get_or_init(|| Arc::new(TypeDeclarationScope::new(Vec::new())))
+        .clone()
+}
+
+static GLOBAL_DECLARATION_SCOPE: std::sync::OnceLock<Arc<TypeDeclarationScope>> = std::sync::OnceLock::new();
+
+pub(crate) fn is_global_declaration_scope(scope: &Arc<TypeDeclarationScope>) -> bool {
+    GLOBAL_DECLARATION_SCOPE
+        .get()
+        .is_some_and(|global| Arc::ptr_eq(global, scope))
+}
+
+/// Gives every declaration of a global table that has no resolution scope of
+/// its own the [`global_declaration_scope`].
+pub(crate) fn attach_global_declaration_scope(table: &TypeDeclarationTable) -> TypeDeclarationTable {
+    let scope = global_declaration_scope();
+    let mut attached = TypeDeclarationTable::new();
+    for (name, declaration) in table.iter() {
+        let declaration = match declaration.clone() {
+            TypeDeclarationInfo::Alias(mut alias) => {
+                alias.resolution_scope.get_or_insert_with(|| scope.clone());
+                TypeDeclarationInfo::Alias(alias)
+            }
+            TypeDeclarationInfo::Interface(mut interface) => {
+                interface.resolution_scope.get_or_insert_with(|| scope.clone());
+                TypeDeclarationInfo::Interface(interface)
+            }
+        };
+        let _ = attached.insert(name.as_ref(), declaration);
+    }
+    attached
+}
+
+/// Marks every interface of a `declare global` block as resolving under its
+/// file's module scope wherever it merges.
+pub(crate) fn mark_module_global_fragments(table: &TypeDeclarationTable) -> TypeDeclarationTable {
+    let mut marked = TypeDeclarationTable::new();
+    for (name, declaration) in table.iter() {
+        let declaration = match declaration.clone() {
+            TypeDeclarationInfo::Interface(mut interface) => {
+                let body = Arc::make_mut(&mut interface.body);
+                body.module_global_fragments = body.declaration_fragments.clone();
+                TypeDeclarationInfo::Interface(interface)
+            }
+            alias => alias,
+        };
+        let _ = marked.insert(name.as_ref(), declaration);
+    }
+    marked
 }
 
 /// Declaration-merge an interface contributed by a `declare module` block in
@@ -826,6 +902,13 @@ fn fold_interface_declaration(
         body.member_fragments.push(fragment.clone());
     }
     body.extends.extend(incoming.body.extends.iter().cloned());
+    body.extends_fragments
+        .extend(incoming.body.extends_fragments.iter().cloned());
+    for fragment in &incoming.body.module_global_fragments {
+        if !body.module_global_fragments.contains(fragment) {
+            body.module_global_fragments.push(fragment.clone());
+        }
+    }
     merge_type_parameters(&mut body.type_parameters, &incoming.body.type_parameters);
     if body.number_index_type.is_none() {
         body.number_index_type = incoming.body.number_index_type.clone();

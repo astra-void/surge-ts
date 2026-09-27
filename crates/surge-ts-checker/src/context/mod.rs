@@ -2050,7 +2050,11 @@ impl CheckerContext {
     /// scope lookup serves the body's own names. Same-file resolution and
     /// windows with no installed scope keep the local-table consult.
     fn lookup_ignores_local_table(&self) -> bool {
-        self.cross_file_resolution_depth > 0 && self.type_declaration_scope.is_some()
+        // A global declaration sees no module's locals, however the context
+        // resolving it was recovered.
+        self.type_declaration_scope.as_ref().is_some_and(|scope| {
+            self.cross_file_resolution_depth > 0 || crate::symbols::is_global_declaration_scope(scope)
+        })
     }
 
     /// A global interface re-opened by several declarations lives fully merged in

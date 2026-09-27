@@ -429,7 +429,17 @@ pub(crate) fn resolve_parsed_type(
                     ctx.module_local_values_for_file(&file_name)
                         .and_then(|table| table.get(&type_of.name).cloned())
                 })
-                .or_else(|| ctx.ambient_global_symbols.get(&type_of.name).cloned());
+                .or_else(|| ctx.ambient_global_symbols.get(&type_of.name).cloned())
+                // A context recovered from an environment captured during module
+                // analysis holds the global table as it stood then, before
+                // `globalThis` was built from it; the check phase reads the
+                // program's final one.
+                .or_else(|| {
+                    crate::program::in_check_phase()
+                        .then(crate::program::program_ambient_globals)
+                        .flatten()
+                        .and_then(|globals| globals.get(&type_of.name).cloned())
+                });
 
             // `undefined` is a global value like any other to a type query:
             // `var x: typeof undefined`. Its type is the widening `undefined`,
@@ -457,16 +467,18 @@ pub(crate) fn resolve_parsed_type(
                 // symbol for it: the reference already reported as TS2686, so a
                 // TS2304 on top would be a second diagnostic tsc never emits.
                 if type_of.name == "globalThis" || umd_global {
-                    // A *member* of it (`typeof globalThis.fetch`) is degraded,
-                    // not clean: the miss is a timing gap — the global object is
-                    // installed after every ambient global is collected, so an
-                    // interface member written this way resolves before it
-                    // exists — and a clean answer would be interned as
-                    // `unknown` for the whole run, as it is for any other base
-                    // still standing at the sentinel below.
+                    // For `globalThis` the miss is a timing gap — the global
+                    // object is installed after every ambient global is
+                    // collected — so an answer decided now is degraded, not
+                    // clean: a clean one would be interned for the whole run.
+                    // That covers a member (`typeof globalThis.fetch`) and the
+                    // object a conditional or an indexed access reads
+                    // (`typeof globalThis extends { onmessage: any } ? … : …`,
+                    // bun's `(typeof globalThis)["WritableStream"]`).
+                    // `resolve_intersection_type` drops the plain query itself.
                     return ResolvedType {
                         ty: Type::Unknown,
-                        had_error: !type_of.members.is_empty(),
+                        had_error: !type_of.members.is_empty() || type_of.name == "globalThis",
                     };
                 }
                 // A class reached through `import type { Class }`, or named

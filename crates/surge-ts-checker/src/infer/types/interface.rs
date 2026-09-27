@@ -793,7 +793,7 @@ pub(crate) fn resolve_interface(
                     declaration_template.as_deref(),
                     interface_key.as_ref(),
                     lazy_member_context,
-                    (!interface.body.fragment_scopes.is_empty()).then(|| &*interface.body),
+                    interface.body.has_foreign_fragments().then(|| &*interface.body),
                 )
             })
         })
@@ -968,6 +968,34 @@ fn install_member_scope(
     }
 }
 
+/// The scope a fragment of a merged declaration resolves under when it was
+/// written where the declaration's own scope does not reach, as tsc resolves
+/// every declaration where it is written: a `declare module` augmentation keeps
+/// the scope it was collected with, and a `declare global` block in a module
+/// takes that module's scope once the program has bound it.
+fn foreign_fragment_scope(
+    body: &crate::symbols::InterfaceBody,
+    fragment: &crate::symbols::InterfaceDeclarationFragmentId,
+    ctx: &CheckerContext,
+) -> Option<(Arc<crate::symbols::TypeDeclarationScope>, Arc<str>)> {
+    if let Some((_, scope)) = body
+        .fragment_scopes
+        .iter()
+        .find(|(candidate, _)| candidate == fragment)
+    {
+        return Some((scope.clone(), fragment.file_name.clone()));
+    }
+    if *fragment.file_name == *ctx.file_name || !body.module_global_fragments.contains(fragment) {
+        return None;
+    }
+    let scope = ctx
+        .module_scope_by_file
+        .get(&*fragment.file_name)
+        .cloned()
+        .or_else(|| crate::program::program_module_scope_for_file(&fragment.file_name))?;
+    Some((scope, fragment.file_name.clone()))
+}
+
 fn restore_member_scope(ctx: &mut CheckerContext, saved: InstalledMemberScope) {
     if saved.crossed_file {
         ctx.cross_file_resolution_depth -= 1;
@@ -998,9 +1026,9 @@ pub(crate) fn resolve_interface_declaration(
     // and diagnostics produced inside a lazy force are dropped with the
     // recovered context.
     lazy_member_context: Option<(&str, usize)>,
-    // The declaration body, when some of its members came from a `declare
-    // module` augmentation written in another file and must resolve under that
-    // file's scope rather than this declaration's.
+    // The declaration body, when some of its fragments were written in another
+    // file and must resolve under that file's scope rather than this
+    // declaration's (`foreign_fragment_scope`).
     augmented_body: Option<&crate::symbols::InterfaceBody>,
 ) -> ResolvedType {
     crate::program::record_interface_member_declaration_visits(members.len());
@@ -1032,7 +1060,11 @@ pub(crate) fn resolve_interface_declaration(
     let mut base_is_open = false;
     let outer_unknown_cycle =
         std::mem::replace(&mut ctx.lowest_unknown_cycle_target_index, usize::MAX);
-    for base in extends {
+    for (base_index, base) in extends.iter().enumerate() {
+        let installed_base_scope = augmented_body
+            .and_then(|body| Some((body, body.extends_fragments.get(base_index)?)))
+            .and_then(|(body, fragment)| foreign_fragment_scope(body, fragment, ctx))
+            .map(|(scope, file_name)| install_member_scope(ctx, &scope, &file_name));
         // `resolveBaseTypesOfClass`: a class whose base is not a class derives
         // from a constructor function, and its type arguments select among the
         // construct signatures rather than instantiate a type reference, so a
@@ -1058,7 +1090,6 @@ pub(crate) fn resolve_interface_declaration(
                 },
             )
         };
-        had_error |= resolved_base.had_error;
         if resolved_base.had_error && had_error_trace_enabled() {
             eprintln!(
                 "[had-error] base '{}' cp={} in file {}",
@@ -1067,6 +1098,10 @@ pub(crate) fn resolve_interface_declaration(
                 ctx.file_name
             );
         }
+        if let Some(saved) = installed_base_scope {
+            restore_member_scope(ctx, saved);
+        }
+        had_error |= resolved_base.had_error;
         // A base that resolved with errors may be missing members surge could
         // not model; the derived member set is incomplete, so keep it open
         // rather than flagging every inherited access.
@@ -1276,8 +1311,9 @@ pub(crate) fn resolve_interface_declaration(
         }
         let mut deferred_method_components = false;
         let installed_member_scope = augmented_body
-            .and_then(|body| body.member_scope(member_index))
-            .map(|(scope, file_name)| install_member_scope(ctx, scope, file_name));
+            .and_then(|body| Some((body, body.member_fragments.get(member_index)?)))
+            .and_then(|(body, fragment)| foreign_fragment_scope(body, fragment, ctx))
+            .map(|(scope, file_name)| install_member_scope(ctx, &scope, &file_name));
         let mut property_type = if let Some(function) = cached_method {
             ResolvedType {
                 ty: Type::Function(function),

@@ -27,6 +27,18 @@ fn defer_reference_intersections() -> bool {
 /// (full `string & number -> never` reduction is a non-goal). If any operand is
 /// unresolved the whole intersection degrades to `Unknown` after the root
 /// diagnostic is reported, so reads stay conservative and never cascade.
+fn names_uninstalled_global_this(ty: &ParsedType, ctx: &CheckerContext) -> bool {
+    matches!(ty, ParsedType::TypeOf(query)
+        if query.name == "globalThis"
+            && query.members.is_empty()
+            && query.import_specifier.is_none())
+        && ctx.symbols.get("globalThis").is_none()
+        && ctx.ambient_global_symbols.get("globalThis").is_none()
+        && !(crate::program::in_check_phase()
+            && crate::program::program_ambient_globals()
+                .is_some_and(|globals| globals.get("globalThis").is_some()))
+}
+
 pub(crate) fn resolve_intersection_type(
     types: Vec<ParsedType>,
     ctx: &mut CheckerContext,
@@ -37,9 +49,22 @@ pub(crate) fn resolve_intersection_type(
     let mut had_error = false;
 
     for ty in types {
+        // `declare var window: Window & typeof globalThis` is lowered before the
+        // global object exists. The query adds nothing the intersection could
+        // use yet (`T & unknown` is `T`), and its degraded answer must not taint
+        // the operands that did resolve.
+        if names_uninstalled_global_this(&ty, ctx) {
+            continue;
+        }
         let resolved = resolve_parsed_type(ty, ctx, resolving, substitution);
         had_error |= resolved.had_error;
         resolved_types.push(resolved.ty);
+    }
+    if resolved_types.is_empty() {
+        return ResolvedType {
+            ty: Type::Unknown,
+            had_error: false,
+        };
     }
 
     // One failed operand must not erase the others: `ComponentProps<"button"> &
