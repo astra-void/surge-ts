@@ -116,6 +116,39 @@ struct LazyBodyReturn {
     environment: crate::context::DeclarationEnvironmentHandle,
     creation_scope: Option<std::sync::Arc<crate::symbols::TypeDeclarationScope>>,
     memo: std::sync::OnceLock<Type>,
+    analysis_memo: std::sync::Mutex<Option<AnalysisForce>>,
+}
+
+type ModuleValueTables = surge_ts_types::fx::FxHashMap<std::sync::Arc<str>, std::sync::Arc<SymbolTable>>;
+type ProgramModuleScopes = surge_ts_types::fx::FxHashMap<
+    std::sync::Arc<str>,
+    std::sync::Arc<crate::symbols::TypeDeclarationScope>,
+>;
+
+/// A body return forced during module analysis, with the program state the body
+/// was read against: the module value tables and module scopes as published
+/// then. They are held weakly so no later publication can take their address.
+struct AnalysisForce {
+    values: Option<std::sync::Weak<ModuleValueTables>>,
+    scopes: Option<std::sync::Weak<ProgramModuleScopes>>,
+    resolved: Type,
+}
+
+impl AnalysisForce {
+    fn read_against(
+        &self,
+        values: &Option<std::sync::Arc<ModuleValueTables>>,
+        scopes: &Option<std::sync::Arc<ProgramModuleScopes>>,
+    ) -> bool {
+        fn same<T>(held: &Option<std::sync::Weak<T>>, current: &Option<std::sync::Arc<T>>) -> bool {
+            match (held, current) {
+                (None, None) => true,
+                (Some(held), Some(current)) => std::ptr::eq(held.as_ptr(), std::sync::Arc::as_ptr(current)),
+                _ => false,
+            }
+        }
+        same(&self.values, values) && same(&self.scopes, scopes)
+    }
 }
 
 impl surge_ts_types::ResolveReference for LazyBodyReturn {
@@ -144,6 +177,25 @@ impl surge_ts_types::ResolveReference for LazyBodyReturn {
             }
         }
         let _pop = PopInProgress;
+        // Module analysis forces the same return over and over (every
+        // `ReturnType<typeof f>` it resolves, every render of `f`'s type) while
+        // the tables the body is read against stay put; only a republication of
+        // them can change the answer.
+        let analysis_state = (!crate::program::in_check_phase()).then(|| {
+            (
+                self.environment.published_module_local_values(),
+                crate::program::program_module_scopes(),
+            )
+        });
+        if let Some((values, scopes)) = &analysis_state {
+            let held = self.analysis_memo.lock().unwrap_or_else(|error| error.into_inner());
+            if let Some(force) = held.as_ref()
+                && force.read_against(values, scopes)
+            {
+                return force.resolved.clone();
+            }
+        }
+        let epoch = crate::program::expansion_degradation_epoch();
         let Some(mut ctx) = self.environment.checker_context() else {
             return Type::Unknown;
         };
@@ -167,8 +219,20 @@ impl surge_ts_types::ResolveReference for LazyBodyReturn {
             .unwrap_or(Type::Unknown);
         // A force during module analysis runs with its scopes still incomplete,
         // so only the check phase's answer is the one every later read may keep.
+        // Module analysis keeps its own answer only for the state it read, and
+        // never one a recursion cut short or that fell back to the sentinel.
         if crate::program::in_check_phase() {
             let _ = self.memo.set(resolved.clone());
+            *self.analysis_memo.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        } else if let Some((values, scopes)) = analysis_state
+            && crate::program::expansion_degradation_epoch() == epoch
+            && !resolved.is_unknown()
+        {
+            *self.analysis_memo.lock().unwrap_or_else(|error| error.into_inner()) = Some(AnalysisForce {
+                values: values.as_ref().map(std::sync::Arc::downgrade),
+                scopes: scopes.as_ref().map(std::sync::Arc::downgrade),
+                resolved: resolved.clone(),
+            });
         }
         resolved
     }
@@ -462,6 +526,7 @@ fn lazy_body_return_reference(
             environment: ctx.declaration_environment(),
             creation_scope: ctx.type_declaration_scope.clone(),
             memo: std::sync::OnceLock::new(),
+            analysis_memo: std::sync::Mutex::new(None),
         }),
     );
     // tsc renders the inferred type, not a name for it.

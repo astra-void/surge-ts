@@ -18,6 +18,19 @@ pub(crate) fn emit_unknown_type_name(
     if ctx.suppress_unknown_type_name() {
         return false;
     }
+    // Suppression goes by file, not by code. Where this file's diagnostics
+    // never reach the user (`skipLibCheck` declarations, the lib), the plain
+    // form stands in for the message, whose spelling suggestion measures every
+    // declared name: a declaration file re-resolves the same unresolvable
+    // reference thousands of times.
+    let mut plain = Diagnostic::ts2304(&named_type.name, ctx.file_name.clone());
+    if let Some(span) = named_type.span {
+        plain = plain.with_span(convert_span(span));
+    }
+    if !ctx.reports_diagnostic(&plain) {
+        ctx.push_utility_diagnostic_once(plain);
+        return false;
+    }
     let mut diagnostic = unknown_type_name_diagnostic(&named_type.name, ctx);
     if let Some(span) = named_type.span {
         diagnostic = diagnostic.with_span(convert_span(span));
@@ -445,6 +458,9 @@ fn suggested_type_name(name: &str, ctx: &CheckerContext) -> Option<String> {
     // `resolveNameHelper` walks the enclosing namespaces' locals too; surge
     // keys their members `ns.Member`.
     let prefixes = &ctx.namespace_member_prefix_stack;
+    // Screening before the sort leaves it only the names the suggestion could
+    // pick; their order is unchanged.
+    let screen = crate::checks::expr::SpellingScreen::new(name);
     let mut candidates: Vec<&str> = ctx
         .type_declarations
         .iter()
@@ -458,6 +474,7 @@ fn suggested_type_name(name: &str, ctx: &CheckerContext) -> Option<String> {
                 .iter()
                 .flat_map(|scope| scope.keys().map(String::as_str)),
         )
+        .filter(|candidate| screen.admits(candidate))
         .collect();
     candidates.sort_unstable();
     candidates.dedup();

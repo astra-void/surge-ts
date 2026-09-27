@@ -481,6 +481,14 @@ impl DeclarationEnvironmentHandle {
         Some(CheckerContext::from_declaration_environment(&data, store))
     }
 
+    /// The module value tables as the program last published them, read
+    /// without recovering a context.
+    pub(crate) fn published_module_local_values(
+        &self,
+    ) -> Option<Arc<FxHashMap<Arc<str>, Arc<SymbolTable>>>> {
+        self.store.upgrade()?.published_module_local_values()
+    }
+
     /// The declaring file's module-local values as the program holds them now.
     pub(crate) fn current_module_local_values(&self, file_name: &str) -> Option<Arc<SymbolTable>> {
         let store = self.store.upgrade()?;

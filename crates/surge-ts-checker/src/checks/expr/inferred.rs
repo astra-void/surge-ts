@@ -361,6 +361,11 @@ pub(super) fn suggested_value_name(
     let max_length_difference = 2.max(name.len() * 34 / 100);
     let mut best_distance = (name.len() * 4 / 10) as f64 + 1.0;
     let mut best: Option<&str> = None;
+    let admits = |candidate: &str| {
+        candidate != name
+            && candidate.len().abs_diff(name.len()) <= max_length_difference
+            && (candidate.len() >= 3 || candidate.eq_ignore_ascii_case(name))
+    };
     let mut candidates: Vec<&str> = symbols
         .visible_names()
         .chain(ctx.symbols.visible_names())
@@ -368,18 +373,13 @@ pub(super) fn suggested_value_name(
         .map(|candidate| candidate.as_ref())
         // Globals the lib does not declare as bindings.
         .chain(["undefined", "globalThis"])
+        .filter(|candidate| admits(candidate))
         .collect();
     // Symbol tables have no declaration order to offer; a name order at least
     // keeps the tie-break deterministic.
     candidates.sort_unstable();
     candidates.dedup();
     for candidate in candidates {
-        if candidate == name || candidate.len().abs_diff(name.len()) > max_length_difference {
-            continue;
-        }
-        if candidate.len() < 3 && !candidate.eq_ignore_ascii_case(name) {
-            continue;
-        }
         let Some(distance) = levenshtein_with_max(name, candidate, best_distance - 0.1) else {
             continue;
         };
@@ -399,21 +399,14 @@ pub(crate) fn spelling_suggestion<'a>(
     candidates: impl IntoIterator<Item = &'a str>,
     max_candidates: usize,
 ) -> Option<&'a str> {
-    let name_length = name.chars().count();
-    let max_length_difference = 2.max(name_length * 34 / 100);
-    let mut best_distance = (name_length * 4 / 10) as f64 + 0.9;
+    let screen = SpellingScreen::new(name);
+    let mut best_distance = (screen.name_length * 4 / 10) as f64 + 0.9;
     let mut best: Option<&str> = None;
     for (index, candidate) in candidates.into_iter().enumerate() {
         if max_candidates > 0 && index >= max_candidates {
             return None;
         }
-        if candidate.is_empty()
-            || candidate == name
-            || candidate.len().abs_diff(name_length) > max_length_difference
-        {
-            continue;
-        }
-        if candidate.len() < 3 && !candidate.eq_ignore_ascii_case(name) {
+        if !screen.admits(candidate) {
             continue;
         }
         let Some(distance) = levenshtein_with_max(name, candidate, best_distance) else {
@@ -429,11 +422,55 @@ pub(crate) fn spelling_suggestion<'a>(
     best
 }
 
+/// The screens [`spelling_suggestion`] applies before measuring a candidate:
+/// not the name itself, a length within `max(2, floor(len * 0.34))` of it, and
+/// a candidate shorter than three only as a case-insensitive match.
+pub(crate) struct SpellingScreen<'a> {
+    name: &'a str,
+    name_length: usize,
+    max_length_difference: usize,
+}
+
+impl<'a> SpellingScreen<'a> {
+    pub(crate) fn new(name: &'a str) -> Self {
+        let name_length = name.chars().count();
+        Self {
+            name,
+            name_length,
+            max_length_difference: 2.max(name_length * 34 / 100),
+        }
+    }
+
+    pub(crate) fn admits(&self, candidate: &str) -> bool {
+        !(candidate.is_empty()
+            || candidate == self.name
+            || candidate.len().abs_diff(self.name_length) > self.max_length_difference
+            || (candidate.len() < 3 && !candidate.eq_ignore_ascii_case(self.name)))
+    }
+}
+
 /// Levenshtein distance where a case-only substitution costs 0.1, abandoning a
 /// row once every cell exceeds `max`.
 fn levenshtein_with_max(source: &str, target: &str, max: f64) -> Option<f64> {
+    // Case folding can map a non-ASCII character onto an ASCII one (the Kelvin
+    // sign folds to `k`), so bytes stand in for characters only when both
+    // names are ASCII.
+    if source.is_ascii() && target.is_ascii() {
+        return levenshtein_rows(source.as_bytes(), target.as_bytes(), max, u8::eq_ignore_ascii_case);
+    }
     let source: Vec<char> = source.chars().collect();
     let target: Vec<char> = target.chars().collect();
+    levenshtein_rows(&source, &target, max, |left: &char, right: &char| {
+        left.to_lowercase().eq(right.to_lowercase())
+    })
+}
+
+fn levenshtein_rows<T: PartialEq>(
+    source: &[T],
+    target: &[T],
+    max: f64,
+    same_ignoring_case: impl Fn(&T, &T) -> bool,
+) -> Option<f64> {
     let mut previous: Vec<f64> = (0..=target.len()).map(|column| column as f64).collect();
     let mut current = vec![0.0; target.len() + 1];
     let big = max + 0.01;
@@ -447,15 +484,15 @@ fn levenshtein_with_max(source: &str, target: &str, max: f64) -> Option<f64> {
             current[column] = big;
         }
         for column in min_column..=max_column {
-            let target_char = target[column - 1];
-            let substitution = if source_char.to_lowercase().eq(target_char.to_lowercase()) {
-                previous[column - 1] + 0.1
-            } else {
-                previous[column - 1] + 2.0
-            };
-            let value = if *source_char == target_char {
+            let target_char = &target[column - 1];
+            let value = if source_char == target_char {
                 previous[column - 1]
             } else {
+                let substitution = if same_ignoring_case(source_char, target_char) {
+                    previous[column - 1] + 0.1
+                } else {
+                    previous[column - 1] + 2.0
+                };
                 (previous[column] + 1.0).min((current[column - 1] + 1.0).min(substitution))
             };
             current[column] = value;
