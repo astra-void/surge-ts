@@ -2,7 +2,7 @@
 
 Current scope:
 
-- `undefined`
+- `undefined` and `null`
 - explicit union annotations
 - conditional expression union inference
 - optional property and optional element access widening
@@ -17,10 +17,14 @@ Current scope:
 `union_type(types)` is the single normalization entry point:
 
 - flatten nested unions
-- collapse any union containing `any` to `any`
+- collapse any union containing the error type to the error type, else any
+  union containing `any` to `any`
 - drop `never` members (`T | never` is `T`); a union whose members were all
   `never` is `never`, and an empty input stays `Unknown`
+- drop an empty-array member (`never[]`) beside another array member
+- without `strictNullChecks`, drop `null`/`undefined` beside any other member
 - dedupe by type equality, preserving first-seen member order
+- fold `true | false` (or either beside `boolean`) into `boolean`
 - collapse single-member unions to the member
 
 Dedup is two-tier: at or below `LINEAR_DEDUP_LIMIT` (16) members a pairwise
@@ -72,16 +76,18 @@ same pattern as function types:
 - value to union target: assignable if it matches at least one constituent
 - union source to target: assignable if every constituent is assignable to the target
 - union source to union target: every source constituent must match at least one target constituent
-- `keyof` intersections for unions are unsupported and fall back to `unknown`
 
 ## Limitations
 
-- flow narrowing over unions remains limited (see the checker's flow module
-  for the supported truthiness/switch subset)
-- literal union members exist and are used by `keyof`, but full TypeScript literal-union normalization/simplification (e.g. literal-absorbing-into-primitive reduction) remains unsupported
-- `null` is not modeled as a distinct type; `void` and `never` exist as types
-  and participate in normalization as described above
-- no exact optional property semantics
+- flow narrowing over unions is the checker's job
+  (`surge-ts-checker/src/checks/function/narrowing/`), not this crate's
+- `union_type` does not absorb literal members into a primitive member
+  (`"a" | string` keeps both); the only literal folding is `true | false`
+  into `boolean`
+- `null` (`Type::Null`), `undefined`, `void`, and `never` are distinct types;
+  `never` participates in normalization as described above
+- optional-property reads and `exactOptionalPropertyTypes` are handled in
+  assignability (`src/assignability/mod.rs`), not by union normalization
 
 ## Clone accounting
 

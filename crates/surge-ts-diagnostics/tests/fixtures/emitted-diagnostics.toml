@@ -426,7 +426,6 @@ oracle = [
   "alias-resolution-basic",
 ]
 
-
 [TS2717]
 status = "emitted"
 fixtures = [
@@ -700,7 +699,6 @@ status = "emitted"
 oracle = [
   "declaration-file-ambient-grammar",
 ]
-
 
 [TS2454]
 status = "emitted"
@@ -2098,20 +2096,30 @@ oracle = [
   "parser-grammar-codes-basic",
 ]
 [TS8002]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
 [TS8005]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
 [TS8012]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
 [TS8016]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
 [TS8037]
-status = "catalog-only"
-reason = "oxc classifies this failure and surge now carries its code, but no fixture witnesses it yet: either the construct's other diagnostics mask it, or its only trigger co-emits a code surge spans differently. It falls back to the un-numbered parser diagnostic until a witness lands."
+status = "emitted"
+oracle = [
+  "tsc-parser-javascript-only-syntax",
+]
 
 [TS18049]
 status = "emitted"
@@ -4494,6 +4502,53 @@ status = "emitted"
 oracle = [
   "decorator-expressions-checked",
 ]
+
+[TS2550]
+status = "emitted"
+oracle = [
+  "lib-builtin-member-fallback-basic",
+  "lib-constructor-feature-basic",
+  "reference-lib-directive-basic",
+]
+
+[TS2556]
+status = "emitted"
+oracle = [
+  "spread-argument-check-basic",
+  "array-literal-spread-arguments",
+]
+
+[TS7013]
+status = "emitted"
+oracle = [
+  "signature-implicit-any-basic",
+]
+
+[TS7020]
+status = "emitted"
+oracle = [
+  "signature-implicit-any-basic",
+]
+
+[TS1012]
+status = "catalog-only"
+reason = "tsgo reports it only from its JSON text parser (`parseJSONText`), which the tsc parser port does not include."
+
+[TS1140]
+status = "catalog-only"
+reason = "The tsc parser port reports it as the type-argument list's parsing-context error, but no oracle preset's tsgo output contains it yet (checked 2026-09-25)."
+
+[TS1179]
+status = "catalog-only"
+reason = "The tsc parser port reports it as the heritage-clause list's parsing-context error, but no oracle preset's tsgo output contains it yet (checked 2026-09-25)."
+
+[TS1439]
+status = "catalog-only"
+reason = "The tsc parser port reports it for a `type` statement with no name, but no oracle preset's tsgo output contains it yet (checked 2026-09-25)."
+
+[TS1513]
+status = "catalog-only"
+reason = "The regular-expression port reports it for a character escape at the end of the pattern, but no oracle preset's tsgo output contains it yet (checked 2026-09-25)."
 
 [TS1200]
 status = "emitted"

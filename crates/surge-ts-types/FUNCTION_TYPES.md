@@ -23,7 +23,10 @@ payload holds the structural facts only:
 - `required_parameter_count: usize` — minimum call arity, which models
   trailing optional parameters
 
-Parameter names, default values, and `this` parameters are not represented.
+Display-only metadata — written parameter names, the rendered type-parameter
+head, the alias name, the originating declaration, and the overload group a
+merged signature stands for — lives on the `FunctionType` handle, never in the
+payload, so it plays no part in interning, identity, or equality.
 Cloning a `FunctionType` copies the handle (an `Arc` bump), never the payload;
 `FunctionTypePayload::clone` (a true deep clone) is separately counted and
 should stay rare.
@@ -84,23 +87,16 @@ ordered templates rather than by payload identity.
 - parameters use a conservative compatibility check
 - return types must be assignable
 
-## Limitations
+## Scope notes
 
-- `void` is intentionally minimal and only models the current checker surface
-- function-type parameter lists may carry parsed type parameters, defaults, and
-  constraints, but the checker only performs narrow call-site instantiation for
-  simple direct calls; full generic inference, overload resolution, callback
-  contextual inference, higher-order inference, and tuple-valued implicit
-  generic returns remain unsupported
 - parameter optionality is modeled only as `required_parameter_count`
-  (trailing optional arity) and rest acceptance only as `is_variadic`;
-  per-parameter names, default values, and `this` parameters are not
-  represented
+  (trailing optional arity) and rest acceptance only as `is_variadic`
 - callable/constructable *objects* are modeled on `ObjectType` via optional
   `call_signature` / `construct_signature` fields (see `src/object.rs`), not
   on `FunctionType` itself
-- unions containing function types are allowed as types, but callable union semantics are not implemented yet
-- no strict TypeScript variance fidelity yet
+- generic inference, overload resolution, and calls on unions of callables
+  are the checker's job (`surge-ts-checker/src/checks/call/`), not this
+  crate's; the payload carries only the structural signature
 
 ## Clone accounting
 

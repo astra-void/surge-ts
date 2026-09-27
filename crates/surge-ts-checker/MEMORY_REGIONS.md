@@ -2,9 +2,9 @@
 
 This note records the checker's memory-lifetime inventory, the region model the
 pipeline actually implements, and the reset/drop boundaries that enforce it.
-It is the companion to [ARENA_ID_PLAN.md](ARENA_ID_PLAN.md) (the historical
-payload-handle landing note) and to the RSS stage instrumentation in
-`metrics/`.
+Its companion is the RSS stage instrumentation in `metrics/`. The historical
+payload-handle landing note (`ARENA_ID_PLAN.md`) was removed on 2026-09-27;
+`git show 6c1dfcf5:crates/surge-ts-checker/ARENA_ID_PLAN.md` has it.
 
 ## Region hierarchy
 
@@ -87,7 +87,7 @@ Classification legend: `program` (whole run), `phase` (one pipeline phase),
 | `local_type_declarations_by_module` | orchestrator local | phase | last read by the final scope build; dropped at `preliminary_release` |
 | Worker `CheckerContext` clone | check worker | worker-scratch | one clone per worker, mutated in place per file; serial checking uses one reused clone for the whole pass (cloning per file was a measured ~3% of check time on tRPC) |
 | `ctx.symbols`, `ctx.type_declarations`, `ctx.type_declaration_scope`, `module_value_fallback` | worker context | file | replaced at each file boundary by `check_program_file` |
-| `ctx.resolved_named_types` | worker context, `Arc<Mutex<HashMap>>` | file | per-file memo; the map is swapped (not cleared in place) because lazy-resolution snapshots hold the old `Arc` |
+| `ctx.resolved_named_types` | worker context, `Arc<Mutex<HashMap>>` | file | per-file memo; the map is swapped (not cleared in place) because retained declaration environments hold the old `Arc` |
 | `ctx.utility_diagnostic_keys` | worker context | file | keys embed the file name; split into a shared pre-check baseline (captured on the first `begin_file_check`) plus a per-file overlay cleared at each file begin, with a retained-capacity bound so one pathological file cannot pin a huge table |
 | `ctx.diagnostics` + dedup keys | worker context | file → owned-output | `mem::take`n into `FileCheckResult` per file |
 | `FunctionFlowState` (flow scopes, branch captures, alias guards) | function-local | function | created per function body, dropped on return |
@@ -96,7 +96,7 @@ Classification legend: `program` (whole run), `phase` (one pipeline phase),
 | `program_resolved_generic_types` | `Arc<Mutex<HashMap>>` | bounded-cache | per-declaration bucket cap (`GENERIC_INSTANTIATION_BUCKET_CAP`); cleared at end of run |
 | `program_instantiations` | `Arc<Mutex<HashMap>>` | bounded-cache | same bucket cap; holds the interned reference expansions |
 | `CANONICALIZE_CACHE`, `RELATIVE_MODULE_CACHE`, `STAR_EXPORT_UNRESOLVED_CACHE`, `NAMESPACE_ALIAS_TABLE_CACHE` | thread-local | bounded-cache (per run) | cleared at run start on the main thread; worker threads are fresh per run |
-| `lazy_resolution_snapshot` | worker context, `Arc<CheckerContext>` | program (per worker) | captured once per context on first deferred library reference; pinned by every `LazyInstantiation` created from it, so it cannot be reset per file |
+| `LazyInstantiation` environment | `DeclarationEnvironmentHandle` (a `Weak` reference into the program `DeclarationEnvironmentStore`) | program | a lazy reference records the handle of the environment it was captured in rather than pinning a context; the environment data is freed with the store. The earlier per-worker `lazy_resolution_snapshot` (`Arc<CheckerContext>`) was removed in `79ed5916` |
 | Diagnostics | `FileCheckResult` → merged vec | owned-output | ordinary owned values with destructors |
 
 ## Cache classification
@@ -164,11 +164,12 @@ The load-bearing mechanisms, which later work must preserve:
   not capture span maps, value tables, diagnostics, flow state, or checker
   context: the pre-fix representation retained ~1.03 GB, including 5.9 M
   COW-defeated span-map entries.
-- **Qualified-import payload sharing with owning-arena retention**:
-  `TypeDeclarationTable::insert_shared_from` adopts the exporter's payload
-  pointer instead of deep-copying per importer, and retains the payload's
-  owning arena in `foreign_payload_arenas` so a shared handle can never
-  outlive its arena. `get_handle` hands back the true owning arena.
+- **Qualified-import payload sharing**:
+  `TypeDeclarationTable::insert_shared_from` adopts the exporter's `Arc`
+  payload instead of deep-copying per importer, and `get_handle` clones that
+  `Arc`. (Until `15667ea1` the payloads lived in a per-table arena, so the
+  table also retained each foreign payload's owning arena in
+  `foreign_payload_arenas`; that bookkeeping went away with the arena.)
 - **True-death lifecycle releases**: declaration-file AST bodies are filtered
   to import/export statements after final module analysis; superseded
   binding/scope generations drop before each rebuild (never three generations
@@ -214,8 +215,8 @@ Set `SURGE_TRACE_DTS_EXPANSION=1` to emit physical-footprint high-water JSON and
 an end-of-run summary of object creation, declaration expansions, reference
 peels, generic instantiations, retained export-table nodes, and peel reasons.
 The trace is opt-in because exact per-declaration aggregation is intentionally
-more expensive than normal checking. `SURGE_EAGER_DEPENDENCY_ANNOTATIONS=1`,
-`SURGE_EAGER_DEPENDENCY_ALIASES=1`, and
+more expensive than normal checking. `SURGE_EAGER_DEPENDENCY_SIGNATURES` (any
+value), `SURGE_EAGER_DEPENDENCY_ALIASES=1`, and
 `SURGE_EAGER_REFERENCE_INTERSECTIONS=1` are profiling escape hatches for paired
 comparisons, not production modes.
 
@@ -254,19 +255,18 @@ default 4096 cap.
   would add plumbing without changing retention; the file boundary
   (`begin_file_check`) was the missing region reset and is implemented instead.
 - Reusing the `resolved_named_types` map in place across files: entries depend
-  on the consumer file's environment and lazy-resolution snapshots may still
-  hold the previous file's `Arc`, so the per-file map swap is required for
+  on the consumer file's environment and retained declaration environments may
+  still hold the previous file's `Arc`, so the per-file map swap is required for
   correctness; the per-file allocation is one `Arc<Mutex<HashMap>>`.
-- Clearing `lazy_resolution_snapshot` per file: every `LazyInstantiation`
-  created from the snapshot pins it anyway, so a per-file reset would create
-  more snapshots, not fewer.
 - Borrowed statement checking (removing the per-statement clone in
   `check_program_file_statements`): a large cross-cutting refactor of the check
   paths, deferred; it is churn, not retention.
-- Typed-ID stores and string/path interning beyond the existing
-  arena/`Arc<str>` sharing: not started in this pass per the staged plan — the
-  next candidate is sharing `TypeDeclarationInfo` payloads as handles (see
-  ARENA_ID_PLAN.md "Next Slice").
+- Typed-ID stores and string/path interning beyond the existing `Arc<str>`
+  sharing: not started in this pass per the staged plan. The candidate
+  recorded at the time, sharing `TypeDeclarationInfo` payloads as handles (the
+  historical `ARENA_ID_PLAN.md` "Next Slice", removed on 2026-09-27), has since
+  landed: `TypeDeclarationHandle` wraps a shared
+  `Arc<TypeDeclarationInfo>`.
 - CLI source-text double retention (`inputs` + `sources`): documented above;
   changing `SourceFileInput.source_text` breaks the public API and render-time
   re-reads change observable behavior; left as the next loader-side lever.

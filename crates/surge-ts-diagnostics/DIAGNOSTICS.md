@@ -2,7 +2,7 @@
 
 Diagnostics in this crate are catalog-driven.
 
-v0.68.1 focuses on emitted diagnostics that are reachable from parser or checker code paths. Catalog-only entries may still exist as stepping stones, but they are tracked separately and must not be counted as compatibility coverage.
+Coverage counts only emitted diagnostics that are reachable from parser or checker code paths. Catalog-only entries may still exist as stepping stones, but they are tracked separately and must not be counted as compatibility coverage.
 
 ## Coverage Manifest
 

@@ -274,8 +274,8 @@ text).
 
 > Note: ky's source-level parity is exact, but three non-zero suppression
 > counters (`suppressedRustOnly`, `suppressedDeclaration`, `externalModuleStubs`)
-> are still pending a transparency audit — see
-> [`crates/surge-ts-checker/SUPPRESSED_DIAGNOSTICS_AUDIT.md`](crates/surge-ts-checker/SUPPRESSED_DIAGNOSTICS_AUDIT.md).
+> sit behind that number; they were audited on 2026-06-20 (the audit document was
+> removed on 2026-09-27 and git history keeps it).
 > The source-file comparison itself is exact.
 
 ### 2.2 Oracle-gated preset registry

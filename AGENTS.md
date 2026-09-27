@@ -120,11 +120,11 @@ statement. These rules exist to prevent both.
   benchmark numbers produced by a dirty working tree; build from a clean
   worktree at the commit you are citing and point the harness at it with
   `SURGE_TS_BIN`.
-- **MUST label historical content unmistakably.** Version-tagged milestone
-  notes, superseded support lists, and point-in-time optimization reports
-  belong under [docs/history/](docs/history/) or [docs/perf/](docs/perf/), or
-  under an explicit `Historical` heading, with a banner saying they do not
-  describe current behavior. Do not delete engineering investigations —
+- **MUST label historical content unmistakably.** Point-in-time optimization
+  reports belong under [docs/perf/](docs/perf/), and any other historical note
+  under an explicit `Historical` heading, with a banner saying it does not
+  describe current behavior. Version-tagged milestone notes and superseded
+  support lists are not kept at all; git history has them. Do not delete engineering investigations —
   a rejected design with its measurement attached is what stops the idea being
   re-proposed.
 - **MUST NOT carry a limitation forward unverified.** Before repeating a

@@ -10,7 +10,11 @@ The single current measurement, together with the correctness gates taken at
 the same commit, lives in [CURRENT_STATUS.md](CURRENT_STATUS.md). This document
 carries the methodology, the reproduction recipe, and the recorded-run history.
 
-## Recorded run: tRPC repository (current)
+## Recorded run: tRPC repository (2026-09-01)
+
+> **Not current.** The latest measurement is in
+> [CURRENT_STATUS.md § Current performance state](CURRENT_STATUS.md#current-performance-state);
+> tRPC is several times slower there than in this run.
 
 | Field | Value |
 | --- | --- |
@@ -39,9 +43,9 @@ The diagnostic hash pins the complete diagnostic output: it is byte-identical
 across all ten timed runs and between `--jobs 1` and `--jobs auto`. That is the
 determinism artifact, and it is stronger than the wall-clock medians.
 
-Correctness gates at the same commit — workspace tests, the oracle preset
-sweep (normal and both strict dimensions), and the real-project parity matrix —
-are recorded in [CURRENT_STATUS.md](CURRENT_STATUS.md#verification-snapshot).
+The correctness gates recorded next to this run belonged to the 2026-09-01
+status snapshot; the current ones are in
+[CURRENT_STATUS.md](CURRENT_STATUS.md#verification-snapshot).
 
 > **The fixture commit changed.** The historical run below used tRPC
 > `3e0e9793eb7f8c4cfbe70a1dccb72f8d355e3c8b`; the checkout measured above is

@@ -217,7 +217,6 @@ old notes — is in [CURRENT_STATUS.md](CURRENT_STATUS.md#known-limitations).
 | Benchmark methodology and reproduction | [BENCHMARKS.md](BENCHMARKS.md) |
 | Rules for performance-sensitive changes | [docs/PERFORMANCE_INVARIANTS.md](docs/PERFORMANCE_INVARIANTS.md) |
 | Optimization investigations (point-in-time records) | [docs/perf/](docs/perf/) |
-| Superseded project history | [docs/history/](docs/history/) |
 
 ## License
 

@@ -43,14 +43,11 @@ TypeScript, `lib.d.ts`, DOM, Node, or React parity.
 
 ## Historical version notes
 
-The version-tagged milestone notes that used to sit here have moved to
-[docs/history/ARCHITECTURE-VERSION-NOTES.md](docs/history/ARCHITECTURE-VERSION-NOTES.md).
-They record how the checker reached its current shape and **do not all describe
-current behavior** — in particular the pre-physical-lib "synthetic built-ins"
-(`v0.72`) and "generated default-lib as the ambient default" (`v0.85`)
-descriptions are superseded: physical `lib*.d.ts` loading is the default and the
-generated subset is the fallback. The `v0.x` / `v1.x` labels are internal
-milestone markers, not releases or crate versions
+The version-tagged milestone notes (`v0.4x`–`v1.2.5`) that used to sit here were
+removed on 2026-09-27; git history keeps them. They described superseded
+states — the "synthetic built-ins" and "generated default-lib" models among
+them — and the `v0.x` / `v1.x` labels are internal milestone markers, not
+releases or crate versions
 ([CURRENT_STATUS.md § Versioning](CURRENT_STATUS.md#versioning)).
 
 ## Crate layout

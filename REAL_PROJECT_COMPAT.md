@@ -21,11 +21,11 @@ and nowhere else; that table is the one that gets re-measured. What lives here
 is the detail behind it: the per-project drift inventories below, the
 burn-down history, and the known-limitation reproductions.
 
-- The oracle preset sweep is green under the normal gate (diagnostic code-count
-  and file/code/line). Message-text and span/column drift are reported but
-  non-gating unless `--strictMessages` / `--strictSpans` are passed (see
-  [STRICT_DRIFT_INVENTORY.md](STRICT_DRIFT_INVENTORY.md)). The preset count and
-  the current strict state are recorded in
+- The oracle preset sweep gates on diagnostic code-count and file/code/line.
+  Message-text and span/column drift are reported but non-gating unless
+  `--strictMessages` / `--strictSpans` are passed (see
+  [STRICT_DRIFT_INVENTORY.md](STRICT_DRIFT_INVENTORY.md)). The preset count, the
+  normal gate's result and the current strict state are recorded in
   [CURRENT_STATUS.md § Gates](CURRENT_STATUS.md#gates).
 - The compact `diagnostics-pack` preset is green at exact 31/31 parity under
   the normal gate *and* both strict gates. It pins duplicate declaration /
@@ -34,10 +34,10 @@ burn-down history, and the known-limitation reproductions.
   temporal dead zone, missing-return span placement (TS2355/TS2366 on the
   function/method name span), and use-site generic-arity spans (TS2314/TS2315).
   This is targeted emitted-diagnostic parity, not full TypeScript parity.
-- Project mode loads the physical `lib*.d.ts` graph by default; the generated
-  default-lib subset is a fallback when the `typescript` package is absent, not
-  the normal project-mode source of truth. `noLib: true` keeps standard/DOM
-  globals unavailable.
+- The TypeScript standard library is bundled into the binary; an on-disk lib
+  directory is used only when explicitly selected (see
+  [CURRENT_STATUS.md § Bundled standard library](CURRENT_STATUS.md#bundled-standard-library)).
+  `noLib: true` keeps standard/DOM globals unavailable.
 - Performance has been stabilized by a program-wide generic instantiation cache
   for context-free library/dependency declarations and by deferring the
   interface/alias payload clone in named-type resolution to a genuine cache
@@ -48,9 +48,8 @@ burn-down history, and the known-limitation reproductions.
 - **Do not read wall-clock figures out of the version-tagged notes.** They
   predate physical-lib-by-default. Current benchmark figures live in
   [CURRENT_STATUS.md](CURRENT_STATUS.md#current-performance-state) and
-  [BENCHMARKS.md](BENCHMARKS.md); everything older is in
-  [docs/history/](docs/history/) and [docs/perf/](docs/perf/) as a
-  point-in-time record.
+  [BENCHMARKS.md](BENCHMARKS.md); older investigations are in
+  [docs/perf/](docs/perf/) as point-in-time records.
 
 ## trpc surge-only inventory (2026-09-07)
 
@@ -1729,12 +1728,9 @@ value re-export fixed here. After that, the dominant remaining drift
 (TS7031/TS7006 React contextual callback inference) is the next high-impact but
 much larger area; it should not be attempted as a "small blocker".
 
-The version-tagged milestone notes that used to follow here — the `v0.60`–`v0.85`
-milestone log — have moved to
-[docs/history/REAL_PROJECT_COMPAT-HISTORY.md](docs/history/REAL_PROJECT_COMPAT-HISTORY.md).
-They record how the checker reached this state; their wall-clock medians and
-their "synthetic built-ins" / "generated default-lib" descriptions reflect the
-measurement and lib model in effect at the time, **not** current behavior.
+The version-tagged milestone log (`v0.60`–`v0.85`) that used to follow here was
+removed on 2026-09-27; git history keeps it. Its wall-clock medians and lib-model
+descriptions were those of their time, not current behavior.
 
 ## ky (Fetch-API real-project parity)
 
@@ -1774,7 +1770,7 @@ Re-verified 2026-09-01; first reached 2026-06-20.
 
 Source-level parity is 0/0, but the compatReport shows three non-zero suppression
 counters on ky that gate the parity claim and need a transparent audit (tracked
-in `crates/surge-ts-checker/SUPPRESSED_DIAGNOSTICS_AUDIT.md`):
+in the 2026-06-20 suppressed-diagnostics audit, removed on 2026-09-27; git history keeps it):
 
 - `suppressedRustOnlyDiagnosticsTotal = 15` — `surge::*` diagnostics
   (parser/internal limits, never TS codes) suppressed before user output.
@@ -2010,13 +2006,9 @@ policy change far larger than these two diagnostics — deliberately not taken.
 
 ## Historical version notes
 
-The version-tagged milestone notes (the `v0.60`–`v0.85` milestone log and the
-per-feature `v0.7x`/`v0.8x` notes) and the
-superseded "current baseline" support lists have moved to
-[docs/history/REAL_PROJECT_COMPAT-HISTORY.md](docs/history/REAL_PROJECT_COMPAT-HISTORY.md).
-They are kept verbatim as measured-at-the-time records and **do not describe
-current behavior** — several of their "unsupported" entries have since landed.
-The current support surface is in [CURRENT_STATUS.md](CURRENT_STATUS.md) and
+The version-tagged milestone notes and the superseded "current baseline" support
+lists were removed on 2026-09-27; git history keeps them. The current support
+surface is in [CURRENT_STATUS.md](CURRENT_STATUS.md) and
 [PUBLIC_API.md](PUBLIC_API.md).
 
 The Node tooling is dev-only. Rust crates do not depend on Node tooling, and
@@ -2775,3 +2767,27 @@ drizzle-orm were in none of them**, and both moved:
   2026-09-13 began reporting (`TS7006`, `TS2339`, `TS2345`, `TS2344`, `TS4114`,
   `TS2564`), which the hang had kept out of view. The other eight corpora are
   byte-identical across the fix.
+
+## Snapshot at `6c1dfcf5` (2026-09-27)
+
+All nine corpora re-measured one at a time from a frozen release binary built in
+a detached worktree at `6c1dfcf5`; the counts are in
+[CURRENT_STATUS.md § Real-project compatibility](CURRENT_STATUS.md#real-project-compatibility).
+What that table does not say:
+
+- **The zod checkout is contaminated.** `packages/zod/src/v3/tests/zzprobe.ts`
+  is an untracked probe file an earlier session left there on 2026-09-24; all
+  8 of zod's `tsc`-only diagnostics are in it. Remove it before using zod as a
+  gate again.
+- **zod's 24 surge-only diagnostics are new since 2026-09-22.** 21 are `TS2339`
+  in `packages/zod/src/v3/tests/error.test.ts`; 3 are `TS2322` in
+  `v4/classic/schemas.ts`, `v4/mini/schemas.ts` and a `node_modules` copy of the
+  first. The same 24 already appear at `c04652cc` (2026-09-26); not bisected
+  further.
+- **trpc's surge-only side rose from 8 to 33** (`TS18047` ×9, `TS18046` ×6,
+  `TS2339` ×6, `TS2345` ×3, `TS2349` ×3, two each of `TS2322`, `TS7006`,
+  `TS18049`) and **tanstack-query from 8 to 15**, while unnamed fell from 11 to
+  2. None of these moves has been attributed to a commit.
+- **drizzle-orm was measured again** for the first time since the
+  2026-09-17 deadlock: 81 surge-only against the 16 `tsc` diagnostics drizzle's
+  own TypeScript-5.6-era assertions produce under 7.0.2.
